@@ -75,7 +75,7 @@ export const kpiExplain = defineAgentIntent<KpiExplainArgs, CapturedKpiExplain>(
     lines.push('3. Peka på vad användaren kan göra om siffran är låg eller hög: utan att moralisera.')
     lines.push('4. Om det är ovanligt för deras bransch eller jämförelseperiod, säg det.')
     lines.push('')
-    lines.push('Svara på svenska, max 4-5 korta stycken. Ditt första svar är det första användaren ser.')
+    lines.push('Svara med max 4-5 korta stycken. Ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

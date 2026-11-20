@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { LOCALE_COOKIE, SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
+import { httpOnlyCookieOptions, requestProtocolFromHeaders } from '@/lib/supabase/cookie-options'
 
 const BodySchema = z.object({
   locale: z.enum(SUPPORTED_LOCALES),
@@ -34,11 +35,11 @@ export async function POST(request: Request) {
   }
 
   const response = NextResponse.json({ data: { locale } })
-  response.cookies.set(LOCALE_COOKIE, locale, {
-    path: '/',
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 60 * 60 * 24 * 365,
-  })
+  // HttpOnly: only the server reads it (i18n/request.ts).
+  response.cookies.set(
+    LOCALE_COOKIE,
+    locale,
+    httpOnlyCookieOptions(60 * 60 * 24 * 365, requestProtocolFromHeaders(request.headers)),
+  )
   return response
 }

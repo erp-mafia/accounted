@@ -1,4 +1,5 @@
 import { skvRequestWithAuth, type SkvAuth } from './api-client'
+import type { SkvAuditActor } from './audit'
 import type {
   SkatteverketSaldoResponse,
   SkatteverketTransaktionerResponse,
@@ -26,6 +27,14 @@ export function getSkattekontoBaseUrl(): string {
   )
 }
 
+const NO_SKATTEKONTO_MESSAGE = 'Inget skattekonto är registrerat hos Skatteverket.'
+
+/** The audit labels of the two skattekonto reads; also the ownership proof's (connection-store.ts). */
+export const SKATTEKONTO_AUDIT_ENDPOINTS = {
+  saldo: 'skattekonto/saldo',
+  transaktioner: 'skattekonto/transaktioner',
+} as const
+
 /**
  * Map Skatteverket error codes (felkod 1-5) to Swedish user messages.
  */
@@ -36,7 +45,7 @@ function mapFelkodToMessage(fel: SkatteverketFel): string {
     case 2:
       return 'Felaktigt datum.'
     case 3:
-      return 'Inget skattekonto är registrerat hos Skatteverket.'
+      return NO_SKATTEKONTO_MESSAGE
     case 4:
       return 'Internt fel hos Skatteverket. Försök igen om en stund.'
     case 5:
@@ -68,6 +77,15 @@ async function handleErrorResponse(response: Response): Promise<never> {
     )
   }
 
+  // A bare 404 ({"message": "Not found"}, no felkod) on /skattekonton/{id}
+  // means Skatteverket keeps no skattekonto for that identity yet. Observed
+  // in production on newly formed companies: the same identifier, on the same
+  // consent, later answers 200 once Skatteverket has opened the account, so
+  // the request is right and the state is Skatteverket's (B07).
+  if (response.status === 404) {
+    throw new SkatteverketSkattekontoError(NO_SKATTEKONTO_MESSAGE, null, response.status)
+  }
+
   throw new SkatteverketSkattekontoError(
     `Skatteverket svarade med ${response.status}`,
     null,
@@ -91,14 +109,30 @@ export class SkatteverketSkattekontoError extends Error {
 }
 
 /**
+ * True when Skatteverket answered that it has no skattekonto for the
+ * identity: felkod 3, or a bare 404 without a felkod envelope. A state of
+ * the account at Skatteverket (typically a company too new to have one),
+ * not a failed request: callers record it and show it, they do not log it
+ * as an error.
+ */
+export function isSkattekontoMissing(err: unknown): err is SkatteverketSkattekontoError {
+  return (
+    err instanceof SkatteverketSkattekontoError &&
+    (err.felkod === 3 || (err.felkod === null && err.httpStatus === 404))
+  )
+}
+
+/**
  * GET /skattekonton/{omfragad}/saldo
  *
  * @param omfragad 10/12-digit org/personnummer (formatRedovisare format)
+ * @param actor    Who the audit row names (null user: a system call)
  * @param datum    Optional ISO date (YYYY-MM-DD); fetch balance as of date
  */
 export async function getSaldo(
   auth: SkvAuth,
   omfragad: string,
+  actor: SkvAuditActor,
   datum?: string,
 ): Promise<SkatteverketSaldoResponse> {
   const qs = datum ? `?datum=${encodeURIComponent(datum)}` : ''
@@ -106,6 +140,7 @@ export async function getSaldo(
     auth,
     'GET',
     `/skattekonton/${omfragad}/saldo${qs}`,
+    { endpoint: SKATTEKONTO_AUDIT_ENDPOINTS.saldo, ...actor, agRegistreradId: omfragad, expectJson: true },
     undefined,
     { baseUrl: getSkattekontoBaseUrl() },
   )
@@ -121,19 +156,22 @@ export async function getSaldo(
  * GET /skattekonton/{omfragad}/transaktioner
  *
  * @param omfragad   10/12-digit org/personnummer
+ * @param actor      Who the audit row names (null user: a system call)
  * @param datumFrom  Optional ISO date (YYYY-MM-DD). Defaults at SKV to
  *                   555 days back; max lookback is 915 days.
  */
 export async function getTransaktioner(
   auth: SkvAuth,
   omfragad: string,
-  datumFrom?: string,
+  datumFrom: string | undefined,
+  actor: SkvAuditActor,
 ): Promise<SkatteverketTransaktionerResponse> {
   const qs = datumFrom ? `?datumFrom=${encodeURIComponent(datumFrom)}` : ''
   const response = await skvRequestWithAuth(
     auth,
     'GET',
     `/skattekonton/${omfragad}/transaktioner${qs}`,
+    { endpoint: SKATTEKONTO_AUDIT_ENDPOINTS.transaktioner, ...actor, agRegistreradId: omfragad, expectJson: true },
     undefined,
     { baseUrl: getSkattekontoBaseUrl() },
   )

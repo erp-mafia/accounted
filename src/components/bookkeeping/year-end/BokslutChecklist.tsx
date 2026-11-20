@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { ClipboardCheck } from 'lucide-react'
+import { ClipboardDocumentCheckIcon } from '@/components/icons'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { BokslutChecklist as Checklist, ChecklistGroup, ChecklistItem, ChecklistState } from '@/lib/bokslut/checklist'
@@ -27,6 +29,7 @@ interface BokslutChecklistProps {
 
 export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
   const t = useTranslations('bokslut_checklist')
+  const { canWrite, lockedTitle } = useViewerLock()
   const locale = useLocale()
   const { toast } = useToast()
   const [checklist, setChecklist] = useState<Checklist | null>(null)
@@ -72,14 +75,14 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
     }
   }
 
-  if (failed) return null
+  if (failed && !checklist) return <LoadError title={t('load_failed')} onRetry={() => void load()} />
   if (!checklist) {
     return (
-      <section aria-busy className="space-y-2">
+      <LateReveal className="space-y-2">
         <Skeleton className="h-4 w-1/3" />
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-2/3" />
-      </section>
+      </LateReveal>
     )
   }
 
@@ -88,9 +91,9 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
   return (
     <section>
       <div className="mb-1 flex items-center gap-2 px-1">
-        <ClipboardCheck className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('heading')}</h3>
-        <span className="text-[11px] tabular-nums text-muted-foreground" data-ph-mask>
+        <ClipboardDocumentCheckIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+        <h3 className="font-sans text-xs font-medium text-muted-foreground">{t('heading')}</h3>
+        <span className="text-xs tabular-nums text-muted-foreground" data-ph-mask>
           {t('progress', { done: checklist.summary.done + checklist.summary.not_applicable, total: checklist.summary.total })}
         </span>
         <div className="h-px flex-1 bg-border/60" />
@@ -100,7 +103,7 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
         if (items.length === 0) return null
         return (
           <div key={group} className="px-1 pt-2">
-            <p className="text-[11px] font-medium text-muted-foreground">{t(`group_${group}`)}</p>
+            <p className="text-xs font-medium text-muted-foreground">{t(`group_${group}`)}</p>
             <ul>
               {items.map((item) => {
                 const done = item.effective_state === 'done'
@@ -111,11 +114,12 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
                 return (
                   <li
                     key={item.key}
-                    className="group flex items-start gap-3 border-b border-border/60 py-2.5 text-[13px] leading-5 last:border-b-0"
+                    className="group flex items-start gap-3 border-b-hairline py-2.5 text-[13px] leading-5 last:border-b-0"
                   >
                     <Checkbox
                       checked={done}
-                      disabled={busy !== null || na || (item.auto && item.stored_state == null)}
+                      disabled={!canWrite || busy !== null || na || (item.auto && item.stored_state == null)}
+                      title={lockedTitle}
                       onCheckedChange={(v) => void set(item, v === true ? 'done' : 'open')}
                       aria-label={label(item)}
                       className="mt-0.5"
@@ -123,12 +127,12 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
                     <span className={cn('min-w-0 flex-1', na && 'text-muted-foreground line-through')}>
                       {label(item)}
                       {item.auto && item.stored_state == null && (
-                        <span className="ml-1.5 rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground no-underline">
+                        <span className="ml-1.5 rounded-md bg-muted px-1.5 py-px text-xs text-muted-foreground no-underline">
                           {t('auto_chip')}
                         </span>
                       )}
                       {item.done_at && !item.auto && (
-                        <span className="ml-1.5 text-[11.5px] text-muted-foreground">{t('done_at', { date: formatDate(item.done_at) })}</span>
+                        <span className="ml-1.5 text-xs text-muted-foreground">{t('done_at', { date: formatDate(item.done_at) })}</span>
                       )}
                     </span>
                     <span className="flex shrink-0 items-center gap-3">
@@ -138,21 +142,22 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
                         </Link>
                       )}
                       {na ? (
-                        <button type="button" onClick={() => void set(item, 'open')} disabled={busy !== null} className={QUIET_LINK_CLASS}>
+                        <button type="button" onClick={() => void set(item, 'open')} disabled={!canWrite || busy !== null} title={lockedTitle} className={QUIET_LINK_CLASS}>
                           {t('reopen')}
                         </button>
                       ) : (
                         <button
                           type="button"
                           onClick={() => void set(item, 'not_applicable')}
-                          disabled={busy !== null}
+                          disabled={!canWrite || busy !== null}
+                          title={lockedTitle}
                           className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
                         >
                           {t('not_applicable')}
                         </button>
                       )}
                       {toggleable && item.auto && item.stored_state != null && !na && (
-                        <button type="button" onClick={() => void set(item, 'open')} disabled={busy !== null} className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}>
+                        <button type="button" onClick={() => void set(item, 'open')} disabled={!canWrite || busy !== null} title={lockedTitle} className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}>
                           {t('use_auto')}
                         </button>
                       )}

@@ -68,7 +68,7 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
   // tjänster). Carrying two treatments that resolve identically would add a
   // state nothing reads. What the split DOES buy is a check, see
   // filesTheRutaItNames: the account number only carries the goods/services
-  // distinction for those six BAS numbers, and outside them the code would be
+  // distinction for those eight BAS numbers, and outside them the code would be
   // filed in whichever box the fallback picks rather than the one Spiris
   // wrote.
   '23': 'reverse_charge_domestic',
@@ -82,7 +82,7 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
  * Every other treatment fixes its box by itself, so this is a tautology for
  * them and a real test for exactly one: reverse_charge_domestic resolves to
  * ruta 23 (varor) or ruta 24 (tjänster) from the account NUMBER, and the
- * number only says which for 4415-4417 and 4425-4427. A Spiris "24" on any
+ * number only says which for 4410/4415-4417 and 4420/4425-4427. A Spiris "24" on any
  * other class 4 account resolved to ruta 23 and filed a service purchase as
  * goods, silently, because the code HAD translated and so the row never
  * reached the review list. Refusing the translation puts it there instead:
@@ -90,7 +90,7 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
  * applySourceVatCodes already keeps the code on the mapping, shows it, and
  * falls back to the label suggestion.
  *
- * Asking the resolver rather than re-testing the six numbers here keeps one
+ * Asking the resolver rather than re-testing the eight numbers here keeps one
  * definition of the boundary. A pinning test asserts the round trip holds for
  * every code in both tables, so a future code whose treatment files somewhere
  * else fails there rather than in a declaration.

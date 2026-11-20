@@ -1,0 +1,461 @@
+[
+  {
+    "flow": "categorize: expense category with 25 % moms",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 1,
+        "entry_date": "2026-03-14",
+        "description": "Programvarulicens",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "250",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Ingående moms 25%",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "1000",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "5420",
+            "line_description": "Programvarulicens",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "1250",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "Programvarulicens",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "categorize: income category with 25 % moms",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 2,
+        "entry_date": "2026-03-20",
+        "description": "Konsultuppdrag mars",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "10000",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "Konsultuppdrag mars",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "8000",
+            "exchange_rate": null,
+            "account_number": "3001",
+            "line_description": "Konsultuppdrag mars",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "2000",
+            "exchange_rate": null,
+            "account_number": "2611",
+            "line_description": "Utgående moms 25%",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "categorize: private",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 3,
+        "entry_date": "2026-04-02",
+        "description": "Privat inköp",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "500",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2893",
+            "line_description": "Privat: Privat inköp",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "500",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "Privat inköp",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "categorize: catalog template, EU reverse charge",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 4,
+        "entry_date": "2026-04-10",
+        "description": "SaaS EU abonnemang",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "224.75",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2645",
+            "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "224.75",
+            "exchange_rate": null,
+            "account_number": "2614",
+            "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "899",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "4535",
+            "line_description": "Inköp tjänster annat EU-land 25% (basbelopp omvänd skattskyldighet)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 3,
+            "debit_amount": "0",
+            "credit_amount": "899",
+            "exchange_rate": null,
+            "account_number": "4598",
+            "line_description": "Motkonto beräknad omvänd moms 25%",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 4,
+            "debit_amount": "899",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "5420",
+            "line_description": "SaaS EU abonnemang",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 5,
+            "debit_amount": "0",
+            "credit_amount": "899",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "SaaS EU abonnemang",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "categorize: catalog template, premises rent",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 5,
+        "entry_date": "2026-05-01",
+        "description": "Hyra maj",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "8000",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "5010",
+            "line_description": "Hyra maj",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "8000",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "Hyra maj",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "categorize: foreign currency row",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 6,
+        "entry_date": "2026-05-12",
+        "description": "Hotel Berlin",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "230.05",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Ingående moms 25%",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "920.2",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "5890",
+            "line_description": "Hotel Berlin",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "EUR",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "1150.25",
+            "exchange_rate": "11.5025",
+            "account_number": "1930",
+            "line_description": "Hotel Berlin",
+            "amount_in_currency": "100"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "categorize: representation with an audit note",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 7,
+        "entry_date": "2026-06-03",
+        "description": "Restaurang Lunch · Deltagare: kund A och B. Syfte: projektmöte",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "68.57",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Ingående moms 12%",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "571.43",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "6072",
+            "line_description": "Restaurang Lunch",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "640",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "Restaurang Lunch",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "categorize: dated before the first fiscal year (pre-FY clamp)",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 8,
+        "entry_date": "2026-01-01",
+        "description": "Bankavgift december · Affärshändelse 2025-12-20, bokförd på räkenskapsårets första dag",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "45",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "6570",
+            "line_description": "Bankavgift december",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "45",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "Bankavgift december",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "ingest: auto-booked by a confident mapping rule",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 9,
+        "entry_date": "2026-06-20",
+        "description": "TELIA SVERIGE AB",
+        "source_type": "bank_transaction",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "99.8",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Ingående moms 25%",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "399.2",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "6212",
+            "line_description": "TELIA SVERIGE AB",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "499",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "TELIA SVERIGE AB",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  }
+]

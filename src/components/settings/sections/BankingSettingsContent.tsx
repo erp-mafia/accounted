@@ -7,10 +7,21 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
-import { AlertTriangle, CreditCard, ExternalLink } from 'lucide-react'
+import {
+  ArrowTopRightOnSquareIcon,
+  CreditCardIcon,
+  ExclamationTriangleIcon,
+} from '@/components/icons'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SettingsBackLink, SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
+import { OpenPaymentsBankSection } from '@/components/bank-feed/OpenPaymentsBankSection'
+import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
+import { useOpenPaymentsConnections } from '@/components/bank-feed/use-open-payments-connections'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
 
 const BankingPanel = getSettingsPanel('enable-banking')
@@ -28,6 +39,21 @@ export function BankingSettingsContent() {
   const [isAccessDenied, setIsAccessDenied] = useState(false)
   const [showHbPoaHint, setShowHbPoaHint] = useState(false)
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
+  // Bank reading through Open Payments, when switched on for the company:
+  // its own section above the Enable Banking panel, which keeps managing
+  // the older connections until they are switched over. The section also
+  // stands when the company may no longer start a consent but holds one (a
+  // cardless trial): its connection stays visible and removable, else the
+  // panel below would offer the same bank again and fail after the BankID.
+  const companyId = useCompanyOptional()?.company?.id ?? null
+  const openPayments = useOpenPaymentsAvailability()
+  const opAvailable = openPayments.status === 'available'
+  const bankFlow = useBankConnectFlow('banking')
+  const opConnections = useOpenPaymentsConnections(companyId)
+  const showOpSection = opAvailable || opConnections.openPayments.length > 0
+  // A bank that signs on its own page sends the person back here with
+  // ?bank_connect=<id>: reopen the flow at its BankID step, once.
+  useBankConnectResume(bankFlow, opAvailable)
 
   // Surface a bank connection/authorization failure that the OAuth callback
   // bounced back as `?bank_error=...`. The success path is handled by the
@@ -77,7 +103,7 @@ export function BankingSettingsContent() {
         setIsAccessDenied(true)
       }
       // Handelsbanken refuses business connects when the company hasn't
-      // registered and linked the open banking fullmakt ("Internet Företag –
+      // registered and linked the open banking fullmakt ("Internet Företag:
       // tilläggstjänst API Företag"): as server_error, or since 2026-09-14
       // as access_denied "Invalid credentials". Surface the fix steps for both.
       if (
@@ -94,14 +120,15 @@ export function BankingSettingsContent() {
 
   return (
     <div>
+      <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       <SettingsSectionHeader title={tNav('banking')} intro={tIntro('banking', { appName })} />
 
       {/* OAuth bounce-back failure: a live warning, so it stays visible in the
           page flow, as compact warning-tone lines instead of a bordered box. */}
       {bankConnectionError && (
         <div role="alert" className="mt-6 flex items-start gap-2 px-1">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
-          <div className="min-w-0 flex-1 space-y-1 text-[12.5px] leading-relaxed">
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
+          <div className="min-w-0 flex-1 space-y-1 text-xs leading-relaxed">
             <p className="text-attn">{bankConnectionError}</p>
             {isAccessDenied && failedBankName && (
               <p className="text-muted-foreground">
@@ -140,21 +167,26 @@ export function BankingSettingsContent() {
         </div>
       )}
 
+      {showOpSection && (
+        <OpenPaymentsBankSection flow={bankFlow} connections={opConnections.openPayments} onChanged={opConnections.refresh} canConnect={opAvailable} />
+      )}
+      {opAvailable && <BankConnectDialog flow={bankFlow} onConnected={opConnections.refresh} />}
+
       {hasBankingExtension && BankingPanel ? (
         // No BankSyncStatusChip here: on this page the chip links to itself,
         // and the panel now carries its own single attention sentence. The
         // chip stays on /transactions.
         <BankingPanel />
-      ) : (
+      ) : showOpSection ? null : (
         <div className="pt-8">
           <EmptyState
-            icon={CreditCard}
+            icon={CreditCardIcon}
             title={t('not_enabled_title')}
             description={t('not_enabled_description')}
           >
             <Button variant="outline" asChild>
               <Link href="/extensions">
-                <ExternalLink className="mr-2 h-4 w-4" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
                 {t('go_to_extensions')}
               </Link>
             </Button>

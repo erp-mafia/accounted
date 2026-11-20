@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { AlertCircle } from 'lucide-react'
+import { ExclamationCircleIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -14,9 +14,9 @@ export function SettingsLoadError({ onRetry }: { onRetry: () => void }) {
   const t = useTranslations('common')
   return (
     <div className="flex flex-col items-center justify-center gap-4 py-12 text-center">
-      <AlertCircle className="h-8 w-8 text-muted-foreground" aria-hidden />
+      <ExclamationCircleIcon className="h-8 w-8 text-muted-foreground" aria-hidden />
       <p className="text-sm text-muted-foreground">{t('load_error')}</p>
-      <Button variant="outline" size="sm" onClick={onRetry}>
+      <Button variant="outline" onClick={onRetry}>
         {t('retry')}
       </Button>
     </div>

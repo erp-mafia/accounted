@@ -15,8 +15,12 @@ vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
 
+// The service's owner/admin gate (requireCompanyAdmin) reads the role through
+// getCompanyRole: an owner unless a test says otherwise.
+const mockGetCompanyRole = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  getCompanyRole: (...args: unknown[]) => mockGetCompanyRole(...args),
 }))
 
 vi.mock('@/lib/company/context', () => ({
@@ -78,6 +82,7 @@ describe('POST /api/import/opening-balance/correct', () => {
     vi.clearAllMocks()
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    mockGetCompanyRole.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
   })
 
   it('returns 401 for unauthenticated requests', async () => {
@@ -104,6 +109,21 @@ describe('POST /api/import/opening-balance/correct', () => {
 
     expect(status).toBe(404)
     expect((body.error as unknown as { code: string }).code).toBe('OB_PERIOD_NOT_FOUND')
+  })
+
+  it('returns 403 FORBIDDEN for a member and books nothing: the relink is owner/admin only', async () => {
+    mockGetCompanyRole.mockResolvedValue({ ok: true, role: 'member', companyId: 'company-1' })
+    enqueue({ data: openPeriodWithOB() }) // period
+
+    const res = await POST(makeRequest({ fiscal_period_id: PERIOD_ID, lines: BALANCED_LINES }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(mockGetCompanyRole).toHaveBeenCalledWith(expect.anything(), 'user-1', { companyId: 'company-1' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
   it('returns 400 when the period is closed', async () => {
@@ -219,7 +239,7 @@ describe('POST /api/import/opening-balance/correct', () => {
     expect((body.error as unknown as { code: string }).code).toBe('OB_UNBALANCED')
   })
 
-  it('books a corrected IB, stornoes the old one, and relinks on success', async () => {
+  it('books a corrected IB, relinks the year to it, then stornoes the old one', async () => {
     enqueue({ data: openPeriodWithOB() }) // period
     enqueue({ data: { bookkeeping_locked_through: null } }) // company lock-date pre-flight
     enqueue({ count: 0 }) // year-end check
@@ -243,6 +263,9 @@ describe('POST /api/import/opening-balance/correct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'opening_balance', voucher_series: 'A' }),
+      // The posting port's ledger adapter fills commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
     expect(mockReverseEntry).toHaveBeenCalledWith(
       expect.anything(),
@@ -250,10 +273,15 @@ describe('POST /api/import/opening-balance/correct', () => {
       'user-1',
       'entry-old',
     )
-    expect(mockSupabase.rpc).toHaveBeenCalledWith(
-      'replace_period_opening_balance_link',
-      expect.objectContaining({ p_period_id: PERIOD_ID, p_new_entry_id: 'entry-new' }),
-    )
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('replace_period_opening_balance_link', {
+      p_company_id: 'company-1',
+      p_period_id: PERIOD_ID,
+      p_new_entry_id: 'entry-new',
+      p_user_id: 'user-1',
+    })
+    // Relinked while the old IB is still posted, and only then stornoed.
+    expect(mockSupabase.rpc.mock.invocationCallOrder[0]).toBeLessThan(mockReverseEntry.mock.invocationCallOrder[0])
+    expect(mockReverseEntry).toHaveBeenCalledTimes(1)
   })
 
   it('returns 500 OB_CORRECT_FAILED if the relink RPC fails', async () => {
@@ -270,5 +298,9 @@ describe('POST /api/import/opening-balance/correct', () => {
 
     expect(status).toBe(500)
     expect((body.error as unknown as { code: string }).code).toBe('OB_CORRECT_FAILED')
+    // The old IB is never stornoed: only the corrected one is, so the year
+    // keeps its old IB, still linked.
+    expect(mockReverseEntry).toHaveBeenCalledTimes(1)
+    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-new')
   })
 })

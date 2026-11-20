@@ -1,3 +1,7 @@
+---
+areas: [fakturering]
+---
+
 # Invoice text library: IT consulting (Sweden)
 
 ## B2B inom EU (omvänd betalningsskyldighet)

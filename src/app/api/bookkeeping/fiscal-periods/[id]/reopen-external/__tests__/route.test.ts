@@ -22,6 +22,7 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 
 import { requireAuth } from '@/lib/auth/require-auth'
 import { reopenExternallyClosedPeriod } from '@/lib/core/bookkeeping/period-service'
+import { codedRefusal } from '@/lib/errors/refusal'
 import { POST } from '../route'
 
 const mockReopen = vi.mocked(reopenExternallyClosedPeriod)
@@ -82,7 +83,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/reopen-external', () => {
 
   it('maps a missing period to 404', async () => {
     mockAuth()
-    mockReopen.mockRejectedValue(new Error('Fiscal period not found'))
+    mockReopen.mockRejectedValue(codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found'))
     const res = await POST(reopenRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(404)
     const body = await res.json()
@@ -91,7 +92,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/reopen-external', () => {
 
   it('maps an open period to a 409', async () => {
     mockAuth()
-    mockReopen.mockRejectedValue(new Error('Period is not closed'))
+    mockReopen.mockRejectedValue(codedRefusal('PERIOD_REOPEN_NOT_CLOSED', 'Period is not closed'))
     const res = await POST(reopenRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(409)
     const body = await res.json()
@@ -101,7 +102,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/reopen-external', () => {
   it('maps a period closed by a year-end run to a 409', async () => {
     mockAuth()
     mockReopen.mockRejectedValue(
-      new Error('Period was closed with a year-end run in Accounted and cannot be reopened here'),
+      codedRefusal('PERIOD_REOPEN_NOT_EXTERNAL', 'Period was closed with a year-end run in Accounted and cannot be reopened here'),
     )
     const res = await POST(reopenRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(409)

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
@@ -6,6 +6,13 @@ vi.mock('next/cache', () => ({
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
+}))
+
+const cookieMocks = vi.hoisted(() => ({ set: vi.fn() }))
+
+vi.mock('next/headers', () => ({
+  cookies: vi.fn(async () => ({ set: cookieMocks.set })),
+  headers: vi.fn(async () => new Headers()),
 }))
 
 const deadlineMocks = vi.hoisted(() => ({
@@ -22,6 +29,18 @@ vi.mock('@/lib/tax/deadline-generator', () => ({
 vi.mock('@/lib/company/context', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/company/context')>()),
   setActiveCompany: vi.fn().mockResolvedValue(undefined),
+}))
+
+// SCB is off by default (no credentials in tests); the säte tests switch it on.
+const scbMocks = vi.hoisted(() => ({ configured: false, lookupByOrgNumber: vi.fn() }))
+
+vi.mock('@/lib/parties/scb/config', () => ({
+  isScbConfigured: () => scbMocks.configured,
+  scbConfigFromEnv: () => ({ baseUrl: 'https://scb.test', pfx: Buffer.from(''), passphrase: 'x', timeoutMs: 20_000 }),
+}))
+
+vi.mock('@/lib/parties/scb/client', () => ({
+  createScbClient: () => ({ lookupByOrgNumber: scbMocks.lookupByOrgNumber }),
 }))
 
 import { createClient } from '@/lib/supabase/server'
@@ -93,6 +112,7 @@ function buildSupabase(opts: {
 beforeEach(() => {
   vi.clearAllMocks()
   deadlineMocks.regenerate.mockResolvedValue({ created: 1, deleted: 0 })
+  scbMocks.configured = false
 })
 
 describe('switchCompany', () => {
@@ -209,6 +229,64 @@ describe('createCompanyFromOnboarding: org_number validation', () => {
     const rpcCreate = supabase.rpc.mock.calls.find(([name]) => name === 'create_company_with_owner')
     expect(rpcCreate).toBeUndefined()
   })
+
+  it('refuses a VAT-registered company without an org number before any write', async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: { create_company_with_owner: { data: 'x' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: {
+        entity_type: 'aktiebolag',
+        company_name: 'Testbolaget AB',
+        vat_registered: true,
+        moms_period: 'quarterly',
+        // No org_number: the momsregistreringsnummer would have nothing to derive from.
+      },
+      fiscalPeriod: {
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        name: 'Räkenskapsår 2026',
+      },
+    })
+
+    expect(result.error).toBe('Ett momsregistrerat företag behöver organisationsnummer.')
+    expect(supabase.rpc.mock.calls.find(([name]) => name === 'create_company_with_owner')).toBeUndefined()
+    expect(calls.some((c) => c.method === 'upsert' || c.method === 'insert')).toBe(false)
+  })
+
+  it('creates a company without an org number when it is not VAT-registered', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: {
+        create_company_with_owner: { data: 'new-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: {
+        entity_type: 'aktiebolag',
+        company_name: 'Testbolaget AB',
+        vat_registered: false,
+        vat_number: null,
+        moms_period: null,
+      },
+      fiscalPeriod: {
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        name: 'Räkenskapsår 2026',
+      },
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(result.companyId).toBe('new-company-id')
+  })
 })
 
 describe('createCompanyFromOnboarding: byrå team gating (WL-15)', () => {
@@ -269,7 +347,7 @@ describe('createCompanyFromOnboarding: byrå team gating (WL-15)', () => {
     })
 
     // Response shape: the created company id, no error.
-    expect(result).toEqual({ companyId: 'client-company-id' })
+    expect(result).toEqual({ companyId: 'client-company-id', registeredOffice: null })
 
     // Team binding present: the RPC received the byrå team explicitly
     // (never ensure_user_team arbitrariness, WL-08/WL-15).
@@ -297,7 +375,7 @@ describe('createCompanyFromOnboarding: byrå team gating (WL-15)', () => {
       ...baseParams,
     })
 
-    expect(result).toEqual({ companyId: 'personal-company-id' })
+    expect(result).toEqual({ companyId: 'personal-company-id', registeredOffice: null })
   })
 })
 
@@ -463,3 +541,327 @@ describe('createCompanyFromOnboarding: TIC snapshot persistence', () => {
   })
 })
 
+
+describe('createCompanyFromOnboarding: säte from the register', () => {
+  const params = {
+    teamId: 'team-1',
+    settings: {
+      entity_type: 'aktiebolag',
+      company_name: 'Acme AB',
+      org_number: '5560125790',
+      // The postal town of the registered address, as the journey fills it.
+      city: 'Postorten',
+    },
+    fiscalPeriod: { startDate: '2026-01-01', endDate: '2026-12-31', name: 'Räkenskapsår 2026' },
+  }
+
+  function settingsUpsert(calls: CapturedCall[]): Record<string, unknown> {
+    const upsert = calls.find((c) => c.table === 'company_settings' && c.method === 'upsert')
+    expect(upsert).toBeDefined()
+    return upsert!.args[0] as Record<string, unknown>
+  }
+
+  it("saves SCB's Säteskommun as registered_office and returns it, keeping city the postal town", async () => {
+    scbMocks.configured = true
+    scbMocks.lookupByOrgNumber.mockResolvedValue({
+      found: true,
+      peOrgNr: '165560125790',
+      row: {},
+      facts: [
+        { field: 'postal_address', value: { street: 'Box 1', co: null, postal_code: '11122', city: 'POSTORTEN' } },
+        { field: 'seat', value: { municipality_code: '0180', county_code: '01', municipality: 'Sateskommunen', county: 'Länet' } },
+      ],
+      fetchedAt: '2026-10-03T00:00:00.000Z',
+    })
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(params)
+
+    expect(result).toEqual({ companyId: 'new-company-id', registeredOffice: 'Sateskommunen' })
+    expect(scbMocks.lookupByOrgNumber).toHaveBeenCalledWith('5560125790')
+    const saved = settingsUpsert(calls)
+    expect(saved.registered_office).toBe('Sateskommunen')
+    expect(saved.city).toBe('Postorten')
+  })
+
+  it('never fills säte from the postal town when the register has no answer', async () => {
+    scbMocks.configured = true
+    scbMocks.lookupByOrgNumber.mockRejectedValue(new Error('SCB svarade 503'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(params)
+
+    expect(result).toEqual({ companyId: 'new-company-id', registeredOffice: null })
+    expect(settingsUpsert(calls).registered_office).toBeUndefined()
+  })
+})
+
+describe('createCompanyFromOnboarding: first-session books gate', () => {
+  const params = {
+    teamId: 'personal-team',
+    settings: { entity_type: 'aktiebolag' as const, company_name: 'Ny AB' },
+    fiscalPeriod: { startDate: '2026-01-01', endDate: '2026-12-31', name: 'Räkenskapsår 2026' },
+  }
+
+  function gateCookieSets() {
+    return cookieMocks.set.mock.calls.filter(([name]) => name === 'gnubok-books-gate')
+  }
+
+  it("arms the gate for the user's first company", async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        company_members: { limit: { data: [] } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'first-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(params)
+
+    expect(result).toEqual({ companyId: 'first-company-id', registeredOffice: null })
+    expect(gateCookieSets()).toHaveLength(1)
+    expect(gateCookieSets()[0][1]).toBe('first-company-id')
+    // Archived companies do not count as a company the user already has.
+    expect(calls).toContainEqual({ table: 'company_members', method: 'is', args: ['companies.archived_at', null] })
+    expect(calls).toContainEqual({ table: 'company_members', method: 'eq', args: ['user_id', 'user-1'] })
+  })
+
+  it('never arms the gate when the user already has a live company (added from inside the app)', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        company_members: { limit: { data: [{ company_id: 'existing-company' }] } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'second-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(params)
+
+    expect(result).toEqual({ companyId: 'second-company-id', registeredOffice: null })
+    expect(gateCookieSets()).toHaveLength(0)
+  })
+
+  it('never arms the gate for a client company created under a byrå team', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'byra' } } },
+        team_members: { maybeSingle: { data: { role: 'owner' } } },
+        company_members: { limit: { data: [] } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'client-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({ ...params, teamId: 'byra-team' })
+
+    expect(result).toEqual({ companyId: 'client-company-id', registeredOffice: null })
+    expect(gateCookieSets()).toHaveLength(0)
+  })
+
+  it('does not arm the gate when the membership read fails', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        company_members: { limit: { error: { message: 'connection reset' } } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(params)
+
+    expect(result).toEqual({ companyId: 'new-company-id', registeredOffice: null })
+    expect(gateCookieSets()).toHaveLength(0)
+  })
+
+  it('ignores a client that still asks for the gate on a second company', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        company_members: { limit: { data: [{ company_id: 'existing-company' }] } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'second-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    // An older client bundle still sends the removed flag during a deploy.
+    await createCompanyFromOnboarding({ ...params, booksGate: true } as Parameters<typeof createCompanyFromOnboarding>[0])
+
+    expect(gateCookieSets()).toHaveLength(0)
+  })
+})
+
+describe('createCompanyFromOnboarding: the profile derived from the legal form', () => {
+  const params = (entityType: string) => ({
+    teamId: 'team-1',
+    settings: { entity_type: entityType, company_name: 'Ny Firma' },
+    fiscalPeriod: { startDate: '2026-01-01', endDate: '2026-12-31', name: 'Räkenskapsår 2026' },
+  })
+
+  function setup(teamKind: 'personal' | 'byra') {
+    const built = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: teamKind } } },
+        team_members: { maybeSingle: { data: { role: 'owner' } } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' }, seed_chart_of_accounts: { data: null } },
+    })
+    mockCreateClient.mockResolvedValue(built.supabase as never)
+    const profileWrites = () =>
+      built.calls
+        .filter((c) => c.table === 'companies' && c.method === 'update')
+        .map((c) => c.args[0] as Record<string, unknown>)
+        .filter((row) => 'suggested_profile_id' in row)
+    return { ...built, profileWrites }
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('records the derived profile as a suggestion only, while PROFILES_APPLY_ON_SIGNUP is off', async () => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', '')
+    const { profileWrites } = setup('personal')
+    const result = await createCompanyFromOnboarding(params('aktiebolag'))
+    expect(result.companyId).toBe('new-company-id')
+    expect(profileWrites()).toEqual([
+      { suggested_profile_id: 'limited-company-no-employees', suggested_profile_version: 1, profile_id: null, profile_version: null },
+    ])
+  })
+
+  it.each([
+    ['enskild_firma', 'sole-trader'],
+    ['ideell_forening', 'association'],
+  ])('derives %s -> %s', async (entityType, profile) => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', '')
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    const { profileWrites } = setup('personal')
+    await createCompanyFromOnboarding(params(entityType))
+    expect(profileWrites()).toEqual([
+      { suggested_profile_id: profile, suggested_profile_version: 1, profile_id: null, profile_version: null },
+    ])
+  })
+
+  it('applies the derived profile on public signup once the instance sets PROFILES_APPLY_ON_SIGNUP', async () => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', 'true')
+    const { profileWrites } = setup('personal')
+    await createCompanyFromOnboarding(params('enskild_firma'))
+    expect(profileWrites()).toEqual([
+      { suggested_profile_id: 'sole-trader', suggested_profile_version: 1, profile_id: 'sole-trader', profile_version: 1 },
+    ])
+  })
+
+  it('never applies it to a byrå client company, even with the flag on: the byrå picks in its invite form', async () => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', 'true')
+    const { profileWrites } = setup('byra')
+    await createCompanyFromOnboarding(params('aktiebolag'))
+    expect(profileWrites()).toEqual([
+      { suggested_profile_id: 'limited-company-no-employees', suggested_profile_version: 1, profile_id: null, profile_version: null },
+    ])
+  })
+
+  it('still creates the company when the suggestion cannot be written', async () => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', '')
+    const built = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        companies: { update: { error: { message: 'column "suggested_profile_id" does not exist' } } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' }, seed_chart_of_accounts: { data: null } },
+    })
+    mockCreateClient.mockResolvedValue(built.supabase as never)
+    const result = await createCompanyFromOnboarding(params('aktiebolag'))
+    expect(result).toEqual({ companyId: 'new-company-id', registeredOffice: null })
+  })
+})
+
+describe('createCompanyFromOnboarding: the räkenskapsår is checked on the server', () => {
+  // The journey works the dates out in the browser. The server asks the one
+  // rule (checkPeriodDuration) itself before it writes anything.
+  async function create(settings: Record<string, unknown>, startDate: string, endDate: string) {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: {
+        create_company_with_owner: { data: 'new-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: { company_name: 'Testbolaget AB', vat_registered: false, ...settings },
+      fiscalPeriod: { startDate, endDate, name: 'Första räkenskapsåret' },
+    })
+    return {
+      result,
+      companyCreated: supabase.rpc.mock.calls.some(([name]) => name === 'create_company_with_owner'),
+      periodWrite: calls.find((c) => c.table === 'fiscal_periods' && c.method === 'upsert')?.args[0],
+    }
+  }
+
+  const firstYear: Record<string, unknown> = { entity_type: 'aktiebolag', is_first_fiscal_year: true }
+
+  const refused: Array<[label: string, settings: Record<string, unknown>, startDate: string, endDate: string]> = [
+    ['a first year of 19 months', firstYear, '2026-06-15', '2027-12-31'],
+    ['an end that is not the last of a month', firstYear, '2026-09-01', '2027-12-30'],
+    ['an end before the start', firstYear, '2026-09-01', '2026-08-31'],
+    ['a date that does not exist', firstYear, '2026-02-30', '2026-12-31'],
+    ['a date in another shape', firstYear, '1/9 2026', '2026-12-31'],
+    ['a mid-month start on a year that is not the first', { entity_type: 'aktiebolag' }, '2026-01-15', '2026-12-31'],
+    [
+      'a first year ending in June for a form bound to the calendar year',
+      { entity_type: 'enskild_firma', is_first_fiscal_year: true },
+      '2026-09-01',
+      '2027-06-30',
+    ],
+  ]
+  for (const [label, settings, startDate, endDate] of refused) {
+    it(`refuses ${label} before any write`, async () => {
+      const { result, companyCreated, periodWrite } = await create(settings, startDate, endDate)
+      expect(result).toEqual({ error: 'period_invalid' })
+      expect(companyCreated).toBe(false)
+      expect(periodWrite).toBeUndefined()
+    })
+  }
+
+  it('creates an extended first year of 18 months from a mid-month start', async () => {
+    const { result, periodWrite } = await create(firstYear, '2026-07-15', '2027-12-31')
+    expect(result.error).toBeUndefined()
+    expect(result.companyId).toBe('new-company-id')
+    expect(periodWrite).toMatchObject({ period_start: '2026-07-15', period_end: '2027-12-31' })
+  })
+
+  it('creates an extended first year to 31 December for a form bound to the calendar year', async () => {
+    const { result, periodWrite } = await create(
+      { entity_type: 'enskild_firma', is_first_fiscal_year: true },
+      '2026-09-10',
+      '2027-12-31',
+    )
+    expect(result.error).toBeUndefined()
+    expect(periodWrite).toMatchObject({ period_start: '2026-09-10', period_end: '2027-12-31' })
+  })
+
+  it('creates a shortened first year, which has no minimum length', async () => {
+    const { result, periodWrite } = await create(firstYear, '2026-11-20', '2026-12-31')
+    expect(result.error).toBeUndefined()
+    expect(periodWrite).toMatchObject({ period_start: '2026-11-20', period_end: '2026-12-31' })
+  })
+})

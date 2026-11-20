@@ -7,7 +7,7 @@ vi.mock('../trial-balance', () => ({
 import { findUntransferredResults, buildImbalanceDiagnosis } from '../imbalance-diagnosis'
 import { generateTrialBalance } from '../trial-balance'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import type { TrialBalanceRow, UntransferredResult } from '@/types'
+import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
 
@@ -148,47 +148,18 @@ describe('findUntransferredResults', () => {
 })
 
 describe('buildImbalanceDiagnosis', () => {
-  const culprit: UntransferredResult = {
-    fiscal_period_id: 'p2',
-    period_name: 'Räkenskapsår 2024/2025',
-    pl_net: 97,
-  }
-
   it('returns null when the differens is below one öre', () => {
-    expect(buildImbalanceDiagnosis([culprit], 0.004)).toBeNull()
-    expect(buildImbalanceDiagnosis([], 0)).toBeNull()
+    expect(buildImbalanceDiagnosis(0.004)).toBeNull()
+    expect(buildImbalanceDiagnosis(0)).toBeNull()
   })
 
-  it('names the culprit year and amount in the single-year message', () => {
-    const diagnosis = buildImbalanceDiagnosis([culprit], 97)
+  it('names the differens and never blames an untransferred result, which the opening balance now carries', () => {
+    const diagnosis = buildImbalanceDiagnosis(-97)
 
     expect(diagnosis).not.toBeNull()
-    expect(diagnosis!.differens).toBe(97)
-    expect(diagnosis!.untransferred_results).toEqual([culprit])
-    expect(diagnosis!.message).toContain('Räkenskapsår 2024/2025')
+    expect(diagnosis!.differens).toBe(-97)
     expect(diagnosis!.message).toContain('97,00')
-    expect(diagnosis!.message).toContain('förts om till eget kapital')
-    expect(diagnosis!.message).toContain('8999')
-  })
-
-  it('lists every culprit year in the multi-year message', () => {
-    const other: UntransferredResult = {
-      fiscal_period_id: 'p1',
-      period_name: 'Räkenskapsår 2023/2024',
-      pl_net: -50,
-    }
-    const diagnosis = buildImbalanceDiagnosis([other, culprit], 47)
-
-    expect(diagnosis!.message).toContain('Räkenskapsår 2023/2024')
-    expect(diagnosis!.message).toContain('Räkenskapsår 2024/2025')
-    expect(diagnosis!.message).toContain('respektive år')
-  })
-
-  it('falls back to a generic message when no culprit was found', () => {
-    const diagnosis = buildImbalanceDiagnosis([], 97)
-
-    expect(diagnosis).not.toBeNull()
-    expect(diagnosis!.untransferred_results).toEqual([])
     expect(diagnosis!.message).toContain('Ingen orsak kunde fastställas automatiskt')
+    expect(diagnosis!.message).not.toContain('förts om till eget kapital')
   })
 })

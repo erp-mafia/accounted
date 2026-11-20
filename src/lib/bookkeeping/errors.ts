@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { DimensionValidationError, MandatoryDimensionMissingError } from './dimension-errors'
+import { conflictCode } from '@/lib/errors/structured-errors'
 
 // ============================================================================
 // Dimension validation errors: the classes live in ./dimension-errors.ts
@@ -25,19 +26,41 @@ export const ENTRY_DATE_OUTSIDE_FISCAL_PERIOD = 'ENTRY_DATE_OUTSIDE_FISCAL_PERIO
 export const JOURNAL_ENTRY_NOT_FOUND = 'JOURNAL_ENTRY_NOT_FOUND' as const
 export const CANNOT_REVERSE_NON_POSTED = 'CANNOT_REVERSE_NON_POSTED' as const
 export const CANNOT_REVERSE_STORNO = 'CANNOT_REVERSE_STORNO' as const
+export const CANNOT_REVERSE_COLLECTED_PAYMENT = 'CANNOT_REVERSE_COLLECTED_PAYMENT' as const
 export const CANNOT_CORRECT_NON_POSTED = 'CANNOT_CORRECT_NON_POSTED' as const
 export const CANNOT_EDIT_NON_DRAFT = 'CANNOT_EDIT_NON_DRAFT' as const
 export const CANNOT_CANCEL_NON_DRAFT = 'CANNOT_CANCEL_NON_DRAFT' as const
 export const ENTRY_ALREADY_REVERSED = 'ENTRY_ALREADY_REVERSED' as const
+export const MIGRATED_DEDUCTION_HELD_BY_REQUEST = 'MIGRATED_DEDUCTION_HELD_BY_REQUEST' as const
+export const REVERSAL_HOOK_MISSING = 'REVERSAL_HOOK_MISSING' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
 export const ASSET_DEPRECIATION_REFUSED = 'ASSET_DEPRECIATION_REFUSED' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
+export const TX_MISSING_SEK_VALUE = 'TX_MISSING_SEK_VALUE' as const
+export const TX_LINES_NOT_BALANCED = 'TX_LINES_NOT_BALANCED' as const
 export const BOOKKEEPING_DATABASE_ERROR = 'BOOKKEEPING_DATABASE_ERROR' as const
+/** guard_bank_booking_context's refusal of a bank row's verifikat that does not name its row (23514). */
+export const BANK_BOOKING_CONTEXT_REQUIRED = 'BANK_BOOKING_CONTEXT_REQUIRED' as const
 export const MEANINGLESS_CORRECTION = 'MEANINGLESS_CORRECTION' as const
 export const CORRECTION_CHAIN_TOO_DEEP = 'CORRECTION_CHAIN_TOO_DEEP' as const
 export const NO_OPEN_PERIOD_FOR_DATE = 'NO_OPEN_PERIOD_FOR_DATE' as const
 export const TARGET_PERIOD_CLOSED = 'TARGET_PERIOD_CLOSED' as const
 export const TARGET_PERIOD_LOCKED = 'TARGET_PERIOD_LOCKED' as const
+export const SI_ACCRUED_COST_PERIOD_INVALID = 'SI_ACCRUED_COST_PERIOD_INVALID' as const
+export const SI_ACCRUED_COST_PERIOD_LOCKED = 'SI_ACCRUED_COST_PERIOD_LOCKED' as const
+export const INVOICE_ACCRUED_INCOME_PERIOD_INVALID = 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID' as const
+export const INVOICE_ACCRUED_INCOME_PERIOD_LOCKED = 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED' as const
+export const SI_PREPAID_COST_PERIOD_PAST = 'SI_PREPAID_COST_PERIOD_PAST' as const
+export const INVOICE_DEFERRED_INCOME_PERIOD_PAST = 'INVOICE_DEFERRED_INCOME_PERIOD_PAST' as const
+export const CUTOFF_CARRY_REVERSAL_DATE = 'CUTOFF_CARRY_REVERSAL_DATE' as const
+export const KONTANTMETOD_CARRY_HAS_SETTLEMENTS = 'KONTANTMETOD_CARRY_HAS_SETTLEMENTS' as const
+export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED' as const
+export const IMPORT_VAT_WITHOUT_BASE = 'IMPORT_VAT_WITHOUT_BASE' as const
+export const CORRECTION_BANK_ACCOUNT_CHANGED = 'CORRECTION_BANK_ACCOUNT_CHANGED' as const
+export const UNATTENDED_COMMIT_LIMIT_EXCEEDED = 'UNATTENDED_COMMIT_LIMIT_EXCEEDED' as const
+export const BOOKING_REVIEW_REQUIRED = 'BOOKING_REVIEW_REQUIRED' as const
+export const ACCRUAL_DRAFT_POSTED_BY_SCHEDULE = 'ACCRUAL_DRAFT_POSTED_BY_SCHEDULE' as const
+export const BOOKING_REVIEW_LIMIT = 'BOOKING_REVIEW_LIMIT' as const
 
 // ============================================================================
 // AccountsNotInChartError: kept for back-compat (many existing call sites)
@@ -199,6 +222,21 @@ export class CannotReverseStornoError extends Error {
   }
 }
 
+/**
+ * A payment the collections provider collected (invoice_payments.source
+ * 'collections') is corrected only through the collections rebook, never a
+ * generic storno: the payment row cannot be removed (block_delete_collected_
+ * payment), so a storno would reopen the receivable in the ledger while the
+ * invoice stays paid and the provider's payout still clears the capital.
+ */
+export class CannotReverseCollectedPaymentError extends Error {
+  readonly code = CANNOT_REVERSE_COLLECTED_PAYMENT
+  constructor() {
+    super('A payment collected by the collections provider cannot be reversed through the generic storno')
+    this.name = 'CannotReverseCollectedPaymentError'
+  }
+}
+
 export class CannotCorrectNonPostedError extends Error {
   readonly code = CANNOT_CORRECT_NON_POSTED
   constructor(public readonly currentStatus: string) {
@@ -249,6 +287,37 @@ export class EntryAlreadyReversedError extends Error {
   }
 }
 
+/**
+ * Raised when the reclassification voucher of a migrated invoice's household
+ * deduction (source_type rot_rut_reclassification) would be reversed while a
+ * begäran made here holds that invoice. The storno would put the deduction
+ * back on 1510 while the begäran still asks Skatteverket for it: the begäran
+ * must be cancelled first (lib/invoices/migrated-deduction-reversal.ts).
+ */
+export class MigratedDeductionHeldByRequestError extends Error {
+  readonly code = MIGRATED_DEDUCTION_HELD_BY_REQUEST
+  constructor(public readonly invoiceId: string) {
+    super('The invoice is held by a ROT/RUT request; cancel the request before reversing')
+    this.name = 'MigratedDeductionHeldByRequestError'
+  }
+}
+
+/**
+ * Raised by reverseEntry before anything is written when the entry's source
+ * type needs a business-state mirror on storno (REVERSAL_MIRROR_REQUIRED in
+ * lib/bookkeeping/reversal-hooks.ts) and no reversal hook for it is
+ * registered (lib/composition/reversal-hooks.ts). A refused storno can be
+ * retried once the hook is back; a storno that left its sub-ledger half
+ * mirrored could not be detected later.
+ */
+export class ReversalHookMissingError extends Error {
+  readonly code = REVERSAL_HOOK_MISSING
+  constructor(public readonly sourceType: string) {
+    super(`No reversal hook is registered for source type ${sourceType}; the storno was refused before anything was written`)
+    this.name = 'ReversalHookMissingError'
+  }
+}
+
 export class CurrencyRevaluationAlreadyExistsError extends Error {
   readonly code = CURRENCY_REVALUATION_ALREADY_EXISTS
   constructor() {
@@ -266,6 +335,243 @@ export class CurrencyRevaluationAlreadyExistsError extends Error {
  */
 export type AssetDepreciationRefusal = 'already_posted' | 'asset_not_found'
 
+/** Recalculate the proposal instead of posting against an edited opening balance. */
+export class AssetOpeningChangedError extends Error {
+  readonly code = 'ASSET_OPENING_CHANGED'
+  constructor() {
+    super('Asset opening depreciation changed: recalculate the proposal before posting')
+    this.name = 'AssetOpeningChangedError'
+  }
+}
+
+/**
+ * The K3 component split a posting was computed with no longer matches the
+ * register (a component was added, replaced or removed in between):
+ * recalculate the proposal.
+ */
+export class AssetComponentsChangedError extends Error {
+  readonly code = 'ASSET_COMPONENTS_CHANGED'
+  constructor() {
+    super('Asset components changed: recalculate the proposal before posting')
+    this.name = 'AssetComponentsChangedError'
+  }
+}
+
+/** The refusals of a component replacement that leave nothing posted. */
+export type AssetComponentRefusal =
+  | 'ASSET_COMPONENT_NOT_FOUND'
+  | 'ASSET_COMPONENT_NOT_ACTIVE'
+  | 'ASSET_LAST_COMPONENT'
+  | 'ASSET_COMPONENT_STATE_CHANGED'
+  | 'ASSET_COMPONENT_IMPAIRED'
+
+export class AssetComponentRefusedError extends Error {
+  readonly code: AssetComponentRefusal
+  constructor(reason: string) {
+    const code = (
+      [
+        'ASSET_COMPONENT_NOT_FOUND',
+        'ASSET_COMPONENT_NOT_ACTIVE',
+        'ASSET_LAST_COMPONENT',
+        'ASSET_COMPONENT_STATE_CHANGED',
+        'ASSET_COMPONENT_IMPAIRED',
+      ] as const
+    ).find((known) => known === reason) ?? 'ASSET_COMPONENT_STATE_CHANGED'
+    super(code)
+    this.code = code
+    this.name = 'AssetComponentRefusedError'
+  }
+}
+
+/** Why a nedskrivning or its reversal (ÅRL 4:5, K3 27) cannot be posted. */
+export type AssetValueAdjustmentBlock =
+  | 'disposed'
+  | 'period_locked'
+  | 'before_acquisition'
+  | 'not_at_balance_sheet_date'
+  | 'later_depreciation_posted'
+  | 'later_adjustment'
+  | 'year_not_depreciated'
+  | 'history_incomplete'
+  | 'no_write_down'
+  | 'nothing_to_reverse'
+  | 'goodwill_reversal'
+  | 'components_changed'
+  | 'exceeds_carrying_amount'
+  | 'exceeds_write_down'
+
+const VALUE_ADJUSTMENT_BLOCK_SV: Record<AssetValueAdjustmentBlock, string> = {
+  disposed: 'Tillgången är avyttrad och kan inte skrivas ned.',
+  period_locked: 'Räkenskapsåret är låst eller stängt.',
+  before_acquisition: 'Räkenskapsåret slutar före tillgångens anskaffningsdatum.',
+  not_at_balance_sheet_date: 'En nedskrivning bokförs per balansdagen, räkenskapsårets sista dag.',
+  later_depreciation_posted: 'Avskrivning för ett senare räkenskapsår är redan bokförd. Återför den med storno först.',
+  later_adjustment: 'En senare nedskrivning eller återföring är redan bokförd. Återför den med storno först.',
+  year_not_depreciated: 'Bokför årets avskrivning för tillgången först: nedskrivningen prövas mot det redovisade värdet efter avskrivning.',
+  history_incomplete:
+    'Avskrivningen för tidigare år finns inte i anläggningsregistret, så det redovisade värdet är inte känt. Bokför de åren eller ange redan avskrivet belopp först.',
+  no_write_down: 'Återvinningsvärdet är inte lägre än det redovisade värdet: ingen nedskrivning behövs (K3 27.2).',
+  nothing_to_reverse:
+    'Det finns ingen nedskrivning att återföra: ingen är bokförd, eller återvinningsvärdet ryms inte över det redovisade värdet (K3 27.15).',
+  goodwill_reversal: 'En nedskrivning av goodwill får inte återföras (ÅRL 4 kap. 5 §).',
+  components_changed: 'Komponenterna har ändrats sedan beräkningen. Räkna om och försök igen.',
+  exceeds_carrying_amount: 'Nedskrivningen är större än det redovisade värdet. Räkna om och försök igen.',
+  exceeds_write_down: 'Återföringen är större än nedskrivningen som återstår. Räkna om och försök igen.',
+}
+
+/** The refusals commit_asset_value_adjustment raises (PT409 message) by reason. */
+const VALUE_ADJUSTMENT_RPC_REFUSALS: Record<string, AssetValueAdjustmentBlock> = {
+  ASSET_DISPOSED: 'disposed',
+  NOT_AT_BALANCE_SHEET_DATE: 'not_at_balance_sheet_date',
+  LATER_DEPRECIATION_POSTED: 'later_depreciation_posted',
+  LATER_ADJUSTMENT_POSTED: 'later_adjustment',
+  EXCEEDS_CARRYING_AMOUNT: 'exceeds_carrying_amount',
+  EXCEEDS_WRITE_DOWN: 'exceeds_write_down',
+  GOODWILL_REVERSAL_FORBIDDEN: 'goodwill_reversal',
+  ASSET_COMPONENTS_CHANGED: 'components_changed',
+}
+
+export function valueAdjustmentBlockFromRpc(message: string): AssetValueAdjustmentBlock | null {
+  return VALUE_ADJUSTMENT_RPC_REFUSALS[message] ?? null
+}
+
+/**
+ * A nedskrivning or reversal that cannot be posted, before or by
+ * commit_asset_value_adjustment; nothing was posted. The message is the
+ * Swedish reason (409 ASSET_VALUE_ADJUSTMENT_BLOCKED).
+ */
+export class AssetValueAdjustmentBlockedError extends Error {
+  readonly code = 'ASSET_VALUE_ADJUSTMENT_BLOCKED'
+  constructor(readonly reason: AssetValueAdjustmentBlock) {
+    super(VALUE_ADJUSTMENT_BLOCK_SV[reason])
+    this.name = 'AssetValueAdjustmentBlockedError'
+  }
+}
+
+/** Why the transition to K3 (BFNAR 2012:1 kap. 35), or a split at it, cannot proceed. */
+export type K3TransitionBlock =
+  | 'not_k3'
+  | 'already_started'
+  | 'not_started'
+  | 'committed'
+  | 'has_splits'
+  | 'period_locked'
+  | 'asset_disposed'
+  | 'asset_not_splittable'
+  | 'asset_acquired_under_k3'
+  | 'later_depreciation_posted'
+  | 'asset_impaired'
+  | 'asset_has_components'
+  | 'split_in_use'
+  | 'asset_changed'
+
+const K3_TRANSITION_BLOCK_SV: Record<K3TransitionBlock, string> = {
+  not_k3: 'Räkenskapsåret upprättas inte enligt K3. Välj K3 för året först.',
+  already_started: 'Övergången till K3 är redan påbörjad. Kapitel 35 tillämpas en gång (K3 punkt 35.1).',
+  not_started: 'Påbörja övergången till K3 först.',
+  committed:
+    'Övergången till K3 är redan bokförd. Återför övergångsverifikationen med storno för att ändra den.',
+  has_splits: 'Ångra komponentuppdelningarna som gjorts vid övergången först.',
+  period_locked: 'Räkenskapsåret är låst eller stängt.',
+  asset_disposed: 'Tillgången är avyttrad.',
+  asset_not_splittable:
+    'Bara materiella anläggningstillgångar delas upp på komponenter (K3 punkt 17.4), och mark skrivs aldrig av.',
+  asset_acquired_under_k3:
+    'Tillgången är anskaffad under ett K3-år: dela upp den på komponenter i anläggningsregistret i stället.',
+  later_depreciation_posted:
+    'Avskrivning är redan bokförd för tillgången från övergångsdagen. Återför den med storno först.',
+  asset_impaired: 'Tillgången har en nedskrivning. Återför den innan tillgången delas upp på komponenter.',
+  asset_has_components: 'Tillgången är redan uppdelad på komponenter.',
+  split_in_use:
+    'Uppdelningen kan inte ändras längre: en komponent har avskrivits, bytts ut eller tillkommit efter övergången.',
+  asset_changed: 'Tillgången har ändrats sedan beräkningen. Räkna om och försök igen.',
+}
+
+/** The refusals the K3 transition RPCs raise (PT409 message) by reason. */
+const K3_TRANSITION_RPC_REFUSALS: Record<string, K3TransitionBlock> = {
+  K3_TRANSITION_NOT_STARTED: 'not_started',
+  K3_TRANSITION_NOT_K3: 'not_k3',
+  K3_TRANSITION_COMMITTED: 'committed',
+  K3_TRANSITION_HAS_SPLITS: 'has_splits',
+  ASSET_DISPOSED: 'asset_disposed',
+  ASSET_NOT_SPLITTABLE: 'asset_not_splittable',
+  ASSET_ACQUIRED_UNDER_K3: 'asset_acquired_under_k3',
+  LATER_DEPRECIATION_POSTED: 'later_depreciation_posted',
+  ASSET_IMPAIRED: 'asset_impaired',
+  ASSET_HAS_COMPONENTS: 'asset_has_components',
+  TRANSITION_SPLIT_IN_USE: 'split_in_use',
+  ASSET_COMPONENTS_CHANGED: 'asset_changed',
+}
+
+export function k3TransitionBlockFromRpc(message: string): K3TransitionBlock | null {
+  return K3_TRANSITION_RPC_REFUSALS[message] ?? null
+}
+
+/**
+ * The transition to K3, or a component split at it, refused before or by
+ * its RPC; nothing was written. The message is the Swedish reason (409
+ * K3_TRANSITION_BLOCKED).
+ */
+export class K3TransitionBlockedError extends Error {
+  readonly code = 'K3_TRANSITION_BLOCKED'
+  constructor(readonly reason: K3TransitionBlock) {
+    super(K3_TRANSITION_BLOCK_SV[reason])
+    this.name = 'K3TransitionBlockedError'
+  }
+}
+
+/** Transition input that cannot be booked, with the Swedish rule (400 INVALID_K3_TRANSITION). */
+export class K3TransitionInvalidError extends Error {
+  readonly code = 'INVALID_K3_TRANSITION'
+  constructor(message: string) {
+    super(message)
+    this.name = 'K3TransitionInvalidError'
+  }
+}
+
+/**
+ * The year's deferred tax is already posted (commit_deferred_tax): a new
+ * calculation needs the earlier voucher reversed first (409).
+ */
+export class DeferredTaxAlreadyPostedError extends Error {
+  readonly code = 'DEFERRED_TAX_ALREADY_POSTED'
+  constructor() {
+    super('DEFERRED_TAX_ALREADY_POSTED')
+    this.name = 'DeferredTaxAlreadyPostedError'
+  }
+}
+
+export type ContractRevenueRefusal = 'not_k3' | 'stale' | 'later_year'
+
+const CONTRACT_REVENUE_REFUSALS: Record<ContractRevenueRefusal, string> = {
+  not_k3: 'CONTRACT_REVENUE_NOT_K3',
+  stale: 'CONTRACT_REVENUE_STALE',
+  later_year: 'CONTRACT_REVENUE_LATER_YEAR_BOOKED',
+}
+
+/** The refusal commit_contract_revenue raised (PT409 with this message), or null. */
+export function contractRevenueRefusalFromRpc(message: string): ContractRevenueRefusal | null {
+  const found = (Object.entries(CONTRACT_REVENUE_REFUSALS) as Array<[ContractRevenueRefusal, string]>).find(
+    ([, raised]) => raised === message,
+  )
+  return found ? found[0] : null
+}
+
+/**
+ * commit_contract_revenue refused the pågående-arbeten adjustment (409): the
+ * year is not reported under K3, the register's verifikat, method or account
+ * changed since the adjustment was computed (a double click, a concurrent
+ * booking), or a later year's booking stands on this year's balance. Nothing
+ * was posted.
+ */
+export class ContractRevenueRefusedError extends Error {
+  readonly code = 'CONTRACT_REVENUE_REFUSED'
+  constructor(public readonly reason: ContractRevenueRefusal) {
+    super(CONTRACT_REVENUE_REFUSALS[reason])
+    this.name = 'ContractRevenueRefusedError'
+  }
+}
+
 export class AssetDepreciationRefusedError extends Error {
   readonly code = ASSET_DEPRECIATION_REFUSED
   constructor(public readonly reason: AssetDepreciationRefusal) {
@@ -282,6 +588,7 @@ export type MeaninglessCorrectionReason =
   | 'net_zero_per_account'
   | 'identical_to_original'
   | 'no_date_change'
+  | 'negates_original'
 
 export class MeaninglessCorrectionError extends Error {
   readonly code = MEANINGLESS_CORRECTION
@@ -291,7 +598,9 @@ export class MeaninglessCorrectionError extends Error {
         ? 'Correction lines net to zero on every account: no economic event represented (BFL 5 kap. 5 §).'
         : reason === 'no_date_change'
           ? 'New date equals the current date: nothing to move.'
-          : 'Correction lines are identical to the original entry: nothing to correct.'
+          : reason === 'negates_original'
+            ? 'Correction lines are the original with debit and credit swapped: the storno already reverses the original, so this would reverse it a second time. To only cancel the entry, reverse it (storno). Pass sides_swapped=true only when the original itself was booked with debit and credit swapped.'
+            : 'Correction lines are identical to the original entry: nothing to correct.'
     )
     this.name = 'MeaninglessCorrectionError'
   }
@@ -366,6 +675,211 @@ export class TargetPeriodLockedError extends Error {
   }
 }
 
+/**
+ * Raised before a supplier invoice registration is posted when a line books
+ * an upplupen kostnad (29xx) for a period that does not end before the
+ * invoice month. The cost of the invoice month itself is no accrual: the
+ * line has to be split instead.
+ */
+export class AccruedCostPeriodInvalidError extends Error {
+  readonly code = SI_ACCRUED_COST_PERIOD_INVALID
+  constructor(
+    public readonly periodStart: string,
+    public readonly periodEnd: string,
+    public readonly invoiceDate: string
+  ) {
+    super(
+      `An accrued cost (29xx) must cover months before the invoice month: the period ${periodStart} to ${periodEnd} reaches the month of the invoice dated ${invoiceDate}. Split the line.`
+    )
+    this.name = 'AccruedCostPeriodInvalidError'
+  }
+}
+
+/** Why a month-end date cannot take an upplupen kostnad (checkPeriodLock's reasons). */
+export type AccruedCostBlockReason =
+  | 'company_lock_date_covers'
+  | 'period_locked_at_set'
+  | 'period_is_closed'
+  | 'no_fiscal_period'
+  | 'lookup_failed'
+
+export interface AccruedCostBlockedDate {
+  date: string
+  reason: AccruedCostBlockReason
+}
+
+/**
+ * Raised before a supplier invoice registration is posted when an upplupen
+ * kostnad (29xx) would book on a month-end that cannot take an entry: a
+ * closed or locked period, a date on or before the company lock date, or no
+ * fiscal year at all. The cost belongs
+ * to that month, so it is never moved to another one: the whole registration
+ * is refused and nothing is written.
+ */
+export class AccruedCostPeriodLockedError extends Error {
+  readonly code = SI_ACCRUED_COST_PERIOD_LOCKED
+  constructor(public readonly blocked: AccruedCostBlockedDate[]) {
+    super(
+      `An accrued cost (29xx) would post on ${blocked.map((b) => `${b.date} (${b.reason})`).join(', ')}, which cannot take entries. Nothing was booked.`
+    )
+    this.name = 'AccruedCostPeriodLockedError'
+  }
+}
+
+/**
+ * Raised before a customer invoice's revenue entry is posted when a line
+ * books an upplupen intäkt (17xx) for a period that does not end before the
+ * invoice month (#62). The invoice month's own revenue is no accrual: the
+ * line has to be split instead.
+ */
+export class AccruedIncomePeriodInvalidError extends Error {
+  readonly code = INVOICE_ACCRUED_INCOME_PERIOD_INVALID
+  constructor(
+    public readonly periodStart: string,
+    public readonly periodEnd: string,
+    public readonly invoiceDate: string
+  ) {
+    super(
+      `Accrued income (17xx) must cover months before the invoice month: the period ${periodStart} to ${periodEnd} reaches the month of the invoice dated ${invoiceDate}. Split the line.`
+    )
+    this.name = 'AccruedIncomePeriodInvalidError'
+  }
+}
+
+/**
+ * Raised before a customer invoice's revenue entry is posted when an
+ * upplupen intäkt (17xx) would book on a month-end that cannot take an entry
+ * (the same reasons as AccruedCostPeriodLockedError). The revenue belongs to
+ * that month, so it is never moved to another one: nothing is written.
+ */
+export class AccruedIncomePeriodLockedError extends Error {
+  readonly code = INVOICE_ACCRUED_INCOME_PERIOD_LOCKED
+  constructor(public readonly blocked: AccruedCostBlockedDate[]) {
+    super(
+      `Accrued income (17xx) would post on ${blocked.map((b) => `${b.date} (${b.reason})`).join(', ')}, which cannot take entries. Nothing was booked.`
+    )
+    this.name = 'AccruedIncomePeriodLockedError'
+  }
+}
+
+/**
+ * Raised before an invoice's verifikat is posted when a line defers
+ * (förutbetald: a cost on 17xx, revenue on 29xx) a period that ends before
+ * the invoice month (accounted#113). Those months are over: the deferral
+ * would release all of them on the invoice date. The line needs the upplupen
+ * account instead (suggestedAccount: 2990/2960 for a cost, 1790 for revenue),
+ * which books each month on its own last day.
+ */
+export class DeferralPeriodPastError extends Error {
+  readonly code: typeof SI_PREPAID_COST_PERIOD_PAST | typeof INVOICE_DEFERRED_INCOME_PERIOD_PAST
+  constructor(
+    public readonly direction: 'expense' | 'revenue',
+    public readonly periodStart: string,
+    public readonly periodEnd: string,
+    public readonly invoiceDate: string,
+    public readonly balanceAccount: string | null,
+    public readonly suggestedAccount: string
+  ) {
+    super(
+      `The period ${periodStart} to ${periodEnd} ends before the month of the invoice dated ${invoiceDate}, so it cannot be deferred on ${balanceAccount ?? 'the default account'}: book it as ${direction === 'expense' ? 'an accrued cost' : 'accrued income'} on ${suggestedAccount}.`
+    )
+    this.code = direction === 'expense' ? SI_PREPAID_COST_PERIOD_PAST : INVOICE_DEFERRED_INCOME_PERIOD_PAST
+    this.name = 'DeferralPeriodPastError'
+  }
+}
+
+/** The details a DeferralPeriodPastError answers with, in every envelope. */
+export function deferralPeriodPastDetails(err: DeferralPeriodPastError) {
+  return {
+    periodStart: err.periodStart,
+    periodEnd: err.periodEnd,
+    invoiceDate: err.invoiceDate,
+    balanceAccount: err.balanceAccount,
+    suggestedAccount: err.suggestedAccount,
+  }
+}
+
+/**
+ * A kontantmetod year-end carry (årsomföring, #3440) may only be stornoed on
+ * its own date: the moms it declared in the closed year's final VAT period
+ * must leave that same period. The database refuses the same thing
+ * (kontantmetod_carry_on_reversal, 20261018131100); this is the readable
+ * refusal before any write.
+ */
+export class CutoffCarryReversalDateError extends Error {
+  readonly code = CUTOFF_CARRY_REVERSAL_DATE
+  constructor(
+    public readonly carryDate: string,
+    public readonly reversalDate: string,
+  ) {
+    super(
+      `A kontantmetod year-end carry dated ${carryDate} can only be reversed on that date, not ${reversalDate}`
+    )
+    this.name = 'CutoffCarryReversalDateError'
+  }
+}
+
+/**
+ * A kontantmetod year-end carry whose invoice has been paid or credited since
+ * cannot be stornoed: the payment or credit note cleared the 1510 / 2440 the
+ * carry booked, and would be left stranded. Undo those first.
+ */
+export class KontantmetodCarryHasSettlementsError extends Error {
+  readonly code = KONTANTMETOD_CARRY_HAS_SETTLEMENTS
+  constructor(public readonly invoiceId: string) {
+    super('The carried invoice has payments or a booked credit note: undo them before reversing the carry')
+    this.name = 'KontantmetodCarryHasSettlementsError'
+  }
+}
+
+/**
+ * A kontantmetod year-end carry is never corrected in place (storno plus
+ * rättelse): it is stornoed on its own date and the cut-off is run again,
+ * which rebuilds it from the invoice.
+ */
+export class CutoffCarryCorrectionRefusedError extends Error {
+  readonly code = CUTOFF_CARRY_CORRECTION_REFUSED
+  constructor() {
+    super('A kontantmetod year-end carry cannot be corrected: reverse it on its own date and run the cut-off again')
+    this.name = 'CutoffCarryCorrectionRefusedError'
+  }
+}
+
+/**
+ * A rättelse that would leave importmoms (rutor 60-62) in the verifikat with
+ * no beskattningsunderlag in ruta 50 (#94), the shape the booking doors refuse
+ * too (#83, lib/bookkeeping/import-vat-base.ts). The message is the Swedish
+ * sentence naming the accounts and what to change.
+ */
+export class ImportVatWithoutBaseError extends Error {
+  readonly code = IMPORT_VAT_WITHOUT_BASE
+  constructor(
+    public readonly importVatAccounts: string[],
+    messageSv: string,
+  ) {
+    super(messageSv)
+    this.name = 'ImportVatWithoutBaseError'
+  }
+}
+
+/**
+ * A storno + rättelse that moves the bank leg of a bank row the original
+ * anchors to another bank account (lib/core/bookkeeping/correction-bank-leg.ts):
+ * the bank row says which account the money moved on. The message is the
+ * Swedish sentence naming both accounts and what to do instead.
+ */
+export class CorrectionBankAccountChangedError extends Error {
+  readonly code = CORRECTION_BANK_ACCOUNT_CHANGED
+  constructor(
+    public readonly bankAccount: string,
+    public readonly movedTo: string[],
+    messageSv: string,
+  ) {
+    super(messageSv)
+    this.name = 'CorrectionBankAccountChangedError'
+  }
+}
+
 export class InvalidMappingResultError extends Error {
   readonly code = INVALID_MAPPING_RESULT
   constructor(
@@ -376,6 +890,134 @@ export class InvalidMappingResultError extends Error {
       `Invalid mapping result: debit_account="${debitAccount}", credit_account="${creditAccount}". Both must be non-empty.`
     )
     this.name = 'InvalidMappingResultError'
+  }
+}
+
+/**
+ * A foreign-currency bank transaction has neither amount_sek nor an
+ * exchange_rate, so its SEK value is unknown. Journal lines are always kronor
+ * (BFL 4 kap 6 §), and the old fallback booked the raw foreign number as if it
+ * were kronor: 100 CAD posted as 100 kr. Booking refuses instead; the next
+ * step is the transaction's refresh-exchange-rate route, which fetches the
+ * Riksbanken rate for the transaction date.
+ */
+export class TransactionMissingSekValueError extends Error {
+  readonly code = TX_MISSING_SEK_VALUE
+  constructor(
+    public readonly transactionId: string,
+    public readonly currency: string,
+    public readonly date: string
+  ) {
+    super(
+      `Transaction ${transactionId} is in ${currency} but has neither amount_sek nor exchange_rate; it cannot be booked until its SEK value is known`
+    )
+    this.name = 'TransactionMissingSekValueError'
+  }
+}
+
+/**
+ * The lines a kontering builds for a bank row do not balance, so the booking
+ * is refused where the lines are built (buildTransactionEntryLines), before
+ * any draft: the engine would refuse the same lines (hard rule 3), but only
+ * after the request reached it, as a failure of ours with no word on what to
+ * do. A single debit/credit pair nets its moms against the bank line and
+ * balances by construction; a learned line pattern (all_lines_complete) books
+ * its lines at their own amounts and sides beside the full bank amount, and a
+ * pattern whose lines net on the bank's own side, or whose moms line sits
+ * opposite its cost lines, cannot be replayed on the row.
+ */
+export class TransactionLinesNotBalancedError extends Error {
+  readonly code = TX_LINES_NOT_BALANCED
+  constructor(
+    public readonly transactionId: string,
+    public readonly totalDebit: number,
+    public readonly totalCredit: number,
+    /** The lines came from a learned line pattern, not a single pair. */
+    public readonly fromLinePattern: boolean,
+  ) {
+    super(
+      `The booking built for transaction ${transactionId} does not balance: debits (${totalDebit}) != credits (${totalCredit})`
+    )
+    this.name = 'TransactionLinesNotBalancedError'
+  }
+}
+
+/**
+ * A verifikat above the acting API key's unattended ceiling
+ * (api_keys.unattended_commit_limit): refused before a voucher number is
+ * drawn, so nothing is posted and the series has no gap. A person posts it
+ * from the app, or the key stages it for approval. lib/bookkeeping/unattended-ceiling.ts
+ * raises it; `attempted` and `limit` are SEK. `attempted` is null for an act
+ * whose amounts are only known as it posts them (a year-end close), which a
+ * key with a ceiling never runs.
+ */
+export class UnattendedCommitLimitExceededError extends Error {
+  readonly code = UNATTENDED_COMMIT_LIMIT_EXCEEDED
+  constructor(
+    public readonly attempted: number | null,
+    public readonly limit: number,
+  ) {
+    super(
+      attempted === null
+        ? `Unattended commit limit: a key with a limit of ${limit} SEK may not run this unattended`
+        : `Unattended commit limit exceeded: ${attempted} SEK is above the key's limit of ${limit} SEK`,
+    )
+    this.name = 'UnattendedCommitLimitExceededError'
+  }
+}
+
+/**
+ * A periodisering draft (source_type 'accrual') handed to a generic commit:
+ * the dashboard's, the v1 API's, an agent's. Such a verifikat is posted only
+ * by the periodisering itself, in the transaction that marks the month (or
+ * the rest of the schedule) it books (commit_accrual_installment,
+ * commit_accrual_dissolution). A draft a killed run left behind, posted from
+ * here, would be a verifikat no month points at, and the posting run would
+ * book the month again: the interim account dissolved twice. Nothing is
+ * posted and no number is drawn; the next posting run books the month and
+ * cancels the draft.
+ */
+export class AccrualDraftPostedByScheduleError extends Error {
+  readonly code = ACCRUAL_DRAFT_POSTED_BY_SCHEDULE
+  /** The draft, when one exists: createJournalEntry and createJournalEntries refuse before drafting. */
+  constructor(public readonly journalEntryId: string | null = null) {
+    super('A periodisering verifikat is posted by its schedule, together with the month it books')
+    this.name = 'AccrualDraftPostedByScheduleError'
+  }
+}
+
+/**
+ * A booking a booking review rule matches (booking_review_rules, accounted#130
+ * step 2) that was about to be posted without a person's review: by a key,
+ * an agent, a grant, cron, a bulk path or a one click. commit_journal_entry
+ * refused it before a voucher number was drawn, so nothing is posted. A
+ * person books it from its review in the app; an agent stages it.
+ */
+export class BookingReviewRequiredError extends Error {
+  readonly code = BOOKING_REVIEW_REQUIRED
+  constructor(public readonly journalEntryId: string | null = null) {
+    super('A booking review rule matches this booking, so a person books it from its review')
+    this.name = 'BookingReviewRequiredError'
+  }
+}
+
+/**
+ * A person reviewed a booking a rule matches, but the company has set
+ * booking_review limits (company_attest_limits) and theirs does not cover
+ * the bank rows' amount, or they have none. Nothing is posted.
+ */
+export class BookingReviewLimitError extends Error {
+  readonly code = BOOKING_REVIEW_LIMIT
+  constructor(
+    public readonly amountSek: number | null,
+    public readonly limitSek: number | null,
+  ) {
+    super(
+      limitSek === null
+        ? 'Booking review limit: the reviewer has no booking_review limit, and the company has set them'
+        : `Booking review limit: ${amountSek} SEK is above the reviewer's limit of ${limitSek} SEK`,
+    )
+    this.name = 'BookingReviewLimitError'
   }
 }
 
@@ -391,6 +1033,7 @@ export type BookkeepingOperation =
   | 'undo_sie_import_chunk'
   | 'undo_sie_duplicate_repair_chunk'
   | 'get_next_voucher_number'
+  | 'peek_next_voucher_number'
   | 'resolve_account_ids'
   | 'create_draft_entry'
   | 'create_entry_lines'
@@ -400,6 +1043,22 @@ export type BookkeepingOperation =
   | 'fetch_asset_disposal_entry'
   | 'commit_asset_depreciation'
   | 'fetch_asset_depreciation_entry'
+  | 'commit_asset_component_replacement'
+  | 'fetch_asset_component_replacement_entry'
+  | 'commit_asset_value_adjustment'
+  | 'fetch_asset_value_adjustment_entry'
+  | 'commit_accrual_installment'
+  | 'fetch_accrual_installment_entry'
+  | 'commit_accrual_dissolution'
+  | 'fetch_accrual_dissolution_entry'
+  | 'commit_deferred_tax'
+  | 'fetch_deferred_tax_entry'
+  | 'commit_contract_revenue'
+  | 'fetch_contract_revenue_entry'
+  | 'commit_k3_transition'
+  | 'fetch_k3_transition_entry'
+  | 'load_collected_payment_rows'
+  | 'load_collections_rebook'
   | 'create_reversal_entry'
   | 'create_reversal_lines'
   | 'post_reversal_entry'
@@ -411,9 +1070,18 @@ export type BookkeepingOperation =
   | 'fetch_currency_payables'
   | 'check_existing_revaluation'
   | 'resolve_settlement_account'
+  // The account a payment file pays from (lib/payments/paying-account.ts).
+  | 'resolve_paying_account'
+  // Posting port (lib/posting), strict mode only: the business event or its
+  // link to the draft could not be written, so nothing was posted.
+  | 'record_business_event'
+  | 'link_business_event'
 
 export class BookkeepingDatabaseError extends Error {
-  readonly code: typeof BOOKKEEPING_DATABASE_ERROR | 'CONFLICT'
+  readonly code:
+    | typeof BOOKKEEPING_DATABASE_ERROR
+    | typeof BANK_BOOKING_CONTEXT_REQUIRED
+    | ReturnType<typeof conflictCode>
   constructor(
     public readonly operation: BookkeepingOperation,
     public readonly cause: string | undefined,
@@ -421,7 +1089,17 @@ export class BookkeepingDatabaseError extends Error {
   ) {
     super(cause ? `Database operation "${operation}" failed: ${cause}` : `Database operation "${operation}" failed`)
     this.name = 'BookkeepingDatabaseError'
-    this.code = pgCode === 'PT409' ? 'CONFLICT' : BOOKKEEPING_DATABASE_ERROR
+    // A PT409 refusal keeps the name the database raised it with, so the
+    // user reads what was refused rather than a generic conflict. So does
+    // the bank-booking guard's 23514 for a bank row's verifikat that does not
+    // name its row: no retry posts it, and "Verifikationen kunde inte sparas.
+    // Försök igen." sent a person round that loop (2026-11-16).
+    this.code =
+      pgCode === 'PT409'
+        ? conflictCode(cause)
+        : pgCode === '23514' && cause === BANK_BOOKING_CONTEXT_REQUIRED
+          ? BANK_BOOKING_CONTEXT_REQUIRED
+          : BOOKKEEPING_DATABASE_ERROR
   }
 }
 
@@ -478,18 +1156,37 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof JournalEntryNotFoundError ||
     err instanceof CannotReverseNonPostedError ||
     err instanceof CannotReverseStornoError ||
+    err instanceof CannotReverseCollectedPaymentError ||
     err instanceof CannotCorrectNonPostedError ||
     err instanceof CannotEditNonDraftError ||
     err instanceof CannotCancelNonDraftError ||
     err instanceof EntryAlreadyReversedError ||
+    err instanceof MigratedDeductionHeldByRequestError ||
+    err instanceof ReversalHookMissingError ||
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
+    err instanceof TransactionMissingSekValueError ||
+    err instanceof TransactionLinesNotBalancedError ||
+    err instanceof UnattendedCommitLimitExceededError ||
+    err instanceof BookingReviewRequiredError ||
+    err instanceof AccrualDraftPostedByScheduleError ||
+    err instanceof BookingReviewLimitError ||
     err instanceof BookkeepingDatabaseError ||
     err instanceof MeaninglessCorrectionError ||
     err instanceof CorrectionChainTooDeepError ||
     err instanceof NoOpenPeriodForDateError ||
     err instanceof TargetPeriodClosedError ||
     err instanceof TargetPeriodLockedError ||
+    err instanceof AccruedCostPeriodInvalidError ||
+    err instanceof AccruedCostPeriodLockedError ||
+    err instanceof AccruedIncomePeriodInvalidError ||
+    err instanceof AccruedIncomePeriodLockedError ||
+    err instanceof DeferralPeriodPastError ||
+    err instanceof CutoffCarryReversalDateError ||
+    err instanceof KontantmetodCarryHasSettlementsError ||
+    err instanceof CutoffCarryCorrectionRefusedError ||
+    err instanceof ImportVatWithoutBaseError ||
+    err instanceof CorrectionBankAccountChangedError ||
     err instanceof DimensionValidationError ||
     err instanceof MandatoryDimensionMissingError
   )
@@ -691,6 +1388,20 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
     )
   }
 
+  if (err instanceof MigratedDeductionHeldByRequestError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { invoiceId: err.invoiceId } } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof ReversalHookMissingError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { sourceType: err.sourceType } } },
+      { status: 500 }
+    )
+  }
+
   if (err instanceof CurrencyRevaluationAlreadyExistsError) {
     return NextResponse.json(
       { error: { code: err.code, message: err.message } },
@@ -707,6 +1418,41 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           details: {
             debitAccount: err.debitAccount,
             creditAccount: err.creditAccount,
+          },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof TransactionMissingSekValueError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: {
+            transactionId: err.transactionId,
+            currency: err.currency,
+            date: err.date,
+          },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof TransactionLinesNotBalancedError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: {
+            transactionId: err.transactionId,
+            totalDebit: err.totalDebit,
+            totalCredit: err.totalCredit,
+            fromLinePattern: err.fromLinePattern,
           },
         },
       },
@@ -779,6 +1525,65 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
     )
   }
 
+  if (err instanceof CutoffCarryReversalDateError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { carryDate: err.carryDate, reversalDate: err.reversalDate },
+        },
+      },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof KontantmetodCarryHasSettlementsError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { invoiceId: err.invoiceId },
+        },
+      },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof CutoffCarryCorrectionRefusedError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof ImportVatWithoutBaseError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { import_vat_accounts: err.importVatAccounts },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof CorrectionBankAccountChangedError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { bank_account: err.bankAccount, moved_to: err.movedTo },
+        },
+      },
+      { status: 409 }
+    )
+  }
+
   if (err instanceof DimensionValidationError) {
     // err.message is already the user-facing Swedish sentence(s) naming the
     // offending code(s); details.issues carries the machine-readable list.
@@ -819,7 +1624,34 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           details: { operation: err.operation },
         },
       },
-      { status: err.code === 'CONFLICT' ? 409 : 500 }
+      { status: err.code === BOOKKEEPING_DATABASE_ERROR ? 500 : 409 }
+    )
+  }
+
+  if (err instanceof AccruedCostPeriodInvalidError || err instanceof AccruedIncomePeriodInvalidError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { periodStart: err.periodStart, periodEnd: err.periodEnd, invoiceDate: err.invoiceDate },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof DeferralPeriodPastError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: deferralPeriodPastDetails(err) } },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof AccruedCostPeriodLockedError || err instanceof AccruedIncomePeriodLockedError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { blocked: err.blocked } } },
+      { status: 400 }
     )
   }
 

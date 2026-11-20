@@ -71,3 +71,53 @@ describe('AB and EF option generation agree', () => {
     expect(abFirstYearEndOptions(2026, 10, 12).map((o) => o.months)).toEqual([3, 15])
   })
 })
+
+describe('the options are what the one räkenskapsår rule allows', () => {
+  /** The month-end `count` calendar months into a year starting in `startMonth` of 2026. */
+  function monthEnd(startMonth: number, count: number): string {
+    const index = startMonth - 1 + count - 1
+    const year = 2026 + Math.floor(index / 12)
+    const month = (index % 12) + 1
+    const day = new Date(year, month, 0).getDate()
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  }
+
+  it('offers every month-end from 1 to 18 months out, and nothing else, for every start month', () => {
+    for (let startMonth = 1; startMonth <= 12; startMonth++) {
+      const legal = Array.from({ length: 18 }, (_, i) => monthEnd(startMonth, i + 1)).sort()
+      const offered = Array.from({ length: 12 }, (_, i) => abFirstYearEndOptions(2026, startMonth, i + 1))
+        .flat()
+        .map((o) => o.date)
+        .sort()
+      expect(offered, `start month ${startMonth}`).toEqual(legal)
+    }
+  })
+
+  it('every offered end passes the gate before submit, also from a start late in the month', () => {
+    for (let startMonth = 1; startMonth <= 12; startMonth++) {
+      for (let endMonth = 1; endMonth <= 12; endMonth++) {
+        for (const option of abFirstYearEndOptions(2026, startMonth, endMonth)) {
+          const start = `2026-${String(startMonth).padStart(2, '0')}-15`
+          expect(journeyAccepts(start, option.date), `${start} to ${option.date}`).toBeNull()
+        }
+      }
+    }
+  })
+
+  it('gives a calendar-year form its extended first year only when the start is after 30 June', () => {
+    for (let startMonth = 1; startMonth <= 12; startMonth++) {
+      const options = efFirstYearEndOptions(2026, startMonth)
+      expect(options.every((o) => o.month === 12 && o.day === 31)).toBe(true)
+      expect(options.some((o) => o.months > 12), `start month ${startMonth}`).toBe(startMonth > 6)
+      for (const option of options) {
+        const gate = computeFiscalPeriod({
+          entity_type: 'enskild_firma',
+          is_first_fiscal_year: true,
+          first_year_start: `2026-${String(startMonth).padStart(2, '0')}-15`,
+          first_year_end: option.date,
+        })
+        expect(gate.error, `start month ${startMonth} to ${option.date}`).toBeNull()
+      }
+    }
+  })
+})

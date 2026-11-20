@@ -7,6 +7,8 @@
  *   preview that lies about where the final invoice will break.
  * - Table rows, totals, the payment box and the notice boxes never split
  *   across a page; a section heading never ends up alone at a page bottom.
+ * - Free text (line descriptions, notes) is kept together whenever it fits on
+ *   a page; a note longer than a page splits between paragraphs (crm#260).
  * - Words wrap whole: react-pdf's default English hyphenation split Swedish
  *   words ("Septem-ber").
  * - Units follow the document language ("st" prints as "pcs" in English).
@@ -15,10 +17,14 @@
 import { describe, expect, it } from 'vitest'
 import { inflateSync } from 'node:zlib'
 import type { ReactElement, ReactNode } from 'react'
+import { createElement } from 'react'
 import { renderToBuffer } from '@react-pdf/renderer'
-import { Font, pdf } from '@react-pdf/renderer'
+import { Document, Font, Page, Text, View, pdf } from '@react-pdf/renderer'
 import layoutDocument from '@react-pdf/layout'
 import {
+  BUILT_IN_FONT_ESTIMATE_ERROR,
+  BUILT_IN_FONT_LINE_PITCH,
+  COURIER_ESTIMATE_ERROR,
   DRAFT_WATERMARK_COLOR,
   DRAFT_WATERMARK_FONT_SIZE_PT,
   DRAFT_WATERMARK_OPACITY,
@@ -28,11 +34,25 @@ import {
   DESCRIPTION_COLUMN_PT,
   FULL_WIDTH_BOX_PT,
   MAX_KEEP_TOGETHER_LINES,
+  NOTICE_BOX_CHROME_PT,
+  NOTICE_FONT_SIZE_PT,
+  PAGE_MARGIN_PT,
+  PAGE_PADDING_BOTTOM_PT,
+  PAGE_PADDING_TOP_PT,
+  PAYMENT_AREA_HEIGHT_PT,
+  TABLE_ROW_CHROME_PT,
+  TABLE_ROW_FONT_SIZE_PT,
+  USABLE_PAGE_HEIGHT_PT,
   approxWidthPt,
+  estimateLines,
   fitsOnOnePage,
+  keepTogetherLineCap,
+  splitParagraphs,
   wrapDescriptionWords,
   wrapFullWidthWords,
 } from '@/lib/invoices/pdf-template'
+import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
+import { A4_HEIGHT_PT, TABLE_HEADER_HEIGHT_PT } from '@/lib/invoices/pdf/geometry'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { InvoiceItem } from '@/types'
 
@@ -317,7 +337,9 @@ describe('draft watermark', () => {
     expect(containsText(last, 'UTKAST')).toBe(true)
 
     // And in the actual PDF: within each page's content stream the watermark
-    // glyph run comes after the last rectangle fill.
+    // glyph run comes after the last fill (the note's and the payment area's
+    // surfaces are rounded, so they are filled paths rather than rectangles).
+    // The page with the payment area has at least one.
     const buffer = await renderToBuffer(tree)
     expect(pageCount(buffer)).toBeGreaterThan(1)
     const streams = contentStreams(buffer)
@@ -325,11 +347,10 @@ describe('draft watermark', () => {
     const watermarkRun = /\[<55>[^\]<]*<54>[^\]<]*<4b>[^\]<]*<41>[^\]<]*<53>[^\]<]*<54>[^\]<]*\]\s*TJ/
     const pagesWithWord = streams.filter((s) => watermarkRun.test(s))
     expect(pagesWithWord.length).toBe(pageCount(buffer))
+    const lastFillAt = (s: string) => Math.max(...[...s.matchAll(/(?:^|\n)(?:f|f\*|B|B\*)(?=\n|$)/g)].map((m) => m.index ?? -1), -1)
+    expect(pagesWithWord.some((s) => lastFillAt(s) > -1)).toBe(true)
     for (const s of pagesWithWord) {
-      const wordAt = s.search(watermarkRun)
-      const lastFill = Math.max(s.lastIndexOf(' re\nf'), s.lastIndexOf(' re\n'))
-      expect(lastFill).toBeGreaterThan(-1)
-      expect(wordAt).toBeGreaterThan(lastFill)
+      expect(s.search(watermarkRun)).toBeGreaterThan(lastFillAt(s))
     }
   })
 
@@ -386,21 +407,23 @@ describe('draft watermark', () => {
 describe('oversize free text', () => {
   it('estimates whether a block fits on one page', () => {
     const column = DESCRIPTION_COLUMN_PT
-    expect(fitsOnOnePage('Konsultation', column)).toBe(true)
-    expect(fitsOnOnePage(null, column)).toBe(true)
-    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES }, () => 'Rad').join('\n'), column)).toBe(true)
-    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES + 1 }, () => 'Rad').join('\n'), column)).toBe(false)
+    const cap = MAX_KEEP_TOGETHER_LINES
+    expect(fitsOnOnePage('Konsultation', column, cap)).toBe(true)
+    expect(fitsOnOnePage(null, column, cap)).toBe(true)
+    expect(fitsOnOnePage(Array.from({ length: cap }, () => 'Rad').join('\n'), column, cap)).toBe(true)
+    expect(fitsOnOnePage(Array.from({ length: cap + 1 }, () => 'Rad').join('\n'), column, cap)).toBe(false)
     // About 25 short words per column line; 13 lines' worth on one source line.
-    expect(fitsOnOnePage(Array.from({ length: 25 * (MAX_KEEP_TOGETHER_LINES + 1) }, () => 'ord').join(' '), column)).toBe(false)
+    expect(fitsOnOnePage(Array.from({ length: 25 * (cap + 1) }, () => 'ord').join(' '), column, cap)).toBe(false)
   })
 
   it('counts the chunks a long token is broken into, not the source line', () => {
     // 35 W per line is one source line but three rendered chunk lines.
     const wide = Array.from({ length: 5 }, () => 'W'.repeat(35)).join('\n')
-    expect(fitsOnOnePage(wide, DESCRIPTION_COLUMN_PT)).toBe(false)
+    expect(estimateLines(wide, DESCRIPTION_COLUMN_PT)).toBe(15)
+    expect(fitsOnOnePage(wide, DESCRIPTION_COLUMN_PT, MAX_KEEP_TOGETHER_LINES)).toBe(false)
   })
 
-  it('keeps the kept-together budget under a third of the page for any font', () => {
+  it('keeps the fixed ROT/RUT cap under a third of the page for any font', () => {
     // Worst case: every line at 20pt (an uploaded font), plus row padding.
     expect(MAX_KEEP_TOGETHER_LINES * 20 + 12).toBeLessThan(762 / 3)
   })
@@ -436,10 +459,11 @@ describe('oversize free text', () => {
   })
 
   it('a free-text row is budgeted at its full width, not the description column', () => {
-    // 12 lines of 60 characters: fits the full width, not a 160pt column.
-    const text = Array.from({ length: MAX_KEEP_TOGETHER_LINES }, () => 'x'.repeat(60)).join('\n')
-    expect(fitsOnOnePage(text, FULL_WIDTH_BOX_PT)).toBe(true)
-    expect(fitsOnOnePage(text, DESCRIPTION_COLUMN_PT)).toBe(false)
+    // A row's worth of 60-character lines: fits the full width, not a 160pt column.
+    const rowCap = keepTogetherLineCap('Helvetica', TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)
+    const text = Array.from({ length: rowCap }, () => 'x'.repeat(60)).join('\n')
+    expect(fitsOnOnePage(text, FULL_WIDTH_BOX_PT, rowCap)).toBe(true)
+    expect(fitsOnOnePage(text, DESCRIPTION_COLUMN_PT, rowCap)).toBe(false)
     const items = [makeItem({ description: text, line_type: 'text', quantity: 0, unit_price: 0 })]
     const row = elements(InvoicePDF({ invoice: sentInvoice(), customer, items, company })).find(
       (el) => el.props.wrap === false && containsText(el, 'x'.repeat(60)),
@@ -468,6 +492,52 @@ describe('oversize free text', () => {
     const pages = await layOut(InvoicePDF({ invoice, customer, items: long, company }))
     expectNothingPastThePageEdge(pages)
     expect(pages.map(textOf).join('')).toContain('Städning vecka 40')
+  })
+
+  it('a ROT box with every row set stays whole and ends inside the page wherever it lands', async () => {
+    // #3385: a ROT invoice now also prints the förening orgnr (bostadsrätt),
+    // the total incl. moms and the seller payout notice. At the line cap the
+    // box is still kept together; pushed towards the page bottom by the rows
+    // above it, it moves to the next page rather than running past the edge.
+    const rotItem = (i: number) =>
+      makeItem({
+        sort_order: 100 + i,
+        id: `rot-${i}`,
+        description: `Elarbete ${i + 1}`,
+        deduction_type: 'rot',
+        deduction_amount: 250,
+        work_type: 'EL',
+        apartment_number: '1201',
+        brf_org_number: '799900-0040',
+      } as Partial<InvoiceItem>)
+    const rotItems = Array.from({ length: MAX_KEEP_TOGETHER_LINES }, (_, i) => rotItem(i))
+    const invoice = { ...sentInvoice(), deduction_total: 3000, deduction_personnummer_masked: '19900101-XXXX' }
+    const box = elements(InvoicePDF({ invoice, customer, items: rotItems, company })).find(
+      (el) => el.props.wrap !== undefined && containsText(el, 'Underlag för skattereduktion'),
+    )
+    expect(box?.props.wrap).toBe(false)
+
+    const landedOn = new Set<number>()
+    // The fixed layout keeps the totals and the box together (the payment
+    // area may follow on the next page), so the filler rows move them as one.
+    for (const fillers of [0, 4, 8, 12, 16, 24, 32, 40]) {
+      const filler = Array.from({ length: fillers }, (_, i) => makeItem({ sort_order: i, id: `fill-${i}`, description: `Rad ${i + 1}` }))
+      const pages = await layOut(InvoicePDF({ invoice, customer, items: [...filler, ...rotItems], company }))
+      expectNothingPastThePageEdge(pages)
+      const texts = pages.map(textOf)
+      const all = texts.join('')
+      expect(all).toContain('Totalt inkl. moms')
+      expect(all).toContain('799900-0040')
+      // The box is whole: its heading and its last row (the payout notice)
+      // are on the same page.
+      const headingPage = texts.findIndex((t) => t.includes('Underlag för skattereduktion'))
+      const noticePage = texts.findIndex((t) => t.includes('Säljaren begär utbetalningen från Skatteverket'))
+      expect(headingPage).toBeGreaterThanOrEqual(0)
+      expect(noticePage).toBe(headingPage)
+      landedOn.add(headingPage)
+    }
+    // The filler rows push the box across a page break at least once.
+    expect(landedOn.size).toBeGreaterThan(1)
   })
 
   it('a 3000-character description without line breaks is not clipped', async () => {
@@ -509,22 +579,349 @@ describe('page breaks', () => {
   const tree = InvoicePDF({ invoice: sentInvoice(), customer, items: [makeItem()], company })
   const all = elements(tree)
 
-  it('never splits a table row, the totals, the payment box or a notice box', () => {
+  it('never splits a table row, the totals block or a notice', () => {
     const rowsWithText = all.filter((el) => containsText(el, 'Konsulttimmar') && el.props.wrap === false)
     expect(rowsWithText.length).toBeGreaterThan(0)
-    expect(all.some((el) => el.props.wrap === false && containsText(el, 'Delsumma:'))).toBe(true)
-    expect(all.some((el) => el.props.wrap === false && containsText(el, 'Betalningsinformation'))).toBe(true)
+    expect(all.some((el) => el.props.wrap === false && containsText(el, 'Delsumma'))).toBe(true)
   })
 
-  it('keeps every section heading with the content below it', () => {
-    const headings = all.filter((el) => {
-      const style = styleOf(el)
-      return style.textTransform === 'uppercase' && style.letterSpacing === 0.5
-    })
-    expect(headings.length).toBeGreaterThanOrEqual(3)
-    for (const heading of headings) {
-      expect(heading.props.minPresenceAhead).toBe(HEADING_MIN_PRESENCE_AHEAD)
+  it('draws the payment area out of the flow, at a fixed height above the footer', () => {
+    const frame = all.find((el) => el.props.fixed === true && typeof el.props.render === 'function' && styleOf(el).height === PAYMENT_AREA_HEIGHT_PT)
+    expect(frame).toBeDefined()
+    expect(styleOf(frame!)).toMatchObject({ position: 'absolute', bottom: PAGE_PADDING_BOTTOM_PT })
+  })
+
+  it('keeps the table header with the rows below it, and repeats it with the table', () => {
+    const header = all.find((el) => el.props.fixed === true && containsText(el, 'Beskrivning'))
+    expect(header).toBeDefined()
+    expect(header!.props.minPresenceAhead).toBe(HEADING_MIN_PRESENCE_AHEAD)
+    // In flow, not absolute: it takes its place at the top of each page the table continues to.
+    expect(styleOf(header!).position).toBeUndefined()
+  })
+})
+
+describe('notes placement', () => {
+  const note = 'Leverans sker vecka 42 enligt offert.'
+  const reverseCharge = 'Omvänd betalningsskyldighet'
+  const invoice = { ...sentInvoice(), notes: note, reverse_charge_text: reverseCharge }
+  const tree = InvoicePDF({ invoice, customer, items: [makeItem()], company })
+  const leaves = textLeaves(tree)
+  const firstIndexOf = (needle: string) => leaves.findIndex((leaf) => leaf.includes(needle))
+
+  it('renders the note after the line items and before the totals', () => {
+    const noteAt = firstIndexOf(note)
+    expect(noteAt).toBeGreaterThan(firstIndexOf('Konsulttimmar'))
+    expect(noteAt).toBeLessThan(firstIndexOf('Delsumma'))
+  })
+
+  it('leaves the statutory VAT notice where it was, after the totals', () => {
+    expect(firstIndexOf(reverseCharge)).toBeGreaterThan(firstIndexOf('Delsumma'))
+  })
+
+  it('keeps a short note in one unsplittable box', () => {
+    const box = elements(tree).find((el) => el.props.wrap !== undefined && containsText(el, note))
+    expect(box?.props.wrap).toBe(false)
+  })
+})
+
+// crm#260: payment instructions, a warning about legal action and the
+// late-payment terms in the notes, some 20-odd lines. It is far shorter than
+// a page, but the old fixed cap of 12 estimated lines let it split
+// mid-paragraph across a page break.
+const PAYMENT_TERMS_NOTE = [
+  'Betalningsanvisning:',
+  'Beloppet ska vara oss tillhanda senast på förfallodagen. Märk betalningen med fakturanumret så att vi kan koppla den rätt.',
+  '',
+  'Varning om rättsliga åtgärder:',
+  'Om full betalning inte har kommit in senast på förfallodagen kommer vi att ansöka om betalningsföreläggande hos Kronofogdemyndigheten utan ytterligare påminnelse.',
+  'Det medför ytterligare lagstadgade kostnader för dig, bland annat ansökningsavgift och ombudsersättning, och kan leda till en betalningsanmärkning.',
+  'Om du har sakliga invändningar mot kravet ska du meddela oss skriftligen så snart som möjligt och senast inom betalningsfristen.',
+  '',
+  'Dröjsmålsränta och förseningsersättning:',
+  'Vid försenad betalning debiteras dröjsmålsränta enligt räntelagen (referensränta plus åtta procentenheter). Mot näringsidkare debiteras därtill lagstadgad förseningsersättning enligt lagen (1981:739) om ersättning för inkassokostnader m.m.',
+  '',
+  'Reklamation:',
+  'Eventuella anmärkningar på fakturan ska göras skriftligen inom åtta dagar från fakturadatum. Efter den tiden anses fakturan godkänd.',
+  '',
+  'Kontakt:',
+  'Frågor om fakturan besvaras av vår ekonomiavdelning på vardagar. Ange alltid fakturanumret när du hör av dig, så hjälper vi dig snabbare.',
+].join('\n')
+
+const BUILT_IN_FONTS = ['Helvetica', 'Times-Roman', 'Courier', 'Source Sans 3', 'Source Serif 4'] as const
+
+/** The estimate error the cap allows for in a built-in font. */
+function estimateErrorFor(font: string): number {
+  return font === 'Courier' ? COURIER_ESTIMATE_ERROR : BUILT_IN_FONT_ESTIMATE_ERROR
+}
+
+/** Text of narrow letters: where the Helvetica-based estimate errs most. */
+const NARROW_LETTERS = Array.from({ length: 39 }, () => Array.from({ length: 7 }, () => 'llllll').join(' ')).join('\n')
+
+interface PlacedText {
+  page: number
+  node: LaidOutNode
+  top: number
+  bottom: number
+}
+
+/** Every TEXT node with its page index and its top and bottom in page coordinates. */
+function placedTextNodes(pages: LaidOutNode[]): PlacedText[] {
+  const out: PlacedText[] = []
+  pages.forEach((page, index) => {
+    const visit = (node: LaidOutNode, offset: number) => {
+      const top = offset + (node.box?.top ?? 0)
+      if (node.type === 'TEXT' && node.box) out.push({ page: index, node, top, bottom: top + node.box.height })
+      for (const child of node.children ?? []) visit(child, top)
     }
+    for (const child of page.children ?? []) visit(child, 0)
+  })
+  return out
+}
+
+/** The laid-out TEXT nodes that print the note: one per paragraph, two for a paragraph that split. */
+function noteNodes(pages: LaidOutNode[], notes: string): PlacedText[] {
+  const paragraphs = new Set(splitParagraphs(notes))
+  return placedTextNodes(pages).filter((n) => paragraphs.has(textOf(n.node)))
+}
+
+function lineCount(nodes: PlacedText[]): number {
+  return nodes.reduce((sum, n) => sum + (n.node.lines?.length ?? 0), 0)
+}
+
+/**
+ * A block kept together although it is taller than the page is placed with
+ * its box cut at the page edge while its lines run on past it: clipped
+ * without anything ending past the edge. The lines must fit their box.
+ */
+function expectNoClippedLines(nodes: PlacedText[], label: string) {
+  for (const { node } of nodes) {
+    const linesHeight = (node.lines ?? []).reduce((sum, line) => sum + line.box.height, 0)
+    expect(linesHeight, `${label}: lines run past their box`).toBeLessThanOrEqual(node.box!.height + 0.5)
+  }
+}
+
+async function withFont(fontFamily: string) {
+  const { prepareInvoiceFont } = await import('@/lib/invoices/pdf-fonts')
+  return prepareInvoiceFont(company, { fontFamily } as never)
+}
+
+describe('keeping free text together', () => {
+  it('derives the line cap from the usable page height, the line pitch and the estimate error', () => {
+    // A fresh page: A4 less the running header and footer reservations and a
+    // repeated table header.
+    expect(USABLE_PAGE_HEIGHT_PT).toBeCloseTo(A4_HEIGHT_PT - PAGE_PADDING_TOP_PT - PAGE_PADDING_BOTTOM_PT - TABLE_HEADER_HEIGHT_PT, 2)
+    for (const font of BUILT_IN_FONTS) {
+      const worstCaseHeight = (lines: number, fontSizePt: number, chromePt: number) =>
+        lines * fontSizePt * BUILT_IN_FONT_LINE_PITCH * estimateErrorFor(font) + chromePt
+      for (const [fontSizePt, chromePt] of [
+        [NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT],
+        [TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT],
+      ]) {
+        const cap = keepTogetherLineCap(font, fontSizePt, chromePt)
+        // The largest count whose worst case still fits on an empty page.
+        expect(worstCaseHeight(cap, fontSizePt, chromePt)).toBeLessThanOrEqual(USABLE_PAGE_HEIGHT_PT)
+        expect(worstCaseHeight(cap + 1, fontSizePt, chromePt)).toBeGreaterThan(USABLE_PAGE_HEIGHT_PT)
+      }
+    }
+    // The values the template comment quotes.
+    expect(keepTogetherLineCap('Helvetica', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(37)
+    expect(keepTogetherLineCap('Helvetica', TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)).toBe(39)
+    expect(keepTogetherLineCap('Courier', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(20)
+    expect(keepTogetherLineCap('Courier', TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)).toBe(21)
+  })
+
+  it('keeps the earlier cap of about 12 lines for an uploaded font, whose metrics are unknown', () => {
+    const uploaded = `${CUSTOM_INVOICE_FONT_RENDER_PREFIX}0123456789ab`
+    expect(keepTogetherLineCap(uploaded, TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)).toBe(MAX_KEEP_TOGETHER_LINES)
+    expect(keepTogetherLineCap(uploaded, NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(11)
+    // The template applies it: the payment-terms note may split in an uploaded font.
+    const tree = InvoicePDF({
+      invoice: { ...sentInvoice(), notes: PAYMENT_TERMS_NOTE },
+      customer,
+      items: [makeItem()],
+      company,
+      branding: { fontFamily: uploaded },
+    })
+    const box = elements(tree).find((el) => el.props.wrap !== undefined && containsText(el, 'Betalningsanvisning:'))
+    expect(box?.props.wrap).toBe(true)
+  })
+
+  it('takes the chrome and font sizes from the stylesheet the template uses', () => {
+    const tree = InvoicePDF({ invoice: { ...sentInvoice(), notes: 'Tack för förtroendet' }, customer, items: [makeItem()], company })
+    const all = elements(tree)
+    const page = styleOf(all.find((el) => el.props.size === 'A4')!)
+    expect(page).toMatchObject({
+      paddingTop: PAGE_PADDING_TOP_PT,
+      paddingBottom: PAGE_PADDING_BOTTOM_PT,
+      paddingHorizontal: PAGE_MARGIN_PT,
+    })
+    expect(page.fontSize).toBe(TABLE_ROW_FONT_SIZE_PT)
+
+    const box = styleOf(all.find((el) => el.props.wrap === false && containsText(el, 'Tack för förtroendet'))!)
+    expect(Number(box.marginTop) + 2 * Number(box.padding) + 2 * Number(box.borderWidth ?? 0)).toBe(NOTICE_BOX_CHROME_PT)
+    const noteText = all.find((el) => el.props.children === 'Tack för förtroendet')
+    expect(styleOf(noteText!).fontSize).toBe(NOTICE_FONT_SIZE_PT)
+
+    const row = all.find((el) => el.props.wrap === false && containsText(el, 'Konsulttimmar'))!
+    const rowStyle = styleOf(row)
+    expect(2 * Number(rowStyle.paddingVertical) + Number(rowStyle.borderBottomWidth)).toBe(TABLE_ROW_CHROME_PT)
+    // Rows inherit the page's font size.
+    expect(rowStyle.fontSize).toBeUndefined()
+  })
+
+  it('sets every built-in font within the assumed line pitch', { timeout: 30_000 }, async () => {
+    const notes = 'Rad ett\nRad två\nRad tre\nRad fyra'
+    for (const font of BUILT_IN_FONTS) {
+      const branding = await withFont(font)
+      const pages = await layOut(InvoicePDF({ invoice: { ...sentInvoice(), notes }, customer, items: [makeItem()], company, branding }))
+      const [note] = noteNodes(pages, notes)
+      expect(note.node.lines).toHaveLength(4)
+      const pitch = note.node.box!.height / 4 / NOTICE_FONT_SIZE_PT
+      expect(pitch, font).toBeLessThanOrEqual(BUILT_IN_FONT_LINE_PITCH)
+    }
+  })
+
+  it('renders no more lines than the estimate times the assumed error, in any built-in font', { timeout: 30_000 }, async () => {
+    // Prose in the narrowest description column (discount and a second VAT
+    // rate shown) is where fixed-width Courier strays furthest.
+    const prose = PAYMENT_TERMS_NOTE.replace(/\n+/g, ' ')
+    const items = [
+      makeItem({ description: prose, discount_percent: 10 }),
+      makeItem({ sort_order: 1, id: 'item-1', description: 'Annan rad', vat_rate: 12 }),
+    ]
+    for (const font of BUILT_IN_FONTS) {
+      const branding = await withFont(font)
+      const pages = await layOut(InvoicePDF({ invoice: { ...sentInvoice(), notes: PAYMENT_TERMS_NOTE }, customer, items, company, branding }))
+      const descriptionLines = lineCount(placedTextNodes(pages).filter((n) => textOf(n.node) === prose))
+      expect(descriptionLines, font).toBeGreaterThan(0)
+      expect(descriptionLines, font).toBeLessThanOrEqual(estimateLines(prose, DESCRIPTION_COLUMN_PT) * BUILT_IN_FONT_ESTIMATE_ERROR)
+      const noteLines = lineCount(noteNodes(pages, PAYMENT_TERMS_NOTE))
+      expect(noteLines, font).toBeGreaterThan(0)
+      expect(noteLines, font).toBeLessThanOrEqual(estimateLines(PAYMENT_TERMS_NOTE, FULL_WIDTH_BOX_PT) * BUILT_IN_FONT_ESTIMATE_ERROR)
+    }
+  })
+
+  it('stays within the assumed error on text of narrow letters, and never clips it', { timeout: 30_000 }, async () => {
+    const items = [
+      makeItem({ description: NARROW_LETTERS, discount_percent: 10 }),
+      makeItem({ sort_order: 1, id: 'item-1', description: 'Annan rad', vat_rate: 12 }),
+    ]
+    // The same letters in the notes, told apart from the description.
+    const notes = NARROW_LETTERS.replace(/l/g, 'i')
+    for (const font of BUILT_IN_FONTS) {
+      const branding = await withFont(font)
+      const pages = await layOut(InvoicePDF({ invoice: { ...sentInvoice(), notes }, customer, items, company, branding }))
+      expectNothingPastThePageEdge(pages)
+      const description = placedTextNodes(pages).filter((n) => textOf(n.node) === NARROW_LETTERS)
+      expectNoClippedLines(description, font)
+      expectNoClippedLines(noteNodes(pages, notes), font)
+      const descriptionLines = lineCount(description)
+      expect(descriptionLines, font).toBeGreaterThan(0)
+      expect(descriptionLines, font).toBeLessThanOrEqual(estimateLines(NARROW_LETTERS, DESCRIPTION_COLUMN_PT) * estimateErrorFor(font))
+      const noteLines = lineCount(noteNodes(pages, notes))
+      expect(noteLines, font).toBeGreaterThan(0)
+      expect(noteLines, font).toBeLessThanOrEqual(estimateLines(notes, FULL_WIDTH_BOX_PT) * estimateErrorFor(font))
+    }
+  })
+
+  it('moves a 20-odd line payment-terms note to the next page whole instead of splitting it', async () => {
+    const noteCap = keepTogetherLineCap('Helvetica', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)
+    // Past the old fixed cap (which let it split), well within the derived one.
+    expect(estimateLines(PAYMENT_TERMS_NOTE, FULL_WIDTH_BOX_PT)).toBeGreaterThan(MAX_KEEP_TOGETHER_LINES)
+    expect(estimateLines(PAYMENT_TERMS_NOTE, FULL_WIDTH_BOX_PT)).toBeLessThanOrEqual(noteCap)
+
+    // Enough rows that the note starts low on the first page.
+    const items = Array.from({ length: 20 }, (_, i) =>
+      makeItem({ sort_order: i, id: `item-${i}`, description: `Rad ${i + 1}` }),
+    )
+    const invoice = { ...sentInvoice(), notes: PAYMENT_TERMS_NOTE }
+    const box = elements(InvoicePDF({ invoice, customer, items, company })).find(
+      (el) => el.props.wrap !== undefined && containsText(el, 'Betalningsanvisning:'),
+    )
+    expect(box?.props.wrap).toBe(false)
+
+    const pages = await layOut(InvoicePDF({ invoice, customer, items, company }))
+    const nodes = noteNodes(pages, PAYMENT_TERMS_NOTE)
+    // Every paragraph printed once, none split in two.
+    expect(nodes).toHaveLength(splitParagraphs(PAYMENT_TERMS_NOTE).length)
+    expect(lineCount(nodes)).toBeGreaterThanOrEqual(20)
+    expect(lineCount(nodes)).toBeLessThanOrEqual(30)
+
+    // All of it on the second page, which it needed: it is taller than what
+    // was left below the last row on the first.
+    expect(new Set(nodes.map((n) => n.page))).toEqual(new Set([1]))
+    const lastRow = placedTextNodes(pages).find((n) => textOf(n.node) === 'Rad 20')
+    expect(lastRow?.page).toBe(0)
+    const noteHeight = nodes.reduce((sum, n) => sum + n.node.box!.height, 0)
+    const spaceLeft = pages[0].box!.height - PAGE_PADDING_BOTTOM_PT - lastRow!.bottom
+    expect(noteHeight).toBeGreaterThan(spaceLeft)
+    expectNothingPastThePageEdge(pages)
+    expectNoClippedLines(nodes, 'note')
+  })
+
+  it('keeps a 25-line description row together', () => {
+    const description = Array.from({ length: 25 }, (_, i) => `Moment ${i + 1}`).join('\n')
+    const tree = InvoicePDF({ invoice: sentInvoice(), customer, items: [makeItem({ description })], company })
+    const row = elements(tree).find((el) => el.props.wrap !== undefined && containsText(el, 'Moment 25'))
+    expect(row?.props.wrap).toBe(false)
+  })
+
+  it('splits a note longer than a page only between paragraphs', { timeout: 30_000 }, async () => {
+    const paragraph = (n: number) =>
+      [`Villkor ${n}:`, ...Array.from({ length: 9 }, (_, i) => `Punkt ${n}.${i + 1}: leverans och betalning sker enligt avtalet.`)].join('\n')
+    const notes = Array.from({ length: 9 }, (_, i) => paragraph(i + 1)).join('\n\n')
+    const paragraphs = splitParagraphs(notes)
+    expect(paragraphs).toHaveLength(9)
+
+    const invoice = { ...sentInvoice(), notes }
+    const box = elements(InvoicePDF({ invoice, customer, items: [makeItem()], company })).find(
+      (el) => el.props.wrap !== undefined && containsText(el, 'Villkor 1:'),
+    )
+    expect(box?.props.wrap).toBe(true)
+    const paragraphTexts = elements(box!.props.children).filter((el) => el.props.hyphenationCallback === wrapFullWidthWords)
+    expect(paragraphTexts.map((el) => el.props.children)).toEqual(paragraphs)
+    expect(paragraphTexts.every((el) => el.props.wrap === false)).toBe(true)
+
+    const pages = await layOut(InvoicePDF({ invoice, customer, items: [makeItem()], company }))
+    expectNothingPastThePageEdge(pages)
+    // Each paragraph whole in one node (a split one would show up twice),
+    // the note as a whole across pages.
+    const nodes = noteNodes(pages, notes)
+    expect(nodes).toHaveLength(9)
+    expectNoClippedLines(nodes, 'note')
+    expect(new Set(nodes.map((n) => n.page)).size).toBeGreaterThan(1)
+    expect(pages.map(textOf).join('')).toContain('Punkt 9.9')
+  })
+
+  it('lays the paragraphs out line for line like the whole note', async () => {
+    const notes = 'Rubrik:\nFörsta stycket.\n\n\nAndra stycket\nmed två rader.\n  \nSista stycket.'
+    const style = { fontSize: NOTICE_FONT_SIZE_PT }
+    const onePage = (...children: ReactElement[]) =>
+      createElement(Document, null, createElement(Page, { size: 'A4', style: { padding: PAGE_MARGIN_PT } }, createElement(View, null, ...children)))
+    const lines = async (doc: ReactElement) => {
+      const pages = await layOut(doc)
+      return textNodes(pages[0]).flatMap((n) => (n.lines ?? []).map((l) => l.string ?? ''))
+    }
+    const whole = await lines(onePage(createElement(Text, { style }, notes)))
+    const pieces = await lines(onePage(...splitParagraphs(notes).map((p, i) => createElement(Text, { key: i, style }, p))))
+    expect(whole).toHaveLength(8)
+    expect(pieces).toEqual(whole)
+  })
+})
+
+describe('splitParagraphs', () => {
+  it.each([
+    ['one line', 'Tack för förtroendet', ['Tack för förtroendet']],
+    ['lines without a blank line', 'Rad 1\nRad 2', ['Rad 1\nRad 2']],
+    ['a blank line', 'A\nB\n\nC', ['A\nB\n\n', 'C']],
+    ['several blank lines', 'A\n\n\nB', ['A\n\n\n', 'B']],
+    ['a whitespace-only line', 'A\n  \nB', ['A\n  \n', 'B']],
+    ['Windows line endings', 'A\r\n\r\nB', ['A\r\n\r\n', 'B']],
+    ['an indented paragraph', 'A\n\n  B', ['A\n\n', '  B']],
+    ['trailing blank lines', 'A\n\n', ['A\n\n']],
+  ])('%s', (_label, text, expected) => {
+    expect(splitParagraphs(text)).toEqual(expected)
+    expect(splitParagraphs(text).join('')).toBe(text)
   })
 })
 

@@ -2,12 +2,20 @@ import type { ArticleType } from '@/types'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { detectArticleColumns } from './column-detector'
 import { cellOrNull } from '../shared/column-utils'
-import { parseAmount } from '../opening-balance/parser'
+import { parseSwedishAmount } from '@/lib/money'
 import { readBestSheet } from '../shared/workbook-reader'
 import type { DetectedArticleColumns, ParsedArticleRow } from './types'
-import { normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
+import { deductionTypeForWorkType, normalizeHouseworkType } from '@/lib/bookkeeping/rot-rut-rules'
 
 const VALID_VAT_RATES = [0, 6, 12, 25] as const
+
+/**
+ * A price cell, through the importers' one amount parser; unreadable reads as
+ * 0. Read from lib/money directly, not the opening-balance parser, because
+ * the article import also runs this file in the browser (crm#1383) and that
+ * module pulls the BAS chart and the bank-file parser with it.
+ */
+const parseAmount = (value: string): number => parseSwedishAmount(value) ?? 0
 
 /** Snap an arbitrary VAT percentage to the nearest Swedish statutory rate. */
 function snapVatRate(n: number): number {
@@ -79,11 +87,11 @@ const INCL_VAT_HEADER_RE = /brutto|inkl|incl|gross/i
  * @param filename - Original filename
  * @param columnOverrides - Optional manual column mapping
  */
-export function parseArticlesFile(
+export async function parseArticlesFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedArticleColumns,
-): {
+): Promise<{
   filename: string
   sheet_name: string
   total_rows: number
@@ -93,8 +101,8 @@ export function parseArticlesFile(
   rows: ParsedArticleRow[]
   warnings: string[]
   notices: ImportNotice[]
-} {
-  const { sheetName, rawData } = readBestSheet(buffer, filename)
+}> {
+  const { sheetName, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedArticleColumns = columnOverrides ?? {
@@ -148,6 +156,7 @@ export function parseArticlesFile(
   let droppedAccountCount = 0
   let droppedCurrencyCount = 0
   let droppedHouseworkCount = 0
+  let droppedGoodsHouseworkCount = 0
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i]
@@ -194,8 +203,18 @@ export function parseArticlesFile(
     // ('0'/'1'/'Ja') mapped by the keyword detector must not land as a value
     // the invoice editor can never interpret.
     const houseworkRaw = cell(row, columns.housework_type_col)
-    const houseworkType = normalizeHouseworkType(houseworkRaw)
+    let houseworkType = normalizeHouseworkType(houseworkRaw)
     if (houseworkRaw !== null && houseworkType === null) droppedHouseworkCount++
+    // ROT/RUT is computed on labor only (IL 67 kap. 11-19 §§): material never
+    // carries the reduction, so a goods row keeps no ROT/RUT flag. The
+    // article form offers goods only the grön teknik installation types, so a
+    // stored ROT/RUT flag would be one the user can neither see nor clear.
+    // Grön teknik is given on arbete OCH material, so a goods row keeps an
+    // installation type (INSTALLATION_*).
+    if (houseworkType !== null && type === 'vara' && deductionTypeForWorkType(houseworkType) !== 'gron_teknik') {
+      houseworkType = null
+      droppedGoodsHouseworkCount++
+    }
     const notes = cell(row, columns.notes_col)
 
     const validationErrors: string[] = []
@@ -235,6 +254,10 @@ export function parseArticlesFile(
   if (droppedHouseworkCount > 0) {
     warnings.push(`${droppedHouseworkCount} rad${droppedHouseworkCount === 1 ? '' : 'er'} hade ett ROT/RUT-värde som inte är en arbetstyp (t.ex. 0/1/Ja) och som ignorerades: sätt arbetstyp på artikeln efteråt.`)
     notices.push(makeNotice('articles_housework_dropped', 'notice', { count: droppedHouseworkCount }))
+  }
+  if (droppedGoodsHouseworkCount > 0) {
+    warnings.push(`${droppedGoodsHouseworkCount} ${droppedGoodsHouseworkCount === 1 ? 'vara' : 'varor'} hade ett ROT/RUT-värde som ignorerades: ROT och RUT gäller bara arbetskostnad. Är artikeln arbete, ändra typen till tjänst och sätt arbetstyp.`)
+    notices.push(makeNotice('articles_housework_on_goods_dropped', 'notice', { count: droppedGoodsHouseworkCount }))
   }
   if (droppedCurrencyCount > 0) {
     warnings.push(`${droppedCurrencyCount} rad${droppedCurrencyCount === 1 ? '' : 'er'} hade en ogiltig valutakod (måste vara tre bokstäver, t.ex. EUR) som ignorerades: priset importeras som SEK.`)

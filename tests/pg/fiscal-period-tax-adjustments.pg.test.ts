@@ -7,16 +7,8 @@ import {
   insertCompanyMember,
   insertFiscalPeriod,
   seedCompany,
+  setActiveCompany,
 } from './fixtures'
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
-}
 
 async function insertAdjustment(params: {
   companyId: string

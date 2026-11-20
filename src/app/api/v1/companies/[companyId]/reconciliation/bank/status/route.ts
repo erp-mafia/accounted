@@ -11,6 +11,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from '@/lib/reconciliation/cash-account-scope'
 
 // Mirrors ReconciliationStatus from lib/reconciliation/bank-reconciliation.ts:
 // the handler passes that object straight through. This schema previously
@@ -42,9 +43,27 @@ const StatusResponse = z.object({
   /** Sum of the unmatched ledger lines, signed like a bank movement. null on a
    *  foreign account, whose candidate lines carry no amount in that currency. */
   unmatched_gl_line_total: z.number().nullable(),
-  /** difference - unmatched_transaction_total + unmatched_gl_line_total: what is
-   *  left once both work lists are accounted for. null when the GL total is. */
+  /** Verifikat in the window settled against verifikat dated outside it (a wrong
+   *  verifikat whose hand-made correction was booked in another period): explained,
+   *  so not in unmatched_gl_line_count. */
+  settled_gl_entry_count: z.number().int(),
+  /** Their sum on the account; zero when no settlement crosses the window edge. */
+  settled_gl_line_total: z.number(),
+  /** difference - unmatched_transaction_total + unmatched_gl_line_total +
+   *  settled_gl_line_total: what is left once the work lists and the settled
+   *  verifikat are accounted for. null when the GL total is. */
   unexplained_difference: z.number().nullable(),
+  /** The first day the bank side covers: the account's earliest bank row (feed, file or created). null without rows. */
+  history_start: z.string().nullable(),
+  /** Verifikat in the window dated before history_start with no bank link: outside difference, the counts and unexplained_difference. */
+  before_history_count: z.number().int(),
+  before_history_total: z.number(),
+  /** Ledger balance just before the comparison starts; null when history_start is not inside the window. */
+  ledger_balance_before_start: z.number().nullable(),
+  /** The bank's saldo at history_start from its last reported balance; null when it reports none. */
+  saldo_at_start: z.number().nullable(),
+  /** saldo_at_start minus ledger_balance_before_start. Informational: in neither difference nor is_reconciled. */
+  opening_difference: z.number().nullable(),
 })
 
 const StatusQuery = z.object({
@@ -81,7 +100,7 @@ registerEndpoint({
     'A non-zero difference is normal between sync runs (uncleared cheques, in-flight transfers). Investigate only if it persists across reconciliations.',
     'difference compares against gl_1930_period_movement (movement excl. opening balance), NOT gl_1930_balance. Do not display gl_1930_balance next to difference.',
     'is_reconciled means |difference| < 0.01 for the window, an aggregate check, not a per-transaction guarantee.',
-    'Judge health on unexplained_difference, NOT on difference. difference is just the gap between the two sides and is expected to be large mid-year; it is fully explained while every krona of it sits in unmatched_transaction_total or unmatched_gl_line_total. A non-zero unexplained_difference is the real finding: a matched pair disagreeing in amount, a voucher with several lines on the account, or a storno/correction line the candidate list hides.',
+    'Judge health on unexplained_difference, NOT on difference. difference is just the gap between the two sides and is expected to be large mid-year; it is fully explained while every krona of it sits in unmatched_transaction_total, unmatched_gl_line_total or settled_gl_line_total. A non-zero unexplained_difference is the real finding: a matched pair disagreeing in amount, a voucher with several lines on the account, or a storno/correction line the candidate list hides.',
     'Ignored transactions are excluded from bank_transaction_total and difference (they never get a ledger counterpart); their count and sum are reported separately.',
   ],
   example: {
@@ -101,6 +120,8 @@ registerEndpoint({
         unmatched_transaction_total: 1250,
         unmatched_gl_line_count: 2,
         unmatched_gl_line_total: 1250,
+        settled_gl_entry_count: 0,
+        settled_gl_line_total: 0,
         unexplained_difference: 0,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -126,14 +147,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     })
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
-    const accountNumber = parsed.data.account_number ?? '1930'
+    const accountNumber = parsed.data.account_number ?? DEFAULT_SETTLEMENT_ACCOUNT
     const { data: cashAccount } = await ctx.supabase
       .from('cash_accounts')
       .select('id, currency, is_primary')
       .eq('company_id', ctx.companyId!)
       .eq('ledger_account', accountNumber)
       .maybeSingle()
-    if (!cashAccount && accountNumber !== '1930') {
+    if (!cashAccount && accountNumber !== DEFAULT_SETTLEMENT_ACCOUNT) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {

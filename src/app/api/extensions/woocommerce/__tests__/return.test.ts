@@ -6,7 +6,6 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: vi.fn() } }))
 vi.mock('@/lib/domains/trusted-app-origin', () => ({
   resolveRequestAppOrigin: vi.fn(async () => 'http://localhost:3000'),
@@ -62,8 +61,8 @@ const ACTIVATED = {
 describe('GET /api/extensions/woocommerce/return', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(extensionRegistry.get).mockReturnValue(
-      { id: 'woocommerce' } as ReturnType<typeof extensionRegistry.get>,
+    vi.mocked(extensionRegistry.get).mockResolvedValue(
+      { id: 'woocommerce' } as Awaited<ReturnType<typeof extensionRegistry.get>>,
     )
   })
 
@@ -72,7 +71,7 @@ describe('GET /api/extensions/woocommerce/return', () => {
   })
 
   it('refuses with 503 when the extension is disabled', async () => {
-    vi.mocked(extensionRegistry.get).mockReturnValue(undefined)
+    vi.mocked(extensionRegistry.get).mockResolvedValue(undefined)
     const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
     expect(res.status).toBe(503)
   })

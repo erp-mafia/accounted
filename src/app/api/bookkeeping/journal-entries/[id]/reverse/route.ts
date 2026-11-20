@@ -1,16 +1,17 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { voucherStornoBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 
 const ReverseJournalEntrySchema = z
   .object({
     allow_deep_chain: z.boolean().optional(),
   })
   .strict()
-
-ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal-entry.reverse',
@@ -60,10 +61,21 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
       allowDeepChain = parsed.data.allow_deep_chain === true
     }
-    const reversalEntry = await reverseEntry(supabase, companyId, user.id, id, undefined, {
-      allowDeepChain,
+    // Posting port (step 2i): while POSTING_EVENTS is on, ledger.storno of the
+    // verifikat, which the person asked for (user_created), dated the day.
+    const reversalEntry = await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId: user.id,
+      entryId: id,
+      options: { allowDeepChain },
+      event: () => voucherStornoBusinessEvent({ entryId: id, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('user_created') }),
+      role: 'reversal',
     })
-    return NextResponse.json({ data: reversalEntry })
+    // The object the verifikat books, if any: a storno leaves it as it was
+    // (an invoice stays open), so the answer names it and its own action.
+    const ownedBy = await voucherOwnerOrNull(supabase, companyId, { id })
+    return NextResponse.json({ data: reversalEntry, owned_by: ownedBy })
   },
   { requireWrite: true },
 )

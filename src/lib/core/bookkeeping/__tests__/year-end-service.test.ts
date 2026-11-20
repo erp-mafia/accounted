@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { makeFiscalPeriod } from '@/tests/helpers'
 
@@ -55,7 +55,10 @@ function makeFilteringClient(tables: SeededTables, failTable?: string) {
       const neqs: Array<[string, unknown]> = []
       const ins: Array<[string, unknown[]]> = []
       const ltes: Array<[string, string]> = []
+      const gtes: Array<[string, string]> = []
+      const gts: Array<[string, string]> = []
       const notNull: string[] = []
+      const notIns: Array<[string, string[]]> = []
       let head = false
       let orderColumn: string | null = null
       let orderAscending = true
@@ -71,7 +74,10 @@ function makeFilteringClient(tables: SeededTables, failTable?: string) {
             neqs.every(([c, v]) => r[c] !== v) &&
             ins.every(([c, vs]) => vs.includes(r[c])) &&
             ltes.every(([c, v]) => String(r[c] ?? '') <= v) &&
-            notNull.every((c) => r[c] != null)
+            gtes.every(([c, v]) => String(r[c] ?? '') >= v) &&
+            gts.every(([c, v]) => String(r[c] ?? '') > v) &&
+            notNull.every((c) => r[c] != null) &&
+            notIns.every(([c, vs]) => !vs.includes(String(r[c])))
         )
         if (orderColumn) {
           const col = orderColumn
@@ -100,8 +106,11 @@ function makeFilteringClient(tables: SeededTables, failTable?: string) {
       b.neq = vi.fn((c: string, v: unknown) => { neqs.push([c, v]); return b })
       b.in = vi.fn((c: string, v: unknown[]) => { ins.push([c, v]); return b })
       b.lte = vi.fn((c: string, v: string) => { ltes.push([c, v]); return b })
+      b.gte = vi.fn((c: string, v: string) => { gtes.push([c, v]); return b })
+      b.gt = vi.fn((c: string, v: string) => { gts.push([c, v]); return b })
       b.not = vi.fn((c: string, op: string, v: unknown) => {
         if (op === 'is' && v === null) notNull.push(c)
+        if (op === 'in') notIns.push([c, String(v).replace(/[()]/g, '').split(',')])
         return b
       })
       b.order = vi.fn((c: string, opts?: { ascending?: boolean }) => {
@@ -111,7 +120,7 @@ function makeFilteringClient(tables: SeededTables, failTable?: string) {
       })
       b.limit = vi.fn((n: number) => { limitN = n; return b })
       b.range = vi.fn((from: number, to: number) => { rangeFrom = from; rangeTo = to; return b })
-      for (const m of ['gte', 'is', 'or', 'insert', 'update', 'delete']) {
+      for (const m of ['is', 'or', 'insert', 'update', 'delete']) {
         b[m] = vi.fn().mockReturnValue(b)
       }
       b.single = vi.fn(async () => ({ data: matching()[0] ?? null, error: null }))
@@ -224,6 +233,7 @@ vi.mock('@/lib/bookkeeping/currency-revaluation', () => ({
     netEffect: 0,
   }),
   executeCurrencyRevaluation: vi.fn().mockResolvedValue(null),
+  syncCurrencyRevaluationReversals: vi.fn().mockResolvedValue({ posted: [], stornoed: [] }),
 }))
 
 vi.mock('../period-service', () => ({
@@ -234,17 +244,64 @@ vi.mock('../period-service', () => ({
   countUnbookedInPeriod: vi.fn().mockResolvedValue({ untriaged: 0, businessUnbooked: 0 }),
   createNextPeriod: vi.fn(),
   findNextPeriod: vi.fn().mockResolvedValue(null),
+  fiscalYearInTheWay: vi.fn().mockResolvedValue(null),
 }))
 
-import { validateYearEndReadiness, previewYearEndClosing } from '../year-end-service'
+// Default: no lock on the year's last day, without a read (the positional
+// queue below hands results out in call order). The company lock date tests
+// run the real verdict against seeded tables.
+const NO_LOCK = { status: { period_id: 'fp-1', status: 'open' as const, lock_date: null }, layer: null }
+vi.mock('../period-status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../period-status')>()),
+  resolvePeriodLockForDate: vi.fn().mockResolvedValue({
+    status: { period_id: 'fp-1', status: 'open', lock_date: null },
+    layer: null,
+  }),
+}))
+
+// Default: the next year has no IB. The one-IB-per-year tests override; the
+// read itself is covered in lib/import/opening-balance/__tests__/existing.test.ts.
+vi.mock('@/lib/import/opening-balance/existing', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/import/opening-balance/existing')>()),
+  findExistingOpeningBalance: vi.fn().mockResolvedValue(null),
+  assertNoOpeningBalance: vi.fn().mockResolvedValue(undefined),
+}))
+
+// Default: nothing carried. Guard tests override (PostHog PH 120 / PH 108).
+// carryAfterDispositions stays real: the preview's omföring runs through it.
+vi.mock('../prior-result-carry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../prior-result-carry')>()),
+  priorResultCarry: vi.fn().mockResolvedValue(null),
+}))
+
+import {
+  kontantmetodCutoffBlockers,
+  validateYearEndReadiness,
+  previewYearEndClosing,
+  executeYearEndClosing,
+  generateOpeningBalances,
+} from '../year-end-service'
+import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import {
+  assertNoOpeningBalance,
+  findExistingOpeningBalance,
+  OpeningBalanceExistsError,
+} from '@/lib/import/opening-balance/existing'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { previewCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
+import { priorResultCarry } from '../prior-result-carry'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { countUnbookedInPeriod, findNextPeriod } from '../period-service'
+import { resolvePeriodLockForDate } from '../period-status'
 import {
   buildCutoffLines,
   KONTANTMETOD_CUTOFF_DESCRIPTIONS,
   reverseLines,
+  type CutoffCollection,
+  type KontantmetodCarryPlan,
+  type KontantmetodCutoffAssessment,
 } from '../kontantmetod-cutoff'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -361,6 +418,35 @@ describe('validateYearEndReadiness', () => {
     expect(result.errors).toContain(locked!.message)
   })
 
+  // crm#1029: the closing entry and the lock are refused while an SIE import
+  // holds the year, but only after the currency revaluation has posted.
+  it('blocks a year an SIE import still holds with SIE_IMPORT_UNFINISHED', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      name: 'Räkenskapsår 2024',
+      is_closed: false,
+      closing_entry_id: null,
+      import_hold: 'imp-1',
+    })
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.ready).toBe(false)
+    const held = result.blockers.find((b) => b.code === 'SIE_IMPORT_UNFINISHED')
+    expect(held).toBeDefined()
+    expect(held!.message).toContain('Räkenskapsår 2024 kan inte stängas med bokslut')
+    expect(held!.message).toContain('Ångra import')
+    expect(result.errors).toContain(held!.message)
+  })
+
   it('does not add PERIOD_LOCKED on a closed period (closed periods are locked too, but cannot be unlocked)', async () => {
     const period = makeFiscalPeriod({
       id: 'fp-1',
@@ -401,6 +487,232 @@ describe('validateYearEndReadiness', () => {
     expect(result.trialBalanceBalanced).toBe(false)
     expect(result.errors.some((e: string) => e.includes('Råbalansen balanserar inte'))).toBe(true)
     expect(result.blockers.some((b) => b.code === 'TRIAL_BALANCE_UNBALANCED')).toBe(true)
+  })
+
+  // PostHog PH 120: a prior year's result still on the result account.
+  // The form lookup only runs when the trial balance shows a leftover, and it
+  // takes one queued result right after the trial balance.
+  function withFormLookup(items: Array<Record<string, unknown>>, entityType: string) {
+    return [...items.slice(0, 6), { data: { entity_type: entityType }, error: null }, ...items.slice(6)]
+  }
+
+  it('blocks with PRIOR_RESULT_NOT_DISPOSED when 2099 still carries a prior result (AB)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = withFormLookup(noGapResults(period), 'aktiebolag')
+    vi.mocked(priorResultCarry).mockResolvedValueOnce({
+      resultAccount: '2099', resultAccountName: 'Årets resultat', priorResultAccount: '2098',
+      retainedAccount: '2091', ibNet: 20000, remaining: 20000, overMoved: 0, movedBy: [],
+    })
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        { account_number: '2099', closing_debit: 0, closing_credit: 20000 },
+        { account_number: '1930', closing_debit: 20000, closing_credit: 0 },
+      ],
+      isBalanced: true,
+      totalDebit: 20000,
+      totalCredit: 20000,
+    } as never)
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(false)
+    const blocker = result.blockers.find((b) => b.code === 'PRIOR_RESULT_NOT_DISPOSED')
+    expect(blocker).toBeDefined()
+    expect(blocker?.message).toContain('2099')
+    expect(blocker?.message).toContain('2098')
+    expect(blocker?.message).toContain('2091')
+  })
+
+  it('names 2069, 2068 and 2067 for an ideell förening', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = withFormLookup(noGapResults(period), 'ideell_forening')
+    vi.mocked(priorResultCarry).mockResolvedValueOnce({
+      resultAccount: '2069', resultAccountName: 'Årets resultat', priorResultAccount: '2068',
+      retainedAccount: '2067', ibNet: 30000, remaining: 30000, overMoved: 0, movedBy: [],
+    })
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [{ account_number: '2069', closing_debit: 0, closing_credit: 30000 }],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    const blocker = result.blockers.find((b) => b.code === 'PRIOR_RESULT_NOT_DISPOSED')
+    expect(blocker?.message).toContain('2069')
+    expect(blocker?.message).toContain('2068')
+    expect(blocker?.message).toContain('2067')
+  })
+
+  it('does not block, or look up the form, when the result account is empty', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [{ account_number: '2099', closing_debit: 20000, closing_credit: 20000 }],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.blockers.some((b) => b.code === 'PRIOR_RESULT_NOT_DISPOSED')).toBe(false)
+    expect(priorResultCarry).not.toHaveBeenCalled()
+  })
+
+  it('does not block when the balance is this year\'s result booked by hand (PostHog PH 108 re-run)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = withFormLookup(noGapResults(period), 'ideell_forening')
+    // 2069 holds 12 000: this year's result re-homed by hand; the carried
+    // 30 000 was moved off by the owner's own disposition.
+    vi.mocked(priorResultCarry).mockResolvedValueOnce({
+      resultAccount: '2069', resultAccountName: 'Årets resultat', priorResultAccount: '2068',
+      retainedAccount: '2067', ibNet: 30000, remaining: 0, overMoved: 0, movedBy: ['A12'],
+    })
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [{ account_number: '2069', closing_debit: 0, closing_credit: 12000 }],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.blockers.some((b) => b.code === 'PRIOR_RESULT_NOT_DISPOSED')).toBe(false)
+  })
+
+  // A migrated aktiebolag's FY2022 (seen 2026-09-29): 2021's result (IB 2099 C 151 986,05) moved off
+  // by the omföring A181 AND the previous system's imported disposition A176
+  // (+2 kr in A178). 2099 shows D 149 217,18, but 1 962,87 of that account is
+  // 2022's result closed by hand through 8999 (A177/A178): the excess is
+  // 151 180,05. #3153's carry alone says 151 274,05 (A178 mixes a 94 kr
+  // closing line into its disposition).
+  const OVER_DISPOSED_CARRY = {
+    resultAccount: '2099', resultAccountName: 'Årets resultat', priorResultAccount: '2098',
+    retainedAccount: '2091', ibNet: 151986.05, remaining: 0, overMoved: -151274.05,
+    movedBy: ['A181', 'A176', 'A178'],
+  }
+  function trialBalanceWith(rows: Array<{ account_number: string; closing_debit: number; closing_credit: number }>) {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows,
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+  }
+
+  it('blocks with PRIOR_RESULT_OVER_DISPOSED, the excess and the correction (migrated aktiebolag)', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1', is_closed: false, closing_entry_id: null, period_end: '2022-12-31',
+    })
+    results = withFormLookup(noGapResults(period), 'aktiebolag')
+    vi.mocked(priorResultCarry).mockResolvedValueOnce(OVER_DISPOSED_CARRY)
+    trialBalanceWith([
+      { account_number: '2099', closing_debit: 149217.18, closing_credit: 0 },
+      { account_number: '8999', closing_debit: 2056.87, closing_credit: 94 },
+    ])
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.some((b) => b.code === 'PRIOR_RESULT_NOT_DISPOSED')).toBe(false)
+    const blocker = result.blockers.find((b) => b.code === 'PRIOR_RESULT_OVER_DISPOSED')
+    expect(blocker).toBeDefined()
+    // The amount a correction must move back, not the raw 2099 balance.
+    expect(blocker?.message).toMatch(/151\s180,05/)
+    expect(blocker?.message).not.toMatch(/149\s217,18/)
+    expect(blocker?.message).toContain('A181, A176, A178')
+    expect(blocker?.message).toContain('senast 2022-12-31')
+    // A profit moved off too often is credited back to 2099.
+    expect(blocker?.message).toContain('debet 2098 eller 2091, kredit 2099')
+    expect(result.errors).toContain(blocker?.message)
+  })
+
+  it('names the reverse correction for a loss moved off too often (ideell förening)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = withFormLookup(noGapResults(period), 'ideell_forening')
+    vi.mocked(priorResultCarry).mockResolvedValueOnce({
+      resultAccount: '2069', resultAccountName: 'Årets resultat', priorResultAccount: '2068',
+      retainedAccount: '2067', ibNet: -4000, remaining: 0, overMoved: 4000, movedBy: ['A2', 'A9'],
+    })
+    trialBalanceWith([{ account_number: '2069', closing_debit: 0, closing_credit: 4000 }])
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    const blocker = result.blockers.find((b) => b.code === 'PRIOR_RESULT_OVER_DISPOSED')
+    expect(blocker?.message).toContain('debet 2069, kredit 2068 eller 2067')
+  })
+
+  it('does not block once a correction entry moved the excess back', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = withFormLookup(noGapResults(period), 'aktiebolag')
+    // The carry still counts both transfers (a correction is not a
+    // disposition), but 2099 now holds only 2022's hand-closed result.
+    vi.mocked(priorResultCarry).mockResolvedValueOnce(OVER_DISPOSED_CARRY)
+    trialBalanceWith([
+      { account_number: '2099', closing_debit: 149217.18, closing_credit: 151180.05 },
+      { account_number: '8999', closing_debit: 2056.87, closing_credit: 94 },
+    ])
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.blockers.some((b) => b.code.startsWith('PRIOR_RESULT_'))).toBe(false)
+  })
+
+  it('does not block a prior result disposed exactly once (omföring or by hand)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = withFormLookup(noGapResults(period), 'aktiebolag')
+    vi.mocked(priorResultCarry).mockResolvedValueOnce({
+      ...OVER_DISPOSED_CARRY, remaining: 0, overMoved: 0, movedBy: ['A181'],
+    })
+    // 2099 holds only this year's result, closed by hand through 8999.
+    trialBalanceWith([
+      { account_number: '2099', closing_debit: 0, closing_credit: 1962.87 },
+      { account_number: '8999', closing_debit: 1962.87, closing_credit: 0 },
+    ])
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.blockers.some((b) => b.code.startsWith('PRIOR_RESULT_'))).toBe(false)
+  })
+
+  it('does not block this year\'s loss re-homed in the disposition verifikat (PostHog PH 108 shape)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = withFormLookup(noGapResults(period), 'ideell_forening')
+    // The carry counts the re-homed loss as moved (-12 000 over), but 2069's
+    // D 12 000 is exactly this year's loss closed by hand through 8999.
+    vi.mocked(priorResultCarry).mockResolvedValueOnce({
+      resultAccount: '2069', resultAccountName: 'Årets resultat', priorResultAccount: '2068',
+      retainedAccount: '2067', ibNet: 30000, remaining: 0, overMoved: -12000, movedBy: ['A12'],
+    })
+    trialBalanceWith([
+      { account_number: '2069', closing_debit: 12000, closing_credit: 0 },
+      { account_number: '8999', closing_debit: 0, closing_credit: 12000 },
+    ])
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.blockers.some((b) => b.code.startsWith('PRIOR_RESULT_'))).toBe(false)
+  })
+
+  it('looks at the carry when only the hand-closed result makes the account look empty', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = withFormLookup(noGapResults(period), 'aktiebolag')
+    // Moved off 20 000 too much, and this year's 20 000 closed by hand makes
+    // the raw balance 0: the residual still shows the excess.
+    vi.mocked(priorResultCarry).mockResolvedValueOnce({
+      ...OVER_DISPOSED_CARRY, ibNet: 20000, overMoved: -20000, movedBy: ['A1', 'A5'],
+    })
+    trialBalanceWith([
+      { account_number: '2099', closing_debit: 20000, closing_credit: 20000 },
+      { account_number: '8999', closing_debit: 20000, closing_credit: 0 },
+    ])
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(priorResultCarry).toHaveBeenCalled()
+    expect(result.blockers.find((b) => b.code === 'PRIOR_RESULT_OVER_DISPOSED')?.message).toMatch(/20\s000/)
   })
 
   it('returns error when period has not yet ended', async () => {
@@ -560,6 +872,135 @@ describe('validateYearEndReadiness', () => {
     expect(result.unexplainedGaps[0]).toEqual({ gap_start: 5, gap_end: 7, series: 'A' })
   })
 
+  // BFNAR 2013:2: the gate must not pass on a series it could not check. A
+  // failed detection used to skip the series, so year-end ran past a gap.
+  it('blocks with VOUCHER_GAP_CHECK_FAILED when gap detection fails', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    const builder = makeBuilder()
+    const supabase = {
+      from: vi.fn().mockImplementation(() => builder),
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'statement timeout' } }),
+    }
+    resultIdx = 0
+    results = [
+      { data: period, error: null },                                           // fetch period
+      { data: null, error: null, count: 0 },                                   // count drafts
+      { data: [{ voucher_series: 'A' }], error: null },                        // voucher_sequences
+      // detect_voucher_gaps fails (custom rpc mock)
+      { data: { last_number: 10 }, error: null },                              // reconciliation: last_number
+      { data: { voucher_number: 10 }, error: null },                           // reconciliation: max voucher
+      { data: null, error: null, count: 5 },                                   // count posted
+      { data: null, error: null, count: 0 },                                   // count revaluation
+      { data: null, error: null, count: 0 },                                   // fx receivables
+      { data: null, error: null, count: 0 },                                   // fx payables
+    ]
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.some((b) => b.code === 'VOUCHER_GAP_CHECK_FAILED')).toBe(true)
+  })
+
+  it('blocks with VOUCHER_GAP_CHECK_FAILED when the explanations cannot be read', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    const builder = makeBuilder()
+    const supabase = {
+      from: vi.fn().mockImplementation(() => builder),
+      rpc: vi.fn().mockResolvedValue({ data: [{ gap_start: 5, gap_end: 7 }], error: null }),
+    }
+    resultIdx = 0
+    results = [
+      { data: period, error: null },                                           // fetch period
+      { data: null, error: null, count: 0 },                                   // count drafts
+      { data: [{ voucher_series: 'A' }], error: null },                        // voucher_sequences
+      { data: null, error: { message: 'connection reset' } },                  // gap_explanations fail
+      { data: { last_number: 10 }, error: null },                              // reconciliation: last_number
+      { data: { voucher_number: 10 }, error: null },                           // reconciliation: max voucher
+      { data: null, error: null, count: 5 },                                   // count posted
+      { data: null, error: null, count: 0 },                                   // count revaluation
+      { data: null, error: null, count: 0 },                                   // fx receivables
+      { data: null, error: null, count: 0 },                                   // fx payables
+    ]
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.some((b) => b.code === 'VOUCHER_GAP_CHECK_FAILED')).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'UNEXPLAINED_VOUCHER_GAP')).toBe(false)
+  })
+
+  // accounted#58 F7: these reads ignored their error, so a failed read counted
+  // as 0 drafts or a reconciled counter and the year could close past it.
+  describe('fails closed on a failed read', () => {
+    const balanced = { rows: [], isBalanced: true, totalDebit: 0, totalCredit: 0 }
+
+    it('passes clean books with no check-failed blocker (normal path)', async () => {
+      const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+      results = noGapResults(period)
+      vi.mocked(generateTrialBalance).mockResolvedValue(balanced as never)
+
+      const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+      expect(result.blockers).toEqual([])
+      expect(result.ready).toBe(true)
+    })
+
+    it('blocks with DRAFT_CHECK_FAILED when the draft count fails', async () => {
+      const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+      results = noGapResults(period)
+      results[1] = { data: null, error: { message: 'statement timeout' }, count: null } // count drafts fails
+      vi.mocked(generateTrialBalance).mockResolvedValue(balanced as never)
+
+      const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+      expect(result.ready).toBe(false)
+      expect(result.blockers).toEqual([
+        { code: 'DRAFT_CHECK_FAILED', message: 'Kontrollen av utkast i perioden kunde inte genomföras: försök igen' },
+      ])
+      expect(result.errors).toEqual(result.blockers.map((b) => b.message))
+    })
+
+    it('blocks with VOUCHER_GAP_CHECK_FAILED when the sequence counter read fails', async () => {
+      const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+      results = noGapResults(period)
+      results[4] = { data: null, error: { message: 'connection reset' } } // voucher_sequences.last_number fails
+      vi.mocked(generateTrialBalance).mockResolvedValue(balanced as never)
+
+      const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+      expect(result.ready).toBe(false)
+      expect(result.blockers).toEqual([
+        { code: 'VOUCHER_GAP_CHECK_FAILED', message: 'Kontrollen av nummerräknaren i serie A kunde inte genomföras: försök igen' },
+      ])
+      expect(result.sequenceMismatches).toEqual([])
+    })
+
+    it('blocks with VOUCHER_GAP_CHECK_FAILED when the highest voucher number read fails', async () => {
+      const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+      results = noGapResults(period)
+      results[5] = { data: null, error: { message: 'connection reset' } } // journal_entries max fails
+      vi.mocked(generateTrialBalance).mockResolvedValue(balanced as never)
+
+      const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+      expect(result.ready).toBe(false)
+      expect(result.blockers.map((b) => b.code)).toEqual(['VOUCHER_GAP_CHECK_FAILED'])
+      expect(result.blockers.some((b) => b.code === 'SEQUENCE_COUNTER_BEHIND')).toBe(false)
+    })
+  })
+
   it('detects gaps across multiple voucher series', async () => {
     const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
 
@@ -715,12 +1156,90 @@ describe('validateYearEndReadiness', () => {
       name: 'FY 2025',
       opening_balance_entry_id: 'ib-1',
     } as never)
+    vi.mocked(findExistingOpeningBalance).mockResolvedValueOnce({
+      journal_entry_id: 'ib-1',
+      voucher_label: 'A1',
+      linked: true,
+    })
 
     const supabase = makeClient()
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('redan ingående balanser bokförda'))).toBe(true)
     expect(result.blockers.some((b) => b.code === 'NEXT_PERIOD_HAS_IB')).toBe(true)
+    expect(findExistingOpeningBalance).toHaveBeenCalledWith(supabase, 'company-1', 'fp-2')
+  })
+
+  // An IB booked as a voucher (gnubok_create_voucher with is_opening_balance)
+  // carries no pointer. Reading the pointer alone let the close run and post
+  // a second IB on top, after the irreversible close (ÅRL 2:4: one IB = UB).
+  it('blocks on a posted IB the next period has no pointer to', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValueOnce({
+      id: 'fp-2',
+      name: 'FY 2025',
+      opening_balance_entry_id: null,
+    } as never)
+    vi.mocked(findExistingOpeningBalance).mockResolvedValueOnce({
+      journal_entry_id: 'ib-voucher',
+      voucher_label: 'A4',
+      linked: false,
+    })
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.some((b) => b.code === 'NEXT_PERIOD_HAS_IB')).toBe(true)
+  })
+
+  it('executeYearEndClosing posts nothing when the next period has a pointer-less IB', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValueOnce({
+      id: 'fp-2',
+      name: 'FY 2025',
+      opening_balance_entry_id: null,
+    } as never)
+    vi.mocked(findExistingOpeningBalance).mockResolvedValueOnce({
+      journal_entry_id: 'ib-voucher',
+      voucher_label: 'A4',
+      linked: false,
+    })
+
+    await expect(
+      executeYearEndClosing(makeClient() as never, 'company-1', 'user-1', 'fp-1'),
+    ).rejects.toThrow(/Bokslutet kan inte verkställas/)
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('generateOpeningBalances: one IB per year', () => {
+  it('refuses before reading or posting anything when the next year has an IB', async () => {
+    vi.mocked(assertNoOpeningBalance).mockRejectedValueOnce(
+      new OpeningBalanceExistsError({ journal_entry_id: 'ib-voucher', voucher_label: 'A4', linked: false }),
+    )
+    const supabase = makeClient()
+
+    await expect(
+      generateOpeningBalances(supabase as never, 'company-1', 'user-1', 'fp-1', 'fp-2'),
+    ).rejects.toBeInstanceOf(OpeningBalanceExistsError)
+    expect(assertNoOpeningBalance).toHaveBeenCalledWith(supabase, 'company-1', 'fp-2')
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(generateTrialBalance).not.toHaveBeenCalled()
+    expect(createJournalEntry).not.toHaveBeenCalled()
   })
 })
 
@@ -729,11 +1248,14 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
     id: 'fp-2', period_start: '2025-01-01', period_end: '2025-12-31',
     is_closed: false, locked_at: null, opening_balance_entry_id: null,
   }
+  // A complete row: the per-invoice carry (#3440) builds this invoice's own
+  // registration verifikat from it (header amounts, no items).
   const openInvoice = {
     id: 'inv-1', company_id: 'company-1', invoice_number: 'F-1',
-    invoice_date: '2024-12-15', status: 'sent', total: 1250, total_sek: 1250,
+    invoice_date: '2024-12-15', status: 'sent', currency: 'SEK', exchange_rate: null,
+    subtotal: 1000, total: 1250, total_sek: 1250,
     vat_amount: 250, vat_amount_sek: 250, vat_treatment: 'standard_25',
-    credited_invoice_id: null, document_type: 'invoice',
+    credited_invoice_id: null, document_type: 'invoice', journal_entry_id: null,
   }
 
   beforeEach(() => {
@@ -803,6 +1325,36 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
       blocker.code === 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
     )).toBe(false)
     expect(result.ready).toBe(true)
+    // A legacy cut-off (self-hosted): its figures stand, its vändningar must
+    // never be stornoed (LEGACY_KONTANTMETOD_VANDNING).
+    expect(result.warnings).toContainEqual(expect.stringContaining('Makulera inte vändningarna'))
+  })
+
+  // #3440: the interim block is lifted, so the blocker sends the user to
+  // preview and post the per-invoice cut-off.
+  it('blocks and sends the user to preview and post the cut-off', async () => {
+    const result = await validateYearEndReadiness(
+      makeFilteringClient(cashTables()) as never,
+      'company-1', 'user-1', 'fp-1',
+    )
+    const blocker = result.blockers.find((b) => b.code === 'KONTANTMETOD_CUTOFF_REQUIRED')
+    expect(result.ready).toBe(false)
+    expect(blocker?.message).toMatch(/^1 fakturor var obetalda vid periodens slut och ska årsomföras/)
+    expect(blocker?.message).toMatch(/Förhandsgranska och bokför avgränsningen innan bokslut\.$/)
+    expect(blocker?.message).not.toMatch(/tillfälligt|vändning/)
+  })
+
+  // Per invoice (#3440) there is no vändning, so the cut-off no longer waits
+  // for the next fiscal year.
+  it('needs no next fiscal year: the blocker names the invoices to carry', async () => {
+    vi.mocked(findNextPeriod).mockResolvedValue(null as never)
+    const result = await validateYearEndReadiness(
+      makeFilteringClient(cashTables()) as never,
+      'company-1', 'user-1', 'fp-1',
+    )
+    const blocker = result.blockers.find((b) => b.code === 'KONTANTMETOD_CUTOFF_REQUIRED')
+    expect(blocker?.message).toMatch(/^1 fakturor var obetalda vid periodens slut/)
+    expect(blocker?.message).not.toMatch(/nästa räkenskapsår/)
   })
 
   it('fails closed when the cut-off query cannot run', async () => {
@@ -813,6 +1365,47 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
     expect(result.blockers).toContainEqual(expect.objectContaining({
       code: 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
     }))
+  })
+
+  // Feedback seq 798354: the year was closed outside the year-end
+  // (close_fiscal_period_external) and readiness kept reporting a cut-off
+  // blocker for a period nothing can be posted into any more.
+  it('does not run the cut-off check on a closed period', async () => {
+    const tables = cashTables()
+    tables.fiscal_periods = tables.fiscal_periods!.map((row) => ({ ...row, is_closed: true }))
+    // Also when the check could not even start: a skipped check must not
+    // resurface as KONTANTMETOD_CUTOFF_CHECK_FAILED.
+    for (const failTable of [undefined, 'company_settings']) {
+      const client = makeFilteringClient(tables, failTable)
+      const result = await validateYearEndReadiness(client as never, 'company-1', 'user-1', 'fp-1')
+      const codes = result.blockers.map((blocker) => blocker.code)
+      expect(codes).toContain('PERIOD_ALREADY_CLOSED')
+      expect(codes).not.toContain('KONTANTMETOD_CUTOFF_REQUIRED')
+      expect(codes).not.toContain('KONTANTMETOD_CUTOFF_CHECK_FAILED')
+      expect(client.from).not.toHaveBeenCalledWith('kontantmetod_cutoff_entries')
+    }
+  })
+
+  it('warns, without blocking, about invoices settled with neither a payment row nor a date', async () => {
+    // What a Fortnox migration imports: paid, paid_amount = total, no row,
+    // no paid_at. Nothing is outstanding, so there is no cut-off to post,
+    // but the answer rests on an assumption the user can check.
+    const migratedPaid = {
+      ...openInvoice, status: 'paid', currency: 'SEK',
+      paid_amount: 1250, remaining_amount: 0, paid_at: null,
+    }
+    const result = await validateYearEndReadiness(
+      makeFilteringClient({ ...cashTables(), invoices: [migratedPaid] }) as never,
+      'company-1', 'user-1', 'fp-1',
+    )
+    expect(result.blockers.some((blocker) =>
+      blocker.code === 'KONTANTMETOD_CUTOFF_REQUIRED' ||
+      blocker.code === 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
+    )).toBe(false)
+    expect(result.ready).toBe(true)
+    expect(result.warnings).toContainEqual(
+      expect.stringMatching(/^1 faktura saknar betalningsdatum: .* per 2024-12-31 som i dag\./),
+    )
   })
 })
 
@@ -1062,6 +1655,91 @@ describe('validateYearEndReadiness: open FX items at balansdagen (ÅRL 4 kap. 13
   })
 })
 
+describe('validateYearEndReadiness: the company lock date over the year\'s last day', () => {
+  // The closing entry is dated period_end. A lock date on or after it (where
+  // the automatic lock puts it 30 to 90 days after the year ends) refused the
+  // closing at its first posting, after readiness had said ready.
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('../period-status')>('../period-status')
+    vi.mocked(resolvePeriodLockForDate).mockImplementation(actual.resolvePeriodLockForDate)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValue(null as never)
+  })
+  afterEach(() => {
+    vi.mocked(resolvePeriodLockForDate).mockResolvedValue(NO_LOCK)
+  })
+
+  /** Books that pass every other gate, with this lock date and automatic lock setting. */
+  const readiness = (lockedThrough: string | null, autoLockDays: number | null, period: Row = {}) => {
+    const tables = fxBaseTables()
+    tables.fiscal_periods = [{ ...tables.fiscal_periods![0], ...period }]
+    tables.company_settings = [
+      { company_id: 'company-1', bookkeeping_locked_through: lockedThrough, auto_lock_period_days: autoLockDays },
+    ]
+    return validateYearEndReadiness(makeFilteringClient(tables) as never, 'company-1', 'user-1', 'fp-1')
+  }
+  const lockBlocker = (result: Awaited<ReturnType<typeof validateYearEndReadiness>>) =>
+    result.blockers.find((b) => b.code === 'COMPANY_LOCK_DATE')
+
+  it('blocks when the lock date is the year\'s last day, naming the date and the way out', async () => {
+    const result = await readiness(FX_PERIOD_END, 30)
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.map((b) => b.code)).toEqual(['COMPANY_LOCK_DATE'])
+    const message = lockBlocker(result)!.message
+    expect(message).toContain(`låst till och med ${FX_PERIOD_END}`)
+    expect(message).toContain('Flytta först tillbaka låsdatumet under Inställningar → Bokföring')
+    expect(message).toMatch(/automatisk låsning är på: stäng av den medan bokslutet görs, annars kan datumet låsas igen nästa natt/)
+    expect(result.errors).toEqual([message])
+  })
+
+  it('blocks a later lock date too, and names that date', async () => {
+    const result = await readiness('2025-03-31', 90)
+    expect(lockBlocker(result)!.message).toContain('låst till och med 2025-03-31')
+  })
+
+  it('is the same block with automatic locking off: the lock date is what refuses the closing', async () => {
+    const off = await readiness(FX_PERIOD_END, null)
+    const on = await readiness(FX_PERIOD_END, 30)
+    expect(off.ready).toBe(false)
+    expect(lockBlocker(off)).toEqual(lockBlocker(on))
+  })
+
+  it('does not block a lock date the day before the year\'s last day', async () => {
+    const result = await readiness('2024-12-30', 30)
+    expect(lockBlocker(result)).toBeUndefined()
+    expect(result.ready).toBe(true)
+  })
+
+  it('leaves a company without a lock date ready, as before', async () => {
+    const result = await readiness(null, 30)
+    expect(result.blockers).toEqual([])
+    expect(result.ready).toBe(true)
+  })
+
+  it('leaves a closed year to PERIOD_ALREADY_CLOSED: its lock date is meant to cover it', async () => {
+    const result = await readiness('2025-12-31', null, { is_closed: true })
+    const codes = result.blockers.map((b) => b.code)
+    expect(codes).toContain('PERIOD_ALREADY_CLOSED')
+    expect(codes).not.toContain('COMPANY_LOCK_DATE')
+  })
+
+  it('fails closed when the lock cannot be read', async () => {
+    vi.mocked(resolvePeriodLockForDate).mockResolvedValue({
+      status: { period_id: null, status: 'locked', lock_date: null, lookup_failed: true },
+      layer: null,
+    })
+    const result = await readiness(null, null)
+    expect(result.ready).toBe(false)
+    expect(result.blockers.map((b) => b.code)).toEqual(['COMPANY_LOCK_DATE_CHECK_FAILED'])
+  })
+})
+
 describe('previewYearEndClosing', () => {
   it('calculates net result from class 3-8 accounts', async () => {
     results = [
@@ -1259,5 +1937,226 @@ describe('previewYearEndClosing', () => {
     const efPreview = await previewYearEndClosing(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(efPreview.netResult).toBe(100000)
     expect(efPreview.bolagsskattMissing).toBe(false)
+  })
+})
+
+// Feedback seq 707985: run_year_end booked an omföring in the next period that
+// no preview had shown. previewYearEndClosing now discloses it, estimated by
+// the close's own rule from the ingående balans the close will write.
+describe('previewYearEndClosing: the omföring it discloses', () => {
+  const settings = (entityType: string) => ({ data: { entity_type: entityType }, error: null })
+  const PERIOD_END = { data: { period_end: '2024-12-31' }, error: null }
+  const profitRows = (amount: number) => ({
+    rows: [
+      { account_number: '3001', account_name: 'Intäkter', account_class: 3, closing_debit: 0, closing_credit: amount },
+    ],
+    isBalanced: true,
+    totalDebit: 0,
+    totalCredit: amount,
+  })
+
+  it('discloses Dr 2099 / Cr 2098 of this year\'s result for an aktiebolag', async () => {
+    results = [settings('aktiebolag'), PERIOD_END]
+    vi.mocked(generateTrialBalance).mockResolvedValue(profitRows(150000) as never)
+
+    const preview = await previewYearEndClosing(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(preview.resultAppropriation).toEqual({
+      from_account: '2099',
+      to_account: '2098',
+      amount: 150000,
+      direction: 'profit',
+      entry_date: '2025-01-01',
+      skipped_reason: null,
+      disposed_by: [],
+    })
+  })
+
+  it('discloses 2069 -> 2068 for an ideell förening', async () => {
+    results = [settings('ideell_forening'), PERIOD_END]
+    vi.mocked(generateTrialBalance).mockResolvedValue(profitRows(25000) as never)
+
+    const preview = await previewYearEndClosing(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(preview.closingAccount).toBe('2069')
+    expect(preview.resultAppropriation).toMatchObject({
+      from_account: '2069',
+      to_account: '2068',
+      amount: 25000,
+      skipped_reason: null,
+    })
+  })
+
+  it('counts a result already closed by hand and the balansdagen revaluation', async () => {
+    // Imported books: the old system closed 20 000 of the year onto 2099
+    // through 8999; the close adds the remaining 10 000 and step 2's FX gain.
+    results = [settings('aktiebolag'), PERIOD_END]
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        { account_number: '2099', account_name: 'Årets resultat', account_class: 2, closing_debit: 0, closing_credit: 20000 },
+        { account_number: '3001', account_name: 'Intäkter', account_class: 3, closing_debit: 0, closing_credit: 100000 },
+        { account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 70000, closing_credit: 0 },
+        { account_number: '8999', account_name: 'Årets resultat', account_class: 8, closing_debit: 20000, closing_credit: 0 },
+      ],
+      isBalanced: true,
+      totalDebit: 90000,
+      totalCredit: 120000,
+    } as never)
+    vi.mocked(previewCurrencyRevaluation).mockResolvedValueOnce({
+      items: [{ id: 'inv-1' }],
+      lines: [],
+      closingRates: {},
+      totalGain: 1500,
+      totalLoss: 0,
+      netEffect: 1500,
+    } as never)
+
+    const preview = await previewYearEndClosing(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(preview.netResult).toBe(10000)
+    expect(preview.resultAppropriation?.amount).toBe(31500)
+  })
+
+  it('discloses the skip when the next period already disposes the result (feedback seq 707985)', async () => {
+    vi.mocked(findNextPeriod).mockResolvedValueOnce(
+      makeFiscalPeriod({ id: 'fp-2', period_start: '2025-01-01', period_end: '2025-12-31' }) as never,
+    )
+    results = [
+      settings('ideell_forening'),
+      PERIOD_END,
+      { data: null, error: null }, // no live omföring in the next period
+      // The migrated disposition in the next period (entries, then lines).
+      { data: [{ id: 'a1172', source_type: 'manual', voucher_series: 'A', voucher_number: 1172 }], error: null },
+      {
+        data: [
+          { id: 'l1', journal_entry_id: 'a1172', account_number: '2067', debit_amount: 0, credit_amount: 35059.47 },
+          { id: 'l2', journal_entry_id: 'a1172', account_number: '2069', debit_amount: 35059.47, credit_amount: 0 },
+        ],
+        error: null,
+      },
+    ]
+    vi.mocked(generateTrialBalance).mockResolvedValue(profitRows(35059.47) as never)
+
+    const preview = await previewYearEndClosing(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(preview.resultAppropriation).toEqual({
+      from_account: '2069',
+      to_account: '2068',
+      amount: 0,
+      direction: 'profit',
+      entry_date: '2025-01-01',
+      skipped_reason: 'already_disposed',
+      disposed_by: ['A1172'],
+    })
+  })
+
+  it('is null for an enskild firma and when the caller (the close itself) opts out', async () => {
+    results = [settings('enskild_firma'), PERIOD_END]
+    vi.mocked(generateTrialBalance).mockResolvedValue(profitRows(50000) as never)
+    const ef = await previewYearEndClosing(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+    expect(ef.resultAppropriation).toBeNull()
+
+    resultIdx = 0
+    results = [settings('aktiebolag'), PERIOD_END]
+    const inClose = await previewYearEndClosing(makeClient() as never, 'company-1', 'user-1', 'fp-1', {
+      resultAppropriation: false,
+    })
+    expect(inClose.resultAppropriation).toBeNull()
+    expect(findNextPeriod).not.toHaveBeenCalled()
+  })
+})
+
+describe('kontantmetodCutoffBlockers (year-end readiness texts, #3440)', () => {
+  const EMPTY: CutoffCollection = {
+    receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [],
+    undatedSettlements: [], rowlessSupplierInvoices: [], carries: [], rotPartialManual: [], rotPartialManualInvoices: [], paidBeforePosting: [],
+    paidBeforePostingManual: [], legacyCovered: [],
+  }
+  const plan = { side: 'customer', invoiceId: 'inv-1' } as KontantmetodCarryPlan
+  const assessment = (
+    over: Partial<Pick<KontantmetodCutoffAssessment, 'mode' | 'complete' | 'plans'>> & { collection?: Partial<CutoffCollection> } = {},
+  ) => ({
+    mode: 'per_invoice' as const,
+    complete: false,
+    plans: [] as KontantmetodCarryPlan[],
+    ...over,
+    collection: { ...EMPTY, ...over.collection },
+  })
+  const open = { hasNextPeriod: false }
+
+  it('has nothing to say about a complete cut-off', () => {
+    expect(kontantmetodCutoffBlockers(assessment({ complete: true }), open)).toEqual([])
+  })
+
+  it('asks to post the carries, with no vändning and no next-period requirement', () => {
+    const [blocker, ...rest] = kontantmetodCutoffBlockers(assessment({ plans: [plan, plan] }), open)
+    expect(rest).toEqual([])
+    expect(blocker).toEqual({
+      code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+      message: expect.stringMatching(/^2 fakturor var obetalda vid periodens slut och ska årsomföras: .*BFL 5 kap 2 §.*Förhandsgranska och bokför avgränsningen innan bokslut\.$/),
+    })
+    expect(blocker!.message).not.toMatch(/vändning|nästa räkenskapsår/)
+  })
+
+  it('names the payments it will correct, and every list a person must handle', () => {
+    const blockers = kontantmetodCutoffBlockers(assessment({
+      collection: {
+        paidBeforePosting: [{
+          side: 'customer', invoiceId: 'inv-2', reference: 'F-2', entryId: 'je-cash', entryDate: '2027-01-14',
+          paymentRowId: 'p', paymentAmount: 1250, carryEntryId: 'je-carry',
+        }],
+        paidBeforePostingManual: [{
+          side: 'supplier', invoiceId: 'si-9', reference: 'L-9', entryId: 'je-batch', entryDate: '2027-01-10',
+          paymentRowId: 'sp', reason: 'shared_verifikat',
+        }],
+        rotPartialManual: ['F-ROT'],
+        legacyCovered: [{ side: 'customer', invoiceId: 'inv-old', reference: 'F-OLD', legacyPeriodEnd: '2025-12-31' }],
+      },
+    }), open)
+    expect(blockers.map((b) => b.code)).toEqual(Array(4).fill('KONTANTMETOD_CUTOFF_REQUIRED'))
+    expect(blockers[0]!.message).toMatch(/^1 fakturor .*betalats efter det .*F-2.*storno och rättelse.*Kör avgränsningen igen\.$/)
+    expect(blockers[1]!.message).toBe(`${getErrorEntry('KONTANTMETOD_CUTOFF_PAID_BEFORE_POSTING_MANUAL')!.message_sv} Fakturor: L-9.`)
+    expect(blockers[2]!.message).toBe(`${getErrorEntry('KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL')!.message_sv} Fakturor: F-ROT.`)
+    expect(blockers[3]!.message).toBe(`${getErrorEntry('KONTANTMETOD_LEGACY_COVERED')!.message_sv} Fakturor: F-OLD.`)
+  })
+
+  // crm#1712: a header-only supplier invoice (a provider migration's) is
+  // named with what clears it, beside the carries that can be posted.
+  it('names a supplier invoice with no rows and what clears it', () => {
+    const blockers = kontantmetodCutoffBlockers(assessment({
+      plans: [plan], collection: { rowlessSupplierInvoices: ['ankomstnr 12'] },
+    }), open)
+    expect(blockers).toHaveLength(2)
+    expect(blockers[1]).toEqual({
+      code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+      message: expect.stringMatching(/^1 leverantörsfaktura som var obetald vid periodens slut saknar fakturarader.*ankomstnr 12\. Lägg till raderna.*befintliga verifikation/),
+    })
+    const many = kontantmetodCutoffBlockers(assessment({
+      collection: { rowlessSupplierInvoices: Array.from({ length: 12 }, (_, i) => `ankomstnr ${i + 1}`) },
+    }), open)
+    expect(many[0]!.message).toMatch(/^12 leverantörsfakturor .*ankomstnr 10 och 2 till\./)
+  })
+
+  it('names at most ten invoices', () => {
+    const refs = Array.from({ length: 12 }, (_, i) => `F-${i + 1}`)
+    const [blocker] = kontantmetodCutoffBlockers(assessment({ collection: { rotPartialManual: refs } }), open)
+    expect(blocker!.message).toMatch(/F-10 och 2 till\.$/)
+  })
+
+  it('says only what to fix when an invoice has an unusable moms setting', () => {
+    const blockers = kontantmetodCutoffBlockers(assessment({
+      plans: [plan], collection: { unknownVatTreatment: ['F-9'], rotPartialManual: ['F-ROT'] },
+    }), open)
+    expect(blockers).toEqual([{
+      code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+      message: expect.stringMatching(/^1 fakturor kan inte tas med .*momsinställning/),
+    }])
+  })
+
+  it('keeps the legacy messages for a legacy period', () => {
+    const [noNext] = kontantmetodCutoffBlockers(assessment({ mode: 'legacy' }), open)
+    expect(noNext!.message).toMatch(/äldre kontantmetodavgränsning med vändning.*nästa räkenskapsår/)
+    const [stale] = kontantmetodCutoffBlockers(assessment({ mode: 'legacy' }), { ...open, hasNextPeriod: true })
+    expect(stale!.message).toMatch(/^En tidigare kontantmetodavgränsning stämmer inte längre med reskontran/)
   })
 })

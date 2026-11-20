@@ -1,0 +1,167 @@
+name: Nightly
+
+# The two long runs that gate nothing: the simulated company and the report
+# benchmark. Both run on a schedule and by hand (Run workflow); the
+# simulated company also runs on a pull request that changes the company
+# itself. Scheduled runs use the workflow on main.
+#
+# No job here reads a secret. Runners: see the header of ci.yml (CI_RUNNER).
+
+on:
+  schedule:
+    # The report benchmark at 02:00 UTC, the simulated company at 03:00 UTC.
+    - cron: '0 2 * * *'
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Which job to run
+        type: choice
+        options: [sim-company, perf-reports, both]
+        default: both
+  pull_request:
+    paths:
+      - tests/sim/**
+      - scripts/sim/**
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels the run it supersedes. A scheduled or
+# hand-started run is never cancelled: it is no older version of anything.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  # The simulated company (tests/sim): three years of a company built through
+  # the MCP tools, then moms, AGI, INK2 and the årsredovisning judged against
+  # an answer key worked out from the same events. About 25 minutes.
+  sim-company:
+    name: Simulated company
+    if: >-
+      github.event_name == 'pull_request'
+      || (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')
+      || (github.event_name == 'workflow_dispatch' && inputs.job != 'perf-reports')
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TOOL_PG_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TOOL_PG_REST_URL: http://127.0.0.1:3000
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-core
+        with:
+          zero-extensions: 'false'
+      - uses: ./.github/actions/tool-pg-stack
+      - name: Build the company
+        env:
+          SIM_SCALE: full
+        run: npm run sim:build
+      - name: Judge the books against the answer key
+        run: npm run test:sim
+      - name: Keep the company
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sim-company
+          path: .local/sim/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Stop PostgREST
+        # Started by hand in tool-pg-stack, so nothing removes it for us. Left
+        # running it keeps the name and port 3000, and the next job that
+        # starts PostgREST on this runner fails.
+        if: ${{ always() }}
+        run: docker rm -f postgrest >/dev/null 2>&1 || true
+
+  # The report benchmark (scripts/perf/README.md, "Report benchmark"): every
+  # migration replayed into Postgres 17 with production's shared_buffers and
+  # work_mem, a synthetic company the size of the largest in production
+  # seeded, then every report RPC and the posting path timed warm and under
+  # mixed load. Fails when a p95 is over its budget in
+  # scripts/perf/bench/budgets.json. About 9 minutes.
+  perf-reports:
+    name: Report benchmark
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * *')
+      || (github.event_name == 'workflow_dispatch' && inputs.job != 'sim-company')
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    env:
+      PGHOST: localhost
+      PGPASSWORD: postgres
+      BENCH_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start Postgres 17 with production's settings
+        # Started by hand: a service container takes no command, and the image
+        # ships 128MB for both caches. effective_cache_size assumes three
+        # quarters of the compute's 8 GB. Dynamic shared memory in files: a
+        # container's /dev/shm is 64 MB, which parallel queries outgrow.
+        run: |
+          # A container left by a run that did not reach "Stop Postgres" would
+          # hold the name and the port.
+          docker rm -f bench-postgres >/dev/null 2>&1 || true
+          docker run -d --name bench-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+            supabase/postgres:17.6.1.136@sha256:f371b5f3f2ac0a05703f33d6e6134515fb2498cab708fb948a0aeb7481467c00 \
+            postgres -D /etc/postgresql -c shared_buffers=2GB -c work_mem=12MB \
+            -c max_connections=160 -c effective_cache_size=6GB -c dynamic_shared_memory_type=mmap
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null; }
+          for _ in $(seq 1 90); do
+            if psql "$BENCH_DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
+              sleep 3
+              psql "$BENCH_DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
+            fi
+            sleep 2
+          done
+          psql "$BENCH_DATABASE_URL" -tAc 'select version()' || { docker logs bench-postgres; exit 1; }
+      - uses: ./.github/actions/setup-core
+        with:
+          zero-extensions: 'false'
+      - name: Replay migrations and seed
+        run: sh scripts/perf/bench/setup-db.sh
+      - name: Benchmark
+        # Both modes run even when the first is over budget, so one run shows both.
+        run: |
+          status=0
+          npx tsx scripts/perf/bench/run.ts --mode warm --check --out perf-warm.json || status=1
+          npx tsx scripts/perf/bench/run.ts --mode mixed --check --out perf-mixed.json || status=1
+          exit $status
+      - name: Keep the timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: perf-reports
+          path: |
+            perf-warm.json
+            perf-mixed.json
+          retention-days: 90
+          if-no-files-found: ignore
+      - name: Stop Postgres
+        # Started by hand above, so nothing removes it for us. Left running it
+        # keeps port 5432, and every later database job on this runner fails.
+        if: ${{ always() }}
+        run: docker rm -f bench-postgres >/dev/null 2>&1 || true

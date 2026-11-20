@@ -35,11 +35,16 @@ vi.mock('@/lib/salary/salary-entries', async (importOriginal) => ({
 vi.mock('@/lib/salary/ytd', () => ({
   refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
 }))
+// The payment-date period pre-check has its own tests (book-run.test.ts);
+// an open period here, so the booking fixtures need not queue its reads.
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { eventBus } from '@/lib/events'
-import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import { createSalaryRunEntries, SalaryRunPartiallyBookedError } from '@/lib/salary/salary-entries'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -75,6 +80,7 @@ describe('POST /api/salary/runs/[id]/book: nollkörning', () => {
     enqueueMany([
       { data: makePaidRun() }, // salary_runs (paid) lookup
       { data: [] }, // salary_run_employees roster (empty)
+      { data: 'booking-claim-1' }, // claim_salary_run_booking
       { data: { id: 'run-1', status: 'booked' } }, // salary_runs update → booked
     ])
 
@@ -103,6 +109,8 @@ describe('POST /api/salary/runs/[id]/book: nollkörning', () => {
     enqueueMany([
       { data: makePaidRun() }, // salary_runs (paid) lookup
       { data: [{ employee_id: 'e1', gross_salary: 0, line_items: [] }] }, // roster present but zero
+      { data: 'booking-claim-1' }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } }, // salary_runs update → booked
     ])
 
@@ -146,6 +154,8 @@ describe('POST /api/salary/runs/[id]/book: nollkörning', () => {
           },
         ],
       }, // roster with dims from the employees join
+      { data: 'booking-claim-1' }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } }, // salary_runs update → booked
     ])
 
@@ -159,5 +169,168 @@ describe('POST /api/salary/runs/[id]/book: nollkörning', () => {
       employees: Array<{ employee_id: string; default_dimensions?: Record<string, string> }>
     }
     expect(runInput.employees[0].default_dimensions).toEqual({ '1': 'KS01' })
+  })
+})
+
+describe('POST /api/salary/runs/[id]/book: posted vouchers of the run that do not match', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('answers 409 naming the vouchers to reverse, and leaves the run unbooked', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: supabase as never,
+      error: null,
+    })
+    vi.mocked(createSalaryRunEntries).mockRejectedValue(
+      new SalaryRunPartiallyBookedError([
+        { id: 'je-7', voucher_series: 'L', voucher_number: 7 },
+        { id: 'je-9', voucher_series: 'L', voucher_number: 9 },
+      ]),
+    )
+
+    enqueueMany([
+      { data: makePaidRun({ total_gross: 30000, total_tax: 7000, total_net: 23000, total_avgifter: 9426 }) },
+      {
+        data: [
+          {
+            employee_id: 'e1',
+            employee: { employment_type: 'employee' },
+            gross_salary: 30000,
+            tax_withheld: 7000,
+            net_salary: 23000,
+            avgifter_amount: 9426,
+            avgifter_rate: 0.3142,
+            vacation_accrual: 0,
+            vacation_accrual_avgifter: 0,
+            line_items: [],
+          },
+        ],
+      },
+      { data: 'booking-claim-1' }, // claim_salary_run_booking
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/book', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: unknown }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_PARTIALLY_BOOKED')
+    // The user reads which vouchers to reverse, not a generic failure.
+    expect(body.error.message).toContain('(L7, L9)')
+    expect(body.error.details).toEqual({ voucher_numbers: ['L7', 'L9'], entry_ids: ['je-7', 'je-9'] })
+    expect(eventBus.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'salary_run.booked' }))
+  })
+})
+
+// accounted#3251: two tabs (or the dashboard plus MCP) booking the same run
+// both used to get 200 while the vouchers were posted twice. The second call
+// now loses the database claim and is told the run is being booked.
+describe('POST /api/salary/runs/[id]/book: concurrent booking of the same run', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('answers 409 SALARY_RUN_BOOKING_IN_PROGRESS in Swedish and posts nothing', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: supabase as never,
+      error: null,
+    })
+
+    enqueueMany([
+      { data: makePaidRun({ total_gross: 30000, total_tax: 7000, total_net: 23000, total_avgifter: 9426 }) },
+      { data: [{ employee_id: 'e1', employee: { employment_type: 'employee' }, line_items: [] }] },
+      { data: null }, // claim_salary_run_booking: another call holds the run
+      { data: { status: 'paid' } }, // status re-read
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/book', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_BOOKING_IN_PROGRESS')
+    expect(body.error.message).toContain('håller redan på att bokföras')
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1216: Bokför on a run whose payment date has not come posted the net
+// pay as paid out of the bank before it was. The server now refuses that
+// unless the Bokför dialog's confirmation comes with the request.
+describe('POST /api/salary/runs/[id]/book: payment date still ahead', () => {
+  const aheadRun = () =>
+    makePaidRun({ payment_date: '2999-12-31', total_gross: 30000, total_tax: 7000, total_net: 23000, total_avgifter: 9426 })
+  const roster = [
+    {
+      employee_id: 'e1',
+      employee: { employment_type: 'employee' },
+      gross_salary: 30000,
+      tax_withheld: 7000,
+      net_salary: 23000,
+      avgifter_amount: 9426,
+      avgifter_rate: 0.3142,
+      vacation_accrual: 0,
+      vacation_accrual_avgifter: 0,
+      line_items: [],
+    },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('answers 422 in Swedish without the confirmation and posts nothing', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({ user: mockUser as never, supabase: supabase as never, error: null })
+    enqueueMany([{ data: aheadRun() }])
+
+    const request = createMockRequest('/api/salary/runs/run-1/book', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+    expect(body.error.message).toContain('utbetalningsdag har inte kommit än')
+    expect(body.error.details.payment_date).toBe('2999-12-31')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('books when the request carries the confirmation', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({ user: mockUser as never, supabase: supabase as never, error: null })
+    vi.mocked(createSalaryRunEntries).mockResolvedValue({
+      salaryEntry: { id: 'je-1' },
+      avgifterEntry: { id: 'je-2' },
+      vacationEntry: null,
+      pensionEntry: null,
+    } as never)
+    enqueueMany([
+      { data: aheadRun() },
+      { data: roster },
+      { data: 'booking-claim-1' }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } }, // salary_runs update → booked
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/book', {
+      method: 'POST',
+      body: { confirm_payment_date_ahead: true },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
   })
 })

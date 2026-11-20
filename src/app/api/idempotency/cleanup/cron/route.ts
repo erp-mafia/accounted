@@ -4,6 +4,9 @@ import { cleanupExpiredIdempotencyKeys } from '@/lib/api/idempotency'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 /**
  * GET /api/idempotency/cleanup/cron: hourly.
  * Sweeps idempotency_keys past their 24h TTL.

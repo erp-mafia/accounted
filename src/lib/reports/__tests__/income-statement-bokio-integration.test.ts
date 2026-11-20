@@ -5,7 +5,7 @@ import { join } from 'node:path'
 // Fixtures live in /dev_docs which is gitignored (contains anonymised real-world
 // customer exports). Skip the suite when running outside a dev machine.
 const fixtureDir = join(process.cwd(), 'dev_docs', 'example_sie')
-const fixturesAvailable = existsSync(join(fixtureDir, '8812090614_2025.se'))
+const fixturesAvailable = existsSync(join(fixtureDir, '8801011233_2025.se'))
 
 vi.mock('../trial-balance', () => ({
   generateTrialBalance: vi.fn(),
@@ -115,7 +115,7 @@ describe.skipIf(!fixturesAvailable)('income statement: Bokio SIE regression (dev
     // with 221 316.27. Before the fix, treating 8999 as a regular class-8
     // financial item cancelled the computed profit and net_result dropped to ~0.
     // NE-bilaga was unaffected because it ignores 8999 by design.
-    const parsed = loadSIE('8812090614_2025.se')
+    const parsed = loadSIE('8801011233_2025.se')
     const rows = buildTrialBalanceFromSIE(parsed)
 
     mockTrialBalance.mockResolvedValue({
@@ -151,7 +151,7 @@ describe.skipIf(!fixturesAvailable)('income statement: Bokio SIE regression (dev
     // 2024 SIE has no "Yearly result" voucher, so 8999 stays at 0 and the
     // computation is a plain revenue-minus-expenses. This proves the fix
     // doesn't regress the non-closed case.
-    const parsed = loadSIE('8812090614_2024.se')
+    const parsed = loadSIE('8801011233_2024.se')
     const rows = buildTrialBalanceFromSIE(parsed)
 
     mockTrialBalance.mockResolvedValue({

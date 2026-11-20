@@ -3,17 +3,22 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { recoverStuckCommittingOperations } from '@/lib/pending-operations/recover-stuck-committing'
+import { runScheduledSuggestions } from '@/lib/suggestions/sweep'
 
 /**
  * GET /api/pending-operations/expire/cron, daily 02:30 UTC.
  *
- * Two sweeps per run:
+ * Three sweeps per run:
  *
  * 1. Expiry: auto-rejects staged operations that have sat at status='pending'
  *    for more than 30 days.
  * 2. Recovery (#843): drives rows stuck in status='committing' beyond the
  *    safe threshold to a terminal status; see
  *    lib/pending-operations/recover-stuck-committing.ts for the semantics.
+ * 3. Scheduled suggestions (lib/suggestions/sweep.ts): the detectors that run
+ *    on a schedule instead of an event stage their proposals. Today only
+ *    "Dölj <paket>?", which stays dark until SUGGESTIONS_HIDE_UNUSED is set:
+ *    with it unset this step reads nothing.
  *
  * AI agents stage operations for human review; when the chat
  * session is abandoned the proposal would otherwise linger in the worklist
@@ -25,14 +30,18 @@ import { recoverStuckCommittingOperations } from '@/lib/pending-operations/recov
  * trail) with the same result_data shape the commit dispatcher uses for its
  * own auto-rejects (lib/pending-operations/commit.ts). The strict
  * reason: 'expired' marker is what the /pending UI keys its
- * "Utgick automatiskt" badge on. rejection_category/rejection_reason stay
- * NULL: those carry user feedback semantics, and an expiry is not feedback.
+ * "Utgick automatiskt" badge on. rejection_category is 'expired', a system
+ * category: an expiry is no person's verdict on the proposal, and the
+ * category says so without reading result_data.
  *
  * If you change EXPIRY_DAYS, update the user-facing copy that states the
  * window: pending.auto_expiry_note + pending.auto_expired_detail in
  * messages/{sv,en}.json and the static note in components/agent/ApprovalCard.tsx.
  */
 const EXPIRY_DAYS = 30
+
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
 
 export const GET = withCronContext('cron.pending_operations_expire', async (_request, ctx) => {
   const supabase = createServiceClient()
@@ -49,6 +58,7 @@ export const GET = withCronContext('cron.pending_operations_expire', async (_req
     .update({
       status: 'rejected',
       resolved_at: new Date().toISOString(),
+      rejection_category: 'expired',
       result_data: { auto_rejected: true, reason: 'expired' },
     })
     .eq('status', 'pending')
@@ -79,5 +89,15 @@ export const GET = withCronContext('cron.pending_operations_expire', async (_req
     recovery = { error: 'recovery_sweep_failed' }
   }
 
-  return NextResponse.json({ success: true, expired, cutoff: cutoff.toISOString(), recovery })
+  // Scheduled suggestions, isolated like the recovery sweep: a failure here
+  // never masks the two passes above.
+  let suggestions: Record<string, unknown>
+  try {
+    suggestions = { ...(await runScheduledSuggestions(supabase, ctx.log)) }
+  } catch (err) {
+    ctx.log.error('scheduled suggestions sweep failed', err as Error)
+    suggestions = { error: 'suggestions_sweep_failed' }
+  }
+
+  return NextResponse.json({ success: true, expired, cutoff: cutoff.toISOString(), recovery, suggestions })
 })

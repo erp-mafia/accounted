@@ -1,11 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyProviderError,
+  fortnoxLoginLicenceRefusal,
   isApiModuleInactiveError,
+  isProviderRefusal,
+  subscriptionRefusal,
+  providerRefusalReason,
   ProviderCallError,
   type ProviderCallErrorCode,
 } from '../with-provider-call'
-import { FortnoxApiError } from '../fortnox/client'
+import { FortnoxApiError, fortnoxApiErrorCode } from '../fortnox/client'
+import { BokioApiError } from '../bokio/client'
+import { VismaApiError } from '../visma/client'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 /**
@@ -145,6 +151,61 @@ describe('classifyProviderError', () => {
   })
 })
 
+/**
+ * PH 149: GET /3/customers answered HTTP 400 with the lowercase body below on
+ * a Fortnox company without Kundfaktura or Order. PH 145: GET /3/suppliers
+ * answered 403. Both are a refusal of one register; only their remedy differs.
+ */
+describe('a Fortnox register refusal', () => {
+  const unlicensed = new FortnoxApiError('Fortnox API error: 400 Bad Request', 400,
+    '{"ErrorInformation":{"error":1,"message":"Det finns ingen aktiv licens för önskat scope.","code":2001101}}')
+
+  it('reads the error code whichever way Fortnox spells the key', () => {
+    expect(fortnoxApiErrorCode(unlicensed)).toBe('2001101')
+    expect(fortnoxApiErrorCode(new FortnoxApiError('Fortnox API error: 403', 403, FORTNOX_SUPPLIER_BODY))).toBe('2003275')
+    expect(fortnoxApiErrorCode(new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"Error":1,"Message":"Det finns ingen aktiv licens för önskat scope.","Code":2001101}}'))).toBe('2001101')
+    expect(fortnoxApiErrorCode(new FortnoxApiError('Fortnox API error: 403', 403))).toBeUndefined()
+  })
+
+  it('classifies a missing module licence as a refused register, not as a transient failure', () => {
+    expect(classifyProviderError(unlicensed)).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+  })
+
+  it('names a missing module licence apart from a missing permission', () => {
+    expect(providerRefusalReason(unlicensed)).toBe('license')
+    expect(providerRefusalReason(new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"error":1,"message":"Har inte behörighet för scope.","code":2000663}}'))).toBe('permission')
+    expect(providerRefusalReason(new FortnoxApiError('Fortnox API error: 403', 403, FORTNOX_SUPPLIER_BODY))).toBe('permission')
+    expect(providerRefusalReason(new FortnoxApiError('Fortnox API error: 403', 403))).toBe('permission')
+    expect(providerRefusalReason(vismaError(403))).toBe('permission')
+  })
+
+  it('reads a register the connecting user may not see as refused under HTTP 400 too (crm#1014)', () => {
+    // Fortnox answers some per-register user rights with 400, not 403. The
+    // migration job used to read these as unclassified and retry for ever,
+    // while the underlag import already called them refusals.
+    for (const err of [
+      new FortnoxApiError('Fortnox API error: 400', 400,
+        '{"ErrorInformation":{"error":1,"message":"Saknar behörighet för leverantörsfaktura.","code":2002182}}'),
+      new FortnoxApiError('Fortnox API error: 400', 400,
+        '{"ErrorInformation":{"error":1,"message":"Saknar behörighet för kundregister.","code":2001538}}'),
+    ]) {
+      expect(classifyProviderError(err)).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+      expect(providerRefusalReason(err)).toBe('permission')
+    }
+    // An ordinary 400 stays unclassified.
+    expect(classifyProviderError(new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"error":1,"message":"Kan inte hitta kontot.","code":2000423}}'))).toBeNull()
+  })
+
+  it('keeps the whole-account API licence apart from a refused register', () => {
+    const noApi = new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"error":1,"message":"Api-licens saknas.","code":2001103}}')
+    expect(classifyProviderError(noApi)).toBe('PROVIDER_LICENSE_MISSING')
+  })
+})
+
 describe('isApiModuleInactiveError', () => {
   it('matches the Visma module string case-insensitively', () => {
     expect(isApiModuleInactiveError(VISMA_MODULE_BODY)).toBe(true)
@@ -176,6 +237,7 @@ describe('structured error registry wiring', () => {
       PROVIDER_RESOURCE_FORBIDDEN: true,
       PROVIDER_LICENSE_MISSING: true,
       PROVIDER_API_MODULE_INACTIVE: true,
+      BOKIO_PLAN_NO_API: true,
       PROVIDER_RATE_LIMITED: true,
       PROVIDER_UNREACHABLE: true,
       PROVIDER_UPSTREAM_ERROR: true,
@@ -187,5 +249,78 @@ describe('structured error registry wiring', () => {
       expect(entry!.message_sv).toBeTruthy()
       expect(entry!.message_en).toBeTruthy()
     }
+  })
+})
+
+describe('one reading of a Bokio plan without API access', () => {
+  const plan = () => new BokioApiError('Bokio API error: 403 Forbidden', 403, JSON.stringify({ error: 'price_plan_feature_required' }))
+
+  it('is the plan, not a dead token or a closed register: reconnecting cannot change it', () => {
+    expect(classifyProviderError(plan())).toBe('BOKIO_PLAN_NO_API')
+    expect(classifyProviderError(plan(), { grantProven: true })).toBe('BOKIO_PLAN_NO_API')
+  })
+
+  it('leaves another Bokio 403 an ordinary refusal', () => {
+    expect(classifyProviderError(new BokioApiError('x', 403, '{"error":"forbidden"}'))).toBe('PROVIDER_AUTH_EXPIRED')
+  })
+})
+
+describe('isProviderRefusal', () => {
+  const fortnox400 = new FortnoxApiError('x', 400, JSON.stringify({ ErrorInformation: { error: 1, message: 'Saknar behörighet för kundregister.', code: 2001538 } }))
+
+  it.each([
+    ['a dead token', new VismaApiError('x', 401)],
+    ['an opaque 403', new VismaApiError('x', 403)],
+    ['a Fortnox refusal under a 400', fortnox400],
+    ['an inactive API module', new VismaApiError('x', 403, 'ForbiddenRequestException - No access to module: api_standard')],
+    ['a Bokio plan without API access', new BokioApiError('x', 403, '{"error":"price_plan_feature_required"}')],
+    ['a connection refused for good', new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'visma', 'refresh refused')],
+  ])('%s is a refusal', (_name, error) => {
+    expect(isProviderRefusal(error)).toBe(true)
+  })
+
+  it.each([
+    ['a rate limit', new VismaApiError('x', 429)],
+    ['a provider outage', new VismaApiError('x', 503)],
+    ['one missing invoice', new VismaApiError('x', 404)],
+    ['a Fortnox 400 that refuses nothing', new FortnoxApiError('x', 400, '{"ErrorInformation":{"message":"Ogiltigt datum"}}')],
+    ['anything else', new Error('boom')],
+  ])('%s is not', (_name, error) => {
+    expect(isProviderRefusal(error)).toBe(false)
+  })
+})
+
+// Fortnox's authorize redirect, as its Errors page documents the two licence
+// refusals. The scope one reached two customers as Fortnox's English on
+// 2026-11-12: the callback looked for "missing license" with a space.
+describe('fortnoxLoginLicenceRefusal', () => {
+  it('reads the documented codes exactly', () => {
+    expect(fortnoxLoginLicenceRefusal('error_missing_license')).toBe('scope')
+    expect(fortnoxLoginLicenceRefusal('error_missing_app_license')).toBe('app')
+  })
+
+  it.each(['access_denied', 'invalid_scope', 'missing license', 'ERROR_MISSING_LICENSE', ''])('is null for %j', (error) => {
+    expect(fortnoxLoginLicenceRefusal(error)).toBeNull()
+  })
+})
+
+// A preliminary read (company information) that meets one of these stops the
+// door with its sentence: the preview did, and now the register fetch does.
+describe('subscriptionRefusal', () => {
+  it.each([
+    ['an inactive Visma API module', new VismaApiError('x', 403, 'ForbiddenRequestException - No access to module: api_standard'), 'PROVIDER_API_MODULE_INACTIVE'],
+    ['a missing Fortnox licence', new Error('token refresh failed: error_missing_license'), 'PROVIDER_LICENSE_MISSING'],
+    ['a Bokio plan without API access', new BokioApiError('x', 403, '{"error":"price_plan_feature_required"}'), 'BOKIO_PLAN_NO_API'],
+  ] as const)('names %s', (_label, error, code) => {
+    expect(subscriptionRefusal(error)).toBe(code)
+  })
+
+  it.each([
+    ['an opaque 403', new VismaApiError('x', 403)],
+    ['a dead token', new VismaApiError('x', 401)],
+    ['a network failure', new Error('fetch failed')],
+    ['not an error', 'nope'],
+  ])('is null for %s: the door carries on as before', (_label, error) => {
+    expect(subscriptionRefusal(error)).toBeNull()
   })
 })

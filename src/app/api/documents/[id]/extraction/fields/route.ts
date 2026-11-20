@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { recordHumanFields } from '@/lib/documents/extract/store'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
@@ -16,7 +16,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  * extraction (pass 'human') on top of it, the settled fields out of review.
  * Values are stored as typed and normalized on the server. The model never
  * overwrites a person's record. An agreement is derived again from the
- * settled record.
+ * settled record. A viewer is refused (requireWrite): the record is written
+ * through the service client, which RLS does not narrow.
  */
 const bodySchema = z.object({
   fields: z
@@ -25,7 +26,7 @@ const bodySchema = z.object({
 })
 
 export const POST = withRouteContext('document.extraction.fields', async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const parsed = await validateBody(request, bodySchema)
   if (!parsed.success) return parsed.response
@@ -53,4 +54,4 @@ export const POST = withRouteContext('document.extraction.fields', async (reques
       ctx.log.error('document fields save failed', { doc: id, reason: out.reason })
       return NextResponse.json({ error: 'Fälten kunde inte sparas. Försök igen.' }, { status: 500 })
   }
-})
+}, { requireWrite: true })

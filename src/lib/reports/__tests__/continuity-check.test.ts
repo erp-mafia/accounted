@@ -1,4 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The period's unlinked IB verifikat has its own tests
+// (opening-balance/unlinked.test.ts, opening-balances.test.ts); here the
+// year has none, so the queued journal reads stay the report's own.
+vi.mock('@/lib/import/opening-balance/unlinked', () => ({
+  findUnlinkedOpeningBalance: vi.fn(async () => null),
+}))
 
 // ============================================================
 // Mock Supabase: table-keyed result queues
@@ -9,7 +16,7 @@ let mockResults: Record<string, MockResult[]>
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'order', 'range', 'update']) {
+  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'order', 'range', 'update', 'limit']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   const consume = (): MockResult => {
@@ -26,6 +33,7 @@ function makeBuilder(tableName: string) {
     return queue.shift()!
   }
   b.single = vi.fn().mockImplementation(async () => consume())
+  b.maybeSingle = b.single
   b.then = (resolve: (v: unknown) => void) => resolve(consume())
   return b
 }
@@ -47,21 +55,10 @@ import { validateBalanceContinuity } from '../continuity-check'
 
 let supabase: ReturnType<typeof makeClient>
 
-// The fixtures feed the previous period's activity through
-// rpc:get_trial_balance_aggregates, so the RPC path must be selected even
-// when the environment carries REPORTS_TB_RPC=off (issue #2470).
-const savedFlag = process.env.REPORTS_TB_RPC
-
 beforeEach(() => {
   vi.clearAllMocks()
   mockResults = {}
   supabase = makeClient()
-  delete process.env.REPORTS_TB_RPC
-})
-
-afterEach(() => {
-  if (savedFlag === undefined) delete process.env.REPORTS_TB_RPC
-  else process.env.REPORTS_TB_RPC = savedFlag
 })
 
 describe('validateBalanceContinuity', () => {
@@ -86,7 +83,7 @@ describe('validateBalanceContinuity', () => {
         // Target period
         { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: 'ob-1' } },
         // Previous period (for name)
-        { data: { id: 'p1', name: 'FY2024' } },
+        { data: { id: 'p1', name: 'FY2024', period_end: '2024-12-31' } },
         // Previous period (for generateTrialBalance)
         { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
       ],
@@ -135,7 +132,7 @@ describe('validateBalanceContinuity', () => {
     mockResults = {
       fiscal_periods: [
         { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: 'ob-1' } },
-        { data: { id: 'p1', name: 'FY2024' } },
+        { data: { id: 'p1', name: 'FY2024', period_end: '2024-12-31' } },
         { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
       ],
       // Previous UB: 1930 = 50000 debit
@@ -180,7 +177,7 @@ describe('validateBalanceContinuity', () => {
     mockResults = {
       fiscal_periods: [
         { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: 'ob-1' } },
-        { data: { id: 'p1', name: 'FY2024' } },
+        { data: { id: 'p1', name: 'FY2024', period_end: '2024-12-31' } },
         { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
       ],
       // Previous UB has 1510 and 2440
@@ -223,7 +220,7 @@ describe('validateBalanceContinuity', () => {
     mockResults = {
       fiscal_periods: [
         { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: 'ob-1' } },
-        { data: { id: 'p1', name: 'FY2024' } },
+        { data: { id: 'p1', name: 'FY2024', period_end: '2024-12-31' } },
         { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
       ],
       // Previous UB: only 1930
@@ -261,7 +258,7 @@ describe('validateBalanceContinuity', () => {
     mockResults = {
       fiscal_periods: [
         { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: 'ob-1' } },
-        { data: { id: 'p1', name: 'FY2024' } },
+        { data: { id: 'p1', name: 'FY2024', period_end: '2024-12-31' } },
         { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
       ],
       'rpc:get_trial_balance_aggregates': [
@@ -289,6 +286,70 @@ describe('validateBalanceContinuity', () => {
     expect(result.discrepancies).toEqual([])
   })
 
+  // A year that ended without a booked resultatavslut opens the next year with
+  // its result on the form's closing account (prior_opening_balance_lines).
+  const unclosedPreviousYear = (entityType: string, ibRows: Array<{ account_number: string; debit: number; credit: number }>) => ({
+    fiscal_periods: [
+      { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: null } },
+      { data: { id: 'p1', name: 'FY2024', period_end: '2024-12-31' } },
+      { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
+    ],
+    // FY2024 earned 1000 and was never closed.
+    'rpc:get_trial_balance_aggregates': [
+      {
+        data: [
+          { bucket: 'period', account_number: '1930', debit: 1000, credit: 0 },
+          { bucket: 'period', account_number: '3001', debit: 0, credit: 1000 },
+        ],
+      },
+    ],
+    // FY2024's own (empty) IB first, then FY2025's derived IB.
+    'rpc:compute_prior_opening_balances': [{ data: [] }, { data: ibRows }],
+    companies: [{ data: { entity_type: entityType } }],
+    chart_of_accounts: [
+      {
+        data: [
+          { account_number: '1930', account_name: 'Företagskonto', account_class: 1 },
+          { account_number: '3001', account_name: 'Försäljning', account_class: 3 },
+        ],
+      },
+    ],
+  })
+
+  it('reads the previous year as closed: a result left on its result accounts opens on 2099', async () => {
+    mockResults = unclosedPreviousYear('aktiebolag', [
+      { account_number: '1930', debit: 1000, credit: 0 },
+      { account_number: '2099', debit: 0, credit: 1000 },
+    ])
+
+    const result = await validateBalanceContinuity(supabase, 'company-1', 'p2')
+
+    expect(result.valid).toBe(true)
+    expect(result.discrepancies).toEqual([])
+  })
+
+  it("an enskild firma's unbooked result opens on 2010", async () => {
+    mockResults = unclosedPreviousYear('enskild_firma', [
+      { account_number: '1930', debit: 1000, credit: 0 },
+      { account_number: '2010', debit: 0, credit: 1000 },
+    ])
+
+    const result = await validateBalanceContinuity(supabase, 'company-1', 'p2')
+
+    expect(result.valid).toBe(true)
+  })
+
+  it('still flags an opening balance that leaves the unbooked result out', async () => {
+    mockResults = unclosedPreviousYear('aktiebolag', [{ account_number: '1930', debit: 1000, credit: 0 }])
+
+    const result = await validateBalanceContinuity(supabase, 'company-1', 'p2')
+
+    expect(result.valid).toBe(false)
+    expect(result.discrepancies).toEqual([
+      { account_number: '2099', account_name: 'Årets resultat', previous_ub_net: -1000, current_ib_net: 0, difference: -1000 },
+    ])
+  })
+
   it('throws when period not found', async () => {
     mockResults = {
       fiscal_periods: [
@@ -301,16 +362,49 @@ describe('validateBalanceContinuity', () => {
     ).rejects.toThrow('Fiscal period not found')
   })
 
-  it('throws when previous period not found', async () => {
+  it('throws when the previous period read fails', async () => {
     mockResults = {
       fiscal_periods: [
         { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: null } },
-        { data: null, error: { message: 'not found' } },
+        { data: null, error: { message: 'timeout' } },
       ],
     }
 
     await expect(
       validateBalanceContinuity(supabase, 'company-1', 'p2')
-    ).rejects.toThrow('Previous fiscal period not found')
+    ).rejects.toThrow('Failed to read the previous fiscal year')
+  })
+
+  // The link is trusted only when the linked year ends the day before this
+  // one starts (resolvePreviousFiscalPeriod). A link to a year two years back
+  // is ignored; the year that does end the day before is the one compared.
+  it('compares against the date-adjacent year when the link skips a year', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { id: 'p3', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: 'ob-3' } },
+        // The linked year ends 2023-12-31: not adjacent.
+        { data: { id: 'p1', name: 'FY2023', period_end: '2023-12-31' } },
+        // By date: the year ending 2024-12-31.
+        { data: { id: 'p2', name: 'FY2024', period_end: '2024-12-31' } },
+        { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
+      ],
+    }
+
+    const result = await validateBalanceContinuity(supabase, 'company-1', 'p3')
+
+    expect(result.previous_period_name).toBe('FY2024')
+  })
+
+  it('treats a period with no year ending the day before as a first year', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: null, opening_balance_entry_id: null } },
+        { data: null, error: null },
+      ],
+    }
+
+    const result = await validateBalanceContinuity(supabase, 'company-1', 'p2')
+
+    expect(result).toMatchObject({ valid: true, previous_period_name: null, checked_accounts: 0 })
   })
 })

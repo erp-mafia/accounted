@@ -14,7 +14,7 @@
  */
 
 import { validateBankgiroNumber, validatePlusgiroNumber, validateOcrReference } from '@/lib/bankgiro/luhn'
-import { resolveDomesticBankAccount } from '@/lib/salary/payment/bank-account'
+import { resolveDomesticBankAccount } from '@/lib/payments/bank-account'
 
 export type SupplierPayee =
   | { type: 'bankgiro'; bankgiro: string }
@@ -39,7 +39,7 @@ export interface SupplierPayeeSource {
  * blob cannot be split safely (is 83279123456789 clearing 8327 or 8327-9?),
  * so it resolves to payee_invalid.
  */
-const FREE_TEXT_BANK_ACCOUNT = /^(\d{4}|8\d{4})[-\s]+([\d\s-]{5,15})$/
+export const FREE_TEXT_BANK_ACCOUNT = /^(\d{4}|8\d{4})[-\s]+([\d\s-]{5,15})$/
 
 function digits(value: string | null | undefined): string {
   return (value ?? '').replace(/\D/g, '')
@@ -110,7 +110,7 @@ export type PaymentReference =
 
 export interface PaymentReferenceSource {
   payment_reference: string | null
-  supplier_invoice_number: string
+  supplier_invoice_number: string | null
 }
 
 /**
@@ -122,24 +122,25 @@ export interface PaymentReferenceSource {
  * as text a human can match, whereas a structured SCOR reference that fails
  * the receiver's OCR check can bounce the whole payment. Callers surface the
  * fallback-on-invalid case as a warning (ocrInvalid) so the typo gets fixed.
+ *
+ * An invoice with neither a valid OCR nor the supplier's number (crm#1039)
+ * resolves to no reference at all: there is nothing the receiver could match
+ * the payment to, and the payment file never carries an empty message.
+ * The batch leaves such an invoice out (reference_missing).
  */
 export function resolvePaymentReference(invoice: PaymentReferenceSource): {
-  reference: PaymentReference
+  reference: PaymentReference | null
   ocrInvalid: boolean
 } {
+  const number = invoice.supplier_invoice_number?.trim() ? invoice.supplier_invoice_number : null
+  const fallback: PaymentReference | null = number ? { type: 'invoice_number', value: number } : null
   const raw = invoice.payment_reference?.trim()
   if (raw) {
     const ocr = digits(raw)
     if (validateOcrReference(ocr)) {
       return { reference: { type: 'ocr', value: ocr }, ocrInvalid: false }
     }
-    return {
-      reference: { type: 'invoice_number', value: invoice.supplier_invoice_number },
-      ocrInvalid: true,
-    }
+    return { reference: fallback, ocrInvalid: true }
   }
-  return {
-    reference: { type: 'invoice_number', value: invoice.supplier_invoice_number },
-    ocrInvalid: false,
-  }
+  return { reference: fallback, ocrInvalid: false }
 }

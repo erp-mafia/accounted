@@ -1,10 +1,14 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { scopeFreeLinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
 import { equalOre, isZeroOre, roundOre, sumOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput, JournalEntry } from '@/types'
 import { PRIOR_RESULT_ACCOUNT, RESULT_ACCOUNT } from './result-appropriation-service'
+import { resultAppropriationBusinessEvent } from './year-end-business-events'
 
+import { isEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 export type HistoricalResultRepairReason =
   | 'ready'
   | 'non_aktiebolag'
@@ -135,6 +139,18 @@ function resultLines(net: number): CreateJournalEntryLineInput[] {
  * is still the complete current posted 2099 balance and no other entry touched
  * 2099 in the period. Everything else stays unchanged for manual review.
  */
+/**
+ * The repair is defined on the 2099 "Årets resultat" -> 2098 "Vinst eller
+ * förlust från föregående år" pair. That pair belongs to the aktiebolag and
+ * the ekonomisk förening (resultClosingAccounts); an enskild firma has no
+ * carry and an ideell förening carries 2069 -> 2068.
+ */
+function usesAbResultChain(entityType: string | null): boolean {
+  if (!entityType || !isEntityType(entityType)) return false
+  const accounts = resultClosingAccounts(entityType)
+  return accounts.closing === '2099' && accounts.priorYearCarry === '2098'
+}
+
 export function classifyHistoricalResultRepair(
   snapshot: HistoricalResultRepairSnapshot,
 ): HistoricalResultRepairAssessment {
@@ -172,8 +188,9 @@ export function classifyHistoricalResultRepair(
   ): HistoricalResultRepairAssessment => ({ ...base, status, reason, plan: null })
 
   // An unknown form is NOT assumed to be an aktiebolag: the repair only ever
-  // applies to the 2099 -> 2098 chain, so anything else is skipped.
-  if (snapshot.entityType !== 'aktiebolag') {
+  // applies to the 2099 -> 2098 chain (aktiebolag and ekonomisk förening),
+  // so anything else is skipped.
+  if (!usesAbResultChain(snapshot.entityType)) {
     return finish('skipped', 'non_aktiebolag')
   }
   if (snapshot.isClosed) return finish('skipped', 'period_closed')
@@ -278,7 +295,7 @@ export async function assessHistoricalResultRepair(
   }
 
   if (
-    baseSnapshot.entityType !== 'aktiebolag' ||
+    !usesAbResultChain(baseSnapshot.entityType) ||
     baseSnapshot.isClosed ||
     baseSnapshot.lockedAt ||
     baseSnapshot.existingPostedAppropriation ||
@@ -332,7 +349,7 @@ export async function assessHistoricalResultRepair(
       openingEntry?.status === 'posted' && openingEntry.source_type === 'opening_balance',
     openingBalanceVoucherLabel:
       openingEntry?.voucher_series != null && openingEntry.voucher_number != null
-        ? `${openingEntry.voucher_series}${openingEntry.voucher_number}`
+        ? formatVoucher(openingEntry)
         : null,
     requiredAccountsActive:
       activeAccounts.has(RESULT_ACCOUNT) && activeAccounts.has(PRIOR_RESULT_ACCOUNT),
@@ -370,7 +387,10 @@ export async function assertRepairAttributionUser(
 
 /**
  * Re-assess immediately before posting and write only an unambiguous plan.
- * All journal writes still pass through the bookkeeping engine.
+ * All journal writes still pass through the bookkeeping engine, through the
+ * posting port: while POSTING_EVENTS is on, the repair records
+ * year_end.result_appropriated of the period, system_derived (the plan is
+ * derived from the validated ingående balans, nobody chose the pair).
  */
 export async function postHistoricalResultRepair(
   supabase: SupabaseClient,
@@ -391,15 +411,27 @@ export async function postHistoricalResultRepair(
   const underlagLabel = assessment.plan.openingBalanceVoucherLabel
     ? `verifikat ${assessment.plan.openingBalanceVoucherLabel}`
     : `verifikat ${assessment.plan.openingBalanceEntryId}`
-  const entry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: periodId,
-    entry_date: assessment.plan.periodStart,
-    description: `Omföring av föregående års resultat (${RESULT_ACCOUNT} → ${PRIOR_RESULT_ACCOUNT})`,
-    source_type: 'result_appropriation',
-    source_id: assessment.plan.openingBalanceEntryId,
-    voucher_series: 'A',
-    notes: `Underlag: ingående balans, ${underlagLabel} (${assessment.plan.openingBalanceEntryId}). Historisk rättelse av kvarliggande föregående års resultat på ${RESULT_ACCOUNT}.`,
-    lines: assessment.plan.lines,
+  const plan = assessment.plan
+  const entry = await postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      resultAppropriationBusinessEvent({
+        fiscalPeriodId: periodId,
+        periodStart: plan.periodStart,
+        amount: plan.amount,
+        linkBasis: scopeFreeLinkBasisColumns('system_derived'),
+      }),
+    input: {
+      fiscal_period_id: periodId,
+      entry_date: plan.periodStart,
+      description: `Omföring av föregående års resultat (${RESULT_ACCOUNT} → ${PRIOR_RESULT_ACCOUNT})`,
+      source_type: 'result_appropriation',
+      source_id: plan.openingBalanceEntryId,
+      notes: `Underlag: ingående balans, ${underlagLabel} (${plan.openingBalanceEntryId}). Historisk rättelse av kvarliggande föregående års resultat på ${RESULT_ACCOUNT}.`,
+      lines: plan.lines,
+    },
   })
 
   return { assessment, entry }

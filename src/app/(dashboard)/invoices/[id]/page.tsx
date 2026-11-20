@@ -1,14 +1,21 @@
 'use client'
 
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { useState, useEffect, useRef, use } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
+import { isCreditableInvoiceStatus } from '@/lib/bookkeeping/creditable-statuses'
 import { createClient } from '@/lib/supabase/client'
-import { guardBrowserWrite } from '@/lib/company/tab-guard'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { RecordHeader } from '@/components/ui/record-header'
+import { PageHeaderOverflowItems } from '@/components/ui/page-header-actions'
+import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import {
@@ -19,27 +26,42 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatCurrency, formatDate, cn, formatRowAmount } from '@/lib/utils'
+import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
-import { getDisplayTotal, getAmountToPay } from '@/lib/invoices/rounding'
-import { workTypeLabel } from '@/lib/invoices/rot-rut-rules'
+import { getDisplayTotal, getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
-import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
+import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
+import { peppolDeliveryAttention } from '@/lib/invoices/peppol-attention'
+import {
+  continueInvoiceSeries,
+  readNextNumberPreview,
+  type SeriesContinuation,
+} from '@/lib/invoices/next-number-preview'
+import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { creditNoteRefundedAmount, planCreditNoteRefund } from '@/lib/invoices/credit-note-refund-plan'
+import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   classifyPaymentHistoryGap,
   fetchInvoicePaymentVouchers,
   type PaymentVoucherRef,
 } from '@/lib/invoices/payment-history-gap'
-import { effectiveQuoteStatus, isQuoteExpired } from '@/lib/invoices/quote-status'
+import { effectiveQuoteStatus, isQuoteExpired, quoteAwaitsSending } from '@/lib/invoices/quote-status'
 import {
   draftDownloadDecision,
   type DraftDownloadDecision,
 } from '@/lib/invoices/draft-download-decision'
 import type { QuoteStatus } from '@/types'
 import {
+  findArchivedInvoiceDelivery,
   invoiceDocumentCaveat,
   invoiceRerenderUrl,
   paymentConfirmationPdfSource,
@@ -48,40 +70,54 @@ import {
   type InvoicePdfSource,
 } from '@/lib/invoices/invoice-pdf-source'
 import { isPaymentConfirmationEligible } from '@/lib/invoices/payment-confirmation'
-import { contentDispositionFilename } from '@/lib/api/content-disposition'
+import { isInvoiceResendEligible } from '@/lib/invoices/resend-eligibility'
+import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
+import { failureDescription } from '@/lib/browser/action-failure'
 import {
-  Loader2,
-  Send,
-  CheckCircle,
-  FileCheck2,
-  FileText,
-  Download,
-  Eye,
-  XCircle,
-  Mail,
-  ReceiptText,
-  AlertTriangle,
-  Trash2,
-  Lock,
-  CalendarClock,
-  Pencil,
-  Copy,
-  MoreHorizontal,
-  ClipboardList,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowTopRightOnSquareIcon,
+  BanknotesIcon,
+  BellAlertIcon,
+  CalendarDaysIcon,
+  CheckCircleIcon,
+  ClipboardDocumentListIcon,
+  DocumentCheckIcon,
+  DocumentTextIcon,
+  EllipsisHorizontalIcon,
+  EnvelopeIcon,
+  ExclamationTriangleIcon,
+  EyeIcon,
+  LockClosedIcon,
+  PaperAirplaneIcon,
+  PencilIcon,
+  ScaleIcon,
+  SpinnerIcon,
+  Square2StackIcon,
+  TrashIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
+import RefundCreditNoteDialog from '@/components/invoices/RefundCreditNoteDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
+import { InvoiceUnderlagSection } from '@/components/invoices/InvoiceUnderlagSection'
+import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
+import QuotePartDialog from '@/components/invoices/QuotePartDialog'
+import { quoteInvoicingProgress } from '@/lib/invoices/quote-partial-invoice'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import {
   InvoiceDeliveryHistory,
   type InvoiceDeliveryView,
 } from '@/components/invoices/InvoiceDeliveryHistory'
-import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
+import { WithCorrection } from '@/components/bookkeeping/WithCorrection'
+import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
+import { AccrualLineInfo, useInvoiceAccrualSchedules } from '@/components/bookkeeping/AccrualLineInfo'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import {
@@ -98,8 +134,39 @@ import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
-import { remindersActiveFor } from '@/lib/invoices/reminders-enabled'
+import { REMINDERS_SENDING_ENABLED, remindersActiveFor } from '@/lib/invoices/reminders-enabled'
+import { SendReminderDialog } from '@/components/reminders/SendReminderDialog'
+import { useInvoiceReminderLadder } from '@/components/reminders/use-invoice-reminder-ladder'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { CollectionCaseCard } from '@/components/collections/CollectionCaseCard'
+import { SendToCollectionDialog } from '@/components/collections/SendToCollectionDialog'
+import { OverdueCollectionBanner } from '@/components/collections/OverdueCollectionBanner'
+import { usePendingCollectionsRun } from '@/components/collections/collections-run-client'
+import { batchItemFor } from '@/lib/collections/overdue-banner'
+import { casePlacement } from '@/lib/collections/case-card'
+import { CustomerLossDialog } from '@/components/customer-loss/CustomerLossDialog'
+import { CustomerLossNote } from '@/components/customer-loss/CustomerLossNote'
+import { RecoveredLossDialog } from '@/components/customer-loss/RecoveredLossDialog'
+import { useCustomerLoss } from '@/components/customer-loss/use-customer-loss'
+import { useCaseWords, useInvoiceCollection } from '@/components/collections/case-client'
+import { remindersAside, showSendToCollection } from '@/lib/collections/invoice-entry'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { isInvoiceOverdue, isInvoiceOwed } from '@/lib/invoices/overdue'
+import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
+import { invoiceRowStatus, invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import type { StatusChip } from '@/lib/status-display'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
+import { UsageLimitDialog } from '@/components/settings/UsageLimitDialog'
+import type { UsageKind } from '@/lib/usage/kinds'
+import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
+import {
+  EMPTY_INVOICE_MAILBOX_VIEW,
+  mailboxSendActions,
+  parseInvoiceMailboxView,
+  type InvoiceMailboxView,
+  type MailboxSendBlock,
+} from '@/lib/invoices/digital-mailbox-view'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
 interface PeppolDeliveryView {
@@ -117,6 +184,23 @@ const PEPPOL_STATUS_KEYS = new Set([
   'no_route', 'failed',
 ])
 const PEPPOL_SENDABLE_STATUSES = new Set<InvoiceStatus>(['draft', 'sent', 'overdue'])
+
+// Why a "Skicka till Kivra/Billo" item is disabled, as invoice_detail keys.
+const MAILBOX_BLOCK_KEYS: Record<MailboxSendBlock, string> = {
+  recipient_unidentified: 'mailbox_block_recipient_unidentified',
+  currency: 'mailbox_block_currency',
+}
+
+// The reminder history card's columns. Never '*': action_token is the
+// customer's bearer link, withheld from end-user roles by a column grant, so
+// a '*' select from the browser is refused outright.
+const REMINDER_HISTORY_COLUMNS = 'id, reminder_level, sent_at, email_to, response_type, response_note'
+// Sent reminders only (the query filters on sent_at): a reserved or failed
+// row of the sender never reached the customer.
+type ReminderHistoryRow = Pick<
+  InvoiceReminder,
+  'id' | 'reminder_level' | 'email_to' | 'response_type' | 'response_note'
+> & { sent_at: string }
 
 // How long the preview waits for the PDF route to say whether it will render
 // before giving up and closing the placeholder tab. Generous: a cold
@@ -141,25 +225,45 @@ const RERENDER_CAVEAT_KEYS: Record<
 const itemHasAccrual = (item: InvoiceItem): boolean =>
   !!(item.accrual_period_start && item.accrual_period_end)
 
-const accrualMonth = (date: string): string => date.slice(0, 7)
 
 // In-row text actions inside DefRow values: always underlined so they read as
 // actions next to plain values, the hairline underline darkening on hover.
 const ROW_ACTION_CLASS =
-  'underline decoration-border underline-offset-4 transition-colors duration-150 hover:decoration-foreground disabled:opacity-50'
+  'underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:decoration-foreground disabled:opacity-50'
 
-// Same arithmetic as the list page's overdue chip, so both say the same days.
-function daysOverdue(dueDateStr: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const dueDate = new Date(dueDateStr)
-  dueDate.setHours(0, 0, 0, 0)
-  return Math.round((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+/**
+ * The file the customer received, in the page as the file itself (V7: an
+ * external document is shown, never redrawn), with the way to open it in a
+ * tab of its own under it.
+ */
+function InvoiceSentDocument({ url, label, openLabel }: { url: string; label: string; openLabel: string }) {
+  const openLink = (
+    <a href={url} target="_blank" rel="noopener noreferrer" className="text-[13px] text-muted-foreground underline underline-offset-4 hover:text-foreground">
+      {openLabel}
+    </a>
+  )
+  return (
+    <div className="overflow-hidden rounded-lg bg-control shadow-raised">
+      <DocumentPreview
+        src={`${url}#toolbar=0&navpanes=0&view=FitH`}
+        kind="pdf"
+        label={label}
+        fallback={<div className="p-4">{openLink}</div>}
+        className="block h-[70vh] min-h-[420px] w-full border-0 bg-white"
+      />
+      <div className="flex items-center justify-end border-t-hairline px-3 py-2">{openLink}</div>
+    </div>
+  )
 }
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()
-  const { company, isSandbox } = useCompany()
+  const { company, isSandbox, role: companyRole } = useCompany()
+  // The invoicing-only role reaches the invoice and nothing around it
+  // (lib/auth/invoicer-role.ts): the panels whose reads the server refuses
+  // for it (collections, kundförlust, the reminder ladder, Peppol and
+  // mailbox status, underlag, bilagor) are left out instead of failing.
+  const isInvoicer = useIsInvoicer()
   const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
@@ -170,10 +274,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Begäran status labels are shared with the payout dialog on the list page.
   const tInvoices = useTranslations('invoices')
   const tCommon = useTranslations('common')
+  const tReminders = useTranslations('reminders_setup')
   const locale = useLocale()
+  const downloadLocale: ErrorLocale = locale.startsWith('sv') ? 'sv' : 'en'
+  const downloadFailureCopy = {
+    timeout: tCommon('download_timeout'),
+    network: tCommon('download_network'),
+  }
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
-  const [reminders, setReminders] = useState<InvoiceReminder[]>([])
+  // The rows' periodisering schedules, for "Ändra periodisering".
+  const accrualSchedules = useInvoiceAccrualSchedules(
+    { invoiceId: id },
+    !!invoice?.items?.some(itemHasAccrual),
+  )
+  const [reminders, setReminders] = useState<ReminderHistoryRow[]>([])
   const [deliveries, setDeliveries] = useState<InvoiceDeliveryView[]>([])
   // An empty deliveries list means "nothing was ever sent through Accounted".
   // A failed read also produces an empty list, and the two must never be
@@ -201,6 +316,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       journal_entry_id: string | null
       voucher_series: string | null
       voucher_number: number | null
+      // Settled by kvittning against a supplier invoice (invoice_payments.source 'setoff').
+      setoff?: boolean
     }>
   >([])
   // Posted payment vouchers keyed on this invoice, for the case where the
@@ -230,12 +347,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [deductionPersonnummerMasked, setDeductionPersonnummerMasked] = useState<
     string | null | undefined
   >(undefined)
+  // crm#1131: the verifikat behind an invoice registered from the books, whose
+  // underlag is the original invoice. null until read, and for every other
+  // invoice. `documents` is null when the list could not be read, which must
+  // never be shown as "nothing attached".
+  const [registrationVoucher, setRegistrationVoucher] = useState<{
+    label: string | null
+    documents: Array<{ id: string; file_name: string }> | null
+  } | null>(null)
   const [creditNote, setCreditNote] = useState<Invoice | null>(null)
   const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null)
   const [convertedFromInvoice, setConvertedFromInvoice] = useState<Invoice | null>(null)
   // Offert: the invoice created from this quote (converted_from_id points
   // back here), and the accept/decline round trip.
   const [quoteInvoice, setQuoteInvoice] = useState<Invoice | null>(null)
+  // crm#1196: every live invoice made from the quote, oldest first: a quote
+  // can be invoiced in parts, and the page shows invoiced so far.
+  const [quoteInvoices, setQuoteInvoices] = useState<
+    Array<{ id: string; invoice_number: string | null; status: string; subtotal: number | null }>
+  >([])
+  const [showQuotePartDialog, setShowQuotePartDialog] = useState(false)
   // Offert -> kundorder: the live order created from this quote, if any. Its
   // presence locks the decision and moves invoicing to the order.
   const [quoteOrder, setQuoteOrder] = useState<{ id: string; order_number: string | null } | null>(null)
@@ -243,7 +374,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isDeciding, setIsDeciding] = useState(false)
   const [showExpiredAcceptDialog, setShowExpiredAcceptDialog] = useState(false)
   const [showExpiredConvertDialog, setShowExpiredConvertDialog] = useState(false)
+  // crm#1202: a yes recorded on a quote the customer has not been sent is
+  // confirmed first (which action, so the dialog can name it).
+  const [unsentQuoteAction, setUnsentQuoteAction] = useState<'accept' | 'invoice' | 'order' | null>(null)
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
+  const [showRefundDialog, setShowRefundDialog] = useState(false)
   const [showSendDialog, setShowSendDialog] = useState(false)
   const [sendDialogMode, setSendDialogMode] = useState<'email' | 'manual'>('email')
   // #2399: "Ladda ner PDF" on a document that is not issued yet. The render
@@ -276,18 +411,40 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     void downloadPDF()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadQueued, invoice])
+  // ?download=1: the invoice editor's "Markera som skickad och ladda ner"
+  // lands here after mark-sent. The issued PDF goes through the same queue,
+  // so it is the archived copy the customer is to get, and the flag leaves
+  // the URL so a reload does not download it again.
+  const searchParams = useSearchParams()
+  const downloadOnArrival = searchParams.get('download') === '1'
+  useEffect(() => {
+    if (!downloadOnArrival) return
+    setDownloadQueued(id)
+    router.replace(`/invoices/${id}`, { scroll: false })
+  }, [downloadOnArrival, id, router])
   const [isConverting, setIsConverting] = useState(false)
   const [isCreatingOrder, setIsCreatingOrder] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With this invoice not on screen the page says so in
+  // place of it; the invoice already on screen stays, with one line above.
+  const [loadFailed, setLoadFailed] = useState(false)
+  // No invoice under this id (deleted, or a wrong link): not a failure to retry.
+  const [notFound, setNotFound] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
   const [isDownloadingPeppol, setIsDownloadingPeppol] = useState(false)
   // Betalningsbekräftelse (#1693): the paid re-render handed to the customer.
   const [isDownloadingConfirmation, setIsDownloadingConfirmation] = useState(false)
   const [showConfirmationSendDialog, setShowConfirmationSendDialog] = useState(false)
+  // "Skicka igen" (crm#1339): the archived invoice emailed once more as a copy.
+  const [showResendDialog, setShowResendDialog] = useState(false)
   const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
   const [isSendingPeppol, setIsSendingPeppol] = useState(false)
+  // A send stopped at what the month includes: the service to ask for more of.
+  const [usageCharge, setUsageCharge] = useState<{ kind: UsageKind; included: number; unitPriceOre: number } | null>(null)
   const [showPeppolSendDialog, setShowPeppolSendDialog] = useState(false)
+  // A file uploading into the Peppol dialog's Bilagor: the send waits (crm#1545).
+  const [peppolAttachmentsBusy, setPeppolAttachmentsBusy] = useState(false)
   // Whether this deployment has a contracted Access Point switched on; the
   // menu item stays a truthful "provider required" note otherwise.
   const [peppolTransportAvailable, setPeppolTransportAvailable] = useState(false)
@@ -300,11 +457,49 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     remaining_sends: number | null
   } | null>(null)
   const [peppolDeliveries, setPeppolDeliveries] = useState<PeppolDeliveryView[]>([])
+  // When the deliveries were read: the clock the "not confirmed yet" line
+  // measures against, set with the rows so rendering stays pure.
+  const [peppolReadAt, setPeppolReadAt] = useState<number | null>(null)
+  // Kivra and Billo (lib/invoices/digital-mailbox-view.ts): the providers the
+  // company sends through, as this invoice can use them, and its dispatches.
+  // Kept with the invoice it was read for, so a pager step never shows
+  // another invoice's items or rows.
+  const [mailboxState, setMailboxState] = useState<{ invoiceId: string; view: InvoiceMailboxView } | null>(null)
+  const [mailboxConfirmProvider, setMailboxConfirmProvider] = useState<DigitalMailboxProviderId | null>(null)
+  const [isSendingMailbox, setIsSendingMailbox] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  // Collections: the invoice's case and the handover dialog. Only a customer
+  // invoice of our own can have one; the read is an obligation path and
+  // renders an open case whatever the start gates say.
+  const collectionEligible =
+    !isInvoicer && !!invoice && (invoice.document_type ?? 'invoice') === 'invoice' && !isCreditNoteDocument(invoice) && !invoice.is_self_billed
+  const collection = useInvoiceCollection(id, collectionEligible)
+  const { tp: tCollections, words: collectionWords } = useCaseWords(collection.data?.availability.displayName ?? null)
+  const [showCollectionDialog, setShowCollectionDialog] = useState(false)
+  // "Skicka påminnelse" (accounted#104): one reminder now, picked by a person.
+  const [showReminderDialog, setShowReminderDialog] = useState(false)
+  // Bumped when the handover dialog closes: the overdue banner reads its bank check again.
+  const [collectionCheckKey, setCollectionCheckKey] = useState(0)
+  // Today's pending collections run, read only where the ladder proposes one:
+  // an invoice it proposes points to the run instead of a send of its own.
+  const collectionsRun = usePendingCollectionsRun(
+    company?.id,
+    collection.data?.availability.start === 'ready' && collection.data.availability.connection?.ladderMode === 'staged',
+  )
+  // Kundförlust (lib/customer-loss, behind CUSTOMER_LOSS_ENABLED): the same
+  // invoices as collections, once issued. Decisions already made show
+  // whatever the flag says; the menu entries only while it is on.
+  const customerLossEligible = collectionEligible && invoice?.status !== 'draft' && invoice?.status !== 'cancelled'
+  const customerLoss = useCustomerLoss(id, customerLossEligible)
+  const tLoss = useTranslations('customer_loss')
+  const [showLossDialog, setShowLossDialog] = useState(false)
+  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
   const [isFinalizing, setIsFinalizing] = useState(false)
   const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
+  // Set when the series already has a higher number: the confirm continues it.
+  const [seriesContinuation, setSeriesContinuation] = useState<SeriesContinuation | null>(null)
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
@@ -322,22 +517,34 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
     setAccountingMethod(settings.accounting_method === 'cash' ? 'cash' : 'accrual')
     setDeferInvoiceBooking(!!settings.defer_invoice_booking)
-    setReminderDays([
-      settings.reminder_days_level_1 ?? 15,
-      settings.reminder_days_level_2 ?? 30,
-      settings.reminder_days_level_3 ?? 45,
-    ])
     setAutoRemindersEnabled(remindersActiveFor(settings.send_invoice_reminders))
   }, [companySettings])
   const [showBookConfirm, setShowBookConfirm] = useState(false)
   const [bookVoucherPreview, setBookVoucherPreview] = useState<string | null>(null)
-  const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
   // null = settings row not loaded; don't promise a reminder schedule then.
   // Otherwise the product-wide kill switch AND the company toggle (crm#95):
   // the toggle alone defaults to on and would claim a schedule nothing runs.
   const [autoRemindersEnabled, setAutoRemindersEnabled] = useState<boolean | null>(null)
+  // Reminders on still remind only the invoices the ladder follows (dated
+  // after the turn-on, sent from Accounted, nothing stopping it): asked of
+  // the policy for this invoice, and read again when its history grows.
+  // Read for every invoice still owed (isInvoiceOwed), partly paid included:
+  // the policy reminds those too.
+  const reminderLadder = useInvoiceReminderLadder(
+    id,
+    !isInvoicer && autoRemindersEnabled === true && invoice?.id === id && isInvoiceOwed(invoice),
+    reminders.length,
+  )
 
-  const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
+  // The plain status, as every invoice surface shows it (lib/invoices/status-display.ts).
+  const baseStatus = (
+    status: InvoiceStatus,
+  ): { label: string; exception: boolean; variant?: StatusChip } => {
+    const display = invoiceStatusDisplay(status)
+    if (!display) return { label: status, exception: false }
+    return { label: tInvoices(display.labelKey), exception: display.chip !== null, variant: display.chip ?? undefined }
+  }
+  const statusLabel = (status: InvoiceStatus): string => baseStatus(status).label
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
 
   // Latest-request guard for fetchInvoice. A mutation refresh can overlap the
@@ -355,11 +562,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   useEffect(() => {
     if (!invoice || invoice.id !== id) return
     const eligible = (!invoice.document_type || invoice.document_type === 'invoice')
-      && !invoice.credited_invoice_id
+      && !isCreditNoteDocument(invoice)
       && !invoice.is_self_billed
-    if (!eligible) return
+    if (!eligible || isInvoicer) return
     void loadPeppolDeliveries()
-  }, [id, invoice?.id, invoice?.status, invoice?.invoice_number]) // eslint-disable-line react-hooks/exhaustive-deps
+    void loadMailbox()
+  }, [id, invoice?.id, invoice?.status, invoice?.invoice_number, isInvoicer]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * Read the delivery history, keeping "read failed" distinct from "nothing
@@ -396,6 +604,40 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  /**
+   * The verifikat behind an invoice registered from the books (crm#1131): its
+   * label, and its attached documents through the read the verifikat page
+   * lists them with. Each half degrades on its own: without a label the link
+   * is unnamed, and an unreadable document list says nothing about underlag.
+   */
+  async function loadRegistrationVoucher(journalEntryId: string) {
+    const [entryRes, documents] = await Promise.all([
+      supabase
+        .from('journal_entries')
+        .select('voucher_series, voucher_number')
+        .eq('id', journalEntryId)
+        .maybeSingle(),
+      fetch(`/api/documents?journal_entry_id=${encodeURIComponent(journalEntryId)}&current_only=true`)
+        .then(async (response) => {
+          if (!response.ok) return null
+          const payload = (await response.json()) as {
+            data?: Array<{ id: string; file_name: string }>
+          }
+          if (!Array.isArray(payload.data)) return null
+          return payload.data.map((doc) => ({ id: doc.id, file_name: doc.file_name }))
+        })
+        .catch(() => null),
+    ])
+    const entry = entryRes.data as {
+      voucher_series: string | null
+      voucher_number: number | null
+    } | null
+    return {
+      label: entry?.voucher_number != null ? formatVoucher(entry) : null,
+      documents,
+    }
+  }
+
   async function retryLoadDeliveries() {
     const result = await loadDeliveries()
     setDeliveries(result.deliveries)
@@ -414,6 +656,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       setIsLoading(true)
       // A different invoice: never let the previous one's mask show on it.
       setDeductionPersonnummerMasked(undefined)
+      // Nor the previous one's original documents.
+      setRegistrationVoucher(null)
     }
 
     const deliveriesPromise = loadDeliveries()
@@ -440,8 +684,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           .single(),
         supabase
           .from('invoice_reminders')
-          .select('*')
+          .select(REMINDER_HISTORY_COLUMNS)
           .eq('invoice_id', id)
+          .not('sent_at', 'is', null)
           .order('sent_at', { ascending: false }),
         // Payment history for the Betalningsstatus card. Joins the
         // journal_entries row to get voucher_series + voucher_number so each
@@ -450,7 +695,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         supabase
           .from('invoice_payments')
           .select(
-            'id, payment_date, amount, currency, journal_entry_id, journal_entries(voucher_series, voucher_number)',
+            'id, payment_date, amount, currency, journal_entry_id, source, journal_entries(voucher_series, voucher_number)',
           )
           .eq('invoice_id', id)
           .order('payment_date', { ascending: true }),
@@ -469,18 +714,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       ])
 
     // A newer fetch owns the page now (pager step or later refresh): commit
-    // nothing from this one, not even the not-found redirect.
+    // nothing from this one, not even the failure state.
     if (seq !== fetchSeqRef.current) return
 
     if (error || !data) {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-      router.push('/invoices')
+      // .single() answers PGRST116 when no row matched (RLS hides another
+      // company's invoice the same way).
+      const missing = (!error && !data) || error?.code === 'PGRST116'
+      setNotFound(missing)
+      setLoadFailed(!missing)
+      setIsLoading(false)
       return
     }
+    setNotFound(false)
+    setLoadFailed(false)
 
     // Sort items by sort_order
     if (data.items) {
@@ -492,7 +739,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setDeliveriesUnreadable(!deliveryData.ok)
 
     if (reminderData) {
-      setReminders(reminderData as InvoiceReminder[])
+      setReminders(reminderData as ReminderHistoryRow[])
     }
 
     if (paymentData) {
@@ -502,6 +749,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         amount: number
         currency: string
         journal_entry_id: string | null
+        source: string | null
         journal_entries: { voucher_series: string | null; voucher_number: number | null } | null
       }
       setPayments(
@@ -513,6 +761,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           journal_entry_id: p.journal_entry_id,
           voucher_series: p.journal_entries?.voucher_series ?? null,
           voucher_number: p.journal_entries?.voucher_number ?? null,
+          setoff: p.source === 'setoff',
         })),
       )
     }
@@ -583,11 +832,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         data.document_type === 'quote'
           ? supabase
               .from('invoices')
-              .select('id, invoice_number, status')
+              .select('id, invoice_number, status, subtotal')
               .eq('converted_from_id', id)
               .neq('status', 'cancelled')
               .order('created_at', { ascending: false })
-              .limit(1)
           : Promise.resolve(null),
         data.document_type === 'quote'
           ? supabase
@@ -598,7 +846,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               .order('created_at', { ascending: false })
               .limit(1)
           : Promise.resolve(null),
-      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes, invoicedRes, orderedRes]) => {
+        isRegisteredFromBooks(data, data.items)
+          ? loadRegistrationVoucher(data.journal_entry_id)
+          : Promise.resolve(null),
+      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes, invoicedRes, orderedRes, registration]) => {
         // Deferred writes need the same guard: they land after first paint
         // and would otherwise attach the previous invoice's related documents
         // to the one the pager has since navigated to.
@@ -612,9 +863,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           setConvertedFromInvoice(convertedRes.data as Invoice)
         }
         setQuoteInvoice((invoicedRes?.data?.[0] as Invoice | undefined) ?? null)
+        setQuoteInvoices(
+          [...((invoicedRes?.data ?? []) as Array<{ id: string; invoice_number: string | null; status: string; subtotal: number | null }>)].reverse(),
+        )
         setQuoteOrder(
           (orderedRes?.data?.[0] as { id: string; order_number: string | null } | undefined) ?? null,
         )
+        setRegistrationVoucher(registration)
       })
   }
 
@@ -640,14 +895,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const response = await fetch(`/api/invoices/${invoice.id}/book`, { method: 'POST' })
       const data = await response.json()
       if (!response.ok) {
-        // data.error is a structured object for this route; only strings are
-        // usable as a toast message.
-        const message =
-          typeof data.error === 'string'
-            ? data.error
-            : typeof data.error?.message === 'string'
-              ? data.error.message
-              : t('book_failed_fallback')
+        const message = getUserErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('book_failed_fallback') })
         throw new Error(message)
       }
       if (Array.isArray(data.warnings) && data.warnings.length > 0) {
@@ -670,14 +918,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
-  async function updateStatus(status: InvoiceStatus) {
+  async function updateStatus(status: 'sent' | 'cancelled') {
     if (!invoice) return
-    // Cross-tab guard (WL-09): the direct Supabase branches below bypass the
-    // patched window.fetch, so consult the tab guard explicitly. On a
-    // mismatch the blocking dialog raised by guardBrowserWrite is the user
-    // feedback; nothing is written.
-    if (!guardBrowserWrite()) return
-
     setIsUpdating(true)
 
     try {
@@ -688,28 +930,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         })
         if (!response.ok) {
           const data = await response.json()
-          throw new Error(data.error || t('mark_sent_failed_fallback'))
+          throw new Error(getUserErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('mark_sent_failed_fallback') }))
         }
-      } else if (status === 'cancelled') {
-        // Only drafts, proformas and quotes can be cancelled directly: sent/overdue/paid
-        // invoices have committed journal entries and require a credit note instead
-        if (invoice.status !== 'draft') {
-          const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
-          if (docType !== 'proforma' && docType !== 'quote') {
-            throw new Error(t('cancel_posted_error'))
-          }
-        }
-        const { error } = await supabase
-          .from('invoices')
-          .update({ status })
-          .eq('id', invoice.id)
-        if (error) throw new Error(error.message)
       } else {
-        const { error } = await supabase
-          .from('invoices')
-          .update({ status })
-          .eq('id', invoice.id)
-        if (error) throw new Error(error.message)
+        // Only a quote or a proforma is cancelled here (the menu offers
+        // nothing else); the route refuses the rest and records who did it.
+        const response = await fetch(`/api/invoices/${invoice.id}/cancel`, {
+          method: 'POST',
+        })
+        if (!response.ok) {
+          const data = await response.json().catch(() => null)
+          throw new Error(
+            getUserErrorMessage(data, { context: 'invoice', statusCode: response.status }) ||
+              t('fallback_try_again'),
+          )
+        }
       }
 
       toast({
@@ -732,7 +967,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  // The invoice has no customer (deleted while the draft existed, crm#263):
+  // nobody to number, send or issue it to. The server refuses as well
+  // (INVOICE_CUSTOMER_MISSING); this says so before a dialog opens.
+  function refuseWithoutCustomer(): boolean {
+    if (invoice?.customer) return false
+    toast({
+      title: t('customer_deleted'),
+      description: t('customer_missing_action'),
+      variant: 'destructive',
+    })
+    return true
+  }
+
   function openSendDialog(mode: 'email' | 'manual') {
+    if (refuseWithoutCustomer()) return
     setSendDialogMode(mode)
     setShowSendDialog(true)
   }
@@ -776,6 +1025,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
    *  startQuoteConvert; an accepted quote past valid_until converts directly. */
   function startQuoteOrder() {
     if (!invoice) return
+    if (quoteAwaitsSending(invoice)) {
+      setUnsentQuoteAction('order')
+      return
+    }
     if (isQuoteExpired(invoice)) {
       setShowExpiredOrderDialog(true)
       return
@@ -871,6 +1124,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   function acceptQuote() {
     if (!invoice) return
+    if (quoteAwaitsSending(invoice)) {
+      setUnsentQuoteAction('accept')
+      return
+    }
     if (isQuoteExpired(invoice)) {
       setShowExpiredAcceptDialog(true)
       return
@@ -882,6 +1139,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
    *  accepted quote past valid_until is not expired and converts directly. */
   function startQuoteConvert() {
     if (!invoice) return
+    if (quoteAwaitsSending(invoice)) {
+      setUnsentQuoteAction('invoice')
+      return
+    }
     if (isQuoteExpired(invoice)) {
       setShowExpiredConvertDialog(true)
       return
@@ -911,34 +1172,30 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsDownloading(true)
 
     try {
-      const response = await fetch(source.url)
+      const result = await downloadFile({
+        url: source.url,
+        filename: `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`,
+        preferServerFilename: true,
+        locale: downloadLocale,
+        errorContext: 'invoice',
+        timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+      })
 
-      if (!response.ok) {
+      if (!result.ok) {
         // A missing archive is not a generation failure and must not offer a
         // silent substitute: hand the choice back to the user.
-        if (source.kind === 'archived') {
+        if (result.reason === 'server' && source.kind === 'archived') {
           setPdfIntent('download')
           setPdfArchiveIssue('document')
           return
         }
         toast({
           title: t('pdf_download_failed_title'),
-          description: await describePdfRouteFailure(response),
+          description: failureDescription(result, downloadFailureCopy),
           variant: 'destructive',
         })
         return
       }
-
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
-        ?? `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
 
       const caveat = invoiceDocumentCaveat(source)
       if (caveat) {
@@ -998,6 +1255,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         invoiceStatus: invoice.status,
         deliveriesLoaded: !deliveriesUnreadable,
         deliveries,
+        archivedThroughInvoice: isInvoicer,
       }),
     )
   }
@@ -1013,24 +1271,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsDownloadingConfirmation(true)
 
     try {
-      const response = await fetch(source.url)
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as {
-          error?: { code?: string; message?: string; message_en?: string }
-        } | null
-        throw body?.error ?? new Error(t('pdf_generate_failed'))
+      const result = await downloadFile({
+        url: source.url,
+        filename: `Betalningsbekraftelse-${invoice.invoice_number ?? invoice.id.slice(0, 8)}.pdf`,
+        preferServerFilename: true,
+        locale: downloadLocale,
+        errorContext: 'invoice',
+        timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('pdf_download_failed_title'),
+          description: failureDescription(result, downloadFailureCopy),
+          variant: 'destructive',
+        })
+        return
       }
-
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
-        ?? `Betalningsbekraftelse-${invoice.invoice_number ?? invoice.id.slice(0, 8)}.pdf`
-      document.body.appendChild(anchor)
-      anchor.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(anchor)
 
       toast({
         title: t('payment_confirmation_downloaded_title'),
@@ -1082,33 +1338,69 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  /**
+   * Email the invoice to the customer again (crm#1339): the archived PDF they
+   * were first sent, marked as a copy. Confirmed up front; the new send then
+   * shows in the delivery history.
+   */
+  async function resendInvoice() {
+    if (!invoice) return
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/resend`, { method: 'POST' })
+      const body = await response.json().catch(() => null) as {
+        error?: { code?: string; message?: string; message_en?: string }
+      } | null
+      if (!response.ok) {
+        throw body?.error ?? new Error(t('resend_failed_description'))
+      }
+
+      toast({
+        title: t('resend_sent_title'),
+        description: t('resend_sent_description', { email: invoice.customer?.email ?? '' }),
+      })
+      await retryLoadDeliveries()
+    } catch (error) {
+      toast({
+        title: t('resend_failed_title'),
+        description: getUserErrorMessage(error, {
+          context: 'invoice',
+          locale: locale.startsWith('sv') ? 'sv' : 'en',
+        }),
+        variant: 'destructive',
+      })
+    }
+  }
+
+  /**
+   * The Peppol XML. A draft without a number downloads as a marked preview
+   * with a placeholder number and OCR (accounted#44), never sendable.
+   */
   async function downloadPeppolXml() {
     if (!invoice) return
+    const preview = !invoice.invoice_number
     setIsDownloadingPeppol(true)
 
     try {
-      const response = await fetch(`/api/invoices/${invoice.id}/peppol`)
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as {
-          error?: { code?: string; message?: string; message_en?: string }
-        } | null
-        throw body?.error ?? new Error(t('peppol_download_failed_description'))
+      const result = await downloadFile({
+        url: `/api/invoices/${invoice.id}/peppol${preview ? '?preview=1' : ''}`,
+        filename: preview ? `peppol-invoice-preview-${invoice.id}.xml` : `peppol-invoice-${invoice.invoice_number}.xml`,
+        preferServerFilename: true,
+        locale: downloadLocale,
+        errorContext: 'invoice',
+        timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('peppol_download_failed_title'),
+          description: failureDescription(result, downloadFailureCopy),
+          variant: 'destructive',
+        })
+        return
       }
 
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
-        ?? `peppol-invoice-${invoice.invoice_number ?? invoice.id}.xml`
-      document.body.appendChild(anchor)
-      anchor.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(anchor)
-
       toast({
-        title: t('peppol_downloaded_title'),
-        description: t('peppol_downloaded_description'),
+        title: t(preview ? 'peppol_preview_downloaded_title' : 'peppol_downloaded_title'),
+        description: t(preview ? 'peppol_preview_downloaded_description' : 'peppol_downloaded_description'),
       })
     } catch (error) {
       toast({
@@ -1171,11 +1463,84 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const rows = Array.isArray(payload.data) ? [...payload.data] : []
       rows.sort((a, b) => (a.status_at < b.status_at ? 1 : a.status_at > b.status_at ? -1 : 0))
       setPeppolDeliveries(rows)
+      setPeppolReadAt(Date.now())
       setPeppolTransportAvailable(payload.transport?.available === true)
       setPeppolAccess(payload.access ?? null)
     } catch {
       // Peppol status is supplementary; the page stays usable without it.
     }
+  }
+
+  async function loadMailbox() {
+    const forId = id
+    try {
+      const response = await fetch(`/api/invoices/${encodeURIComponent(forId)}/digital-mailbox`)
+      if (!response.ok) return
+      setMailboxState({ invoiceId: forId, view: parseInvoiceMailboxView(await response.json()) })
+    } catch {
+      // Supplementary, like the Peppol status: the page works without it.
+    }
+  }
+
+  /**
+   * Send to the customer's Kivra or Billo mailbox. A draft is issued on the
+   * way (numbered, booked, PDF archived) after every refusing check; a
+   * customer without a mailbox there leaves it a draft. A delivery that
+   * fails after the issue leaves an issued invoice: sending again resends it.
+   */
+  async function sendToMailbox(provider: DigitalMailboxProviderId) {
+    if (!invoice) return
+    const providerName = DIGITAL_MAILBOX_PROVIDER_NAMES[provider]
+    const errorLocale: ErrorLocale = locale.startsWith('sv') ? 'sv' : 'en'
+    setIsSendingMailbox(true)
+    try {
+      const response = await fetch(`/api/invoices/${encodeURIComponent(invoice.id)}/digital-mailbox/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      })
+      const body = (await response.json().catch(() => null)) as {
+        data?: { issued?: boolean; journal_entry_id?: string | null }
+        error?: { code?: string; details?: { included?: number; unit_price_ore?: number } }
+      } | null
+      if (body?.error?.code === 'USAGE_LIMIT_REACHED') {
+        setUsageCharge({
+          kind: `${provider}_send`,
+          included: body.error.details?.included ?? 0,
+          unitPriceOre: body.error.details?.unit_price_ore ?? 0,
+        })
+      } else if (!response.ok) {
+        toast({
+          title: t('mailbox_send_failed_title', { provider: providerName }),
+          description: getUserErrorMessage(body ?? new Error(`HTTP ${response.status}`), {
+            locale: errorLocale,
+            context: 'invoice',
+            statusCode: response.status,
+          }),
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: t('mailbox_sent_title', { provider: providerName }),
+          description: body?.data?.issued
+            ? t(body.data.journal_entry_id ? 'mailbox_sent_issued_booked' : 'mailbox_sent_issued', { provider: providerName })
+            : t('mailbox_sent_description', { provider: providerName }),
+        })
+      }
+    } catch (error) {
+      toast({
+        title: t('mailbox_send_failed_title', { provider: providerName }),
+        description: getUserErrorMessage(error, { locale: errorLocale, context: 'invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSendingMailbox(false)
+      setMailboxConfirmProvider(null)
+    }
+    // Sent or not, the send may have issued the draft and logged a
+    // dispatch: show where the invoice stands.
+    await fetchInvoice()
+    await loadMailbox()
   }
 
   async function sendViaPeppol() {
@@ -1186,8 +1551,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const response = await fetch(`/api/invoices/${invoice.id}/peppol/send`, { method: 'POST' })
       const body = await response.json().catch(() => null) as {
         data?: { already_submitted?: boolean; issuance?: { ok: boolean } | null }
-        error?: { code?: string; message?: string; message_en?: string }
+        error?: { code?: string; message?: string; message_en?: string; details?: { included?: number; unit_price_ore?: number } }
       } | null
+      if (body?.error?.code === 'USAGE_LIMIT_REACHED') {
+        setShowPeppolSendDialog(false)
+        setUsageCharge({
+          kind: 'peppol_send',
+          included: body.error.details?.included ?? 0,
+          unitPriceOre: body.error.details?.unit_price_ore ?? 0,
+        })
+        return
+      }
       if (!response.ok) {
         throw body?.error ?? new Error(t('peppol_send_failed_description'))
       }
@@ -1216,6 +1590,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             }),
         variant: 'destructive',
       })
+      // A failed send can still have issued the draft and recorded a failed
+      // delivery: show where the invoice stands.
+      await fetchInvoice()
+      await loadPeppolDeliveries()
     } finally {
       setIsSendingPeppol(false)
     }
@@ -1325,6 +1703,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         invoiceStatus: invoice.status,
         deliveriesLoaded: !deliveriesUnreadable,
         deliveries,
+        archivedThroughInvoice: isInvoicer,
       }),
     )
   }
@@ -1343,6 +1722,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       invoiceStatus: invoice.status,
       deliveriesLoaded: result.ok,
       deliveries: result.deliveries,
+      archivedThroughInvoice: isInvoicer,
     })
     // The retry is a second attempt at what the user asked for, not a switch to
     // the other mechanism. A preview retry re-resolves the source first, so the
@@ -1373,24 +1753,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   // Open the finalize dialog and peek the next F-number so the user can see
-  // which number they'll get before committing. Read-only (peek_next_invoice_number);
-  // the real number is allocated atomically on confirm and may differ by one if
-  // another invoice is created in between.
+  // which number they'll get before committing. Read-only; the real number is
+  // allocated atomically on confirm and may differ by one if another invoice
+  // is created in between. When the series already has a higher number (an
+  // import), the dialog offers the number that continues it instead.
   async function openFinalizeDialog() {
+    if (refuseWithoutCustomer()) return
     setNextNumberPreview(null)
+    setSeriesContinuation(null)
     setShowFinalizeDialog(true)
     try {
       const r = await fetch('/api/invoices/next-number?document_type=invoice')
       if (r.ok) {
-        const json = await r.json()
-        const preview = json?.data?.preview
-        // Only show a value that looks like a real invoice number. Guards the
-        // preview against an unexpected/oversized API response being rendered
-        // verbatim, a short alphanumeric token (optional series prefix), never
-        // free-form text.
-        setNextNumberPreview(
-          typeof preview === 'string' && /^[A-Za-z0-9-]{1,32}$/.test(preview) ? preview : null
-        )
+        const read = readNextNumberPreview(await r.json())
+        setNextNumberPreview(read.preview)
+        setSeriesContinuation(read.continuation)
       }
     } catch {
       // Best-effort preview; the dialog still works without it.
@@ -1406,6 +1783,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsFinalizing(true)
 
     try {
+      // The confirm said where the series continues: save it first, so the
+      // number below is the one the dialog showed.
+      if (seriesContinuation) {
+        const continued = await continueInvoiceSeries(seriesContinuation)
+        if (!continued.ok) throw new Error(getUserErrorMessage(continued.error))
+      }
+
       const response = await fetch(`/api/invoices/${invoice.id}/finalize`, {
         method: 'POST',
       })
@@ -1413,7 +1797,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error?.message || t('fallback_try_again'))
+        throw new Error(getUserErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('fallback_try_again') }))
       }
 
       toast({
@@ -1446,7 +1830,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       if (!response.ok) {
         const data = await response.json()
-        throw new Error(data.error?.message || t('cancel_failed_fallback'))
+        throw new Error(getUserErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('cancel_failed_fallback') }))
       }
 
       // Unnumbered drafts are hard deleted ("Ta bort"); numbered drafts are
@@ -1486,12 +1870,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     return <DetailPageSkeleton cards={3} />
   }
 
-  if (!invoice) {
-    return null
+  // A pager step that failed leaves the previous invoice in state: never show
+  // it under this id.
+  if (!invoice || ((loadFailed || notFound) && invoice.id !== id)) {
+    if (!loadFailed && !notFound) return null
+    return (
+      <div className="space-y-8">
+        <PageHeader title={tInvoices('title')} />
+        {notFound ? (
+          <NotFoundState title={t('not_found')} backHref="/invoices" backLabel={tCommon('back_to_list')} />
+        ) : (
+          <LoadError title={t('load_failed_title')} onRetry={() => void fetchInvoice()} />
+        )}
+      </div>
+    )
   }
 
+  // Null when the customer was deleted (invoices.customer_id is ON DELETE SET
+  // NULL): the page must still render so the draft can be fixed or deleted.
   const customer = invoice.customer
-  const customerHasEmail = !!customer.email
+  const customerHasEmail = !!customer?.email
   const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
   const isProforma = docType === 'proforma'
   const isQuote = docType === 'quote'
@@ -1500,10 +1898,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Offert: the effective status (expired is derived, never stored) and what
   // can still happen to it. Once an invoice exists the decision is final.
   const quoteStatus = isQuote ? effectiveQuoteStatus(invoice) : null
+  // crm#1196: a quote is invoiced, whole or in parts, until fully invoiced.
+  // The first invoice locks its decision and the kundorder path
+  // (canDecideQuote); a part needs the customer's yes recorded first.
+  const quoteProgress = isQuote ? quoteInvoicingProgress(invoice, quoteInvoices) : null
+  const canInvoiceQuote =
+    isQuote && invoice.status !== 'cancelled' && !quoteOrder && quoteStatus !== 'declined' && !quoteProgress?.fullyInvoiced
+  const canPartInvoiceQuote = canInvoiceQuote && quoteStatus === 'accepted' && (quoteProgress?.quoteSubtotal ?? 0) > 0
+
   const canDecideQuote = isQuote && invoice.status !== 'cancelled' && !quoteInvoice && !quoteOrder
   const canConvertQuote = canDecideQuote && quoteStatus !== 'declined'
+  // crm#1202: an unsent quote's one next step is sending it (convention 9).
+  // Accept and Skapa faktura move into the menu until it has gone out or the
+  // customer has said yes, and confirm there (unsentQuoteAction).
+  const quoteDecisionInMenu = isQuote && quoteAwaitsSending(invoice)
   // #1693: only a fully paid faktura has a betalningsbekräftelse to offer.
   const canSendPaymentConfirmation = isPaymentConfirmationEligible(invoice)
+  // crm#1339: only an unpaid invoice whose emailed file is in the archive can
+  // be sent again; the route reads the same two rules.
+  const resendDelivery = deliveriesUnreadable ? null : findArchivedInvoiceDelivery(deliveries)
+  const canResend = isInvoiceResendEligible(invoice) && resendDelivery !== null
   // Paid header but no payment row (#2213): the row must state where the
   // payment lives instead of implying none happened. When vouchers settled
   // the invoice here without a row, they stand in for the rows.
@@ -1525,7 +1939,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           voucher_number: v.voucher_number,
         }))
       : payments
-  const isCreditNote = !!invoice.credited_invoice_id
+  const isCreditNote = isCreditNoteDocument(invoice)
+  // What the customer has tillgodo on this credit note (follow-up of
+  // crm#1435): the same rule the mark-paid door records the refund by.
+  const refundPlan = isCreditNote && originalInvoice ? planCreditNoteRefund(invoice, originalInvoice) : null
+  const refundedAmount = creditNoteRefundedAmount(invoice)
   const booksOnIssue = isCreditNote
     ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
     : accountingMethod === 'accrual' && !deferInvoiceBooking
@@ -1568,6 +1986,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Self-billing invoices we received: the document is the counterparty's, so
   // there is no own PDF to render and no send step: it arrives already booked.
   const isSelfBilled = !!invoice.is_self_billed
+  // crm#1131: registered from the books (issued in another system, linked to
+  // the verifikat that booked it, no lines here). The invoice is the original
+  // kept as underlag on that verifikat, not a render of this row.
+  const registeredFromBooks = isRegisteredFromBooks(invoice, invoice.items)
+  const registrationDocuments = registeredFromBooks ? registrationVoucher?.documents ?? null : null
+  // The link to that verifikat inside the sentence that replaces the lines.
+  const registrationVoucherLink = (chunks: React.ReactNode) => (
+    <Link href={`/bookkeeping/${invoice.journal_entry_id}`} className={cn(ROW_ACTION_CLASS, 'text-foreground')}>
+      {chunks}
+    </Link>
+  )
+  // Our own render is the invoice only for a document issued here. A
+  // self-billed invoice is the counterparty's document and a registration is
+  // the previous system's, so neither is offered as a generated PDF.
+  const offersOwnPdf = !isSelfBilled && !registeredFromBooks
   // A draft (no committed verifikat, not sent, not self-billed) can be edited
   // in place (header + lines) via /invoices/{id}/edit. Sent/paid invoices are
   // immutable (BFL); they are corrected with a credit note instead.
@@ -1577,16 +2010,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the rest is claimed from Skatteverket. Same helper as the PDF and the
   // invoice email so all three surfaces state the same "Att betala".
   const amountToPay = getAmountToPay(invoice, { ore_rounding: oreRounding })
-  const deductionItems = invoice.items.filter(
-    (i) => i.deduction_type === 'rot' || i.deduction_type === 'rut',
-  )
+  const deductionItems = invoice.items.filter((i) => Boolean(i.deduction_type))
   const hasRot = deductionItems.some((i) => i.deduction_type === 'rot')
   const hasRut = deductionItems.some((i) => i.deduction_type === 'rut')
+  // Grön teknik never shares an invoice with ROT/RUT (refused at creation).
+  const hasGronTeknik = deductionItems.some((i) => i.deduction_type === 'gron_teknik')
   const deductionKindLabel = hasRot && hasRut ? 'ROT/RUT' : hasRot ? 'ROT' : 'RUT'
+  const deductionRowLabel = hasGronTeknik
+    ? t('deduction_row_gron_teknik')
+    : t('deduction_row', { kind: deductionKindLabel })
   const showDeduction = amountToPay.deductionApplies && !isDeliveryNote
-  // Fastighetsbeteckning / lägenhet live on the ROT lines (one property per
-  // invoice in practice); the first ROT line carries the value.
-  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot')
+  // Fastighetsbeteckning / lägenhet live on the ROT and grön teknik lines
+  // (one property per invoice in practice); the first such line carries it.
+  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot' || i.deduction_type === 'gron_teknik')
   const rotHousing = rotItem?.housing_designation ?? null
   const rotApartment = rotItem?.apartment_number ?? null
   const rotBrf = rotItem?.brf_org_number ?? null
@@ -1594,7 +2030,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // "RUT · Städning · 4 tim" under a claimed line, so the claim is visible on
   // the item itself, not only in the PDF. The amount lives in the totals block.
   const deductionLineInfo = (item: InvoiceItem): string => {
-    const parts = [item.deduction_type === 'rot' ? 'ROT' : 'RUT']
+    const parts = [
+      item.deduction_type === 'gron_teknik'
+        ? tInvoices('rot_rut_type_gron_teknik')
+        : item.deduction_type === 'rot' ? 'ROT' : 'RUT',
+    ]
     const label = workTypeLabel(item.work_type)
     if (label) parts.push(label)
     if (item.labor_hours && item.labor_hours > 0) {
@@ -1627,50 +2067,33 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             ? t('title_invoice', { number: titleNumber })
             : t('title_draft')
 
-  // Offert: open and accepted are the normal states (muted text); declined
-  // and the derived expiry deviate and get a chip. Same map as the list page.
-  const quoteStatusDescriptor: { label: string; exception: boolean; variant?: 'secondary' | 'warning' } | null =
-    quoteStatus === 'expired'
-      ? { label: tInvoices('quote_status_expired'), exception: true, variant: 'warning' }
-      : quoteStatus === 'declined'
-        ? { label: tInvoices('quote_status_declined'), exception: true, variant: 'secondary' }
-        : quoteStatus === 'accepted'
-          ? { label: tInvoices('quote_status_accepted'), exception: false }
-          : quoteStatus === 'open'
-            ? { label: tInvoices('quote_status_open'), exception: false }
-            : null
-  // One status element, same rule as the list page (chips mark exceptions):
-  // sent and paid render as muted text, everything that deviates gets a chip.
-  const status: { label: string; exception: boolean; variant?: 'secondary' | 'outline' | 'warning' } =
-    invoice.status === 'cancelled'
-      ? { label: statusLabel('cancelled'), exception: true, variant: 'secondary' }
-      : quoteStatusDescriptor
-        ? quoteStatusDescriptor
-      : invoice.status === 'credited'
-        ? { label: statusLabel('credited'), exception: true, variant: 'secondary' }
-        : invoice.status === 'draft'
-          ? isUnsentNumberedInvoice
-            ? { label: t('status_unsent'), exception: true, variant: 'outline' }
-            : { label: statusLabel('draft'), exception: true, variant: 'secondary' }
-          : invoice.status === 'partially_paid'
-            ? { label: statusLabel('partially_paid'), exception: true, variant: 'warning' }
-            : invoice.status === 'overdue' && invoice.due_date
-              ? {
-                  label: tInvoices('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }),
-                  exception: true,
-                  variant: 'warning',
-                }
-              : invoice.status === 'paid'
-                ? {
-                    label: invoice.paid_at
-                      ? tInvoices('status_paid_date', { date: formatDate(invoice.paid_at) })
-                      : statusLabel('paid'),
-                    exception: false,
-                  }
-                : { label: statusLabel('sent'), exception: false }
+  // One status element, the line the invoice list and the customer card show
+  // (lib/invoices/status-display.ts invoiceRowStatus): overdue follows the
+  // due date and the open remainder, a credit note says so whatever its
+  // status, and sent and paid render as muted text while everything that
+  // deviates gets a chip.
+  const rowStatus = invoiceRowStatus(invoice)
+  const rowStatusValues =
+    rowStatus.values && 'date' in rowStatus.values ? { date: formatDate(rowStatus.values.date) } : rowStatus.values
+  const status: { label: string; exception: boolean; variant?: StatusChip } = rowStatus.labelKey
+    ? { label: tInvoices(rowStatus.labelKey, rowStatusValues), exception: rowStatus.chip !== null, variant: rowStatus.chip ?? undefined }
+    : { label: invoice.status, exception: false }
+
+  // The exact file the customer received, when the archive holds it and the
+  // delivery history could be read: the only PDF the page shows inline.
+  const pdfSourceForPage = deliveriesUnreadable
+    ? null
+    : resolveInvoicePdfSource({
+        invoiceId: invoice.id,
+        invoiceStatus: invoice.status,
+        deliveriesLoaded: true,
+        deliveries,
+        archivedThroughInvoice: isInvoicer,
+      })
+  const sentDocument = pdfSourceForPage?.kind === 'archived' ? pdfSourceForPage : null
 
   const metaParts = [
-    customer.name,
+    customer?.name,
     t('created_at', { date: formatDate(invoice.created_at) }),
     latestCompletedDelivery?.sent_at
       ? t('sent_on', { date: formatDate(latestCompletedDelivery.sent_at) })
@@ -1679,15 +2102,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   // Secondary actions collapse into one overflow menu (convention 9: one
   // obvious next step in the header, the alternatives behind a caret).
+  // A credit note imported without a link names no original: no door issues it.
+  const canIssueDraft = !isDeliveryNote && (!isCreditNote || !!invoice.credited_invoice_id)
   const showManualSendAlternative =
     !isProforma &&
     !isQuote &&
-    !isDeliveryNote &&
+    canIssueDraft &&
     isUnsentNumberedInvoice &&
     preferredSendMode === 'email'
   const canCreateCreditNote =
-    (invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'paid') &&
+    isCreditableInvoiceStatus(invoice.status) &&
     isRealInvoice &&
+    // A credit note, linked or imported without its original, is never
+    // credited (the doors refuse it by the same rule).
+    !isCreditNoteDocument(invoice) &&
     !creditNote
   // Download/prepare need the F-number (the XML carries it); sending a draft
   // assigns the number server-side, so the menu shows once a provider is on.
@@ -1700,22 +2128,90 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const canSendPeppol = peppolTransportAvailable && peppolSendGranted && peppolSendsLeft
     && PEPPOL_SENDABLE_STATUSES.has(invoice.status)
   const peppolRecipientLabel = invoice.customer?.org_number
-    ? `0007:${invoice.customer.org_number.replace(/\D/g, '')}`
+    ? `0007:${normalizeOrgNumber(invoice.customer.org_number) ?? invoice.customer.org_number}`
     : '0007'
+  // Text rows never reach the buyer over Peppol: say so before the send.
+  const peppolTextRowsLeftOut = countTextRowsLeftOutOfPeppol(invoice.items)
   const peppolStatusLabel = (status: string) =>
     PEPPOL_STATUS_KEYS.has(status) ? t(`peppol_status_${status}`) : status
   const latestPeppolDelivery = peppolDeliveries[0] ?? null
+  // The page's one Peppol sentence (convention 6), while the invoice can
+  // still be sent: the latest delivery failed, or the access point has held
+  // it for over an hour without news of delivery (after a day: without
+  // reporting an outcome at all, which is not the same as not delivered).
+  const peppolAttention = PEPPOL_SENDABLE_STATUSES.has(invoice.status)
+    ? peppolDeliveryAttention(latestPeppolDelivery, peppolReadAt)
+    : null
+  // The other way to the buyer. A draft (put back after the failure) can be
+  // emailed from here; an issued invoice cannot (the email send issues
+  // drafts only), so it offers the PDF to send by hand.
+  // "Skicka till Kivra/Billo": the providers the company sends through, for
+  // a customer invoice of our own in a sendable status.
+  const mailboxView = mailboxState?.invoiceId === invoice.id ? mailboxState.view : EMPTY_INVOICE_MAILBOX_VIEW
+  const mailboxActions =
+    isRealInvoice && !isCreditNote && !isSelfBilled ? mailboxSendActions(invoice.status, mailboxView.options) : []
+  const mailboxConfirmName = mailboxConfirmProvider ? DIGITAL_MAILBOX_PROVIDER_NAMES[mailboxConfirmProvider] : ''
+  const peppolOtherWay = invoice.status === 'draft'
+    ? (canWrite ? { label: t('peppol_failed_email_action'), onClick: () => openSendDialog('email') } : null)
+    : { label: t('download_pdf'), onClick: () => void downloadPDF() }
   const showDestructive =
     invoice.status !== 'cancelled' &&
     invoice.status !== 'credited' &&
     (!invoice.credited_invoice_id || invoice.status === 'draft') &&
     (isProforma || isQuote || invoice.status === 'draft')
+  // Skapa order is the alternative to the header's next step (Skapa
+  // faktura / Konvertera), so it lives in the menu with the other
+  // alternatives instead of adding a fourth header button.
+  const canCreateOrder = (isProforma && invoice.status !== 'cancelled') || canConvertQuote
+  // "Skicka till inkasso": an overdue, unpaid invoice with no open case (or
+  // a delivered claim the provider offers to start), while the start entry
+  // points are not hidden (lib/collections/invoice-entry.ts).
+  const collectionCase = collection.data?.case ?? null
+  // An open case sits at the top as a compact card; a closed or refused one further down.
+  const collectionCaseOnTop = !!collectionCase && casePlacement(collectionCase) === 'top'
+  const showCollectionItem =
+    collectionEligible &&
+    !!collection.data &&
+    showSendToCollection({
+      invoice,
+      start: collection.data.availability.start,
+      openCase: collectionCase,
+      today: todayIsoStockholm(),
+    })
+  // What the Påminnelser card says about reminders when collections is in play.
+  const collectionAside = collection.data
+    ? remindersAside({ invoice, connection: collection.data.availability.connection, openCase: collectionCase })
+    : null
+  const collectionRemindersAside: string | null = collectionAside
+    ? tCollections(collectionAside.key, collectionAside.key === 'reminders_batch' ? { days: collectionAside.days } : {})
+    : null
+  // "Skicka påminnelse": an owed invoice of our own past its due date, while
+  // reminders exist at all and no collections provider or open case reminds
+  // the customer already; the send decides the rest from fresh facts.
+  const collectionsConnected = collection.data?.availability.connection?.state === 'active'
+  const showReminderItem =
+    !isInvoicer && REMINDERS_SENDING_ENABLED && !isSelfBilled && isInvoiceOverdue(invoice) && !collectionCaseOnTop && !collectionsConnected
+  const showCustomerLossItem = customerLoss.view?.menuVisible === true
+  const showRecoveryItem = customerLoss.view?.recovery?.available === true
+  // Correcting the invoice's voucher (storno + rättelse) is a rare repair,
+  // so it lives in the header menu rather than as a line in Detaljer.
+  const showCorrectionItem = canWrite && !!invoice.journal_entry_id
   const hasMenu =
-    !isSelfBilled ||
+    showCorrectionItem ||
+    showCollectionItem ||
+    showReminderItem ||
+    showCustomerLossItem ||
+    showRecoveryItem ||
+    canCreateOrder ||
+    (quoteDecisionInMenu && canDecideQuote) ||
+    offersOwnPdf ||
     (isCopyable && canWrite) ||
     showManualSendAlternative ||
-    canCreateCreditNote ||
+    canResend ||
+    (canCreateCreditNote && canWrite) ||
+    (canBookAfterwards && canWrite) ||
     showPeppolActions ||
+    mailboxActions.length > 0 ||
     showDestructive
 
   // Aggregated VAT per rate for the totals block. Shown when at least one
@@ -1724,7 +2220,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     const vatByRate = new Map<number, number>()
     for (const item of invoice.items) {
       const rate = item.vat_rate ?? 0
-      const lineVat = Math.round(item.line_total * (rate / 100) * 100) / 100
+      // The stored line VAT is what the invoice states and booked (the PDF
+      // prints the same); a legacy row that carries none is recomputed with
+      // the rule the builder stores (crm#1343).
+      const lineVat = item.vat_amount || computeLineVat(item.line_total, rate)
       vatByRate.set(rate, (vatByRate.get(rate) || 0) + lineVat)
     }
     const entries = Array.from(vatByRate.entries())
@@ -1732,6 +2231,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       .sort(([a], [b]) => b - a)
     if (entries.length > 0) {
       return entries.map(([rate, vat]) => ({ key: String(rate), label: t('vat_at_rate', { rate }), amount: vat }))
+    }
+    // crm#1131: a registration from the books has no lines to sum; its header
+    // holds the VAT its verifikat booked, at one rate. Summing nothing printed
+    // "Moms 0" under a total that includes it.
+    if (registeredFromBooks && invoice.vat_amount > 0) {
+      return [{
+        key: 'header',
+        label: invoice.vat_rate ? t('vat_at_rate', { rate: invoice.vat_rate }) : t('vat_label'),
+        amount: invoice.vat_amount,
+      }]
     }
     if (vatRegistered === false && invoice.vat_amount === 0) return []
     return [{ key: 'zero', label: t('vat_label'), amount: 0 }]
@@ -1741,19 +2250,35 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const lineSubInfo = (item: InvoiceItem) => (
     <>
       {itemHasAccrual(item) && (
-        <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
-          <CalendarClock className="h-3 w-3 shrink-0" />
-          {t('accrual_line_info', {
-            from: accrualMonth(item.accrual_period_start!),
-            to: accrualMonth(item.accrual_period_end!),
-          })}
-          {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
-        </span>
+        <AccrualLineInfo
+          start={item.accrual_period_start!}
+          end={item.accrual_period_end!}
+          balanceAccount={item.accrual_balance_account}
+          schedule={accrualSchedules.scheduleForItem(item.id)}
+          canWrite={canWrite}
+          onReplan={accrualSchedules.openReplan}
+        />
       )}
       {item.deduction_type && (
         <span className="mt-0.5 block text-xs text-muted-foreground tabular-nums">
           {deductionLineInfo(item)}
         </span>
+      )}
+    </>
+  )
+
+  const statusChips = (
+    <>
+      {status.exception ? (
+        <Badge variant={status.variant}>{status.label}</Badge>
+      ) : (
+        <span className="text-sm text-muted-foreground">{status.label}</span>
+      )}
+      {hasAccruedItems && (
+        <Badge variant="outline" className="gap-1">
+          <CalendarDaysIcon className="h-3 w-3" />
+          {t('badge_accrued')}
+        </Badge>
       )}
     </>
   )
@@ -1765,27 +2290,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           The page-header hooks turn it into the top bar: the sidebar says
           where we are, so there is no back link, and the prev/next pager
           sits in the bar. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="page-header-lead min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* data-ph-mask: the title carries the invoice number */}
-            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
-            {status.exception ? (
-              <Badge variant={status.variant}>{status.label}</Badge>
-            ) : (
-              <span className="text-sm text-muted-foreground">{status.label}</span>
-            )}
-            {hasAccruedItems && (
-              <Badge variant="outline" className="gap-1">
-                <CalendarClock className="h-3 w-3" />
-                {t('badge_accrued')}
-              </Badge>
-            )}
-          </div>
-          <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
-        </div>
-
-        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+      <RecordHeader
+        parent={{
+          label: tInvoices(invoice.document_type === 'quote' ? 'title_quotes' : 'title'),
+          href: invoice.document_type === 'quote' ? '/quotes' : '/invoices',
+        }}
+        title={title}
+        mask
+        // The invoice's own status; an open case's stage is the case card's one chip.
+        status={statusChips}
+        actions={<>
           <DetailPager
             contextKey={listContextKey(isQuote ? 'quotes' : 'invoices', company?.id)}
             basePath="/invoices"
@@ -1793,907 +2307,1354 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             className="shrink-0"
           />
           {isEditableDraft && canWrite && (
-            <Button variant="outline" asChild>
+            <Button size="toolbar" variant="outline" asChild>
               <Link href={`/invoices/${invoice.id}/edit`}>
-                <Pencil className="mr-2 h-4 w-4" />
+                <PencilIcon className="mr-2 h-4 w-4" />
                 {t('edit_draft')}
               </Link>
             </Button>
           )}
           {/* Review in the browser (#1190); the download lives in the menu. */}
-          {!isSelfBilled && (
-            <Button variant="outline" onClick={() => previewPDF()}>
-              <Eye className="mr-2 h-4 w-4" />
+          {offersOwnPdf && (
+            <Button size="toolbar" variant="outline" onClick={() => previewPDF()}>
+              <EyeIcon className="h-4 w-4" />
               {t('preview_pdf')}
             </Button>
           )}
+          {/* crm#1131: a registration's invoice is the original on its
+              verifikat. With several documents the page cannot tell which one
+              that is; the lines section lists them all. */}
+          {registrationDocuments?.length === 1 && (
+            <DocumentViewButton
+              documentId={registrationDocuments[0].id}
+              label={t('registered_view_original')}
+            />
+          )}
           {isProforma && invoice.status !== 'cancelled' && (
-            <Button
+            <Button size="toolbar"
               onClick={convertToInvoice}
-              disabled={isConverting || !canWrite}
+              disabled={!canWrite}
+              loading={isConverting}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isConverting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="mr-2 h-4 w-4" />
+              {isConverting ? null : !canWrite ? (
+                <LockClosedIcon className="h-4 w-4" />
               ) : (
-                <FileText className="mr-2 h-4 w-4" />
+                <DocumentTextIcon className="h-4 w-4" />
               )}
               {t('convert_to_invoice')}
             </Button>
           )}
-          {canDecideQuote && quoteStatus !== 'accepted' && (
-            <Button
+          {canDecideQuote && quoteStatus !== 'accepted' && !quoteDecisionInMenu && (
+            <Button size="toolbar"
               variant="outline"
               onClick={acceptQuote}
-              disabled={isDeciding || isConverting || !canWrite}
+              disabled={isConverting || !canWrite}
+              loading={isDeciding}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isDeciding ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="mr-2 h-4 w-4" />
-              )}
+              {!isDeciding && <CheckCircleIcon className="h-4 w-4" />}
               {t('quote_accept')}
             </Button>
           )}
-          {canConvertQuote && (
-            <Button
+          {canInvoiceQuote && !quoteDecisionInMenu && (
+            <Button size="toolbar"
               onClick={startQuoteConvert}
-              disabled={isConverting || isDeciding || !canWrite}
+              disabled={isDeciding || !canWrite}
+              loading={isConverting}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isConverting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="mr-2 h-4 w-4" />
+              {isConverting ? null : !canWrite ? (
+                <LockClosedIcon className="h-4 w-4" />
               ) : (
-                <FileText className="mr-2 h-4 w-4" />
+                <DocumentTextIcon className="h-4 w-4" />
               )}
-              {t('quote_create_invoice')}
+              {t(quoteInvoice ? 'quote_invoice_rest' : 'quote_create_invoice')}
             </Button>
           )}
-          {((isProforma && invoice.status !== 'cancelled') || canConvertQuote) && (
-            <Button
-              variant="outline"
-              onClick={isQuote ? startQuoteOrder : convertToOrder}
-              disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {isCreatingOrder ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="mr-2 h-4 w-4" />
-              ) : (
-                <ClipboardList className="mr-2 h-4 w-4" />
-              )}
-              {t('create_order')}
-            </Button>
-          )}
-          {isUnnumberedDraft && (
-            <Button
+          {isUnnumberedDraft && canIssueDraft && (
+            <Button size="toolbar"
               onClick={openFinalizeDialog}
               disabled={isFinalizing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <DocumentTextIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
               {t('finalize_action')}
             </Button>
           )}
-          {invoice.status === 'draft' && !isDeliveryNote && invoice.invoice_number && (
+          {invoice.status === 'draft' && canIssueDraft && invoice.invoice_number && (
             preferredSendMode === 'email' ? (
-              <Button
+              <Button size="toolbar"
                 onClick={() => openSendDialog('email')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
-                {canWrite ? <Mail className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+                {canWrite ? <PaperAirplaneIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
                 {t(issuesByBooking ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
-              <Button
+              <Button size="toolbar"
                 onClick={() => openSendDialog('manual')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
-                {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+                {canWrite ? <PaperAirplaneIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
                 {t(issuesByBooking ? 'mark_sent_and_book' : 'mark_as_sent')}
               </Button>
             )
           )}
           {creditNoteNeedsRepair && (
-            <Button
+            <Button size="toolbar"
               onClick={() => openSendDialog('manual')}
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <AlertTriangle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <ExclamationTriangleIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
               {t('complete_credit_bookkeeping')}
             </Button>
           )}
           {isDeliveryNote && invoice.status === 'draft' && (
-            <Button
+            <Button size="toolbar"
               onClick={() => updateStatus('sent')}
-              disabled={isUpdating || !canWrite}
+              disabled={!canWrite}
+              loading={isUpdating}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isUpdating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : canWrite ? (
-                <Send className="mr-2 h-4 w-4" />
+              {isUpdating ? null : canWrite ? (
+                <PaperAirplaneIcon className="h-4 w-4" />
               ) : (
-                <Lock className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="h-4 w-4" />
               )}
               {t('mark_as_sent')}
             </Button>
           )}
           {/* partially_paid included (#1717): completes a stuck partial, e.g.
               a sub-krona öresavrundning remaining, via the same dialog. */}
-          {(invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'partially_paid') && isRealInvoice && !isCreditNote && (
-            <Button
+          {isOwedInvoiceStatus(invoice.status) && isRealInvoice && !isCreditNote && (
+            <Button size="toolbar"
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <CheckCircleIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
               {t('mark_as_paid')}
+            </Button>
+          )}
+          {refundPlan?.ok && (
+            <Button size="toolbar"
+              onClick={() => setShowRefundDialog(true)}
+              disabled={isUpdating || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {canWrite ? <BanknotesIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
+              {t('record_refund')}
             </Button>
           )}
 
           {hasMenu && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
-                  {isDownloading || isDownloadingPeppol || isPreparingPeppol ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <MoreHorizontal className="h-4 w-4" />
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[240px]">
-                {!isSelfBilled && (
-                  <DropdownMenuItem onSelect={() => void downloadPDF()} disabled={isDownloading}>
-                    <Download className="h-4 w-4" />
-                    {t('download_pdf')}
-                  </DropdownMenuItem>
-                )}
-                {isCopyable && canWrite && (
-                  <DropdownMenuItem asChild>
-                    <Link href={`/invoices?copy=${invoice.id}`}>
-                      <Copy className="h-4 w-4" />
-                      {t('copy_invoice')}
-                    </Link>
-                  </DropdownMenuItem>
-                )}
-                {/* The header offers "Skicka via e-post" as the next step; the
-                    manual path stays reachable for invoices sent another way. */}
-                {showManualSendAlternative && (
-                  <DropdownMenuItem
-                    onSelect={() => openSendDialog('manual')}
-                    disabled={!canWrite}
-                    className="items-start"
-                  >
-                    <Send className="mt-0.5 h-4 w-4" />
-                    <span className="min-w-0">
-                      <span className="block">{t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}</span>
-                      <span className="block text-[11px] leading-snug text-muted-foreground">
-                        {t('send_manual_hint_with_email')}
-                      </span>
-                    </span>
-                  </DropdownMenuItem>
-                )}
-                {canCreateCreditNote && (
-                  <DropdownMenuItem asChild>
-                    <Link href={`/invoices/${invoice.id}/credit`}>
-                      <ReceiptText className="h-4 w-4" />
-                      {t('create_credit_note')}
-                    </Link>
-                  </DropdownMenuItem>
-                )}
-                {showPeppolActions && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={() => void downloadPeppolXml()}
-                      disabled={isDownloadingPeppol || !invoice.invoice_number}
+            <WithCorrection
+              journalEntryId={showCorrectionItem ? (invoice.journal_entry_id ?? null) : null}
+              onCorrected={fetchInvoice}
+            >
+              {(correction) => (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-toolbar"
+                      aria-label={tCommon('more_options')}
+                      data-topbar-overflow-host=""
+                      loading={isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder || correction?.isLoading}
                     >
-                      <FileText className="h-4 w-4" />
-                      {t('download_peppol_xml')}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => void preparePeppolDelivery()}
-                      disabled={isPreparingPeppol || !canWrite || !invoice.invoice_number}
-                    >
-                      <FileCheck2 className="h-4 w-4" />
-                      {t('prepare_peppol_delivery')}
-                    </DropdownMenuItem>
-                    {peppolTransportAvailable && peppolSendGranted && peppolSendsLeft ? (
+                      {isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder || correction?.isLoading ? null : (
+                        <EllipsisHorizontalIcon className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-[240px]">
+                    {/* On a phone the bar's other actions are listed here first. */}
+                    <PageHeaderOverflowItems />
+                    {/* PH 244: the page's actions live in this menu, so booking a
+                        sent invoice is here too, not only on the Bokföring row. */}
+                    {canBookAfterwards && canWrite && (
+                      <>
+                        <DropdownMenuItem onSelect={openBookConfirm} disabled={isUpdating}>
+                          <DocumentCheckIcon className="h-4 w-4" />
+                          {t('book_action')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    {/* An unsent quote's decisions (crm#1202): reachable for a yes
+                        given another way, confirmed before anything is recorded. */}
+                    {quoteDecisionInMenu && canDecideQuote && quoteStatus !== 'accepted' && (
                       <DropdownMenuItem
-                        onSelect={() => setShowPeppolSendDialog(true)}
-                        disabled={isSendingPeppol || !canWrite || !canSendPeppol}
+                        onSelect={acceptQuote}
+                        disabled={isDeciding || isConverting || !canWrite}
                       >
-                        <Send className="h-4 w-4" />
-                        {t('send_via_peppol')}
+                        <CheckCircleIcon className="h-4 w-4" />
+                        {t('quote_accept')}
                       </DropdownMenuItem>
-                    ) : peppolTransportAvailable ? (
-                      <DropdownMenuItem disabled className="items-start">
-                        <Send className="mt-0.5 h-4 w-4" />
-                        <span className="min-w-0">
-                          <span className="block">{t('send_via_peppol')}</span>
-                          <span className="block text-[11px] leading-snug text-muted-foreground">
-                            {peppolSendGranted ? t('peppol_send_limit_reached') : t('peppol_access_required')}
-                          </span>
-                        </span>
+                    )}
+                    {quoteDecisionInMenu && canConvertQuote && (
+                      <DropdownMenuItem
+                        onSelect={startQuoteConvert}
+                        disabled={isDeciding || isConverting || !canWrite}
+                      >
+                        <DocumentTextIcon className="h-4 w-4" />
+                        {t('quote_create_invoice')}
                       </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem disabled className="items-start">
-                        <Send className="mt-0.5 h-4 w-4" />
+                    )}
+                    {quoteDecisionInMenu && canDecideQuote && !canCreateOrder && <DropdownMenuSeparator />}
+                    {canCreateOrder && (
+                      <>
+                        <DropdownMenuItem
+                          onSelect={() => void (isQuote ? startQuoteOrder() : convertToOrder())}
+                          disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
+                        >
+                          <ClipboardDocumentListIcon className="h-4 w-4" />
+                          {t('create_order')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    {canPartInvoiceQuote && (
+                      <>
+                        <DropdownMenuItem
+                          onSelect={() => setShowQuotePartDialog(true)}
+                          disabled={isConverting || isDeciding || !canWrite}
+                        >
+                          <DocumentTextIcon className="h-4 w-4" />
+                          {t('quote_create_part')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    {offersOwnPdf && (
+                      <DropdownMenuItem onSelect={() => void downloadPDF()} disabled={isDownloading}>
+                        <ArrowDownTrayIcon className="h-4 w-4" />
+                        {t('download_pdf')}
+                      </DropdownMenuItem>
+                    )}
+                    {isCopyable && canWrite && (
+                      <DropdownMenuItem asChild>
+                        <Link href={newEditorHref({ copyFromId: invoice.id })}>
+                          <Square2StackIcon className="h-4 w-4" />
+                          {t('copy_invoice')}
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {/* The header offers "Skicka via e-post" as the next step; the
+                        manual path stays reachable for invoices sent another way. */}
+                    {showManualSendAlternative && (
+                      <DropdownMenuItem
+                        onSelect={() => openSendDialog('manual')}
+                        disabled={!canWrite}
+                        className="items-start"
+                      >
+                        <PaperAirplaneIcon className="mt-0.5 h-4 w-4" />
                         <span className="min-w-0">
-                          <span className="block">{t('send_via_peppol')}</span>
-                          <span className="block text-[11px] leading-snug text-muted-foreground">
-                            {t('peppol_provider_required')}
+                          <span className="block">{t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}</span>
+                          <span className="block text-xs leading-snug text-muted-foreground">
+                            {t('send_manual_hint_with_email')}
                           </span>
                         </span>
                       </DropdownMenuItem>
                     )}
-                  </>
-                )}
-                {canDecideQuote && quoteStatus !== 'declined' && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={() => void setQuoteDecision('declined')}
-                      disabled={isDeciding || isConverting || !canWrite}
-                    >
-                      <XCircle className="h-4 w-4" />
-                      {t('quote_decline')}
-                    </DropdownMenuItem>
-                  </>
-                )}
-                {showDestructive && (
-                  <>
-                    <DropdownMenuSeparator />
-                    {isProforma || isQuote ? (
+                    {canResend && (
                       <DropdownMenuItem
-                        // A cancelled quote is done with: back to Offerter,
-                        // the way deleting a draft returns to its list.
-                        onSelect={() =>
-                          void updateStatus('cancelled').then((ok) => {
-                            if (ok && isQuote) router.push('/quotes')
-                          })
-                        }
-                        disabled={isUpdating || !canWrite}
-                        className="text-destructive focus:text-destructive"
+                        onSelect={() => setShowResendDialog(true)}
+                        disabled={!canWrite || !customerHasEmail || !canEmail}
+                        className="items-start"
                       >
-                        <XCircle className="h-4 w-4" />
-                        {t('cancel_action')}
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem
-                        onSelect={() => setShowDeleteDialog(true)}
-                        disabled={isDeleting || !canWrite}
-                        className="text-destructive focus:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        {isUnnumberedDraft
-                          ? t('remove_action')
-                          : t(isCreditNote ? 'remove_credit_draft' : 'delete_draft')}
+                        <EnvelopeIcon className="mt-0.5 h-4 w-4" />
+                        <span className="min-w-0">
+                          <span className="block">{t('resend_action')}</span>
+                          <span className="block text-xs leading-snug text-muted-foreground">
+                            {customerHasEmail ? t('resend_hint') : t('resend_no_email')}
+                          </span>
+                        </span>
                       </DropdownMenuItem>
                     )}
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                    {canCreateCreditNote && canWrite && (
+                      <DropdownMenuItem asChild>
+                        <Link href={`/invoices/${invoice.id}/credit`}>
+                          <DocumentTextIcon className="h-4 w-4" />
+                          {t('create_credit_note')}
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {correction && (
+                      <DropdownMenuItem onSelect={correction.open} disabled={correction.isLoading}>
+                        <PencilIcon className="h-4 w-4" />
+                        {correction.isLoading ? t('correction_loading') : t('correction_menu_item')}
+                      </DropdownMenuItem>
+                    )}
+                    {showCollectionItem && (
+                      <DropdownMenuItem onSelect={() => setShowCollectionDialog(true)} disabled={!canWrite}>
+                        <ScaleIcon className="h-4 w-4" />
+                        {tCollections('menu_send')}
+                      </DropdownMenuItem>
+                    )}
+                    {showReminderItem && (
+                      <DropdownMenuItem onSelect={() => setShowReminderDialog(true)} disabled={!canWrite}>
+                        <BellAlertIcon className="h-4 w-4" />
+                        {tReminders('invoice_action')}
+                      </DropdownMenuItem>
+                    )}
+                    {showCustomerLossItem && (
+                      <DropdownMenuItem onSelect={() => setShowLossDialog(true)} disabled={!canWrite}>
+                        <BanknotesIcon className="h-4 w-4" />
+                        {tLoss('menu')}
+                      </DropdownMenuItem>
+                    )}
+                    {showRecoveryItem && (
+                      <DropdownMenuItem onSelect={() => setShowRecoveryDialog(true)} disabled={!canWrite}>
+                        <BanknotesIcon className="h-4 w-4" />
+                        {tLoss('recovery_menu')}
+                      </DropdownMenuItem>
+                    )}
+                    {showPeppolActions && (
+                      <>
+                        <DropdownMenuSeparator />
+                        {invoice.invoice_number || invoice.status !== 'draft' ? (
+                          <DropdownMenuItem
+                            onSelect={() => void downloadPeppolXml()}
+                            disabled={isDownloadingPeppol || !invoice.invoice_number}
+                          >
+                            <ArrowDownTrayIcon className="h-4 w-4" />
+                            {t('download_peppol_xml')}
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            onSelect={() => void downloadPeppolXml()}
+                            disabled={isDownloadingPeppol}
+                            className="items-start"
+                          >
+                            <DocumentTextIcon className="mt-0.5 h-4 w-4" />
+                            <span className="min-w-0">
+                              <span className="block">{t('preview_peppol_xml')}</span>
+                              <span className="block text-xs leading-snug text-muted-foreground">
+                                {t('preview_peppol_xml_hint')}
+                              </span>
+                            </span>
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem
+                          onSelect={() => void preparePeppolDelivery()}
+                          disabled={isPreparingPeppol || !canWrite || !invoice.invoice_number}
+                        >
+                          <DocumentCheckIcon className="h-4 w-4" />
+                          {t('prepare_peppol_delivery')}
+                        </DropdownMenuItem>
+                        {peppolTransportAvailable && peppolSendGranted && peppolSendsLeft ? (
+                          <DropdownMenuItem
+                            onSelect={() => setShowPeppolSendDialog(true)}
+                            disabled={isSendingPeppol || !canWrite || !canSendPeppol}
+                          >
+                            <PaperAirplaneIcon className="h-4 w-4" />
+                            {t('send_via_peppol')}
+                          </DropdownMenuItem>
+                        ) : peppolTransportAvailable ? (
+                          <DropdownMenuItem disabled className="items-start">
+                            <PaperAirplaneIcon className="mt-0.5 h-4 w-4" />
+                            <span className="min-w-0">
+                              <span className="block">{t('send_via_peppol')}</span>
+                              <span className="block text-xs leading-snug text-muted-foreground">
+                                {peppolSendGranted ? t('peppol_send_limit_reached') : t('peppol_access_required')}
+                              </span>
+                            </span>
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem disabled className="items-start">
+                            <PaperAirplaneIcon className="mt-0.5 h-4 w-4" />
+                            <span className="min-w-0">
+                              <span className="block">{t('send_via_peppol')}</span>
+                              <span className="block text-xs leading-snug text-muted-foreground">
+                                {t('peppol_provider_required')}
+                              </span>
+                            </span>
+                          </DropdownMenuItem>
+                        )}
+                      </>
+                    )}
+                    {mailboxActions.length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        {mailboxActions.map((action) => {
+                          const label = t('send_via_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[action.provider] })
+                          return action.blockedBy ? (
+                            // A disabled item takes no hover, so it says why on itself.
+                            <DropdownMenuItem key={action.provider} disabled className="items-start">
+                              <PaperAirplaneIcon className="mt-0.5 h-4 w-4" />
+                              <span className="min-w-0">
+                                <span className="block">{label}</span>
+                                <span className="block text-xs leading-snug text-muted-foreground">
+                                  {t(MAILBOX_BLOCK_KEYS[action.blockedBy])}
+                                </span>
+                              </span>
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              key={action.provider}
+                              onSelect={() => setMailboxConfirmProvider(action.provider)}
+                              disabled={isSendingMailbox || !canWrite}
+                            >
+                              <PaperAirplaneIcon className="h-4 w-4" />
+                              {label}
+                            </DropdownMenuItem>
+                          )
+                        })}
+                      </>
+                    )}
+                    {canDecideQuote && quoteStatus !== 'declined' && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onSelect={() => void setQuoteDecision('declined')}
+                          disabled={isDeciding || isConverting || !canWrite}
+                        >
+                          <XCircleIcon className="h-4 w-4" />
+                          {t('quote_decline')}
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                    {showDestructive && (
+                      <>
+                        <DropdownMenuSeparator />
+                        {isProforma || isQuote ? (
+                          <DropdownMenuItem
+                            // A cancelled quote is done with: back to Offerter,
+                            // the way deleting a draft returns to its list.
+                            onSelect={() =>
+                              void updateStatus('cancelled').then((ok) => {
+                                if (ok && isQuote) router.push('/quotes')
+                              })
+                            }
+                            disabled={isUpdating || !canWrite}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <XCircleIcon className="h-4 w-4" />
+                            {t('cancel_action')}
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            onSelect={() => setShowDeleteDialog(true)}
+                            disabled={isDeleting || !canWrite}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <TrashIcon className="h-4 w-4" />
+                            {isUnnumberedDraft
+                              ? t('remove_action')
+                              : t(invoice.credited_invoice_id ? 'remove_credit_draft' : 'delete_draft')}
+                          </DropdownMenuItem>
+                        )}
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </WithCorrection>
           )}
-        </div>
-      </div>
+        </>}
+      />
+
+      {loadFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchInvoice() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
+      {/* Inkasso lives on the invoice: an open case as a compact card under
+          the header, else, on an owed invoice past its due date, the overdue
+          banner with its one send button. Neither renders while collections
+          is hidden and nothing is open (lib/collections/overdue-banner.ts). */}
+      {collectionCase && collection.data && collectionCaseOnTop ? (
+        <CollectionCaseCard
+          placement="top"
+          invoiceId={invoice.id}
+          view={collectionCase}
+          availability={collection.data.availability}
+          withdrawFee={collection.data.withdrawFee}
+          invoiceStatus={invoice.status}
+          canWrite={canWrite}
+          onChanged={collection.setCase}
+          onRefresh={collection.reload}
+          onOpenHandover={() => setShowCollectionDialog(true)}
+        />
+      ) : (
+        collectionEligible &&
+        collection.data && (
+          <OverdueCollectionBanner
+            invoiceId={invoice.id}
+            invoice={invoice}
+            availability={collection.data.availability}
+            openCase={collectionCase}
+            canWrite={canWrite}
+            canManage={companyRole === 'owner' || companyRole === 'admin'}
+            today={todayIsoStockholm()}
+            refreshKey={collectionCheckKey}
+            batchItem={batchItemFor(collectionsRun.run?.items, invoice.id)}
+            onSend={() => setShowCollectionDialog(true)}
+          />
+        )
+      )}
 
       {/* Why the VAT treatment is what it is (#2749, #2558): the page's one
           ochre sentence, with the VIES check inline. Drafts only: an issued
           invoice is what it is. A non-momsregistrerad seller charges nothing
           and has nothing to explain. After a successful check the invoice is
           refetched so the sentence flips to what the lines still carry. */}
-      {isEditableDraft && vatRegistered !== false && (
+      {isEditableDraft && vatRegistered !== false && customer && (
         <VatTreatmentNotice
           customer={customer}
           lineVatRates={invoice.items
             .filter((item) => item.line_type !== 'text')
             .map((item) => item.vat_rate ?? 0)}
-          onValidated={() => void fetchInvoice()}
-          editHref={`/invoices/${invoice.id}/edit`}
+          onValidated={canWrite ? () => void fetchInvoice() : undefined}
+          editHref={canWrite ? `/invoices/${invoice.id}/edit` : undefined}
+          // One ochre sentence per page: a failed refresh or Peppol delivery holds it.
+          tone={peppolAttention || loadFailed ? 'muted' : 'attn'}
         />
       )}
 
-      {/* Kund and Detaljer side by side like an invoice head: who it is for
-          on the left, the facts on the right. */}
-      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
-        <DetailSection kicker={t('customer_card_title')}>
-          <DefRow label={t('def_customer')}>
-            <Link href={`/customers/${customer.id}`} className="hover:underline">
-              {customer.name}
-            </Link>
-          </DefRow>
-          {customer.customer_type !== 'individual' && customer.org_number && (
-            <DefRow label={t('def_org_number')}>
-              <span className="tabular-nums">{customer.org_number}</span>
-            </DefRow>
+      {/* The latest Peppol delivery, when it needs the user: the operator's
+          own reason (status_detail, never adapter text) and the ways on. */}
+      {!loadFailed && peppolAttention === 'failed' && latestPeppolDelivery && (
+        <AttnLine
+          action={canWrite && canSendPeppol
+            ? { label: t('peppol_failed_resend_action'), onClick: () => setShowPeppolSendDialog(true) }
+            : undefined}
+          trailing={peppolOtherWay && (
+            <>
+              {' '}
+              <button
+                type="button"
+                onClick={peppolOtherWay.onClick}
+                className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {peppolOtherWay.label}
+              </button>
+            </>
           )}
-          {customer.customer_type !== 'individual' && customer.vat_number && (
-            <DefRow label={t('def_vat_number')}>{customer.vat_number}</DefRow>
-          )}
-          <DefRow label={t('def_email')}>
-            {customer.email ? (
-              <a href={`mailto:${customer.email}`} className="hover:underline">
-                {customer.email}
-              </a>
-            ) : (
-              <DefEmpty />
-            )}
-          </DefRow>
-          {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
-          <DefRow label={t('def_address')}>
-            {customer.address_line1 || customer.city ? (
-              <div>
-                {customer.address_line1 && <p>{customer.address_line1}</p>}
-                {customer.address_line2 && <p>{customer.address_line2}</p>}
+        >
+          {latestPeppolDelivery.status_detail
+            ? t.rich('peppol_failed_attn', {
+                reason: latestPeppolDelivery.status_detail,
+                // data-ph-mask: the operator's reason can quote the invoice number
+                mask: (chunks) => <span data-ph-mask="">{chunks}</span>,
+              })
+            : t('peppol_failed_attn_no_reason')}
+        </AttnLine>
+      )}
+      {!loadFailed && peppolAttention === 'unconfirmed' && <AttnLine>{t('peppol_unconfirmed_attn')}</AttnLine>}
+      {!loadFailed && peppolAttention === 'unreported' && <AttnLine>{t('peppol_unreported_attn')}</AttnLine>}
+
+      {/* Record head (V7 Försäljning): who the document is for and what it
+          comes to; the number and the status are the top bar's. */}
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2" data-ph-mask="">
+        <div className="min-w-0">
+          <h2 className="truncate text-xl text-strong">{customer?.name ?? title}</h2>
+          <p className="mt-0.5 text-[13px] text-muted-foreground">{metaParts.slice(customer?.name ? 1 : 0).join(' · ')}</p>
+        </div>
+        <p className="font-display text-3xl tabular-nums">{formatCurrency(rounding.displayed, invoice.currency)}</p>
+      </div>
+
+      {/* The document and its lines on the left; who it is for, the facts,
+          payment, reminders and delivery in a capped column on the right
+          (label-value rows do not stretch across the panel). One column
+          below xl. */}
+      <div className="grid gap-x-12 gap-y-8 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="min-w-0 space-y-8">
+          {/* The file the customer received, shown as the file itself. Only
+              the archived delivery is shown this way: a re-render is another
+              document (lib/invoices/invoice-pdf-source.ts) and keeps its own
+              door, Förhandsgranska, with the draft and archive prompts. */}
+          {sentDocument && <InvoiceSentDocument url={sentDocument.url} label={title} openLabel={t('preview_pdf')} />}
+
+          {/* Invoice lines: the list-page table idiom straight on the panel, with
+              the totals as a right-aligned block and the amount due in the serif. */}
+          <DetailSection kicker={t('items_card_title')}>
+            {registeredFromBooks ? (
+              // crm#1131: no lines to list. Say why, and lead to the original: the
+              // verifikat that booked the invoice and the documents attached to it.
+              <div className="space-y-1 py-2 text-sm text-muted-foreground">
                 <p>
-                  {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
-                  {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
+                  {registrationVoucher?.label
+                    ? t.rich('registered_note', {
+                        voucher: registrationVoucher.label,
+                        link: registrationVoucherLink,
+                      })
+                    : t.rich('registered_note_unnamed', { link: registrationVoucherLink })}
                 </p>
+                {registrationDocuments && registrationDocuments.length > 0 && (
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <span>{t('registered_original_label')}</span>
+                    {registrationDocuments.map((doc) => (
+                      <a
+                        key={doc.id}
+                        href={`/api/documents/${doc.id}/inline`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={cn(ROW_ACTION_CLASS, 'inline-flex max-w-full items-center gap-1 text-foreground')}
+                      >
+                        <span className="truncate">{doc.file_name}</span>
+                        <ArrowTopRightOnSquareIcon className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {registrationDocuments?.length === 0 && <p>{t('registered_original_missing')}</p>}
               </div>
             ) : (
-              <DefEmpty />
+              <>
+                <table className="hidden w-full border-collapse text-[13px] sm:table">
+                  <thead>
+                    <tr>
+                      <th className={cn(TH_CLASS, 'pl-0')}>{t('th_description')}</th>
+                      <th className={cn(TH_CLASS, 'text-right')}>{t('th_quantity')}</th>
+                      <th className={TH_CLASS}>{t('th_unit')}</th>
+                      <th className={cn(TH_CLASS, 'text-right')}>{t('th_unit_price')}</th>
+                      <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('th_amount')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.items.map((item) =>
+                      isTextLikeLine(item) ? (
+                        <tr key={item.id}>
+                          <td colSpan={5} className={cn(TD_CLASS, 'whitespace-pre-line pl-0 pr-0 text-muted-foreground')}>
+                            {item.description || ' '}
+                          </td>
+                        </tr>
+                      ) : (
+                        <tr key={item.id}>
+                          <td className={cn(TD_CLASS, 'whitespace-pre-line pl-0')}>
+                            {item.description}
+                            {lineSubInfo(item)}
+                          </td>
+                          <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
+                          <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
+                          <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                            {formatRowAmount(item.unit_price, invoice.currency)}
+                          </td>
+                          <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
+                            {formatRowAmount(item.line_total, invoice.currency)}
+                          </td>
+                        </tr>
+                      )
+                    )}
+                  </tbody>
+                </table>
+
+                {/* Mobile: one flat row per line, no numeric columns to cram. */}
+                <div className="divide-y divide-border text-sm sm:hidden">
+                  {invoice.items.map((item) =>
+                    isTextLikeLine(item) ? (
+                      <p key={item.id} className="whitespace-pre-line py-3 text-muted-foreground">{item.description || ' '}</p>
+                    ) : (
+                      <div key={item.id} className="flex items-start justify-between gap-4 py-3">
+                        <div className="min-w-0">
+                          <p className="whitespace-pre-line">{item.description}</p>
+                          <p className="text-xs text-muted-foreground tabular-nums">
+                            {item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}
+                          </p>
+                          {lineSubInfo(item)}
+                        </div>
+                        <span className="shrink-0 tabular-nums">
+                          {formatCurrency(item.line_total, invoice.currency)}
+                        </span>
+                      </div>
+                    )
+                  )}
+                </div>
+              </>
             )}
-          </DefRow>
-          {invoice.your_reference && (
-            <DefRow label={t('your_reference_label')}>
-              {invoice.your_reference.split(',').map((ref) => ref.trim()).join(', ')}
-            </DefRow>
-          )}
-        </DetailSection>
 
-        <DetailSection kicker={t('details_card_title')}>
-          {isSelfBilled && (
-            <DefRow label={t('external_number_label')}>
-              {invoiceDisplayNumber(invoice as Invoice)}
-            </DefRow>
-          )}
-          {isSelfBilled && (invoice as Invoice).self_billing_agreement_ref && (
-            <DefRow label={t('agreement_ref_label')}>
-              {(invoice as Invoice).self_billing_agreement_ref}
-            </DefRow>
-          )}
-          <DefRow label={t('invoice_date_label')}>
-            <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
-          </DefRow>
-          {isQuote ? (
-            <DefRow label={t('valid_until_label')}>
-              <span className="tabular-nums">{formatDate(invoice.valid_until ?? invoice.due_date)}</span>
-            </DefRow>
-          ) : (
-            <DefRow label={t('due_date_label')}>
-              <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
-            </DefRow>
-          )}
-          <DefRow label={t('currency_label')}>{invoice.currency}</DefRow>
-          <DefRow label={t('vat_treatment_label')}>{getVatTreatmentLabel(invoice.vat_treatment)}</DefRow>
-          {invoice.our_reference && (
-            <DefRow label={t('our_reference_label')}>
-              {invoice.our_reference.split(',').map((ref) => ref.trim()).join(', ')}
-            </DefRow>
+            <div className="ml-auto mt-4 w-full max-w-xs space-y-1 text-sm tabular-nums">
+              <div className="flex justify-between gap-4">
+                <span className="text-muted-foreground">{t('subtotal')}</span>
+                <span>{formatCurrency(invoice.subtotal, invoice.currency)}</span>
+              </div>
+              {vatRows.map((row) => (
+                <div key={row.key} className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">{row.label}</span>
+                  <span>{formatCurrency(row.amount, invoice.currency)}</span>
+                </div>
+              ))}
+              {rounding.applies && (
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">{t('ore_rounding')}</span>
+                  <span>{formatCurrency(rounding.roundingDelta, 'SEK')}</span>
+                </div>
+              )}
+              {/* ROT/RUT (fakturamodellen): the invoice total stands, the
+                  deduction is shown as a reduction and the headline becomes what
+                  the customer actually pays, exactly as on the PDF and in the
+                  invoice email. */}
+              {showDeduction ? (
+                <>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted-foreground">{t('total')}</span>
+                    <span>{formatCurrency(rounding.displayed, invoice.currency)}</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted-foreground">{deductionRowLabel}</span>
+                    <span>{formatCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency)}</span>
+                  </div>
+                  {/* Skatteverket refused (part of) the deduction and the reclaim
+                      voucher moved it back onto the customer: the printed
+                      deduction stands, the refused share is the customer's again. */}
+                  {(invoice.deduction_reclaimed_total ?? 0) > 0 && (
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">{t('deduction_reclaimed_row')}</span>
+                      <span>{formatCurrency(Math.abs(invoice.deduction_reclaimed_total ?? 0), invoice.currency)}</span>
+                    </div>
+                  )}
+                  <div className="flex items-baseline justify-between gap-4 border-t-hairline pt-2">
+                    <span>{t('amount_to_pay')}</span>
+                    <span className="font-display text-xl">
+                      {formatCurrency(
+                        Math.round((amountToPay.toPay + Math.abs(invoice.deduction_reclaimed_total ?? 0)) * 100) / 100,
+                        invoice.currency,
+                      )}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-baseline justify-between gap-4 border-t-hairline pt-2">
+                  <span>{t('total')}</span>
+                  <span className="font-display text-xl">{formatCurrency(rounding.displayed, invoice.currency)}</span>
+                </div>
+              )}
+              {invoice.currency !== 'SEK' && invoice.total_sek && (
+                <div className="flex justify-between gap-4 text-muted-foreground">
+                  <span>{t('in_sek', { rate: invoice.exchange_rate ?? 1 })}</span>
+                  <span>{formatCurrency(invoice.total_sek)}</span>
+                </div>
+              )}
+            </div>
+          </DetailSection>
+
+          {(invoice.notes || invoice.reverse_charge_text) && (
+            <DetailSection kicker={t('notes_card_title')}>
+              {invoice.reverse_charge_text && (
+                <DefRow label={t('reverse_charge_label')}>
+                  <span className="text-muted-foreground">{invoice.reverse_charge_text}</span>
+                </DefRow>
+              )}
+              {invoice.notes && (
+                <p className="py-2 text-sm text-muted-foreground whitespace-pre-wrap">{invoice.notes}</p>
+              )}
+            </DetailSection>
           )}
 
-          {/* ROT/RUT (fakturamodellen): the underlag Skatteverket needs and
-              where the begäran om utbetalning stands, as plain rows. The
-              amounts live in the totals block; nothing is repeated here. */}
-          {showDeduction && (
-            <>
-              <DefRow label={t('deduction_personnummer_label')}>
-                {deductionPersonnummerMasked ? (
-                  <span className="tabular-nums">{deductionPersonnummerMasked}</span>
-                ) : !invoice.deduction_personnummer_last4 ? (
-                  <span className="text-attn">{t('deduction_personnummer_missing')}</span>
-                ) : deductionPersonnummerMasked === undefined ? (
-                  // Stored; the mask is still on its way from the server.
-                  // Never print the last four digits meanwhile.
-                  <Skeleton className="h-4 w-24" />
-                ) : (
-                  // Stored but the server could not read it back.
-                  <span className="text-muted-foreground">{t('deduction_personnummer_unreadable')}</span>
-                )}
+          {/* Underlag (accounted#42): the documents the invoice rests on, in
+              every state, since the question usually comes after it went out. */}
+          {isRealInvoice && !isInvoicer && <InvoiceUnderlagSection invoiceId={invoice.id} canWrite={canWrite} />}
+        </div>
+        <div className="min-w-0 space-y-8">
+          {/* Kund and Detaljer: who it is for, then the facts. */}
+          <div className="space-y-8">
+            <DetailSection kicker={t('customer_card_title')}>
+              {customer ? (
+                <>
+                  <DefRow label={t('def_customer')}>
+                    <Link href={`/customers/${customer.id}`} className="hover:underline">
+                      {customer.name}
+                    </Link>
+                  </DefRow>
+                  {customer.customer_type !== 'individual' && customer.org_number && (
+                    <DefRow label={t('def_org_number')}>
+                      <span className="tabular-nums">{customer.org_number}</span>
+                    </DefRow>
+                  )}
+                  {customer.customer_type !== 'individual' && customer.vat_number && (
+                    <DefRow label={t('def_vat_number')}>{customer.vat_number}</DefRow>
+                  )}
+                  <DefRow label={t('def_email')}>
+                    {customer.email ? (
+                      <a href={`mailto:${customer.email}`} className="break-all hover:underline">
+                        {customer.email}
+                      </a>
+                    ) : (
+                      <DefEmpty />
+                    )}
+                  </DefRow>
+                  {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
+                  <DefRow label={t('def_address')}>
+                    {customer.address_line1 || customer.city ? (
+                      <div>
+                        {customer.address_line1 && <p>{customer.address_line1}</p>}
+                        {customer.address_line2 && <p>{customer.address_line2}</p>}
+                        <p>
+                          {postalPlaceLine(customer)}
+                          {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
+                        </p>
+                      </div>
+                    ) : (
+                      <DefEmpty />
+                    )}
+                  </DefRow>
+                </>
+              ) : (
+                // The customer was deleted while the invoice pointed at it
+                // (crm#263): say so instead of failing the whole page.
+                <DefRow label={t('def_customer')}>
+                  <span className="text-muted-foreground">{t('customer_deleted')}</span>
+                </DefRow>
+              )}
+              {invoice.your_reference && (
+                <DefRow label={t('your_reference_label')}>
+                  {invoice.your_reference.split(',').map((ref) => ref.trim()).join(', ')}
+                </DefRow>
+              )}
+              {invoice.invoice_marking?.trim() && (
+                <DefRow label={t('invoice_marking_label')}>{invoice.invoice_marking.trim()}</DefRow>
+              )}
+            </DetailSection>
+
+            <DetailSection kicker={t('details_card_title')}>
+              {isSelfBilled && (
+                <DefRow label={t('external_number_label')}>
+                  {invoiceDisplayNumber(invoice as Invoice)}
+                </DefRow>
+              )}
+              {isSelfBilled && (invoice as Invoice).self_billing_agreement_ref && (
+                <DefRow label={t('agreement_ref_label')}>
+                  {(invoice as Invoice).self_billing_agreement_ref}
+                </DefRow>
+              )}
+              <DefRow label={t('invoice_date_label')}>
+                <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
               </DefRow>
-              {hasRot && (
-                <DefRow label={t('deduction_property_label')}>
-                  {rotHousing ? (
-                    <span>
-                      {rotHousing}
-                      {rotApartment && (
-                        <span className="text-muted-foreground tabular-nums">
-                          {' · '}{t('deduction_apartment_value', { number: rotApartment })}
+              {isQuote ? (
+                <DefRow label={t('valid_until_label')}>
+                  <span className="tabular-nums">{formatDate(invoice.valid_until ?? invoice.due_date)}</span>
+                </DefRow>
+              ) : (
+                <DefRow label={t('due_date_label')}>
+                  <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
+                </DefRow>
+              )}
+              {/* Debited by Autogiro (frozen at issue): the invoice told the customer so. */}
+              {(invoice as Invoice).autogiro_payer_number && !isQuote && (
+                <DefRow label={t('autogiro_label')}>
+                  <Link href="/invoices/autogiro" className="hover:underline">
+                    {t('autogiro_value', { payer: (invoice as Invoice).autogiro_payer_number ?? '' })}
+                  </Link>
+                </DefRow>
+              )}
+              {/* SEK and domestic 25 % are the norm; the rows show only when the
+                  invoice deviates (the totals block carries the VAT either way). */}
+              {!isLedgerCurrency(invoice.currency) && (
+                <DefRow label={t('currency_label')}>{invoice.currency}</DefRow>
+              )}
+              {invoice.vat_treatment && invoice.vat_treatment !== 'standard_25' && (
+                <DefRow label={t('vat_treatment_label')}>{getVatTreatmentLabel(invoice.vat_treatment)}</DefRow>
+              )}
+              {invoice.our_reference && (
+                <DefRow label={t('our_reference_label')}>
+                  {invoice.our_reference.split(',').map((ref) => ref.trim()).join(', ')}
+                </DefRow>
+              )}
+
+              {/* ROT/RUT (fakturamodellen): the underlag Skatteverket needs and
+                  where the begäran om utbetalning stands, as plain rows. The
+                  amounts live in the totals block; nothing is repeated here. */}
+              {showDeduction && (
+                <>
+                  <DefRow label={t('deduction_personnummer_label')}>
+                    {deductionPersonnummerMasked ? (
+                      <span className="tabular-nums">{deductionPersonnummerMasked}</span>
+                    ) : !invoice.deduction_personnummer_last4 ? (
+                      <span className="text-attn">{t('deduction_personnummer_missing')}</span>
+                    ) : deductionPersonnummerMasked === undefined ? (
+                      // Stored; the mask is still on its way from the server.
+                      // Never print the last four digits meanwhile.
+                      <Skeleton className="h-4 w-24" />
+                    ) : (
+                      // Stored but the server could not read it back.
+                      <span className="text-muted-foreground">{t('deduction_personnummer_unreadable')}</span>
+                    )}
+                  </DefRow>
+                  {(hasRot || hasGronTeknik) && (
+                    <DefRow label={t('deduction_property_label')}>
+                      {rotHousing ? (
+                        <span>
+                          {rotHousing}
+                          {rotApartment && (
+                            <span className="text-muted-foreground tabular-nums">
+                              {' · '}{t('deduction_apartment_value', { number: rotApartment })}
+                            </span>
+                          )}
                         </span>
-                      )}
-                    </span>
-                  ) : rotBrf ? (
-                    <span>
-                      {t('deduction_brf_value', { org: rotBrf })}
-                      {rotApartment && (
-                        <span className="text-muted-foreground tabular-nums">
-                          {' · '}{t('deduction_apartment_value', { number: rotApartment })}
+                      ) : rotBrf ? (
+                        <span>
+                          {t('deduction_brf_value', { org: rotBrf })}
+                          {rotApartment && (
+                            <span className="text-muted-foreground tabular-nums">
+                              {' · '}{t('deduction_apartment_value', { number: rotApartment })}
+                            </span>
+                          )}
                         </span>
+                      ) : (
+                        <span className="text-attn">{t('deduction_housing_missing')}</span>
                       )}
+                    </DefRow>
+                  )}
+                  <DefRow label={t('deduction_status_label')}>
+                    {hasGronTeknik && payoutRequests.length === 0 ? (
+                      // No grön teknik file yet: the payout is requested in
+                      // Skatteverkets e-tjänst. The link opens the figures it
+                      // asks for, on this invoice's row.
+                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="text-muted-foreground">{t('deduction_claim_gron_teknik')}</span>
+                        {skvClaimable && (
+                          <Link
+                            href={`/invoices/rot-rut?new=1&type=gron_teknik&invoice=${invoice.id}`}
+                            className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}
+                          >
+                            {t('deduction_claim_gron_teknik_cta')}
+                          </Link>
+                        )}
+                      </span>
+                    ) : payoutRequests.length === 0 ? (
+                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="text-muted-foreground">{t('deduction_claim_none')}</span>
+                        {skvClaimable && (
+                          <Link href="/invoices?rot-rut=1" className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}>
+                            {t('deduction_claim_cta')}
+                          </Link>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="flex flex-col gap-1 tabular-nums">
+                        {payoutRequests.map((req) => (
+                          <span key={req.id}>
+                            {tInvoices(`rot_rut_status_${req.status}`)}
+                            {' '}
+                            {formatDate(req.decided_at ?? req.submitted_at ?? req.created_at)}
+                            {req.decided_amount !== null &&
+                              ` · ${formatCurrency(req.decided_amount, invoice.currency)}`}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                  </DefRow>
+                </>
+              )}
+
+              {canBookAfterwards && (
+                <DefRow label={t('bookkeeping_label')}>
+                  <span className="flex flex-wrap items-center gap-3">
+                    <span className="text-muted-foreground">
+                      {t(deferInvoiceBooking ? 'not_booked_yet_deferred' : 'not_booked_yet')}
                     </span>
-                  ) : (
-                    <span className="text-attn">{t('deduction_housing_missing')}</span>
+                    {canWrite && (
+                      <Button variant="outline" className="-my-1" onClick={openBookConfirm} loading={isUpdating}>
+                        {t('book_action')}
+                      </Button>
+                    )}
+                  </span>
+                </DefRow>
+              )}
+              {invoice.journal_entry_id && (
+                <DefRow label={t('bookkeeping_label')}>
+                  <Link href={`/bookkeeping/${invoice.journal_entry_id}`} className={ROW_ACTION_CLASS}>
+                    {t('view_voucher')}
+                  </Link>
+                </DefRow>
+              )}
+
+              {/* Related documents as rows, not cards: the credit note that
+                  cancels this invoice, the invoice a credit note cancels, the
+                  proforma this invoice was converted from. */}
+              {creditNote && (
+                <DefRow label={t('def_credit_note')}>
+                  <Link href={`/invoices/${creditNote.id}`} className="hover:underline">
+                    {creditNote.invoice_number ?? statusLabel('draft')}
+                  </Link>
+                  {creditNote.status === 'draft' && creditNote.invoice_number && (
+                    <span className="text-muted-foreground">{' · '}{statusLabel('draft')}</span>
                   )}
                 </DefRow>
               )}
-              <DefRow label={t('deduction_status_label')}>
-                {payoutRequests.length === 0 ? (
-                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="text-muted-foreground">{t('deduction_claim_none')}</span>
-                    {skvClaimable && (
-                      <Link href="/invoices?rot-rut=1" className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}>
-                        {t('deduction_claim_cta')}
-                      </Link>
-                    )}
+              {invoice.credited_invoice_id && originalInvoice && (
+                <DefRow label={t('def_credits')}>
+                  <Link href={`/invoices/${originalInvoice.id}`} className="hover:underline">
+                    {t('title_invoice', { number: originalInvoice.invoice_number ?? '' })}
+                  </Link>
+                </DefRow>
+              )}
+              {refundedAmount > 0 && (
+                <DefRow label={t('def_refunded')}>
+                  <span className="tabular-nums">
+                    {formatCurrency(refundedAmount, invoice.currency)}
+                    {invoice.paid_at ? ` · ${formatDate(invoice.paid_at)}` : ''}
                   </span>
-                ) : (
-                  <span className="flex flex-col gap-1 tabular-nums">
-                    {payoutRequests.map((req) => (
-                      <span key={req.id}>
-                        {tInvoices(`rot_rut_status_${req.status}`)}
-                        {' '}
-                        {formatDate(req.decided_at ?? req.submitted_at ?? req.created_at)}
-                        {req.decided_amount !== null &&
-                          ` · ${formatCurrency(req.decided_amount, invoice.currency)}`}
+                </DefRow>
+              )}
+              {refundPlan?.ok && refundedAmount > 0 && (
+                <DefRow label={t('def_refund_owed')}>
+                  <span className="tabular-nums">{formatCurrency(refundPlan.owed, invoice.currency)}</span>
+                </DefRow>
+              )}
+              {convertedFromInvoice && (
+                <DefRow label={t('def_converted_from')}>
+                  <Link href={`/invoices/${convertedFromInvoice.id}`} className="hover:underline">
+                    {t(convertedFromInvoice.document_type === 'quote' ? 'title_quote' : 'title_proforma', {
+                      number: convertedFromInvoice.invoice_number ?? '',
+                    })}
+                  </Link>
+                </DefRow>
+              )}
+              {isQuote && quoteProgress && quoteInvoices.length > 0 && (
+                <DefRow label={t('def_invoiced')}>
+                  <span className="tabular-nums">
+                    {t('def_quote_invoiced_progress', {
+                      invoiced: formatCurrency(quoteProgress.invoiced, invoice.currency),
+                      total: formatCurrency(quoteProgress.quoteSubtotal, invoice.currency),
+                    })}
+                    {': '}
+                    {quoteInvoices.map((row, index) => (
+                      <span key={row.id}>
+                        {index > 0 && ', '}
+                        <Link href={`/invoices/${row.id}`} className="hover:underline">
+                          {t('title_invoice', { number: row.invoice_number ?? '' })}
+                        </Link>
                       </span>
                     ))}
                   </span>
-                )}
-              </DefRow>
-            </>
-          )}
-
-          {canBookAfterwards && (
-            <DefRow label={t('bookkeeping_label')}>
-              <span className="flex flex-wrap items-center gap-3">
-                <span className="text-muted-foreground">{t('not_booked_yet')}</span>
-                {canWrite && (
-                  <Button size="sm" variant="outline" className="-my-1" onClick={openBookConfirm} disabled={isUpdating}>
-                    {isUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    {t('book_action')}
-                  </Button>
-                )}
-              </span>
-            </DefRow>
-          )}
-          {invoice.journal_entry_id && (
-            <DefRow label={t('bookkeeping_label')}>
-              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <Link href={`/bookkeeping/${invoice.journal_entry_id}`} className={ROW_ACTION_CLASS}>
-                  {t('view_voucher')}
-                </Link>
-                {canWrite && (
-                  <CorrectionAffordance
-                    journalEntryId={invoice.journal_entry_id}
-                    onCorrected={fetchInvoice}
-                  >
-                    {({ open, isLoading }) => (
-                      <button
-                        type="button"
-                        onClick={open}
-                        disabled={isLoading}
-                        className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
-                      >
-                        {isLoading ? t('correction_loading') : t('correction_prompt')}
-                      </button>
-                    )}
-                  </CorrectionAffordance>
-                )}
-              </span>
-            </DefRow>
-          )}
-
-          {/* Related documents as rows, not cards: the credit note that
-              cancels this invoice, the invoice a credit note cancels, the
-              proforma this invoice was converted from. */}
-          {creditNote && (
-            <DefRow label={t('def_credit_note')}>
-              <Link href={`/invoices/${creditNote.id}`} className="hover:underline">
-                {creditNote.invoice_number ?? statusLabel('draft')}
-              </Link>
-              {creditNote.status === 'draft' && creditNote.invoice_number && (
-                <span className="text-muted-foreground">{' · '}{statusLabel('draft')}</span>
+                </DefRow>
               )}
-            </DefRow>
-          )}
-          {invoice.credited_invoice_id && originalInvoice && (
-            <DefRow label={t('def_credits')}>
-              <Link href={`/invoices/${originalInvoice.id}`} className="hover:underline">
-                {t('title_invoice', { number: originalInvoice.invoice_number ?? '' })}
-              </Link>
-            </DefRow>
-          )}
-          {convertedFromInvoice && (
-            <DefRow label={t('def_converted_from')}>
-              <Link href={`/invoices/${convertedFromInvoice.id}`} className="hover:underline">
-                {t(convertedFromInvoice.document_type === 'quote' ? 'title_quote' : 'title_proforma', {
-                  number: convertedFromInvoice.invoice_number ?? '',
-                })}
-              </Link>
-            </DefRow>
-          )}
-          {isQuote && quoteInvoice && (
-            <DefRow label={t('def_invoiced')}>
-              <Link href={`/invoices/${quoteInvoice.id}`} className="hover:underline">
-                {t('title_invoice', { number: quoteInvoice.invoice_number ?? '' })}
-              </Link>
-            </DefRow>
-          )}
-          {isQuote && quoteOrder && (
-            <DefRow label={t('def_sales_order')}>
-              <Link href={`/sales-orders/${quoteOrder.id}`} className="hover:underline">
-                {quoteOrder.order_number ?? t('open_sales_order')}
-              </Link>
-            </DefRow>
-          )}
-          {invoice.sales_order_id && (
-            <DefRow label={t('def_sales_order')}>
-              <Link href={`/sales-orders/${invoice.sales_order_id}`} className="hover:underline">
-                {t('open_sales_order')}
-              </Link>
-            </DefRow>
-          )}
-        </DetailSection>
-      </div>
-
-      {/* Invoice lines: the list-page table idiom straight on the panel, with
-          the totals as a right-aligned block and the amount due in the serif. */}
-      <DetailSection kicker={t('items_card_title')}>
-        <table className="hidden w-full border-collapse text-[13px] sm:table">
-          <thead>
-            <tr>
-              <th className={cn(TH_CLASS, 'pl-0')}>{t('th_description')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('th_quantity')}</th>
-              <th className={TH_CLASS}>{t('th_unit')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('th_unit_price')}</th>
-              <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('th_amount')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoice.items.map((item) =>
-              isTextLikeLine(item) ? (
-                <tr key={item.id}>
-                  <td colSpan={5} className={cn(TD_CLASS, 'whitespace-pre-line pl-0 pr-0 text-muted-foreground')}>
-                    {item.description || ' '}
-                  </td>
-                </tr>
-              ) : (
-                <tr key={item.id}>
-                  <td className={cn(TD_CLASS, 'whitespace-pre-line pl-0')}>
-                    {item.description}
-                    {lineSubInfo(item)}
-                  </td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
-                  <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                    {formatCurrency(item.unit_price, invoice.currency)}
-                  </td>
-                  <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
-                    {formatCurrency(item.line_total, invoice.currency)}
-                  </td>
-                </tr>
-              )
-            )}
-          </tbody>
-        </table>
-
-        {/* Mobile: one flat row per line, no numeric columns to cram. */}
-        <div className="divide-y divide-border text-sm sm:hidden">
-          {invoice.items.map((item) =>
-            isTextLikeLine(item) ? (
-              <p key={item.id} className="whitespace-pre-line py-3 text-muted-foreground">{item.description || ' '}</p>
-            ) : (
-              <div key={item.id} className="flex items-start justify-between gap-4 py-3">
-                <div className="min-w-0">
-                  <p className="whitespace-pre-line">{item.description}</p>
-                  <p className="text-xs text-muted-foreground tabular-nums">
-                    {item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}
-                  </p>
-                  {lineSubInfo(item)}
-                </div>
-                <span className="shrink-0 tabular-nums">
-                  {formatCurrency(item.line_total, invoice.currency)}
-                </span>
-              </div>
-            )
-          )}
-        </div>
-
-        <div className="ml-auto mt-4 w-full max-w-xs space-y-1 text-sm tabular-nums">
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground">{t('subtotal')}</span>
-            <span>{formatCurrency(invoice.subtotal, invoice.currency)}</span>
+              {isQuote && quoteOrder && (
+                <DefRow label={t('def_sales_order')}>
+                  <Link href={`/sales-orders/${quoteOrder.id}`} className="hover:underline">
+                    {quoteOrder.order_number ?? t('open_sales_order')}
+                  </Link>
+                </DefRow>
+              )}
+              {invoice.sales_order_id && (
+                <DefRow label={t('def_sales_order')}>
+                  <Link href={`/sales-orders/${invoice.sales_order_id}`} className="hover:underline">
+                    {t('open_sales_order')}
+                  </Link>
+                </DefRow>
+              )}
+            </DetailSection>
           </div>
-          {vatRows.map((row) => (
-            <div key={row.key} className="flex justify-between gap-4">
-              <span className="text-muted-foreground">{row.label}</span>
-              <span>{formatCurrency(row.amount, invoice.currency)}</span>
-            </div>
-          ))}
-          {rounding.applies && (
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">{t('ore_rounding')}</span>
-              <span>{formatCurrency(rounding.roundingDelta, 'SEK')}</span>
-            </div>
-          )}
-          {/* ROT/RUT (fakturamodellen): the invoice total stands, the
-              deduction is shown as a reduction and the headline becomes what
-              the customer actually pays, exactly as on the PDF and in the
-              invoice email. */}
-          {showDeduction ? (
-            <>
-              <div className="flex justify-between gap-4">
-                <span className="text-muted-foreground">{t('total')}</span>
-                <span>{formatCurrency(rounding.displayed, invoice.currency)}</span>
-              </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-muted-foreground">{t('deduction_row', { kind: deductionKindLabel })}</span>
-                <span>{formatCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency)}</span>
-              </div>
-              {/* Skatteverket refused (part of) the deduction and the reclaim
-                  voucher moved it back onto the customer: the printed
-                  deduction stands, the refused share is the customer's again. */}
-              {(invoice.deduction_reclaimed_total ?? 0) > 0 && (
-                <div className="flex justify-between gap-4">
-                  <span className="text-muted-foreground">{t('deduction_reclaimed_row')}</span>
-                  <span>{formatCurrency(Math.abs(invoice.deduction_reclaimed_total ?? 0), invoice.currency)}</span>
-                </div>
-              )}
-              <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2">
-                <span>{t('amount_to_pay')}</span>
-                <span className="font-display text-xl">
+
+          {/* Payment: shown for paid and partially paid alike, so a partly paid
+              invoice always exposes paid / remaining and the payment events. */}
+          {(invoice.status === 'paid' || invoice.status === 'partially_paid') && (
+            <DetailSection
+              kicker={t('payment_section')}
+              aside={
+                invoice.status === 'paid' && invoice.paid_at ? (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {t('paid_received_at', { date: formatDate(invoice.paid_at) })}
+                  </span>
+                ) : undefined
+              }
+            >
+              <DefRow label={t('payment_status_paid_label')}>
+                <span className="tabular-nums">{formatCurrency(invoice.paid_amount ?? 0, invoice.currency)}</span>
+              </DefRow>
+              <DefRow label={t('payment_status_remaining_label')}>
+                <span className={cn('tabular-nums', invoice.status === 'partially_paid' && 'text-attn')}>
                   {formatCurrency(
-                    Math.round((amountToPay.toPay + Math.abs(invoice.deduction_reclaimed_total ?? 0)) * 100) / 100,
+                    invoice.remaining_amount ??
+                      Math.max(0, invoice.total - (invoice.paid_amount ?? 0)),
                     invoice.currency,
                   )}
                 </span>
-              </div>
-            </>
-          ) : (
-            <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2">
-              <span>{t('total')}</span>
-              <span className="font-display text-xl">{formatCurrency(rounding.displayed, invoice.currency)}</span>
-            </div>
-          )}
-          {invoice.currency !== 'SEK' && invoice.total_sek && (
-            <div className="flex justify-between gap-4 text-muted-foreground">
-              <span>{t('in_sek', { rate: invoice.exchange_rate ?? 1 })}</span>
-              <span>{formatCurrency(invoice.total_sek)}</span>
-            </div>
-          )}
-        </div>
-      </DetailSection>
-
-      {(invoice.notes || invoice.reverse_charge_text) && (
-        <DetailSection kicker={t('notes_card_title')}>
-          {invoice.reverse_charge_text && (
-            <DefRow label={t('reverse_charge_label')}>
-              <span className="text-muted-foreground">{invoice.reverse_charge_text}</span>
-            </DefRow>
-          )}
-          {invoice.notes && (
-            <p className="py-2 text-sm text-muted-foreground whitespace-pre-wrap">{invoice.notes}</p>
-          )}
-        </DetailSection>
-      )}
-
-      {/* Payment: shown for paid and partially paid alike, so a partly paid
-          invoice always exposes paid / remaining and the payment events. */}
-      {(invoice.status === 'paid' || invoice.status === 'partially_paid') && (
-        <DetailSection
-          kicker={t('payment_section')}
-          aside={
-            invoice.status === 'paid' && invoice.paid_at ? (
-              <span className="text-[11px] tabular-nums text-muted-foreground">
-                {t('paid_received_at', { date: formatDate(invoice.paid_at) })}
-              </span>
-            ) : undefined
-          }
-        >
-          <DefRow label={t('payment_status_paid_label')}>
-            <span className="tabular-nums">{formatCurrency(invoice.paid_amount ?? 0, invoice.currency)}</span>
-          </DefRow>
-          <DefRow label={t('payment_status_remaining_label')}>
-            <span className={cn('tabular-nums', invoice.status === 'partially_paid' && 'text-attn')}>
-              {formatCurrency(
-                invoice.remaining_amount ??
-                  Math.max(0, invoice.total - (invoice.paid_amount ?? 0)),
-                invoice.currency,
+              </DefRow>
+              <DefRow label={t('payment_status_payments_heading')} className="items-baseline">
+                {paymentGap.kind === 'settled_before_accounted' ? (
+                  // Migrated in as paid: the payment is in the previous system's
+                  // books, so there is nothing to register here. One dated line;
+                  // "inga registrerade ännu" read as still unpaid under a paid
+                  // header (#2213).
+                  <span className="text-muted-foreground">
+                    {!paymentGap.full
+                      ? t('payment_status_partial_before_migration')
+                      : paymentGap.paid_at
+                        ? t('payment_status_before_migration', { date: formatDate(paymentGap.paid_at) })
+                        : t('payment_status_before_migration_undated')}
+                  </span>
+                ) : paymentGap.kind === 'unreadable' ? (
+                  <span className="text-muted-foreground">{t('payment_status_unavailable')}</span>
+                ) : (
+                  <ul className="divide-y divide-border">
+                    {paymentHistory.map((p) => {
+                      const voucherLabel =
+                        p.voucher_series && p.voucher_number != null
+                          ? formatVoucher(p)
+                          : null
+                      return (
+                        <li key={p.id} className="flex items-center gap-4 py-1.5 first:pt-0 last:pb-0">
+                          <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
+                          {p.amount != null && (
+                            <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
+                          )}
+                          {'setoff' in p && p.setoff ? (
+                            <span className="text-xs text-muted-foreground">{t('payment_status_setoff')}</span>
+                          ) : null}
+                          {p.journal_entry_id && voucherLabel ? (
+                            <Link
+                              href={`/bookkeeping/${p.journal_entry_id}`}
+                              className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline tabular-nums"
+                            >
+                              {t('payment_status_view_voucher', { label: voucherLabel })}
+                            </Link>
+                          ) : (
+                            <span className="ml-auto text-xs text-muted-foreground">
+                              {t('payment_status_view_voucher_unlinked')}
+                            </span>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </DefRow>
+              {/* Betalningsbekräftelse (#1693): a fresh BETALD render the customer
+                  can be handed. It belongs to the payment, not the invoice, and
+                  is a different document from the archived original. */}
+              {canSendPaymentConfirmation && (
+                <DefRow label={t('payment_confirmation_label')}>
+                  <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <button
+                      type="button"
+                      onClick={downloadPaymentConfirmation}
+                      disabled={isDownloadingConfirmation}
+                      title={t('payment_confirmation_hint')}
+                      className={cn(ROW_ACTION_CLASS, 'inline-flex items-center gap-1')}
+                    >
+                      {isDownloadingConfirmation && <SpinnerIcon className="h-3 w-3 animate-spin" />}
+                      {t('payment_confirmation_download_short')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmationSendDialog(true)}
+                      disabled={!canWrite || !customerHasEmail || !canEmail}
+                      title={
+                        !canWrite
+                          ? t('viewer_disabled_tooltip')
+                          : !customerHasEmail
+                            ? t('payment_confirmation_no_email')
+                            : t('payment_confirmation_hint')
+                      }
+                      className={ROW_ACTION_CLASS}
+                    >
+                      {t('payment_confirmation_send_short')}
+                    </button>
+                  </span>
+                </DefRow>
               )}
-            </span>
-          </DefRow>
-          <DefRow label={t('payment_status_payments_heading')} className="items-baseline">
-            {paymentGap.kind === 'settled_before_accounted' ? (
-              // Migrated in as paid: the payment is in the previous system's
-              // books, so there is nothing to register here. One dated line;
-              // "inga registrerade ännu" read as still unpaid under a paid
-              // header (#2213).
-              <span className="text-muted-foreground">
-                {!paymentGap.full
-                  ? t('payment_status_partial_before_migration')
-                  : paymentGap.paid_at
-                    ? t('payment_status_before_migration', { date: formatDate(paymentGap.paid_at) })
-                    : t('payment_status_before_migration_undated')}
-              </span>
-            ) : paymentGap.kind === 'unreadable' ? (
-              <span className="text-muted-foreground">{t('payment_status_unavailable')}</span>
-            ) : (
-              <ul className="divide-y divide-border">
-                {paymentHistory.map((p) => {
-                  const voucherLabel =
-                    p.voucher_series && p.voucher_number != null
-                      ? `${p.voucher_series}-${p.voucher_number}`
-                      : null
-                  return (
-                    <li key={p.id} className="flex items-center gap-4 py-1.5 first:pt-0 last:pb-0">
-                      <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
-                      {p.amount != null && (
-                        <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
-                      )}
-                      {p.journal_entry_id && voucherLabel ? (
-                        <Link
-                          href={`/bookkeeping/${p.journal_entry_id}`}
-                          className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline tabular-nums"
-                        >
-                          {t('payment_status_view_voucher', { label: voucherLabel })}
-                        </Link>
-                      ) : (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {t('payment_status_view_voucher_unlinked')}
-                        </span>
+            </DetailSection>
+          )}
+
+          <CustomerLossNote view={customerLoss.view} />
+
+          {collectionCase && collection.data && !collectionCaseOnTop && (
+            <CollectionCaseCard
+              invoiceId={invoice.id}
+              view={collectionCase}
+              availability={collection.data.availability}
+              withdrawFee={collection.data.withdrawFee}
+              invoiceStatus={invoice.status}
+              canWrite={canWrite}
+              onChanged={collection.setCase}
+              onRefresh={collection.reload}
+              onOpenHandover={() => setShowCollectionDialog(true)}
+            />
+          )}
+
+          {/* Only when there is something to say: reminders were sent, or the
+              invoice is owed and automatic reminders actually run (product
+              switch and company toggle, remindersActiveFor) or collections
+              speaks for them. A card that only says "avstängda" is noise. */}
+          {(reminders.length > 0 ||
+            (isInvoiceOwed(invoice) &&
+              (autoRemindersEnabled === true || collectionRemindersAside !== null))) && (
+            <DetailSection
+              kicker={t('reminders_card_title')}
+              aside={
+                collectionRemindersAside ? (
+                  <span className="text-xs text-muted-foreground">{collectionRemindersAside}</span>
+                ) : autoRemindersEnabled === false ? (
+                  <span className="text-xs text-muted-foreground">{t('reminders_disabled_aside')}</span>
+                ) : reminderLadder?.on ? (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {reminderLadder.follows
+                      ? t('reminders_schedule_aside', {
+                          day1: reminderLadder.days[0],
+                          day2: reminderLadder.days[1],
+                          day3: reminderLadder.days[2],
+                        })
+                      : tReminders('invoice_not_in_ladder')}
+                  </span>
+                ) : undefined
+              }
+            >
+              {reminders.length > 0 ? (
+                <ul className="divide-y divide-border text-sm">
+                  {reminders.map((reminder) => (
+                    <li key={reminder.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
+                      <span className="tabular-nums text-muted-foreground">{formatDate(reminder.sent_at)}</span>
+                      <span>{reminderLevelLabel(reminder.reminder_level as 1 | 2 | 3)}</span>
+                      <span className="min-w-0 truncate text-muted-foreground">{reminder.email_to}</span>
+                      {/* Chips mark exceptions: an objection is the deviation;
+                          "kunden markerat som betald" reads as muted text. */}
+                      {reminder.response_type === 'disputed' ? (
+                        <Badge variant="destructive" className="ml-auto">{t('reminder_objection')}</Badge>
+                      ) : reminder.response_type === 'marked_paid' ? (
+                        <span className="ml-auto text-xs text-muted-foreground">{t('reminder_marked_paid')}</span>
+                      ) : null}
+                      {/* The customer's own words from the answer page; data-ph-mask: user data. */}
+                      {reminder.response_note && (
+                        <p className="w-full whitespace-pre-line text-xs text-muted-foreground" data-ph-mask="">
+                          {t('reminder_customer_note', { note: reminder.response_note })}
+                        </p>
                       )}
                     </li>
-                  )
-                })}
-              </ul>
-            )}
-          </DefRow>
-          {/* Betalningsbekräftelse (#1693): a fresh BETALD render the customer
-              can be handed. It belongs to the payment, not the invoice, and
-              is a different document from the archived original. */}
-          {canSendPaymentConfirmation && (
-            <DefRow label={t('payment_confirmation_label')}>
-              <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-muted-foreground">{t('reminders_empty')}</p>
+              )}
+            </DetailSection>
+          )}
+
+          {/* The legacy empty state asserts "sent before delivery history
+              existed". A failed read produces the same empty list, so that
+              claim would be a guess: say what actually happened instead. */}
+          {latestPeppolDelivery && (
+            <DetailSection kicker={t('peppol_status_title')}>
+              <DefRow label={t('peppol_status_recipient')}>
+                <span className="tabular-nums">
+                  {latestPeppolDelivery.recipient_scheme}:{latestPeppolDelivery.recipient_identifier}
+                </span>
+              </DefRow>
+              <DefRow label={t('peppol_status_label')}>
+                <span>{peppolStatusLabel(latestPeppolDelivery.status)}</span>
+                {latestPeppolDelivery.status_detail && (
+                  <span className="block text-xs text-muted-foreground">
+                    {latestPeppolDelivery.status_detail}
+                  </span>
+                )}
+              </DefRow>
+              <DefRow label={t('peppol_status_updated')}>
+                <span className="tabular-nums">{formatDate(latestPeppolDelivery.status_at)}</span>
+              </DefRow>
+            </DetailSection>
+          )}
+
+          {isRealInvoice && !isSelfBilled && deliveriesUnreadable && (
+            <DetailSection kicker={t('delivery_history_title')}>
+              <p className="text-sm text-muted-foreground">
+                {t('delivery_history_unreadable_description')}{' '}
                 <button
                   type="button"
-                  onClick={downloadPaymentConfirmation}
-                  disabled={isDownloadingConfirmation}
-                  title={t('payment_confirmation_hint')}
-                  className={cn(ROW_ACTION_CLASS, 'inline-flex items-center gap-1')}
+                  onClick={() => void retryLoadDeliveries()}
+                  className={cn(ROW_ACTION_CLASS, 'text-foreground')}
                 >
-                  {isDownloadingConfirmation && <Loader2 className="h-3 w-3 animate-spin" />}
-                  {t('payment_confirmation_download_short')}
+                  {t('delivery_history_unreadable_retry')}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmationSendDialog(true)}
-                  disabled={!canWrite || !customerHasEmail || !canEmail}
-                  title={
-                    !canWrite
-                      ? t('viewer_disabled_tooltip')
-                      : !customerHasEmail
-                        ? t('payment_confirmation_no_email')
-                        : t('payment_confirmation_hint')
-                  }
-                  className={ROW_ACTION_CLASS}
-                >
-                  {t('payment_confirmation_send_short')}
-                </button>
-              </span>
-            </DefRow>
+              </p>
+            </DetailSection>
           )}
-        </DetailSection>
-      )}
 
-      {(invoice.status === 'sent' || invoice.status === 'overdue' || reminders.length > 0) && (
-        <DetailSection
-          kicker={t('reminders_card_title')}
-          aside={
-            autoRemindersEnabled !== null ? (
-              <span className="text-[11px] tabular-nums text-muted-foreground">
-                {autoRemindersEnabled
-                  ? t('reminders_schedule_aside', {
-                      day1: reminderDays[0],
-                      day2: reminderDays[1],
-                      day3: reminderDays[2],
-                    })
-                  : t('reminders_disabled_aside')}
-              </span>
-            ) : undefined
-          }
-        >
-          {reminders.length > 0 ? (
-            <ul className="divide-y divide-border text-sm">
-              {reminders.map((reminder) => (
-                <li key={reminder.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
-                  <span className="tabular-nums text-muted-foreground">{formatDate(reminder.sent_at)}</span>
-                  <span>{reminderLevelLabel(reminder.reminder_level as 1 | 2 | 3)}</span>
-                  <span className="min-w-0 truncate text-muted-foreground">{reminder.email_to}</span>
-                  {/* Chips mark exceptions: an objection is the deviation;
-                      "kunden markerat som betald" reads as muted text. */}
-                  {reminder.response_type === 'disputed' ? (
-                    <Badge variant="destructive" className="ml-auto">{t('reminder_objection')}</Badge>
-                  ) : reminder.response_type === 'marked_paid' ? (
-                    <span className="ml-auto text-xs text-muted-foreground">{t('reminder_marked_paid')}</span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">{t('reminders_empty')}</p>
+          {isRealInvoice && !isSelfBilled && !deliveriesUnreadable && (
+            <InvoiceDeliveryHistory
+              deliveries={deliveries}
+              pdfThroughInvoiceId={isInvoicer ? invoice.id : undefined}
+              mailboxDispatches={mailboxView.dispatches}
+              showLegacyEmptyState={[
+                'sent',
+                'paid',
+                'partially_paid',
+                'overdue',
+                'credited',
+              ].includes(invoice.status)}
+            />
           )}
-        </DetailSection>
-      )}
-
-      {/* The legacy empty state asserts "sent before delivery history
-          existed". A failed read produces the same empty list, so that
-          claim would be a guess: say what actually happened instead. */}
-      {latestPeppolDelivery && (
-        <DetailSection kicker={t('peppol_status_title')}>
-          <DefRow label={t('peppol_status_recipient')}>
-            <span className="tabular-nums">
-              {latestPeppolDelivery.recipient_scheme}:{latestPeppolDelivery.recipient_identifier}
-            </span>
-          </DefRow>
-          <DefRow label={t('peppol_status_label')}>
-            <span>{peppolStatusLabel(latestPeppolDelivery.status)}</span>
-            {latestPeppolDelivery.status_detail && (
-              <span className="block text-xs text-muted-foreground">
-                {latestPeppolDelivery.status_detail}
-              </span>
-            )}
-          </DefRow>
-          <DefRow label={t('peppol_status_updated')}>
-            <span className="tabular-nums">{formatDate(latestPeppolDelivery.status_at)}</span>
-          </DefRow>
-        </DetailSection>
-      )}
-
-      {isRealInvoice && !isSelfBilled && deliveriesUnreadable && (
-        <DetailSection kicker={t('delivery_history_title')}>
-          <p className="text-sm text-muted-foreground">
-            {t('delivery_history_unreadable_description')}{' '}
-            <button
-              type="button"
-              onClick={() => void retryLoadDeliveries()}
-              className={cn(ROW_ACTION_CLASS, 'text-foreground')}
-            >
-              {t('delivery_history_unreadable_retry')}
-            </button>
-          </p>
-        </DetailSection>
-      )}
-
-      {isRealInvoice && !isSelfBilled && !deliveriesUnreadable && (
-        <InvoiceDeliveryHistory
-          deliveries={deliveries}
-          showLegacyEmptyState={[
-            'sent',
-            'paid',
-            'partially_paid',
-            'overdue',
-            'credited',
-          ].includes(invoice.status)}
-        />
-      )}
+        </div>
+      </div>
 
       {/* Remove/cancel confirmation. An unissued credit-note draft and an
           unnumbered invoice draft are hard deleted; other numbered drafts are
           retained as cancelled to preserve their number series. */}
+      {collection.data && (
+        <SendToCollectionDialog
+          invoiceId={invoice.id}
+          invoiceNumber={invoice.invoice_number}
+          currency={invoice.currency}
+          open={showCollectionDialog}
+          onOpenChange={(next) => {
+            setShowCollectionDialog(next)
+            if (!next) setCollectionCheckKey((k) => k + 1)
+          }}
+          availability={collection.data.availability}
+          onDone={collection.setCase}
+        />
+      )}
+
+      {/* After a send the invoice is read again: the Påminnelser card lists sent reminders. */}
+      {showReminderItem && company && (
+        <SendReminderDialog
+          invoiceId={invoice.id}
+          companyId={company.id}
+          canWrite={canWrite}
+          open={showReminderDialog}
+          onOpenChange={setShowReminderDialog}
+          onSent={() => void fetchInvoice()}
+        />
+      )}
+
+      {customerLoss.view && showCustomerLossItem && (
+        <CustomerLossDialog
+          invoiceId={invoice.id}
+          invoiceNumber={invoice.invoice_number}
+          view={customerLoss.view}
+          providerName={collectionWords.provider}
+          today={todayIsoStockholm()}
+          open={showLossDialog}
+          onOpenChange={setShowLossDialog}
+          onDone={() => {
+            void fetchInvoice()
+            void customerLoss.refresh()
+          }}
+        />
+      )}
+      {customerLoss.view?.recovery && showRecoveryItem && (
+        <RecoveredLossDialog
+          invoiceId={invoice.id}
+          invoiceNumber={invoice.invoice_number}
+          left={customerLoss.view.recovery.left}
+          today={todayIsoStockholm()}
+          open={showRecoveryDialog}
+          onOpenChange={setShowRecoveryDialog}
+          onDone={() => {
+            void fetchInvoice()
+            void customerLoss.refresh()
+          }}
+        />
+      )}
+
       {/* Peppol send confirmation (convention 10: confirm up front). */}
+      {usageCharge && (
+        <UsageLimitDialog
+          kind={usageCharge.kind}
+          included={usageCharge.included}
+          unitPriceOre={usageCharge.unitPriceOre}
+          open
+          onOpenChange={(open) => {
+            if (!open) setUsageCharge(null)
+          }}
+        />
+      )}
       <Dialog open={showPeppolSendDialog} onOpenChange={setShowPeppolSendDialog}>
         <DialogContent>
           <DialogHeader>
@@ -2702,6 +3663,24 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('peppol_send_confirm_description', { recipient: peppolRecipientLabel })}
             </DialogDescription>
           </DialogHeader>
+          {peppolTextRowsLeftOut > 0 && (
+            <AttnLine
+              action={isEditableDraft && canWrite
+                ? { label: t('edit_draft'), href: `/invoices/${invoice.id}/edit` }
+                : undefined}
+            >
+              {t('peppol_send_text_rows_left_out', { count: peppolTextRowsLeftOut })}
+            </AttnLine>
+          )}
+          {/* Bilagor ride inside the e-faktura on a draft (crm#1545). */}
+          {canWrite && offersInvoiceAttachments({ channel: 'peppol', status: invoice.status, isSandbox, canEmail, invoicer: isInvoicer }) && (
+            <InvoiceAttachmentsSection
+              target={{ kind: 'invoice', invoiceId: invoice.id }}
+              channel="peppol"
+              disabled={isSendingPeppol}
+              onBusyChange={setPeppolAttachmentsBusy}
+            />
+          )}
           <DialogFooter>
             <Button
               variant="outline"
@@ -2710,9 +3689,54 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             >
               {t('delete_dialog_cancel')}
             </Button>
-            <Button onClick={() => void sendViaPeppol()} disabled={isSendingPeppol}>
-              {isSendingPeppol && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button
+              onClick={() => void sendViaPeppol()}
+              loading={isSendingPeppol}
+              disabled={peppolAttachmentsBusy}
+            >
               {isSendingPeppol ? t('peppol_sending') : t('peppol_send_confirm_action')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Kivra/Billo send confirmation (convention 10: confirm up front). */}
+      <Dialog
+        open={mailboxConfirmProvider !== null}
+        onOpenChange={(open) => {
+          if (!open && !isSendingMailbox) setMailboxConfirmProvider(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('mailbox_send_confirm_title', { provider: mailboxConfirmName })}</DialogTitle>
+            <DialogDescription>
+              {t(
+                invoice.status !== 'draft'
+                  ? 'mailbox_send_confirm_issued'
+                  : issuesByBooking
+                    ? 'mailbox_send_confirm_draft_book'
+                    : 'mailbox_send_confirm_draft',
+                { provider: mailboxConfirmName },
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setMailboxConfirmProvider(null)}
+              disabled={isSendingMailbox}
+            >
+              {t('delete_dialog_cancel')}
+            </Button>
+            <Button
+              onClick={() => {
+                if (mailboxConfirmProvider) void sendToMailbox(mailboxConfirmProvider)
+              }}
+              loading={isSendingMailbox}
+              disabled={!canWrite}
+            >
+              {t('send_via_mailbox', { provider: mailboxConfirmName })}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2722,14 +3746,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {isCreditNote
+              {invoice.credited_invoice_id
                 ? t('remove_credit_dialog_title')
                 : invoice.invoice_number
                   ? t('delete_dialog_title')
                   : t('remove_dialog_title')}
             </DialogTitle>
             <DialogDescription>
-              {isCreditNote ? (
+              {invoice.credited_invoice_id ? (
                 t('remove_credit_dialog_desc')
               ) : invoice.invoice_number ? (
                 <>
@@ -2752,9 +3776,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={isDeleting}>
               {t('delete_dialog_cancel')}
             </Button>
-            <Button variant="destructive" onClick={deleteInvoice} disabled={isDeleting}>
-              {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {isCreditNote
+            <Button variant="destructive" onClick={deleteInvoice} loading={isDeleting}>
+              {invoice.credited_invoice_id
                 ? t('remove_credit_dialog_confirm')
                 : invoice.invoice_number
                   ? t('delete_dialog_confirm')
@@ -2772,19 +3795,30 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <DialogTitle>{t('finalize_dialog_title')}</DialogTitle>
             <DialogDescription>{t('finalize_dialog_desc')}</DialogDescription>
           </DialogHeader>
-          {nextNumberPreview && (
-            <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/40 px-4 py-3">
+          {(seriesContinuation?.number ?? nextNumberPreview) && (
+            <div className="flex items-center justify-between rounded-lg bg-secondary/40 px-4 py-3 bg-control shadow-raised">
               <span className="text-sm text-muted-foreground">{t('finalize_dialog_number_label')}</span>
-              <span className="text-base font-medium tabular-nums">{nextNumberPreview}</span>
+              <span className="text-base font-medium tabular-nums">
+                {seriesContinuation?.number ?? nextNumberPreview}
+              </span>
             </div>
+          )}
+          {seriesContinuation && (
+            <AttnLine>
+              {t('finalize_series_continues', {
+                highest: seriesContinuation.highest,
+                number: seriesContinuation.number,
+              })}
+            </AttnLine>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowFinalizeDialog(false)} disabled={isFinalizing}>
               {t('finalize_dialog_cancel')}
             </Button>
-            <Button onClick={finalizeInvoice} disabled={isFinalizing}>
-              {isFinalizing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {t('finalize_dialog_confirm')}
+            <Button onClick={finalizeInvoice} loading={isFinalizing}>
+              {seriesContinuation
+                ? t('finalize_dialog_confirm_continue', { number: seriesContinuation.number })
+                : t('finalize_dialog_confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2813,12 +3847,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 : t(issuesByBooking ? 'draft_download_book_desc' : 'draft_download_send_desc')}
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter className="sm:flex-wrap sm:gap-2 sm:space-x-0">
             <Button variant="outline" onClick={() => setDraftDownloadPrompt(null)}>
               {tCommon('cancel')}
             </Button>
             <Button
-              variant={draftDownloadPrompt === 'offer_issue' && canWrite ? 'secondary' : 'default'}
+              variant={draftDownloadPrompt === 'offer_issue' && canWrite ? 'outline' : 'default'}
               onClick={() => {
                 setDraftDownloadPrompt(null)
                 // Honour what was asked for: open the viewer, or save the file.
@@ -2878,7 +3912,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('pdf_archive_issue_cancel')}
             </Button>
             <Button
-              variant="secondary"
+              variant="outline"
               onClick={downloadRerenderAnyway}
               disabled={isDownloading}
             >
@@ -2886,20 +3920,36 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 ? t('pdf_archive_issue_rerender_preview')
                 : t('pdf_archive_issue_rerender')}
             </Button>
-            <Button onClick={retryArchivedDownload} disabled={isDownloading}>
-              {isDownloading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={retryArchivedDownload} loading={isDownloading}>
               {t('pdf_archive_issue_retry')}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
+      {refundPlan?.ok && (
+        <RefundCreditNoteDialog
+          open={showRefundDialog}
+          onOpenChange={setShowRefundDialog}
+          creditNote={invoice}
+          owed={refundPlan.owed}
+          onSuccess={() => {
+            fetchInvoice()
+            toast({
+              title: t('refund_toast_title'),
+              description: t('refund_toast_description', { number: invoice.invoice_number ?? '' }),
+            })
+          }}
+        />
+      )}
       <PaymentBookingDialog
         open={showPaymentDialog}
         onOpenChange={setShowPaymentDialog}
         invoice={invoice}
         onSuccess={() => {
           fetchInvoice()
+          // The collection case card shows the provider's amounts: read them again once the payment is reported.
+          void collection.reloadAfterPayment()
           toast({
             title: t('paid_toast_title'),
             description: t('paid_toast_description', { number: invoice.invoice_number ?? '' }),
@@ -2936,6 +3986,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           }
         />
       )}
+
+      {accrualSchedules.replanDialog}
 
       {/* Confirm-before-posting (convention 10): booking writes an immutable
           verifikat, so the outcome is described before the POST, not narrated
@@ -2982,6 +4034,44 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         }}
       />
 
+      {/* crm#1202: the customer has not been sent this quote. Recording their
+          yes (or building on it) is confirmed first; expiry is moot then. */}
+      <ConfirmDialog
+        open={unsentQuoteAction !== null}
+        onOpenChange={(open) => {
+          if (!open) setUnsentQuoteAction(null)
+        }}
+        title={t(
+          unsentQuoteAction === 'invoice'
+            ? 'quote_unsent_convert_title'
+            : unsentQuoteAction === 'order'
+              ? 'quote_unsent_order_title'
+              : 'quote_unsent_accept_title',
+        )}
+        description={t(
+          unsentQuoteAction === 'invoice'
+            ? 'quote_unsent_convert_description'
+            : unsentQuoteAction === 'order'
+              ? 'quote_unsent_order_description'
+              : 'quote_unsent_accept_description',
+          { number: invoiceDisplayNumber(invoice as Invoice) },
+        )}
+        confirmLabel={t(
+          unsentQuoteAction === 'invoice'
+            ? 'quote_create_invoice'
+            : unsentQuoteAction === 'order'
+              ? 'create_order'
+              : 'quote_accept',
+        )}
+        onConfirm={async () => {
+          const action = unsentQuoteAction
+          setUnsentQuoteAction(null)
+          if (action === 'invoice') await convertToInvoice()
+          else if (action === 'order') await convertToOrder()
+          else if (action === 'accept') await setQuoteDecision('accepted')
+        }}
+      />
+
       <ConfirmDialog
         open={showConfirmationSendDialog}
         onOpenChange={setShowConfirmationSendDialog}
@@ -2993,6 +4083,35 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         confirmLabel={t('payment_confirmation_confirm_action')}
         onConfirm={sendPaymentConfirmation}
       />
+
+      {resendDelivery && (
+        <ConfirmDialog
+          open={showResendDialog}
+          onOpenChange={setShowResendDialog}
+          title={t('resend_confirm_title')}
+          description={t('resend_confirm_description', {
+            number: invoiceDisplayNumber(invoice as Invoice),
+            email: invoice.customer?.email ?? '',
+            date: resendDelivery.sent_at ? formatDate(resendDelivery.sent_at) : '',
+          })}
+          confirmLabel={t('resend_confirm_action')}
+          onConfirm={resendInvoice}
+        />
+      )}
+
+      {isQuote && quoteProgress && (
+        <QuotePartDialog
+          quote={{
+            id: invoice.id,
+            invoice_number: invoice.invoice_number ?? null,
+            subtotal: quoteProgress.quoteSubtotal,
+            currency: invoice.currency,
+          }}
+          conversions={quoteInvoices}
+          open={showQuotePartDialog}
+          onOpenChange={setShowQuotePartDialog}
+        />
+      )}
 
       <ConfirmDialog
         open={showBookConfirm}

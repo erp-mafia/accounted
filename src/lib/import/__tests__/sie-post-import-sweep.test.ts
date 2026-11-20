@@ -2,16 +2,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { sweep, init } = vi.hoisted(() => ({ sweep: vi.fn(), init: vi.fn() }))
+const { sweep, logError } = vi.hoisted(() => ({ sweep: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/reconciliation/unattended-sweep', async (load) => ({
   ...(await load<typeof import('@/lib/reconciliation/unattended-sweep')>()),
   runUnattendedReconciliationSweep: sweep,
 }))
-vi.mock('@/lib/init', () => ({ ensureInitialized: init }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      error: logError,
+    }),
+  }
+})
 
 import {
   runPendingSIEBankSweeps,
+  SIE_BANK_SWEEP_MAX_ATTEMPTS,
   sweepBankRowsAfterSIEImport,
   type SIEBankSweepJob,
 } from '../sie-post-import-sweep'
@@ -70,7 +80,6 @@ describe('sweepBankRowsAfterSIEImport', () => {
       p_company_id: COMPANY,
       p_import_id: IMPORT,
     })
-    expect(init).toHaveBeenCalledTimes(1)
     expect(sweep).toHaveBeenCalledWith(supabase, COMPANY, ACTOR, {
       dateFrom: '2026-01-01',
       dateTo: '2026-12-31',
@@ -90,19 +99,15 @@ describe('sweepBankRowsAfterSIEImport', () => {
     })
   })
 
-  it('counts only rows the matcher would consider: unlinked, not ignored, dated in the year', async () => {
+  it('counts only rows the matcher would consider: open work dated in the year', async () => {
     mock.enqueueMany([{ data: true }, { count: 1 }, { data: true }])
 
     await sweepBankRowsAfterSIEImport(supabase, job())
 
-    expect(mock.findCall('transactions', 'select')).toEqual(['id', { count: 'exact', head: true }])
-    expect(mock.findCalls('transactions', 'eq')).toEqual([
-      ['company_id', COMPANY],
-      ['is_ignored', false],
-    ])
-    expect(mock.findCall('transactions', 'is')).toEqual(['journal_entry_id', null])
-    expect(mock.findCall('transactions', 'gte')).toEqual(['date', '2026-01-01'])
-    expect(mock.findCall('transactions', 'lte')).toEqual(['date', '2026-12-31'])
+    expect(mock.findCall('open_bank_rows', 'select')).toEqual(['id', { count: 'exact', head: true }])
+    expect(mock.findCalls('open_bank_rows', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCall('open_bank_rows', 'gte')).toEqual(['date', '2026-01-01'])
+    expect(mock.findCall('open_bank_rows', 'lte')).toEqual(['date', '2026-12-31'])
   })
 
   it('skips the matcher, and still records a receipt, when the year holds no unlinked bank rows', async () => {
@@ -111,7 +116,6 @@ describe('sweepBankRowsAfterSIEImport', () => {
     const receipt = await sweepBankRowsAfterSIEImport(supabase, job())
 
     expect(sweep).not.toHaveBeenCalled()
-    expect(init).not.toHaveBeenCalled()
     expect(receipt).toMatchObject({ skipped: 'no_unlinked_bank_rows', auto_linked: 0, suggested: 0 })
     expect(mock.supabase.rpc).toHaveBeenLastCalledWith(
       'record_sie_import_bank_sweep',
@@ -156,19 +160,41 @@ describe('sweepBankRowsAfterSIEImport', () => {
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('swallows a matcher failure and leaves the claim for the cron to retry', async () => {
+  it('reports a matcher failure as an error and leaves the claim for the cron to retry', async () => {
     mock.enqueueMany([{ data: true }, { count: 4 }])
-    sweep.mockRejectedValue(new Error('Kunde inte hämta kassakonton för avstämningssvepet'))
+    const failure = new Error('Kunde inte hämta kassakonton för avstämningssvepet')
+    sweep.mockRejectedValue(failure)
 
     await expect(sweepBankRowsAfterSIEImport(supabase, job())).resolves.toBeNull()
 
     // No receipt: state stays "running", which goes stale and is retried.
     expect(mock.supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('post-import bank sweep failed; the import itself is unaffected', failure, {
+      alert: true,
+      companyId: COMPANY,
+      importId: IMPORT,
+      claimed: true,
+      attempt: 1,
+      retried: true,
+    })
+  })
+
+  it('says so when the failed attempt was the last the claim grants', async () => {
+    mock.enqueueMany([{ data: true }, { count: 4 }])
+    sweep.mockRejectedValue(new Error('statement timeout'))
+
+    await sweepBankRowsAfterSIEImport(supabase, job({ bank_sweep: { state: 'running', attempt: SIE_BANK_SWEEP_MAX_ATTEMPTS - 1 } }))
+
+    expect(logError).toHaveBeenCalledWith(expect.any(String), expect.any(Error),
+      expect.objectContaining({ claimed: true, attempt: SIE_BANK_SWEEP_MAX_ATTEMPTS, retried: false }))
   })
 
   it('swallows a failed claim, a failed count and a client that throws', async () => {
     mock.enqueue({ error: { message: 'permission denied' } })
     await expect(sweepBankRowsAfterSIEImport(supabase, job())).resolves.toBeNull()
+    // The claim itself failed: no attempt was spent, the next caller claims.
+    expect(logError).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ message: 'permission denied' }),
+      expect.objectContaining({ claimed: false, attempt: null, retried: true }))
 
     mock.reset()
     mock.enqueueMany([{ data: true }, { error: { message: 'statement timeout' } }])
@@ -223,11 +249,61 @@ describe('runPendingSIEBankSweeps', () => {
       ['job_state', 'completed'],
       ['job_kind', 'import'],
     ])
+    // The every-minute listing never carries the manifest (O10).
+    const [columns] = mock.findCall('sie_imports', 'select') as [string]
+    expect(columns.split(',').map((column) => column.trim())).toEqual([
+      'id', 'company_id', 'user_id', 'execution_actor_id', 'job_state', 'job_kind',
+      'fiscal_year_start', 'fiscal_year_end', 'bank_sweep',
+    ])
+    expect(mock.findCalls('sie_imports', 'select')).toHaveLength(1)
     const since = mock.findCall('sie_imports', 'gte') as [string, string]
     expect(since[0]).toBe('imported_at')
     const ageMs = Date.now() - new Date(since[1]).getTime()
     expect(ageMs).toBeGreaterThan(23.9 * 3_600_000)
     expect(ageMs).toBeLessThan(24.1 * 3_600_000)
+  })
+
+  it('reads the manifest only for a pending row without fiscal-year columns, and sweeps its sealed year', async () => {
+    const done = { ...job({ id: '66666666-6666-4666-8666-666666666666' }), bank_sweep: { state: 'done' } }
+    const legacy = { ...job({ fiscal_year_start: null, fiscal_year_end: null }), bank_sweep: null }
+    delete (legacy as Partial<SIEBankSweepJob>).manifest
+    mock.enqueueMany([
+      { data: [done, legacy] },
+      { data: { manifest: { input: { fiscalYear: { start: '2025-07-01', end: '2026-06-30' } } } } },
+      { data: true }, // claimed
+      { count: 4 },
+      { data: true },
+    ])
+
+    const result = await runPendingSIEBankSweeps({ supabase })
+
+    expect(result).toEqual({ considered: 1, swept: 1 })
+    expect(mock.findCalls('sie_imports', 'select')).toEqual([
+      [expect.not.stringContaining('manifest')],
+      ['manifest'],
+    ])
+    expect(mock.findCalls('sie_imports', 'eq')).toContainEqual(['id', IMPORT])
+    expect(sweep).toHaveBeenCalledWith(supabase, COMPANY, ACTOR, { dateFrom: '2025-07-01', dateTo: '2026-06-30' })
+  })
+
+  it('leaves a row whose manifest cannot be read for the next run and goes on with the rest', async () => {
+    const legacy = { ...job({ fiscal_year_start: null, fiscal_year_end: null }), bank_sweep: null }
+    const unswept = { ...job({ id: '55555555-5555-4555-8555-555555555555' }), bank_sweep: null }
+    mock.enqueueMany([
+      { data: [legacy, unswept] },
+      { error: { message: 'statement timeout' } },
+      { data: true }, // unswept: claimed
+      { count: 0 },
+      { data: true },
+    ])
+
+    const result = await runPendingSIEBankSweeps({ supabase })
+
+    expect(result).toEqual({ considered: 2, swept: 1 })
+    expect(mock.supabase.rpc).not.toHaveBeenCalledWith(
+      'claim_sie_import_bank_sweep',
+      expect.objectContaining({ p_import_id: IMPORT }),
+    )
   })
 
   it('honours the worker pause switch', async () => {

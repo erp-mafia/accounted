@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Documentation
-    url: https://docs.gnubok.se
+    url: https://docs.accounted.se
     about: User guides and API reference.
   - name: Security vulnerability
     url: https://github.com/erp-mafia/accounted/security/policy

@@ -1,19 +1,42 @@
+---
+audience: developer
+---
+
 # SIE4 Project Dimensions
 
-## Table of contents
 
-1. Dimension system overview
-2. Record types for dimensions
-3. Transaction encoding with objects
-4. Object balances and budgets
-5. Import/export considerations
-6. Mapping to Fortnox/Visma/Bokio
+<!-- toc -->
+**Contents**
+
+- [1. Dimension system overview](#1-dimension-system-overview)
+- [2. Record types for dimensions](#2-record-types-for-dimensions)
+- [3. Transaction encoding with objects](#3-transaction-encoding-with-objects)
+- [4. Object balances and budgets](#4-object-balances-and-budgets)
+- [5. Import/export considerations](#5-importexport-considerations)
+- [6. Mapping to Fortnox/Visma/Bokio](#6-mapping-to-fortnoxvismabokio)
+
+<!-- /toc -->
 
 ---
 
 ## 1. Dimension system overview
 
-SIE4 (Version 4B, 2008-09-30) provides a standardized encoding of dimensional data through reserved and user-defined dimensions.
+SIE4 (current spec: utgåva 4C, 2025-08-06) provides a standardized encoding of dimensional data through reserved and user-defined dimensions.
+
+### What is projektredovisning?
+
+Projektredovisning tags individual transaction lines (bokföringsposter) with project codes alongside BAS account numbers. Same ledger, extra dimension. It enables tracking intäkter och kostnader per project rather than only per account.
+
+Projects are never encoded in the account number itself. They exist as a separate dimensional layer called objektredovisning. The 4-digit BAS account captures the *what* (cost/revenue type); the project dimension captures the *where/for whom*.
+
+### Projekt vs kostnadsställe
+
+These are distinct concepts that complement each other:
+
+- **Kostnadsställe** (cost center): permanent organizational unit (department, branch). No end date. SIE dimension 1.
+- **Projekt**: time-limited initiative with start/end dates and accumulated multi-year balances. SIE dimension 6.
+
+A project typically belongs to one kostnadsställe. Reports can cross-reference both dimensions.
 
 ### Reserved dimensions
 
@@ -196,7 +219,7 @@ Budget data enables budget vs actual comparison per project.
 
 ### Encoding considerations
 
-SIE files use CP437 encoding by default (#FLAGGA 0). UTF-8 is indicated by #FLAGGA 1. Project names with å/ä/ö must be encoded correctly. See the swedish-sie-import-export skill for encoding details.
+SIE files use CP437 (PC8), which the spec still mandates. **#FLAGGA says nothing about encoding**: it is the guard marking whether the file has already been imported (0 = not yet, 1 = imported). Project names with å/ä/ö must be encoded correctly. See the swedish-sie-import-export skill for encoding details.
 
 ### Multi-dimensional transactions
 
@@ -210,6 +233,12 @@ A single #TRANS line can carry objects from multiple dimensions simultaneously. 
 ---
 
 ## 6. Mapping to Fortnox/Visma/Bokio
+
+| System | Dimension model | SIE compatibility |
+|--------|----------------|-------------------|
+| Fortnox | Project + CostCenter (flat, independent) | Direct mapping to dim 1+6 |
+| Visma | Objekt 1 + 2 (renamable), Flerårigt flag for multi-year | Flerårigt maps to projekt, non-flerårigt to KS |
+| Bokio | Unlimited Tag Groups | Tags don't export as SIE dimensions |
 
 ### Fortnox
 

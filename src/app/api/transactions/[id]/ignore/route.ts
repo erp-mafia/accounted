@@ -20,11 +20,11 @@ import { setTransactionIgnored } from '@/lib/transactions/ignore'
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.ignore',
-  async (_request, { supabase, companyId }, { params }) => {
+  async (_request, { supabase, companyId, user }, { params }) => {
     const { id } = await params
 
     try {
-      const outcome = await setTransactionIgnored(supabase, companyId, id, true)
+      const outcome = await setTransactionIgnored(supabase, companyId, id, true, { userId: user.id })
       if (!outcome.ok) {
         if (outcome.status === 404) {
           return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })

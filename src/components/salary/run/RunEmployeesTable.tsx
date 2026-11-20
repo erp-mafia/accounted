@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import { effectiveRow } from '@/lib/salary/effective-figures'
+import { runRowVacation } from '@/lib/salary/run-row-vacation'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -16,11 +18,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { FileDown, Loader2, Receipt, Trash2 } from 'lucide-react'
-import { cn, formatCurrency } from '@/lib/utils'
+import { DocumentArrowDownIcon, ReceiptRefundIcon, TrashIcon } from '@/components/icons'
+import { cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
-import { periodLabelOf, type RunDetail } from './types'
+import { formatRunAmount, periodLabelOf, type RunDetail } from './types'
 
 type SreWithEmployee = SalaryRunEmployee & {
   employee?: {
@@ -30,6 +32,32 @@ type SreWithEmployee = SalaryRunEmployee & {
     // the encrypted `personnummer` column never reaches the client.
     personnummer_masked: string
     default_dimensions?: Record<string, string>
+    f_skatt_status?: string | null
+    // The employee's live pay fields: what a draft's calculation prices.
+    salary_type?: string | null
+    monthly_salary?: number | null
+    hourly_rate?: number | null
+    employment_degree?: number | null
+  }
+}
+
+/**
+ * How a row is paid, in the figures the next calculation uses. A draft
+ * prices the employee's live pay type, rate and degree, and the row's own
+ * monthly salary unless the pay type changed since the employee joined the
+ * run: then the employee's (lib/salary/run-calculation.ts, base-salary-line.ts).
+ * Past draft the row's own columns are the only figures there are.
+ */
+function payBasis(sre: SalaryRunEmployee, isDraft: boolean) {
+  const employee = (sre as SreWithEmployee).employee
+  const live = isDraft ? employee : undefined
+  const salaryType = live?.salary_type || sre.salary_type
+  const typeChanged = salaryType !== sre.salary_type
+  return {
+    salaryType,
+    monthlySalary: typeChanged ? (salaryType === 'monthly' ? live?.monthly_salary || 0 : 0) : sre.monthly_salary,
+    hourlyRate: live?.hourly_rate ?? null,
+    degree: Number(live?.employment_degree ?? sre.employment_degree),
   }
 }
 
@@ -76,6 +104,15 @@ export function RunEmployeesTable({
   const notAdded = availableEmployees.filter(e => !addedEmployeeIds.has(e.id))
   const canRemoveEmployee = run.status === 'draft' && canWrite
   const isDraft = run.status === 'draft'
+  // Gross is a calculated figure: while the calculation is not current
+  // (isCalculated, lib/salary/calculation-state.ts) the row shows the salary
+  // the next calculation starts from, never the stale gross.
+  const showInputSalary = isDraft || !isCalculated
+  // An hourly-paid row has no monthly salary: hourly gross is timlön x
+  // hours, so its cell shows the timlön (crm#1337) and the column is plain
+  // "Lön" once the roster has one.
+  const anyHourlyInput =
+    showInputSalary && employees.some(sre => payBasis(sre, isDraft).salaryType === 'hourly')
 
   // Δ vs the latest booked run: hidden on the first-ever run and before
   // calculation (gross is 0 until then, the diff would be noise).
@@ -99,7 +136,7 @@ export function RunEmployeesTable({
     return (
       <span className="text-xs text-muted-foreground tabular-nums">
         {sign}
-        {formatCurrency(Math.abs(delta))}
+        {formatRunAmount(Math.abs(delta))}
       </span>
     )
   }
@@ -144,7 +181,9 @@ export function RunEmployeesTable({
                 {showDiff && previous && (
                   <th className={TH_CLASS}>{t('th_diff', { period: periodLabelOf(previous) })}</th>
                 )}
-                <th className={numericTh}>{isDraft ? t('th_monthly_salary') : t('th_gross')}</th>
+                <th className={numericTh}>
+                  {showInputSalary ? (anyHourlyInput ? t('th_pay') : t('th_monthly_salary')) : t('th_gross')}
+                </th>
                 {isCalculated && (
                   <>
                     <th className={numericTh}>{t('th_tax')}</th>
@@ -169,25 +208,36 @@ export function RunEmployeesTable({
                   .sort((a, b) => Number(a) - Number(b))
                   .map(k => dims[k])
                   .join(' · ')
-                const taxValue = sre.tax_withheld_override ?? sre.tax_withheld
-                const avgifterValue = sre.avgifter_amount_override ?? sre.avgifter_amount
-                const netValue = sre.net_salary + (sre.tax_withheld - taxValue)
-                const editableSalary = isDraft && canWrite && sre.salary_type === 'monthly'
-                const primaryNumber = isDraft ? sre.monthly_salary : sre.gross_salary
+                // The figures the booking and the AGI use (effectiveRow): an
+                // avgifter override on an F-skatt row is ignored there, so here.
+                const figures = effectiveRow({ ...sre, employee })
+                const taxValue = figures.tax_withheld
+                const avgifterValue = figures.avgifter_amount
+                const netValue = figures.net_salary
+                // Semester: the accrued semesterlöneskuld, or, when the payslip
+                // pays semesterersättning with the salary (vacation_rule
+                // 'semesterersattning' accrues nothing), that amount marked as
+                // part of the pay instead of a bare 0 kr (crm#2017).
+                const vacation = runRowVacation(sre)
+                const vacationPaidOnly = vacation.accrued === 0 && vacation.paidOut !== 0
+                const basis = payBasis(sre, isDraft)
+                const hourlyInput = showInputSalary && basis.salaryType === 'hourly'
+                const editableSalary = isDraft && canWrite && basis.salaryType === 'monthly'
+                const primaryNumber = showInputSalary ? basis.monthlySalary : sre.gross_salary
                 // In a draft the number on the row is the full-time monthly salary
                 // the engine multiplies by the employee's sysselsättningsgrad. Below
                 // 100 % that product is not obvious from the input alone (a 10 %
                 // employee typed 45 310 to get a 4 531 kr gross), so spell it out
                 // as a muted suffix right after the number instead of only in
                 // Beräkningsdetaljer.
-                const degree = Number(sre.employment_degree)
+                const degree = basis.degree
                 const showDegreeHint =
-                  isDraft && sre.salary_type === 'monthly' && Number.isFinite(degree) && degree < 100
+                  isDraft && basis.salaryType === 'monthly' && Number.isFinite(degree) && degree < 100
                 const degreeHint = showDegreeHint ? (
-                  <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
+                  <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
                     {t('degree_hint', {
                       degree: degree.toLocaleString('sv-SE'),
-                      amount: formatCurrency(roundOre((sre.monthly_salary || 0) * (degree / 100))),
+                      amount: formatRunAmount(roundOre((basis.monthlySalary || 0) * (degree / 100))),
                     })}
                   </span>
                 ) : null
@@ -225,25 +275,42 @@ export function RunEmployeesTable({
                             type="number"
                             step="0.01"
                             min="0"
-                            defaultValue={sre.monthly_salary}
+                            defaultValue={basis.monthlySalary}
                             onClick={e => e.stopPropagation()}
-                            onBlur={e => onSalaryEdit(sre.employee_id, e.target.value, sre.monthly_salary)}
+                            onBlur={e => onSalaryEdit(sre.employee_id, e.target.value, basis.monthlySalary)}
                             disabled={actionLoading === `salary-${sre.employee_id}`}
                             aria-label={t('salary_input_aria', { name })}
                             className="-my-1 h-8 w-28 text-right tabular-nums"
                           />
+                        ) : hourlyInput ? (
+                          <span>
+                            {basis.hourlyRate != null
+                              ? t('hourly_rate_cell', { amount: formatRunAmount(basis.hourlyRate) })
+                              : t('hourly_pay_cell')}
+                          </span>
                         ) : (
-                          <span>{formatCurrency(primaryNumber)}</span>
+                          <span>{formatRunAmount(primaryNumber)}</span>
                         )}
                         {degreeHint}
                       </span>
                     </td>
                     {isCalculated && (
                       <>
-                        <td className={numericTd}>{formatCurrency(taxValue)}</td>
-                        <td className={numericTd}>{formatCurrency(netValue)}</td>
-                        <td className={numericTd}>{formatCurrency(avgifterValue)}</td>
-                        <td className={numericTd}>{formatCurrency(sre.vacation_accrual)}</td>
+                        <td className={numericTd}>{formatRunAmount(taxValue)}</td>
+                        <td className={numericTd}>{formatRunAmount(netValue)}</td>
+                        <td className={numericTd}>{formatRunAmount(avgifterValue)}</td>
+                        <td className={numericTd}>
+                          <span className="inline-flex items-center justify-end gap-2">
+                            <span>{formatRunAmount(vacationPaidOnly ? vacation.paidOut : vacation.accrued)}</span>
+                            {vacation.paidOut !== 0 && (
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                {vacationPaidOnly
+                                  ? t('vacation_in_pay')
+                                  : t('vacation_in_pay_extra', { amount: formatRunAmount(vacation.paidOut) })}
+                              </span>
+                            )}
+                          </span>
+                        </td>
                       </>
                     )}
                     <td className={cn(TD_CLASS, 'pr-0 text-right')}>
@@ -253,32 +320,31 @@ export function RunEmployeesTable({
                         {showAddClaims && (
                           <Button
                             variant="ghost"
-                            size="sm"
-                            className="h-8 px-3 text-xs text-muted-foreground hover:text-foreground"
+                            className="text-muted-foreground hover:text-foreground"
                             onClick={e => {
                               e.stopPropagation()
                               onAddExpenseClaims(sre.employee_id, name)
                             }}
-                            disabled={addingClaims}
+                            loading={addingClaims}
                             title={t('add_expense_claims_title')}
                             aria-label={t('add_expense_claims_aria', { name })}
                           >
-                            {addingClaims ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <Receipt className="mr-2 h-4 w-4" />
-                            )}
+                            {!addingClaims && <ReceiptRefundIcon className="h-4 w-4" />}
                             <span className="tabular-nums">
                               {t('add_expense_claims', {
                                 count: openClaims.count,
-                                amount: formatCurrency(openClaims.total_sek),
+                                amount: formatRunAmount(openClaims.total_sek),
                               })}
                             </span>
                           </Button>
                         )}
-                        {/* Payslip PDF */}
+                        {/* Payslip PDF: the copy the employee receives, so it
+                            follows the payslip section switches in Settings.
+                            A preview, so opening it never fixes the run's
+                            sections. Employer cost and every calculation step
+                            stay on this page (Beräkningsdetaljer, the KPIs). */}
                         <a
-                          href={`/api/salary/runs/${runId}/payslips/${sre.employee_id}/pdf`}
+                          href={`/api/salary/runs/${runId}/payslips/${sre.employee_id}/pdf?audience=employee&preview=1`}
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={e => e.stopPropagation()}
@@ -286,26 +352,22 @@ export function RunEmployeesTable({
                           title={t('view_payslip_title')}
                           aria-label={t('view_payslip_title')}
                         >
-                          <FileDown className="h-4 w-4" />
+                          <DocumentArrowDownIcon className="h-4 w-4" />
                         </a>
                         {canRemoveEmployee && (
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            className="text-muted-foreground hover:text-destructive"
                             onClick={e => {
                               e.stopPropagation()
                               onRemoveEmployee(sre.employee_id, name)
                             }}
-                            disabled={removing}
+                            loading={removing}
                             aria-label={t('remove_employee_aria', { name })}
                             title={t('remove_employee_title')}
                           >
-                            {removing ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
+                            {!removing && <TrashIcon className="h-4 w-4" />}
                           </Button>
                         )}
                       </span>

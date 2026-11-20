@@ -61,8 +61,12 @@ These can be in the same system but must be logically separate outputs.
 ### Timing requirements (5 kap 2§)
 - Kontanta transaktioner: bokföras senast påföljande arbetsdag
 - Övriga affärshändelser: "så snart det kan ske"
-- In practice (per BFNAR 2013:2): senast the month following the month of the affärshändelse
-- Exception: om den bokföringsskyldige har ordnade verifikationer that are easily accessible, bokföring kan dröja up to 50 dagar from the transaction
+- Senareläggning (5 kap 2§ 2 st, BFNAR 2013:2), allowed only if verifikationerna are kept ordered while waiting (3.5):
+  - 3.6: up to 50 days after the end of the month in which the affärshändelse occurred
+  - 3.7: nettoomsättning normalt ≤ 3 MSEK: up to 50 days after the end of the quarter
+  - 3.8: normally ≤ 50 verifikationer (≤ 250 affärshändelser) per räkenskapsår and nettoomsättning ≤ 1 MSEK: up to 60 days after räkenskapsårets end
+  - 3.9: enskild näringsidkare within the 3.8 limits and without EU cross-border transactions: until the day the inkomstdeklaration is due
+  - None of these delays registreringsordning for kontanta in- och utbetalningar (still next arbetsdag), except when registered in a certified kassaregister (3.10: 50 days after month-end)
 
 ### Kontantmetod vs faktureringsmetod
 - **Kontantmetod**: bokföring vid betalningstillfället (only allowed if nettoomsättning normalt < 3 MSEK)
@@ -71,7 +75,7 @@ These can be in the same system but must be logically separate outputs.
 - Kontantmetod still requires that fordringar/skulder are booked at bokslut
 
 ### Gemensam verifikation (5 kap 6§ st 3)
-Multiple affärshändelser can share one verifikation if they are of the same slag and occurred the same dag. Example: daily kassarapport for retail.
+Flera likartade affärshändelser får dokumenteras genom en gemensam verifikation. BFNAR 2013:2 6.1 limits "likartade" to recurring affärshändelser collected in a samlingsfaktura covering at most one month, automatically generated affärshändelser, or other similar affärshändelser on the same day. The one-day rule applies to kontant försäljning: a day's cash receipts may share one verifikation (5 kap 6§ st 3; BFNAR 6.6: if registered in a kassaregister or small amounts). Example: daily Z-rapport or kassarapport for retail.
 
 ## 4. Verifikationer in depth
 
@@ -120,13 +124,17 @@ BFL allows multiple verification series (e.g., "A" for supplier invoices, "B" fo
 ### Form
 - Must be in varaktigt läsbart skick (durable, readable form)
 - Digital storage: must ensure data integrity (immutability)
-- Since 1 July 2024 (SFS 2024:494): no requirement to keep paper originals after proper digitization
+- Since 1 July 2024 (SFS 2024:342): no requirement to keep paper originals after proper digitization
 - The digitized version must be a faithful reproduction
 - Metadata and structure must be preserved
+- Electronic documents must be kept in the format and with the content they had when received or compiled (7 kap 1§ 3 st, SFS 2024:342)
+- Electronic räkenskapsinformation must be backed up, and the backup stored separately from the original (BFNAR 2013:2 8.2, as amended by BFNAR 2024:1)
 
 ### Location
-- Must be available in Sweden
-- Can be stored in EU/EEA if Skatteverket is notified
+- Main rule: stored in Sweden, and the equipment and systems needed to print it kept available in Sweden (7 kap 2§)
+- Electronic documents may be stored in another EU country, or in a non-EU country with equivalent legal instruments for mutual assistance, if (1) the location and every change of it is reported to Skatteverket, (2) Skatteverket or Tullverket get immediate electronic access on request, and (3) the information can be printed immediately in Sweden (7 kap 3a§)
+- Otherwise electronic storage abroad requires a permit from Skatteverket (7 kap 4§)
+- Paper verifikationer may be kept abroad only temporarily, for särskilda skäl (7 kap 3§; BFNAR 2013:2 8.5-8.11). If the information is transferred under 7 kap 6§, the paper may be destroyed abroad (8.5A, BFNAR 2024:1)
 - Must be producible to Skatteverket upon request within reasonable time
 
 ### What must be archived
@@ -147,7 +155,7 @@ BFN issues allmänna råd (BFNAR) that specify how BFL and ÅRL should be applie
 | K3 (BFNAR 2012:1) | Default for ÅRL-companies | Yes (full) | Component depreciation, full disclosures |
 | K4 (IFRS) | Listed companies | Yes (IFRS) | International standards |
 
-**2026 change**: BRF:er must now use K3 (no longer K2). Companies where byggnader generate >= 75% of nettoomsättning must also K3.
+**2026 change** (BFNAR 2025:2, räkenskapsår beginning after 2025-12-31): bostadsrättsföreningar and bostadsföreningar must use K3 regardless of size, as must companies with filialer abroad, direct holdings of kryptotillgångar, aktierelaterade ersättningar, or convertible/sammansatta finansiella instrument. Companies outside the lättnadsregel (exceeding more than one of: > 3 anställda, > 1.5 MSEK balansomslutning, > 3 MSEK nettoomsättning, in each of the last two years) must also use K3 if byggnader generate >= 75% of nettoomsättning or they have a material uppskjuten skatteskuld.
 
 ## 8. K1 (BFNAR 2006:1 / 2010:1)
 
@@ -172,7 +180,7 @@ Key characteristics:
 - Avsättningar: only if legal obligation exists and can be reliably estimated
 - Eventualförpliktelser: disclosed in notes
 
-**Restrictions from 2026**: BRF:er excluded from K2, companies with >= 75% revenue from buildings excluded. See changes-2025-2026.md.
+**Restrictions from 2026**: BRF:er excluded from K2 regardless of size; the >= 75% revenue from buildings exclusion applies only to companies outside the lättnadsregel. See section 7 and changes-2025-2026.md.
 
 ## 10. K3 (BFNAR 2012:1)
 

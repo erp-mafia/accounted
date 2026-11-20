@@ -1,5 +1,20 @@
 # Strategy, Interactions, and Optimization
 
+<!-- toc -->
+**Contents**
+
+- [Year-end decision sequence](#year-end-decision-sequence)
+- [Lön vs utdelning: the fundamental trade-off](#lön-vs-utdelning-the-fundamental-trade-off)
+- [Interaction matrix](#interaction-matrix)
+- [Obeskattade reserver: balance sheet effects](#obeskattade-reserver-balance-sheet-effects)
+- [Skatteverket audit triggers](#skatteverket-audit-triggers)
+- [Skatteflyktslagen (Lag 1995:575)](#skatteflyktslagen-lag-1995575)
+- [Documentation requirements](#documentation-requirements)
+- [Multi-year planning horizon](#multi-year-planning-horizon)
+- [Bolagsskatt and rule changes (status September 2026)](#bolagsskatt-and-rule-changes-status-september-2026)
+
+<!-- /toc -->
+
 ## Year-end decision sequence
 
 Follow this order for optimal tax planning:
@@ -97,6 +112,16 @@ The most valuable long-term strategy for a fåmansbolagsägare:
 4. Use periodiseringsfond strategically against anticipated loss years
 5. Time major asset acquisitions to maximize överavskrivningar in the acquisition year
 
-## Proposed bolagsskatt reduction
+## Bolagsskatt and rule changes (status September 2026)
 
-A proposal to reduce bolagsskatt to 20% has been remitted (May 2025) but is not yet enacted. If passed, it would trigger transition effects across periodiseringsfonder (potential uppräkning) and affect the relative attractiveness of all tools. Monitor.
+**Bolagsskatt is 20.6%** (IL 65 kap. 10 §). A cut to 20% has not been enacted; plan with 20.6% for 2026. A future rate cut would again raise the question of uppräkning of older periodiseringsfonder.
+
+### Enacted
+
+- **Skattereduktion för gåvor från juridiska personer** (IL 67 kap. 21, 23 and 24 a-26 a §§, SFS 2025:1361; gåvor lämnade efter 2025-12-31): gifts of money of at least **2 000 kr** per gåvotillfälle to a godkänd gåvomottagare (social hjälpverksamhet or vetenskaplig forskning) give a skattereduktion of **20.6%** of the gift. The underlag is capped at **800 000 kr per kalenderår** (max reduction 164 800 kr). Requested in the first income tax return due after the end of the calendar year of the gift. The gift is not taxed as intäkt or utdelning for the owners (IL 11 kap. 49 §, 42 kap. 12 a §).
+- **Ränteavdrag on intra-group debt to EES lenders** (IL 24 kap. 19 a §, prop. 2025/26:20): from beskattningsår beginning after 2025-12-31, deduction is denied only for a konstlat upplägg. See `ranteavdragsbegransningar.md`.
+- **3:12 steg 2**: four-year periods in 57 kap. 3-5 §§ from inkomstår 2027. See `312-regler.md`.
+
+### Proposed, not enacted
+
+- Förenklingsregeln for ränteavdrag raised from 5 to 25 MSEK (IL 24 kap. 24 § still says 5 MSEK).

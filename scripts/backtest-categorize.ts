@@ -5,11 +5,10 @@
  * candidate slate + underlag from prod, runs the real selector (against the
  * configured AI backend), and compares the model's proposed account to the
  * account the human actually booked (the expense debit line). Prints per-row
- * detail + an aggregate: overall accuracy, and — the honest signal — accuracy
+ * detail + an aggregate: overall accuracy, and - the honest signal - accuracy
  * on the cases where the top deterministic candidate was NOT the answer, i.e.
  * where the model had to add value.
  *
- *   cp ~/erp-base/.env.local .   # prod DB + Bedrock, read-only
  *   npx tsx scripts/backtest-categorize.ts [N]
  *   rm .env.local
  *

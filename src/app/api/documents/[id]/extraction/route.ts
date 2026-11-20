@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import type { Payload } from '@/lib/documents/extract/fields'
 import type { CheckFailure } from '@/lib/documents/extract/merge'
 import { schemaForType, type FieldDef } from '@/lib/documents/extract/schemas'
@@ -30,7 +30,11 @@ export interface ExtractionView {
 type ExtractionRow = Omit<ExtractionView, 'extraction_id' | 'fields'> & { id: string }
 
 export const GET = withRouteContext('document.extraction', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  // The decision sheet asks for the reading of every document it opens, and
+  // "this document has none" (the company is outside the rollout, or nothing
+  // has read it yet) is an answer to that question, not a failed request: as
+  // a 404 it was 174 failed requests a week (2026-11) that the sheet then hid.
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ data: null })
   const { id } = await params
   const { data, error } = await ctx.supabase
     .from('document_extractions')
@@ -40,7 +44,7 @@ export const GET = withRouteContext('document.extraction', async (_request, ctx,
     .eq('is_current', true)
     .maybeSingle()
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
-  if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!data) return NextResponse.json({ data: null })
   const { id: extractionId, ...row } = data as ExtractionRow
   const view: ExtractionView = { extraction_id: extractionId, ...row, fields: schemaForType(row.schema_type).fields }
   return NextResponse.json({ data: view })

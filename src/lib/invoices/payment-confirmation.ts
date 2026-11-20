@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { Invoice, InvoiceDocumentType } from '@/types'
 
 /**
@@ -12,9 +13,9 @@ import type { Invoice, InvoiceDocumentType } from '@/types'
  * the detail page, so the three can never disagree on who gets the button.
  */
 export function isPaymentConfirmationEligible(
-  invoice: Pick<Invoice, 'status' | 'credited_invoice_id'> & { document_type?: InvoiceDocumentType | null },
+  invoice: Pick<Invoice, 'status' | 'credited_invoice_id'> & Partial<Pick<Invoice, 'total'>> & { document_type?: InvoiceDocumentType | null },
 ): boolean {
-  if (invoice.credited_invoice_id) return false
+  if (isCreditNoteDocument(invoice)) return false
   const docType = invoice.document_type || 'invoice'
   if (docType !== 'invoice') return false
   return invoice.status === 'paid'

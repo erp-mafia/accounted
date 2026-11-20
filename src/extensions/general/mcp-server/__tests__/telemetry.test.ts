@@ -5,11 +5,22 @@
  * scope denied, unknown tool) emit a correctly-shaped event to the bus,
  * and that the event-log handler registers the new type for persistence.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import type { EventPayload } from '@/lib/events/types'
+import { OAUTH_MCP_KEY_NAME, validateApiKey } from '@/lib/auth/api-keys'
 
 // ── Mocks (mirrors receipt-matcher.test.ts setup) ────────────
+
+// The PostHog mirror of each tool call (posthog-tool-call.ts). Off in every
+// test without a project token; the last describe switches it on.
+const posthogCapture = vi.hoisted(() => vi.fn((..._a: unknown[]) => undefined))
+vi.mock('posthog-node', () => ({
+  PostHog: class {
+    capture = posthogCapture
+    flush = async () => undefined
+  },
+}))
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -25,7 +36,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       userId: 'user-1',
       companyId: '11111111-1111-4111-8111-111111111111',
       // Only reports:read: enough to call gnubok_get_trial_balance, NOT enough
-      // to call gnubok_create_invoice (invoices:write). Drives the scope-denied test.
+      // to call gnubok_create_invoice (invoices:draft). Drives the scope-denied test.
       scopes: ['reports:read'],
       apiKeyId: 'key-1',
       apiKeyName: 'Test Key',
@@ -36,6 +47,12 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     // filter has data to work against.
     createServiceClientNoCookies: vi.fn(() => ({
       from: vi.fn((table: string) => {
+        if (table === 'company_skills') {
+          const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+          for (const method of ['select', 'eq', 'order']) chain[method] = vi.fn(() => chain)
+          chain.range = vi.fn().mockResolvedValue({ data: [], error: null })
+          return chain
+        }
         if (table === 'company_members') {
           return {
             select: vi.fn(() => {
@@ -59,7 +76,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 maybeSingle: vi.fn().mockResolvedValue({
-                  data: { entity_type: 'AB', vat_registered: true },
+                  data: { entity_type: 'aktiebolag', vat_registered: true },
                   error: null,
                 }),
               })),
@@ -95,7 +112,9 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   }
 })
 
-import { handleMcpRequest } from '../server'
+import { handleMcpRequest, tools } from '../server'
+import { readCompletionLog } from '@/lib/extensions/completion-log'
+import { TOOL_CALL_EVENT_PROPERTIES } from '../posthog-tool-call'
 
 function mcpRequest(
   method: string,
@@ -213,7 +232,7 @@ describe('mcp.tool_called telemetry', () => {
   it('emits errorKind=scope_denied when the API key lacks the required scope', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
-    // gnubok_create_invoice requires invoices:write; our test key has only reports:read.
+    // gnubok_create_invoice requires invoices:draft; our test key has only reports:read.
     await handleMcpRequest(
       mcpRequest('tools/call', {
         name: 'gnubok_create_invoice',
@@ -223,7 +242,7 @@ describe('mcp.tool_called telemetry', () => {
 
     const event = await eventPromise
     expect(event.tool).toBe('gnubok_create_invoice')
-    expect(event.requiredScope).toBe('invoices:write')
+    expect(event.requiredScope).toBe('invoices:draft')
     expect(event.success).toBe(false)
     expect(event.isError).toBe(true)
     expect(event.errorKind).toBe('scope_denied')
@@ -297,7 +316,7 @@ describe('mcp.tool_called telemetry', () => {
     // would also pass on a wrong-but-present value, which is no assertion.
     // And "some other string" is barely stronger, so pin the content that
     // makes the field worth storing: the scope the caller actually lacks.
-    expect(event.errorDetail).toContain('invoices:write')
+    expect(event.errorDetail).toContain('invoices:draft')
     expect(event.errorDetail).not.toBe(event.errorMessage)
   })
 
@@ -337,7 +356,7 @@ describe('mcp.tool_called telemetry', () => {
     expect(payload.error.code).toBe('INSUFFICIENT_SCOPE')
     const event = await eventPromise
     expect(event.tool).toBe('gnubok_create_invoice')
-    expect(event.requiredScope).toBe('invoices:write')
+    expect(event.requiredScope).toBe('invoices:draft')
     expect(event.errorKind).toBe('scope_denied')
   })
 
@@ -416,14 +435,27 @@ describe('mcp.tool_called telemetry', () => {
     it('stays null for a plain Error: the class name "Error" is noise, not vocabulary', async () => {
       const eventPromise = captureNextToolCalledEvent()
 
-      // gnubok_load_skill throws `new Error("Skill not found: ...")`.
+      // Any tool whose execute() throws a bare `new Error(...)`.
+      const listSkills = tools.find((t) => t.name === 'gnubok_list_skills')!
+      vi.spyOn(listSkills, 'execute').mockRejectedValueOnce(new Error('a refusal nobody coded'))
+      await handleMcpRequest(mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }))
+
+      const event = await eventPromise
+      expect(event.errorKind).toBe('execution')
+      expect(event.errorCause).toBeNull()
+    })
+
+    it('records the code of a coded refusal', async () => {
+      const eventPromise = captureNextToolCalledEvent()
+
+      // gnubok_load_skill answers an unknown slug with NOT_FOUND.
       await handleMcpRequest(
         mcpRequest('tools/call', { name: 'gnubok_load_skill', arguments: { slug: 'definitely-does-not-exist' } })
       )
 
       const event = await eventPromise
-      expect(event.errorKind).toBe('execution')
-      expect(event.errorCause).toBeNull()
+      expect(event.errorCode).toBe('NOT_FOUND')
+      expect(event.errorCause).toBe('NOT_FOUND')
     })
 
     it('stays null on success and on pre-execution denials', async () => {
@@ -535,20 +567,146 @@ describe('client marker telemetry', () => {
     expect(event.client).toBe('openclaw')
   })
 
-  it('drops markers that fail the charset/length sanitation and reports null', async () => {
+  it('drops markers that fail the charset/length sanitation and falls back to the User-Agent', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
     await handleMcpRequest(
       mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
-        headers: { 'X-Gnubok-Client': 'bad client!<script>' },
+        headers: { 'X-Gnubok-Client': 'bad client!<script>', 'User-Agent': 'claude-code/2.0.14' },
       })
     )
 
     const event = await eventPromise
-    expect(event.client).toBeNull()
+    expect(event.client).toBe('claude-code')
+    expect(event.clientSource).toBe('user_agent')
   })
 
-  it('reports null when no marker is sent (existing clients unchanged)', async () => {
+  it('keeps a marker-labelled row in its previous shape: no clientName, no clientSource', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        url: 'http://localhost:3000/api/extensions/ext/mcp-server/mcp?client=claude-connector',
+        headers: { 'User-Agent': 'python-httpx/0.28.1' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('claude-connector')
+    expect(event).not.toHaveProperty('clientName')
+    expect(event).not.toHaveProperty('clientSource')
+  })
+})
+
+describe('client label fallback without a marker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('maps a known User-Agent into the marker vocabulary', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'User-Agent': 'openai-mcp/1.0.0' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('chatgpt')
+    expect(event.clientSource).toBe('user_agent')
+    expect(event).not.toHaveProperty('clientName')
+  })
+
+  it('labels an unmapped User-Agent other, with the sanitized raw name', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'User-Agent': 'python-httpx/0.28.1 (custom; "agent")' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('other')
+    expect(event.clientName).toBe('python-httpx/0.28.1 custom agent')
+    expect(event.clientSource).toBe('user_agent')
+  })
+
+  it('labels a stdio bridge User-Agent by the client name it carries', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'User-Agent': 'accounted-mcp/1.1.0 (claude-ai/0.14.10)' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('claude-desktop')
+    expect(event.clientSource).toBe('bridge')
+    expect(event).not.toHaveProperty('clientName')
+  })
+
+  it('labels a stdio bridge User-Agent without a client name other, with the bridge name', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'User-Agent': 'gnubok-mcp/1.2.0' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('other')
+    expect(event.clientName).toBe('gnubok-mcp')
+    expect(event.clientSource).toBe('bridge')
+  })
+
+  it('prefers the stateless clientInfo name over the User-Agent', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_list_skills',
+        arguments: {},
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientInfo': { name: 'cursor-vscode', version: '1.7.0' },
+        },
+      }, 1, { headers: { 'User-Agent': 'node' } })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('cursor')
+    expect(event.clientSource).toBe('client_info')
+  })
+
+  it('uses the provider an OAuth key was minted for before any client-supplied name', async () => {
+    vi.mocked(validateApiKey).mockResolvedValueOnce({
+      userId: 'user-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      scopes: ['reports:read'],
+      apiKeyId: 'key-oauth',
+      apiKeyName: OAUTH_MCP_KEY_NAME,
+      client: 'chatgpt',
+    } as Awaited<ReturnType<typeof validateApiKey>>)
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'User-Agent': 'claude-code/2.0.14' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('chatgpt')
+    expect(event.clientSource).toBe('oauth')
+    expect(event.actorLabel).toBe('ChatGPT (OpenAI)')
+  })
+
+  it('labels a call with no marker and no User-Agent other, source none', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
     await handleMcpRequest(
@@ -556,7 +714,24 @@ describe('client marker telemetry', () => {
     )
 
     const event = await eventPromise
-    expect(event.client).toBeNull()
+    expect(event.client).toBe('other')
+    expect(event.clientSource).toBe('none')
+    expect(event).not.toHaveProperty('clientName')
+  })
+
+  it('labels tools/list and resources/read the same way', async () => {
+    const listPromise = captureNextToolsListEvent()
+    await handleMcpRequest(mcpRequest('tools/list', undefined, 1, { headers: { 'User-Agent': 'Gemini-CLI/0.9' } }))
+    const list = await listPromise
+    expect(list.client).toBe('gemini')
+
+    const readPromise = captureNextResourceReadEvent()
+    await handleMcpRequest(
+      mcpRequest('resources/read', { uri: 'ui://receipt-matcher/app.html' }, 2, { headers: { 'User-Agent': 'node' } })
+    )
+    const read = await readPromise
+    expect(read.client).toBe('other')
+    expect((read as unknown as Record<string, unknown>).clientName).toBe('node')
   })
 })
 
@@ -689,22 +864,193 @@ describe('mcp.skill_loaded telemetry', () => {
     expect(wf.slug).toBe('month-end-close')
   })
 
-  it('does not emit when the slug is unknown (load throws before emission)', async () => {
-    const seen: unknown[] = []
-    eventBus.on('mcp.skill_loaded', (payload) => {
-      seen.push(payload)
+  it('carries found=true, the body hash and the client label', async () => {
+    const skillLoadedPromise = new Promise<Record<string, unknown>>((resolve) => {
+      const off = eventBus.on('mcp.skill_loaded', (payload) => {
+        off()
+        resolve(payload as Record<string, unknown>)
+      })
     })
 
     await handleMcpRequest(
-      mcpRequest('tools/call', {
-        name: 'gnubok_load_skill',
-        arguments: { slug: 'nope-not-real' },
+      mcpRequest('tools/call', { name: 'accounted_load_skill', arguments: { slug: 'month-end-close' } }, 1, {
+        url: 'http://localhost:3000/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted',
+        headers: { 'User-Agent': 'claude-code/2.0.14', 'Mcp-Session-Id': 'session-abc' },
       })
     )
+
+    const event = await skillLoadedPromise
+    expect(event.slug).toBe('month-end-close')
+    expect(event.found).toBe(true)
+    expect(event.bodyHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(event.client).toBe('claude-code')
+    expect(event.clientSource).toBe('user_agent')
+    expect(event.sessionId).toBe('session-abc')
+    expect(event.actorType).toBe('api_key')
+  })
+
+  it('records an unknown slug as mcp.skill_not_found, never as mcp.skill_loaded', async () => {
+    const loaded: unknown[] = []
+    eventBus.on('mcp.skill_loaded', (payload) => {
+      loaded.push(payload)
+    })
+    const notFoundPromise = new Promise<EventPayload<'mcp.skill_not_found'>>((resolve) => {
+      const off = eventBus.on('mcp.skill_not_found', (payload) => {
+        off()
+        resolve(payload)
+      })
+    })
+
+    const response = await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_load_skill',
+        arguments: { slug: '  nope-not-real  ' },
+      }, 1, { headers: { 'X-Accounted-Client': 'cursor', 'Mcp-Session-Id': 'session-xyz' } })
+    )
+    const json = await response.json()
+    expect(json.result.isError).toBe(true)
+
+    const event = await notFoundPromise
+    expect(event.slug).toBe('nope-not-real')
+    expect(event.found).toBe(false)
+    expect(event.client).toBe('cursor')
+    expect(event.sessionId).toBe('session-xyz')
+    expect(event.actorType).toBe('api_key')
+    expect(event.actorId).toBe('key-1')
+    expect(event.companyId).toBe('11111111-1111-4111-8111-111111111111')
     // Flush microtasks: emission is fire-and-forget.
     await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(loaded).toHaveLength(0)
+  })
 
-    expect(seen).toHaveLength(0)
+  it('caps a long requested slug at 200 characters', async () => {
+    const notFoundPromise = new Promise<EventPayload<'mcp.skill_not_found'>>((resolve) => {
+      const off = eventBus.on('mcp.skill_not_found', (payload) => {
+        off()
+        resolve(payload)
+      })
+    })
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_load_skill', arguments: { slug: 's'.repeat(500) } })
+    )
+
+    const event = await notFoundPromise
+    expect(event.slug).toBe('s'.repeat(200))
+  })
+})
+
+describe('mcp.tool_searched telemetry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  function captureNextToolSearched(): Promise<EventPayload<'mcp.tool_searched'>> {
+    return new Promise((resolve) => {
+      const off = eventBus.on('mcp.tool_searched', (payload) => {
+        off()
+        resolve(payload)
+      })
+    })
+  }
+
+  it('records the trimmed query, the detail level, the top hits in rank order and the hit count', async () => {
+    const eventPromise = captureNextToolSearched()
+
+    const response = await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_search_tools', arguments: { query: '  Skill  ', detail: 'name', limit: 2 } }, 1, {
+        headers: { 'User-Agent': 'openai-mcp/1.0.0', 'Mcp-Session-Id': 'session-search' },
+      })
+    )
+    const json = await response.json()
+    const result = json.result.structuredContent as { tools: { name: string }[]; total_matched: number }
+
+    const event = await eventPromise
+    expect(event.query).toBe('Skill')
+    expect(event.detail).toBe('name')
+    expect(event.hitCount).toBe(result.total_matched)
+    expect(result.total_matched).toBeGreaterThan(2)
+    // Top hits do not depend on the page size the agent asked for.
+    expect(event.topHits.length).toBe(Math.min(5, result.total_matched))
+    expect(event.topHits.slice(0, 2)).toEqual(result.tools.map((t) => t.name))
+    expect(event.sessionId).toBe('session-search')
+    expect(event.client).toBe('chatgpt')
+    expect(event.clientSource).toBe('user_agent')
+    expect(event.actorType).toBe('api_key')
+    expect(event.userId).toBe('user-1')
+    expect(event.companyId).toBe('11111111-1111-4111-8111-111111111111')
+  })
+
+  it('records canonical tool ids for the accounted alias and defaults detail to summary', async () => {
+    const eventPromise = captureNextToolSearched()
+
+    const response = await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'accounted_search_tools', arguments: { query: 'skill' } }, 1, {
+        url: 'http://localhost:3000/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted',
+      })
+    )
+    const json = await response.json()
+    const result = json.result.structuredContent as { tools: { name: string }[] }
+    expect(result.tools[0].name.startsWith('accounted_')).toBe(true)
+
+    const event = await eventPromise
+    expect(event.detail).toBe('summary')
+    expect(event.topHits.length).toBeGreaterThan(0)
+    expect(event.topHits.every((name) => name.startsWith('gnubok_'))).toBe(true)
+    expect(event.topHits[0]).toBe(result.tools[0].name.replace(/^accounted_/, 'gnubok_'))
+  })
+
+  it('truncates a long query to 200 characters and records an empty one as empty', async () => {
+    const longPromise = captureNextToolSearched()
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_search_tools', arguments: { query: `   ${'moms '.repeat(100)}` } })
+    )
+    const long = await longPromise
+    expect(long.query.length).toBe(200)
+    expect(long.query.startsWith('moms moms')).toBe(true)
+
+    const emptyPromise = captureNextToolSearched()
+    await handleMcpRequest(mcpRequest('tools/call', { name: 'gnubok_search_tools', arguments: {} }, 2))
+    const empty = await emptyPromise
+    expect(empty.query).toBe('')
+    expect(empty.hitCount).toBeGreaterThan(0)
+  })
+
+  it('records a query with no hits', async () => {
+    const eventPromise = captureNextToolSearched()
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_search_tools', arguments: { query: 'zzqx-nonexistent-capability' } })
+    )
+    const event = await eventPromise
+    expect(event.query).toBe('zzqx-nonexistent-capability')
+    expect(event.hitCount).toBe(0)
+    expect(event.topHits).toEqual([])
+  })
+
+  it('records argument text for the search tool only: other tools carry no argument values', async () => {
+    const emit = vi.spyOn(eventBus, 'emit')
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: { tag: 'zz-arg-value-7781' } })
+    )
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_search_tools', arguments: { query: 'qq-search-text-5512' } }, 2)
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const emitted = emit.mock.calls.map(([event]) => event as { type: string; payload: unknown })
+    expect(emitted.map((e) => e.type)).toEqual(
+      expect.arrayContaining(['mcp.tool_called', 'mcp.tool_searched'])
+    )
+    for (const event of emitted) {
+      const text = JSON.stringify(event.payload)
+      expect(text).not.toContain('zz-arg-value-7781')
+      if (event.type !== 'mcp.tool_searched') expect(text).not.toContain('qq-search-text-5512')
+    }
+    const searched = emitted.find((e) => e.type === 'mcp.tool_searched')
+    expect((searched?.payload as { query: string }).query).toBe('qq-search-text-5512')
+    emit.mockRestore()
   })
 })
 
@@ -721,5 +1067,109 @@ describe('event_log persistence registration', () => {
     expect(text).toMatch(/'mcp\.tools_list_called'/)
     expect(text).toMatch(/'mcp\.resource_read'/)
     expect(text).toMatch(/'mcp\.skill_loaded'/)
+    expect(text).toMatch(/'mcp\.skill_not_found'/)
+    expect(text).toMatch(/'mcp\.tool_searched'/)
+  })
+})
+
+describe('the dispatcher completion line (one per tools/call, none for chatter)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('names the method, tool, key, company and outcome of a successful tools/call', async () => {
+    const request = mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} })
+    await handleMcpRequest(request)
+    const note = readCompletionLog(request)
+    expect(note?.quiet).toBe(false)
+    expect(note?.fields).toEqual({
+      mcpMethod: 'tools/call',
+      tool: 'gnubok_list_skills',
+      apiKeyId: 'key-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      outcome: 'ok',
+      errorCode: null,
+    })
+  })
+
+  it('carries the error code of a failed tools/call', async () => {
+    const request = mcpRequest('tools/call', { name: 'gnubok_does_not_exist', arguments: {} })
+    await handleMcpRequest(request)
+    expect(readCompletionLog(request)?.fields).toMatchObject({
+      tool: 'gnubok_does_not_exist',
+      outcome: 'error',
+      errorCode: 'UNKNOWN_TOOL',
+    })
+  })
+
+  it('marks tools/list and notifications/initialized quiet', async () => {
+    const list = mcpRequest('tools/list')
+    await handleMcpRequest(list)
+    expect(readCompletionLog(list)).toMatchObject({ quiet: true, fields: { mcpMethod: 'tools/list', tool: null } })
+
+    const initialized = mcpRequest('notifications/initialized')
+    await handleMcpRequest(initialized)
+    expect(readCompletionLog(initialized)?.quiet).toBe(true)
+  })
+})
+
+describe('PostHog mirror of a tool call', () => {
+  const call = () => handleMcpRequest(mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }))
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  afterEach(() => {
+    posthogCapture.mockReset()
+    vi.unstubAllEnvs()
+  })
+
+  it('sends nothing while analytics is off, as on a self-hosted install', async () => {
+    vi.stubEnv('NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN', 'phc_test')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const eventPromise = captureNextToolCalledEvent()
+    await call()
+    await eventPromise
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(posthogCapture).not.toHaveBeenCalled()
+  })
+
+  it('mirrors the call with fixed fields only, and a throwing capture changes nothing for the caller', async () => {
+    const offResult = await (await call()).json()
+
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    vi.stubEnv('NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN', 'phc_test')
+    posthogCapture.mockImplementation(() => {
+      throw new Error('posthog down')
+    })
+    const eventPromise = captureNextToolCalledEvent()
+    const response = await call()
+    expect(response.status).toBe(200)
+    const onResult = await response.json()
+    expect(onResult.error).toBeUndefined()
+    expect(onResult.result.isError).toBeFalsy()
+    expect(onResult.result.content).toEqual(offResult.result.content)
+
+    // The event log still gets its row.
+    expect((await eventPromise).tool).toBe('gnubok_list_skills')
+
+    await vi.waitFor(() => expect(posthogCapture).toHaveBeenCalledTimes(1))
+    const sent = posthogCapture.mock.calls[0][0] as {
+      distinctId: string
+      event: string
+      properties: Record<string, unknown>
+      groups: Record<string, string>
+    }
+    expect(Object.keys(sent).sort()).toEqual(['distinctId', 'event', 'groups', 'properties'])
+    expect(sent.distinctId).toBe('user-1')
+    expect(sent.event).toBe('$mcp_tool_call')
+    expect(sent.groups).toEqual({ company: '11111111-1111-4111-8111-111111111111' })
+    const allowed = new Set<string>(TOOL_CALL_EVENT_PROPERTIES)
+    expect(Object.keys(sent.properties).filter((key) => !allowed.has(key))).toEqual([])
+    expect(sent.properties.$mcp_tool_name).toBe('gnubok_list_skills')
+    expect(sent.properties.$mcp_is_error).toBe(false)
   })
 })

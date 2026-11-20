@@ -7,7 +7,7 @@
  */
 
 import type { EntityType, VatTreatment } from '@/types'
-import { byEntityType } from '@/lib/company/entity-type'
+import { templateAccountForForm } from '@/lib/company/entity-type'
 
 /**
  * Stable code for the "foreign-currency customer invoice without a rate"
@@ -54,8 +54,19 @@ export class InvoiceFxRateMissingError extends Error {
  *
  * For 'exempt': AB uses 3004 (Försäljning inom Sverige, momsfri),
  * EF uses 3100 (Momsfria intäkter, mapped to R2 in NE engine).
+ *
+ * `goods` says the sale is of goods: an invoice that stated a goods delivery
+ * abroad (delivery_country, #2906), a bank row on the income_products
+ * category. The zero-rated treatments then book the goods accounts, which is
+ * what puts the sale in the right momsdeklaration box: 3108 (ruta 35,
+ * periodisk sammanställning goods) instead of 3308 (ruta 39), 3105 (ruta 36)
+ * instead of 3305 (ruta 40). Every other sale books the services accounts.
  */
-export function getRevenueAccount(vatTreatment: VatTreatment, entityType: EntityType = 'enskild_firma'): string {
+export function getRevenueAccount(
+  vatTreatment: VatTreatment,
+  entityType: EntityType = 'enskild_firma',
+  { goods = false }: { goods?: boolean } = {},
+): string {
   switch (vatTreatment) {
     case 'standard_25':
       return '3001' // Försäljning 25%
@@ -64,15 +75,18 @@ export function getRevenueAccount(vatTreatment: VatTreatment, entityType: Entity
     case 'reduced_6':
       return '3003' // Försäljning 6%
     case 'reverse_charge':
-      return '3308' // Försäljning tjänst EU
+      // Varor till annat EU-land, momsfri / Försäljning tjänst EU
+      return goods ? '3108' : '3308'
+    case 'reverse_charge_domestic':
+      // Försäljning inom byggsektorn, omvänd betalningsskyldighet (ruta 41)
+      return '3231'
     case 'export':
-      return '3305' // Försäljning tjänst Export
+      // Försäljning varor till land utanför EU / Försäljning tjänst Export
+      return goods ? '3105' : '3305'
     case 'exempt':
-      return byEntityType(entityType, {
-        aktiebolag: '3004',
-        enskild_firma: '3100',
-        ideell_forening: '3100',
-      })
+      // Momsfri försäljning: 3004 for a form that books like an aktiebolag
+      // (templateColumn 'ab'), 3100 for the others.
+      return templateAccountForForm(entityType, '3100', '3004') ?? '3100'
     default:
       return '3001'
   }

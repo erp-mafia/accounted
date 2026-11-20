@@ -2,7 +2,7 @@
  * gnubok_categorize_transaction on a transaction that already has a
  * journal entry.
  *
- * categorizeTransactionCore returns a success-shaped object for this case
+ * The old preview returned a success-shaped object for this case
  * ({ success: true, journal_entry_created: false, journal_entry_error }),
  * which the tool used to pass through as its result. STAGED_OPERATION_SCHEMA
  * requires staged/risk_level/actor/message/preview, so strict clients
@@ -30,7 +30,7 @@ beforeEach(() => {
 })
 
 describe('gnubok_categorize_transaction: already booked', () => {
-  it('throws a plain error naming the existing verifikat instead of returning an off-schema object', async () => {
+  it('throws an error naming the existing verifikat instead of returning an off-schema object', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: {
@@ -48,7 +48,8 @@ describe('gnubok_categorize_transaction: already booked', () => {
         is_business: true,
       },
       error: null,
-    }) // core: transactions select('*')
+    }) // the service's transactions read
+    enqueue({ data: [{ id: JE_ID, status: 'posted' }], error: null }) // the pointer's verifikat is posted
 
     await expect(
       categorize.execute(

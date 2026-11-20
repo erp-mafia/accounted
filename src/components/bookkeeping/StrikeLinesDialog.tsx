@@ -11,20 +11,21 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
-import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import { AccountNumber } from '@/components/ui/account-number'
 import { useToast } from '@/components/ui/use-toast'
 import { useAccounts } from '@/lib/reference-data/hooks'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { changeCorrectionLineAccount, getSelectableCorrectionCatalog } from '@/lib/bookkeeping/correction-line-account'
 import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
-import { Loader2, Plus, Trash2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
+import { formatDate } from '@/lib/utils'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
 interface NewLine {
@@ -39,6 +40,8 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   onCorrected: () => void
+  /** The filed momsperiod the verifikat is dated in, when its date is open and the record has one. */
+  filedVat?: { tax_period: string; filed_on: string } | null
 }
 
 /**
@@ -46,9 +49,9 @@ interface Props {
  * and add replacement lines in the SAME verifikat, without an
  * ändringsverifikation. The struck originals stay visible (strikethrough)
  * in the verifikat via the immutable rättelse log. Stays Swedish
- * (verifikat surface, .claude/rules/i18n.md).
+ * (verifikat surface).
  */
-export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrected }: Props) {
+export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrected, filedVat }: Props) {
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
   // The full chart (deactivated rows included) comes from the session cache
@@ -162,13 +165,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
 
   // Effective verifikat after the rättelse: remaining original lines + new lines.
   const remaining = originalLines.filter((l) => !strikeIds.has(l.id))
-  const remainingDebit = remaining.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
-  const remainingCredit = remaining.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0)
-  const newDebit = newLines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
-  const newCredit = newLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-  const totalDebit = Math.round((remainingDebit + newDebit) * 100) / 100
-  const totalCredit = Math.round((remainingCredit + newCredit) * 100) / 100
-  const isBalanced = totalDebit === totalCredit && totalDebit > 0
+  const { totalDebit, totalCredit, balanced: isBalanced } = lineBalance([...remaining, ...newLines])
 
   const newLinesValid = newLines.every((l) => {
     const debit = parseFloat(l.debit_amount) || 0
@@ -223,7 +220,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
@@ -250,10 +247,18 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
           </DialogDescription>
         </DialogHeader>
 
+        {/* The button in the top bar opens this without passing the Rätta
+            menu, where the same sentence sits: said here too. */}
+        {filedVat && (
+          <p className="text-xs text-muted-foreground">
+            {t('correct_menu_period_filed', { period: filedVat.tax_period, date: formatDate(filedVat.filed_on) })}
+          </p>
+        )}
+
         {/* Original lines with strike checkboxes */}
         <div className="space-y-1">
           <p className="text-sm font-medium">Markera rader som ska strykas</p>
-          <div className="rounded-lg border divide-y">
+          <div className="divide-y">
             {originalLines.map((line) => {
               const struck = strikeIds.has(line.id)
               // FX lines carry conversion data replacements cannot reproduce;
@@ -297,83 +302,44 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
           </div>
 
           {accountsStatus !== 'ready' && (
-            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground">
+            <div className="flex items-center justify-between gap-3 rounded-lg p-3 text-sm text-muted-foreground bg-control shadow-raised">
               <span className="flex items-center gap-2">
-                {accountsStatus === 'loading' && <Loader2 className="h-4 w-4 animate-spin" />}
+                {accountsStatus === 'loading' && <SpinnerIcon className="h-4 w-4 animate-spin" />}
                 {accountsStatus === 'loading' ? t('accounts_loading') : t('accounts_load_failed')}
               </span>
               {accountsStatus === 'error' && (
-                <Button variant="outline" size="sm" onClick={() => void refreshAccounts()}>
+                <Button variant="outline" onClick={() => void refreshAccounts()}>
                   {t('accounts_retry')}
                 </Button>
               )}
             </div>
           )}
 
-          <div className="space-y-2">
-            {newLines.map((line, index) => (
-              <div key={index} className="space-y-2 sm:space-y-0 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_auto] sm:gap-2 sm:items-start border-b sm:border-0 pb-3 sm:pb-0 last:border-0">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] sm:contents gap-2">
-                  {/* min-w-0: at sm: the sm:contents wrapper promotes this cell
-                      to a direct grid item; without it the combobox refuses to
-                      shrink below its content and overflows the dialog (same
-                      pattern as SendInvoiceDialog's desktop rows). */}
-                  <div className="min-w-0">
-                    <AccountCombobox
-                      value={line.account_number}
-                      accounts={activeAccounts}
-                      catalog={selectableCatalog}
-                      onChange={(v) => updateNewLineAccount(index, v)}
-                      onCreateAccount={(prefill) => {
-                        setCreatingAccountForLine(index)
-                        setCreateAccountPrefill(prefill)
-                      }}
-                      disabled={accountsStatus !== 'ready'}
-                    />
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 min-h-[44px] min-w-[44px] sm:order-last"
-                    onClick={() => removeNewLine(index)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                <Input
-                  value={line.line_description}
-                  onChange={(e) => updateNewLine(index, 'line_description', e.target.value)}
-                  placeholder="Beskrivning"
-                  className="h-8"
-                />
-                <div className="grid grid-cols-2 gap-2 sm:contents">
-                  <Input
-                    type="number"
-                    value={line.debit_amount}
-                    onChange={(e) => updateNewLine(index, 'debit_amount', e.target.value)}
-                    placeholder="Debet"
-                    className="h-8 text-right"
-                    min={0}
-                    step="0.01"
-                  />
-                  <Input
-                    type="number"
-                    value={line.credit_amount}
-                    onChange={(e) => updateNewLine(index, 'credit_amount', e.target.value)}
-                    placeholder="Kredit"
-                    className="h-8 text-right"
-                    min={0}
-                    step="0.01"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <Button variant="outline" size="sm" onClick={addNewLine}>
-            <Plus className="h-4 w-4 mr-1" />
-            Lägg till rad
-          </Button>
+          <KonteringLinesEditor
+            lines={newLines}
+            accounts={activeAccounts}
+            catalog={selectableCatalog}
+            onAccountChange={updateNewLineAccount}
+            onAmountChange={(index, field, value) => updateNewLine(index, field, value)}
+            onDescriptionChange={(index, value) => updateNewLine(index, 'line_description', value)}
+            onAdd={addNewLine}
+            onRemove={removeNewLine}
+            onCreateAccount={(index, prefill) => {
+              setCreatingAccountForLine(index)
+              setCreateAccountPrefill(prefill)
+            }}
+            accountsDisabled={accountsStatus !== 'ready'}
+            minLines={0}
+            header={false}
+            labels={{
+              account: 'Konto',
+              description: 'Beskrivning',
+              debit: 'Debet',
+              credit: 'Kredit',
+              addRow: 'Lägg till rad',
+              removeRow: 'Ta bort rad',
+            }}
+          />
         </div>
 
         {/* Effective balance after the rättelse */}

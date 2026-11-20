@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { coreKey, ledgerKey } from '@/lib/parties/ledger-key'
 import { addDays, daysBetween } from './dates'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Arkiv phase 4: did the expected money arrive? Obligations are compared
@@ -15,7 +16,7 @@ export interface ObserveSummary {
 }
 
 /** Days before and after a due date a payment may land. */
-const DATE_TOLERANCE_DAYS = 10
+export const DATE_TOLERANCE_DAYS = 10
 /** An expected payment this far past due with nothing arrived is missed. */
 const MISSED_AFTER_DAYS = 14
 /** How far back an obligation is still compared, so a late arrival can settle a missed one. */
@@ -56,8 +57,20 @@ interface TransactionRow {
   merchant_name: string | null
 }
 
-export async function observeObligations(supabase: SupabaseClient, companyId: string, today: string): Promise<ObserveSummary> {
-  const obligations = await loadObligations(supabase, companyId, today)
+/**
+ * `agreementIds` narrows the run to those agreements' obligations: the
+ * manual agreements of a company outside the brain rollout (the Bolaget
+ * rollout, lib/env/commitments-switch.ts) are observed without its derived
+ * ones. Without it every obligation of the company is compared, as before.
+ */
+export async function observeObligations(
+  supabase: SupabaseClient,
+  companyId: string,
+  today: string,
+  opts: { agreementIds?: readonly string[] } = {},
+): Promise<ObserveSummary> {
+  if (opts.agreementIds && opts.agreementIds.length === 0) return { checked: 0, matched: 0, missed: 0 }
+  const obligations = await loadObligations(supabase, companyId, today, opts.agreementIds)
   const summary: ObserveSummary = { checked: obligations.length, matched: 0, missed: 0 }
   if (obligations.length === 0) return summary
   const agreements = await loadAgreements(supabase, [...new Set(obligations.map((o) => o.agreement_id))])
@@ -134,15 +147,16 @@ function textTokens(t: TransactionRow): Set<string> {
   )
 }
 
-async function loadObligations(supabase: SupabaseClient, companyId: string, today: string): Promise<ObligationRow[]> {
-  const { data, error } = await supabase
+async function loadObligations(supabase: SupabaseClient, companyId: string, today: string, agreementIds?: readonly string[]): Promise<ObligationRow[]> {
+  let query = supabase
     .from('agreement_obligations')
     .select('id, agreement_id, due_on, amount, currency, amount_is_estimate, status, direction')
     .eq('company_id', companyId)
     .in('status', ['expected', 'missed'])
     .gte('due_on', addDays(today, -LOOKBACK_DAYS))
     .lte('due_on', addDays(today, LOOKAHEAD_DAYS))
-    .order('due_on', { ascending: true })
+  if (agreementIds) query = query.in('agreement_id', [...agreementIds])
+  const { data, error } = await query.order('due_on', { ascending: true })
   if (error) throw new Error(`obligations fetch failed: ${error.message}`)
   return (data ?? []) as ObligationRow[]
 }
@@ -163,14 +177,20 @@ async function loadParties(supabase: SupabaseClient, ids: string[]): Promise<Par
 /** Unignored transactions around the obligations' due dates; the sign is checked per obligation's direction. */
 async function loadTransactions(supabase: SupabaseClient, companyId: string, obligations: ObligationRow[]): Promise<TransactionRow[]> {
   const dates = obligations.map((o) => o.due_on).sort()
-  const { data, error } = await supabase
-    .from('transactions')
-    .select('id, date, amount, currency, description, original_description, merchant_name')
-    .eq('company_id', companyId)
-    .eq('is_ignored', false)
-    .gte('date', addDays(dates[0], -DATE_TOLERANCE_DAYS))
-    .lte('date', addDays(dates[dates.length - 1], DATE_TOLERANCE_DAYS))
-    .limit(2000)
-  if (error) throw new Error(`transactions fetch failed: ${error.message}`)
-  return (data ?? []) as TransactionRow[]
+  // Paged: a payment past the first 1000 rows of the window would read as a missed one.
+  try {
+    return await fetchAllRows<TransactionRow>((range) =>
+      supabase
+        .from('transactions')
+        .select('id, date, amount, currency, description, original_description, merchant_name')
+        .eq('company_id', companyId)
+        .eq('is_ignored', false)
+        .gte('date', addDays(dates[0], -DATE_TOLERANCE_DAYS))
+        .lte('date', addDays(dates[dates.length - 1], DATE_TOLERANCE_DAYS))
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+  } catch (error) {
+    throw new Error(`transactions fetch failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }

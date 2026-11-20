@@ -264,8 +264,7 @@ describe('mapSalesInvoice: kreditfaktura', () => {
  * #2789: what a provider's own credit note becomes, end to end through the
  * provider mapper and the importer. Before the fix a Fortnox kreditfaktura
  * landed as status 'paid' with paid_amount equal to its negative total, no
- * reference to the invoice it credits and no disclosure: 3 200 such rows
- * across 92 companies in production, none of them ever 'credited'.
+ * reference to the invoice it credits and no disclosure, none of them ever 'credited'.
  */
 describe('mapSalesInvoice: a provider credit note end to end (#2789)', () => {
   // InvoiceFull as Fortnox serialises it: `Credit` is the string "true",
@@ -453,18 +452,25 @@ describe('mapSupplierInvoice: kreditfaktura', () => {
   })
 
   it('flips accounting rows together: a balanced voucher reads as the invoice it reverses', () => {
-    // Fortnox sends the document's ACCOUNTING rows, which net to zero: the
-    // header decides the factor, and the 2440 row keeps the opposite sign of
-    // the cost rows, exactly as on an ordinary migrated Fortnox invoice.
+    // Fortnox sends the document's ACCOUNTING rows. The 2440 row is the
+    // payable leg the booking engine writes itself, so it is dropped; with no
+    // VAT stated on the header (Fortnox states none for a supplier invoice)
+    // the 2641 row stays as a row, and what is left flips to the magnitudes
+    // of the invoice it reverses, the float residue of the VAT row included.
     const rows = [[2440, 1250], [4010, -1000], [2641, -250.00000000000003]].map(([account, total], i) => ({
       id: String(i + 1), lineExtensionAmount: { value: total, currencyCode: 'SEK' }, accountNumber: String(account),
     }))
-    const { items } = mapSupplier(supplierDto({ invoiceTypeCode: '381', signOfAmounts: -1, lines: rows }))
-    expect(items.map((item) => [item.account_number, item.line_total])).toEqual([['2440', -1250], ['4010', 1000], ['2641', 250]])
+    const { items, rowsMismatch } = mapSupplier({
+      ...supplierDto({ invoiceTypeCode: '381', signOfAmounts: -1, lines: rows }),
+      taxTotal: undefined,
+      legalMonetaryTotal: { payableAmount: { value: -1250, currencyCode: 'SEK' } },
+    })
+    expect(items.map((item) => [item.account_number, item.line_total])).toEqual([['4010', 1000], ['2641', 250]])
+    expect(rowsMismatch).toBe(false)
   })
 
   it('keeps the relative sign of the rows on a credit note that also charges something', () => {
-    const line = (id: string, total: number) => ({ id, quantity: total < 0 ? -1 : 1, unitPrice: { value: Math.abs(total), currencyCode: 'SEK' },
+    const line = (id: string, total: number) => ({ id, accountNumber: '4010', quantity: total < 0 ? -1 : 1, unitPrice: { value: Math.abs(total), currencyCode: 'SEK' },
       lineExtensionAmount: { value: total, currencyCode: 'SEK' }, taxPercent: 25, taxAmount: { value: total * 0.25, currencyCode: 'SEK' } })
     const { items, invoice } = mapSupplier({ ...supplierDto({ invoiceTypeCode: '381', signOfAmounts: -1 }), lines: [line('1', -1200), line('2', 200)] })
     expect(items.map((item) => [item.quantity, item.unit_price, item.line_total, item.vat_amount]))

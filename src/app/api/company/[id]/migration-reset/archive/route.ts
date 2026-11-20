@@ -1,18 +1,18 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { privateNoStore } from '@/lib/api/private-no-store'
-import { utcDateStamp } from '@/lib/utils'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   estimateArchiveSize,
-  generateFullArchive,
+  streamFullArchive,
 } from '@/lib/reports/full-archive-export'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fileResponse, streamedBody } from '@/lib/api/file-response'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
-
-const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
+// Streamed like /api/reports/full-archive: bounded by time, not memory.
+export const maxDuration = 800
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -124,67 +124,45 @@ export const GET = withRouteContext<Params>(
     const estimateOnly = searchParams.get('estimate') === '1'
     const includeDocuments = searchParams.get('include_documents') !== 'false'
 
-    try {
-      const estimate = await estimateArchiveSize(archiveClient, reset.source_company_id, 'all')
-      const plannedSizeBytes = includeDocuments
-        ? estimate.total_bytes
-        : Math.max(0, estimate.total_bytes - estimate.document_bytes)
-      if (estimateOnly) {
-        return privateNoStore(NextResponse.json(
-          {
-            data: {
-              ...estimate,
-              archived_at: reset.created_at,
-              size_limit_bytes: SIZE_LIMIT_BYTES,
-              within_limit: plannedSizeBytes <= SIZE_LIMIT_BYTES,
-            },
-          },
-        ))
+    if (estimateOnly) {
+      try {
+        const estimate = await estimateArchiveSize(archiveClient, reset.source_company_id, 'all')
+        return privateNoStore(NextResponse.json({
+          data: { ...estimate, archived_at: reset.created_at },
+        }))
+      } catch (error) {
+        log.error('migration reset source archive estimate failed', error as Error, {
+          userId: user.id,
+          companyId,
+          sourceCompanyId: reset.source_company_id,
+        })
+        return privateNoStore(errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId }))
       }
-
-      if (plannedSizeBytes > SIZE_LIMIT_BYTES) {
-        return privateNoStore(NextResponse.json(
-          {
-            error: 'archive_too_large',
-            size_bytes: plannedSizeBytes,
-            size_limit_bytes: SIZE_LIMIT_BYTES,
-          },
-          { status: 413 },
-        ))
-      }
-
-      const zipBuffer = await generateFullArchive(archiveClient, reset.source_company_id, {
-        scope: 'all',
-        include_documents: includeDocuments,
-      })
-      const filename = `migration_reset_archive_${utcDateStamp(new Date())}.zip`
-
-      log.info('migration reset source archive generated', {
-        userId: user.id,
-        companyId,
-        sourceCompanyId: reset.source_company_id,
-        includeDocuments,
-        filename,
-        sizeBytes: zipBuffer.byteLength,
-      })
-
-      return new NextResponse(zipBuffer, {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/zip',
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Cache-Control': 'private, no-store',
-        },
-      })
-    } catch (error) {
-      log.error('migration reset source archive generation failed', error as Error, {
-        userId: user.id,
-        companyId,
-        sourceCompanyId: reset.source_company_id,
-      })
-      return privateNoStore(
-        errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId }),
-      )
     }
+
+    const filename = `migration_reset_archive_${todayIsoStockholm().replace(/-/g, '')}.zip`
+    const logContext = {
+      userId: user.id,
+      companyId,
+      sourceCompanyId: reset.source_company_id,
+      includeDocuments,
+      filename,
+    }
+    // Streamed as it is written (see /api/reports/full-archive): a failure
+    // after the headers can only cut the download off, so it is logged here.
+    const archive = streamFullArchive(archiveClient, reset.source_company_id, {
+      scope: 'all',
+      include_documents: includeDocuments,
+    })
+    return fileResponse(
+      streamedBody(archive, {
+        onEnd: (sizeBytes) => log.info('migration reset source archive generated', { ...logContext, sizeBytes }),
+        onError: (error, bytesSent) =>
+          log.error('migration reset source archive generation failed', error as Error, { ...logContext, bytesSent }),
+        onCancel: (bytesSent) =>
+          log.info('migration reset source archive download cancelled', { ...logContext, bytesSent }),
+      }),
+      { filename, contentType: 'application/zip', cacheControl: 'private, no-store' },
+    )
   },
 )

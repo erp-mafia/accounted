@@ -1,12 +1,24 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
+import { roundOre } from '@/lib/money'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import type { IncomeStatementReport, IncomeStatementSection, TrialBalanceRow } from '@/types'
+import {
+  AKTIVERAT_ARBETE_RANGES,
+  INCOME_STATEMENT_DEFINITIONS,
+  NETTOOMSATTNING_RANGES,
+  OVRIGA_RORELSEINTAKTER_RANGES,
+  inAccountRanges,
+  type AccountRange,
+} from './income-definitions'
 
 /**
  * Generate Income Statement (Resultaträkning)
  *
  * Filters to class 3-8 accounts:
- * - Rörelseintäkter (3xxx): Revenue
+ * - Rörelseintäkter (3xxx): Revenue. total_revenue is all of class 3; the
+ *   statutory nettoomsättning (3000-3799) and the other RR revenue lines are
+ *   returned separately, see income-definitions.ts
  * - Rörelsekostnader (4-7xxx): Operating expenses
  * - Finansiella poster (8xxx): Financial items
  * - Årets resultat: Net result
@@ -140,15 +152,16 @@ export function buildIncomeStatementFromRows(
     periodMovements,
   )
 
-  // Financial sections (class 8): exclude 8999 "Årets resultat".
-  // 8999 is a closing account: when year-end posts "8999 debit → 2099 credit"
-  // to move the computed profit into equity, including 8999's debit balance
-  // here cancels out the revenue/expense difference and drives net_result to
-  // zero. The income statement shows the *computed* årets resultat as
-  // (revenue - expenses + financial), so 8999's own balance must stay out.
+  // Financial sections (class 8): exclude årets resultat (8990-8999).
+  // These are closing accounts: when an omföring posts "8999 debit → 2099
+  // credit" (or through 8990) to move the computed profit into equity,
+  // including that debit balance here cancels out the revenue/expense
+  // difference and drives net_result to zero. The income statement shows the
+  // *computed* årets resultat as (revenue - expenses + financial), so their
+  // own balance must stay out.
   const financialSections = buildSections(
     incomeExpenseRows.filter(
-      (r) => r.account_class === 8 && r.account_number !== '8999'
+      (r) => r.account_class === 8 && !isAretsResultatAccount(r.account_number)
     ),
     {
       '80': 'Resultat andelar koncernföretag',
@@ -168,6 +181,17 @@ export function buildIncomeStatementFromRows(
   const totalExpenses = expenseSections.reduce((sum, s) => sum + s.subtotal, 0)
   const totalFinancial = financialSections.reduce((sum, s) => sum + s.subtotal, 0)
 
+  // Statutory RR revenue lines, summed from the same rounded row amounts as
+  // the sections so nettoomsattning + aktiverat_arbete + ovriga_rorelseintakter
+  // always equals total_revenue for 4-digit BAS accounts.
+  const revenueRows = revenueSections.flatMap((s) => s.rows)
+  const sumRanges = (ranges: readonly AccountRange[]) =>
+    roundOre(
+      revenueRows
+        .filter((row) => inAccountRanges(row.account_number, ranges))
+        .reduce((sum, row) => sum + row.amount, 0),
+    )
+
   return {
     revenue_sections: revenueSections.filter((s) => s.rows.length > 0),
     total_revenue: Math.round(totalRevenue * 100) / 100,
@@ -176,6 +200,11 @@ export function buildIncomeStatementFromRows(
     financial_sections: financialSections.filter((s) => s.rows.length > 0),
     total_financial: Math.round(totalFinancial * 100) / 100,
     net_result: Math.round((totalRevenue - totalExpenses + totalFinancial) * 100) / 100,
+    nettoomsattning: sumRanges(NETTOOMSATTNING_RANGES),
+    aktiverat_arbete: sumRanges(AKTIVERAT_ARBETE_RANGES),
+    ovriga_rorelseintakter: sumRanges(OVRIGA_RORELSEINTAKTER_RANGES),
+    rorelseresultat: roundOre(totalRevenue - totalExpenses),
+    definitions: INCOME_STATEMENT_DEFINITIONS,
     period: { start: '', end: '' }, // Will be filled by caller
   }
 }

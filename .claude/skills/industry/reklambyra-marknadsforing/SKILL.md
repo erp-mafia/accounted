@@ -78,8 +78,8 @@ Verifierat mot BAS 2025 (Kontoplan-BAS-2025.xlsx, bas.se). Notera att BAS 2025 h
 | **5420** | Programvaror | SaaS- och AI-prenumerationer (Adobe CC, ChatGPT Teams, Midjourney, Claude Pro, Figma). |
 | **5970** | Film-, radio-, TV- och Internetreklam | Byråns egna mediainköp för egen marknadsföring (inte kundens kampanjer). |
 | **5980** | PR, institutionell reklam och sponsring | **Sponsringsutgifter med dokumenterad motprestation**: separera avdragsgill del från eventuell gåvodel (jfr RÅ 2000 ref. 31). |
-| **6071** | Representation, avdragsgill | OBS: I BAS är 6071 *avdragsgill* och 6072 *ej avdragsgill*: vanligt invertfel. Måltidsrepresentation 2025 endast moms-avdragsgill (60 kr/person ink. moms), inte inkomstskattemässigt. |
-| **6072** | Representation, ej avdragsgill | Den del av sponsringspaket eller kundbjudningar som inte uppfyller motprestationskrav. |
+| **6071** | Representation, avdragsgill | OBS: I BAS är 6071 *avdragsgill* och 6072 *ej avdragsgill*: vanligt invertfel. Bara enklare förtäring (högst 60 kr/person exkl. moms) och kringkostnader (högst 180 kr/person exkl. moms) hör hit, aldrig en måltid. |
+| **6072** | Representation, ej avdragsgill | Måltidsrepresentation (kundlunch, kundmiddag): inte avdragsgill vid inkomstbeskattningen sedan 2017 (IL 16 kap 2 §), momsen avdragsgill på ett underlag om högst 300 kr exkl. moms/person och tillfälle (`swedish-vat`). Även den del av sponsringspaket eller kundbjudningar som inte uppfyller motprestationskrav. |
 | **6540** | IT-tjänster | Externa molntjänster, AI-API-användning (OpenAI API, Anthropic API), DevOps. |
 | **6559** | Övrig konsultverksamhet | **Frilansande kreatörer med F-skatt** (copywriters, art directors, foto, motion designers). |
 | **6860** | Inhyrd marknads- och försäljningspersonal | Bemanningsföretag för marknadsfunktioner. |

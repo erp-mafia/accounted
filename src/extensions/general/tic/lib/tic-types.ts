@@ -95,50 +95,6 @@ export interface TICCompanyDocument {
 }
 
 /**
- * v2 `/companies/{id}/bank-accounts` returns only Bankgirot numbers
- * (`Bankgironumber_Dto[]`), not full bank accounts. v1's IBAN / plusgiro
- * / generic bank-account coverage is gone from this endpoint.
- */
-export interface TICBankgirot {
-  bankgironumber?: number | null
-  terminated?: boolean | null
-  name?: string | null
-  isTaxBankgironumber?: boolean | null
-  updatedAt?: string | null
-}
-
-/** v2 `/companies/{id}/industries` returns `CompanyIndustryCode_Dto[]`. */
-export interface TICIndustryCode {
-  companyIndustryCodeType?: 'sni2007' | 'sni2025' | 'other' | string
-  industryCode?: string | null
-  description?: string | null
-  rank?: number | null
-}
-
-/** v2 `/companies/{id}/email-addresses` returns `View_CompanyEmail[]`. */
-export interface TICEmail {
-  emailAddress?: string | null
-  firstSeenAtUtc?: string | null
-  lastSeenAtUtc?: string | null
-}
-
-/** v2 `/companies/{id}/phone-numbers` returns `CompanyPhoneNumber_Dto[]`. */
-export interface TICPhone {
-  phoneNumberFormatted?: string | null
-  e164PhoneNumber?: string | null
-  firstSeenAtUtc?: string | null
-  lastSeenAtUtc?: string | null
-}
-
-/** v2 `/companies/{id}/purposes` returns `CompanyPurpose_Dto[]`. */
-export interface TICCompanyPurpose {
-  companyPurposeId?: number
-  purpose?: string
-  firstSeenAtUtc?: string
-  lastUpdatedAtUtc?: string
-}
-
-/**
  * Raw Bolagsverket beneficial-owner notification record: one per
  * registration event. The latest active notification is what we care
  * about; older ones describe ownership changes over time.
@@ -177,7 +133,7 @@ export type TICBeneficialOwnerResponse = TICBeneficialOwnerNotificationRaw[]
  * Document type enum from v2 `/companies/{id}/documents`. The endpoint
  * returns every document the company has filed (annual reports, audit
  * reports, articles of association, minutes, etc.); we filter on this
- * field to extract the financial-report subset that TicWorkspace shows.
+ * field to extract the financial-report subset the profile carries.
  */
 export type TICDocumentType =
   | 'annualReport'
@@ -215,10 +171,9 @@ export interface TICDocument {
 }
 
 /**
- * Normalized financial-report row consumed by TicWorkspace. v1's TIC
+ * Normalized financial-report row in the company profile. v1's TIC
  * endpoint returned this shape directly; in v2 we derive it from
- * `TICDocument` (filtered to `type === 'annualReport'`). Keeping the
- * shape stable means TicWorkspace doesn't need to change.
+ * `TICDocument` (filtered to `type === 'annualReport'`).
  */
 export interface TICFinancialReportSummary {
   financialReportSummaryId?: number
@@ -301,21 +256,6 @@ export interface TICPayrollMomsAg {
 export interface TICPayrollSummary {
   payroll2?: TICPayroll2[]
   payrolls?: TICPayrollMomsAg[]
-}
-
-/**
- * v2 `/companies/{id}/signatory` returns `CompanySignatory_Dto[]`.
- * Each entry's `signatureDescription` is free-form Swedish text
- * describing firmateckning rules ("Firman tecknas av styrelsen.
- * Firman tecknas två i förening av ledamöterna.").
- */
-export interface TICSignatory {
-  companySignatoryId?: number
-  companyId?: number
-  signatureDescription?: string | null
-  firstSeenAtUtc?: string | null
-  lastSeenAtUtc?: string | null
-  lastUpdatedAtUtc?: string | null
 }
 
 /**
@@ -470,6 +410,14 @@ export interface TICCompanyProfile {
     equityAssetsRatio: number | null
   } | null
   financialReports: TICFinancialReportSummary[]
+  /**
+   * True when the documents call answered, so `financialReports` is the full
+   * list of annual reports Bolagsverket holds. False when it failed and the
+   * list is an empty placeholder: "no reports" and "could not ask" must not
+   * look the same to a gate that reads it (the closed-year reopen refuses on
+   * a registered report, crm#1290).
+   */
+  financialReportsComplete: boolean
   fiscalYear: TICProfileFiscalYear | null
   fiscalYearHistory: TICProfileFiscalYear[]
   signatory: TICProfileSignatory[]

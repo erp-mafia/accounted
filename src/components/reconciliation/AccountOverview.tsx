@@ -1,15 +1,18 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import { QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -19,16 +22,38 @@ import type {
   ReconciliationItemBucket,
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
+import type { BankBalanceCheck } from '@/lib/reconciliation/bank-balance-check'
+import { dropProposedLedgerDuplicates } from '@/lib/reconciliation/overview-rows'
+import { accountTransactionsHref } from '@/lib/reconciliation/account-links'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
 import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { ReconciliationSummary } from './ReconciliationSummary'
+import { lacksSkatteverketSaldo, sidesAgree, skatteverketNotConnected } from './verdict'
 import { PairRow, PairsHead } from './ReconciliationPairs'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { SKATTEKONTO_ACCOUNT_DEFAULT, isSkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+
+const SkattekontoLinkProposalsDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoLinkProposalsDialog').then(
+      (module) => module.SkattekontoLinkProposalsDialog,
+    ),
+  { loading: DialogLoadingSkeleton },
+)
+
+const SkattekontoMatchDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoMatchDialog').then(
+      (module) => module.SkattekontoMatchDialog,
+    ),
   { loading: DialogLoadingSkeleton },
 )
 
@@ -56,6 +81,8 @@ const BUCKET_ORDER: ReconciliationItemBucket[] = [
   'matched',
   'ignored',
   'upcoming',
+  // Bank only, and only once asked for: read on demand (beforeItems).
+  'before_history',
 ]
 
 /** Buckets that start folded: they explain the bridge but are not work. */
@@ -78,21 +105,45 @@ interface AccountOverviewProps {
   onChanged: () => void
   /** Opens the manual match view. */
   onMatchManually?: () => void
+  /**
+   * The workspace's slot in the top bar, beside "Senast avstämt": the
+   * sign-off details and Öppna igen render there, so the date is said once.
+   */
+  headerSlot?: HTMLElement | null
+  /** Where the sign-off primary renders instead of the actions row: the top bar's action group. */
+  primarySlot?: HTMLElement | null
 }
 
-export function AccountOverview({ account, otherBankAccounts = [], window, onChanged, onMatchManually }: AccountOverviewProps) {
+export function AccountOverview({ account, otherBankAccounts = [], window, onChanged, onMatchManually, headerSlot = null, primarySlot = null }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const { toast } = useToast()
   const [status, setStatus] = useState<ReconciliationStatus | null>(null)
+  // The company's skattekonto account (1630, or 2012 for an enskild firma that
+  // runs it there): what the skattekonto texts name.
+  const skattekontoAccount =
+    status && isSkattekontoLedgerAccount(status.account_number) ? status.account_number : SKATTEKONTO_ACCOUNT_DEFAULT
   const [items, setItems] = useState<ItemsPayload | null>(null)
   const [loadError, setLoadError] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  // Every action here writes (match, book, sign off, reopen): locked while one runs, and for a read-only member.
+  const { canWrite } = useViewerLock()
+  const locked = busy !== null || !canWrite
   const [unfolded, setUnfolded] = useState<Set<ReconciliationItemBucket>>(new Set())
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
+  // Skattekonto: every proposal linked in one previewed action (PH 171).
+  const [linkAllOpen, setLinkAllOpen] = useState(false)
+  // Row the book dialog handed to the match flow (a ledger twin exists). Kept
+  // as the converted row so the match dialog's fetch effect sees a stable object.
+  const [matchRow, setMatchRow] = useState<SkattekontoTransactionWithSuggestion | null>(null)
   const [signoffOpen, setSignoffOpen] = useState(false)
   const [matcher, setMatcher] = useState<MatcherMatch[] | null>(null)
   const [bridgeOpen, setBridgeOpen] = useState(false)
+  // Bank: the verifikat dated before the bank's history (crm#1221), listed
+  // only when asked for. Null until read; a refresh reads them again.
+  const [beforeOpen, setBeforeOpen] = useState(false)
+  const [beforeItems, setBeforeItems] = useState<ReconciliationItem[] | null>(null)
   const searchParams = useSearchParams()
   const autorunRequested = searchParams.get('autorun') === '1'
   const autorunDone = useRef(false)
@@ -102,7 +153,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   // bridge (IB, movement, UB against a specification or the signer's
   // underlag) and the sign-off.
   const isManual = account.kind === 'manual'
-  const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
+  const transactionsHref = accountTransactionsHref(account)
+  const base =`/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
 
   const load = useCallback(async () => {
     try {
@@ -120,6 +172,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       const itemsJson = await itemsRes.json()
       setStatus(statusJson.data as ReconciliationStatus)
       setItems(itemsJson.data as ItemsPayload)
+      setBeforeItems(null)
     } catch {
       setLoadError(true)
     }
@@ -136,18 +189,45 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
     onChanged()
   }, [load, onChanged])
 
+  useEffect(() => {
+    if (!beforeOpen || beforeItems !== null) return
+    let cancelled = false
+    void (async () => {
+      const qs = new URLSearchParams({
+        date_from: window.from,
+        date_to: window.to,
+        bucket: 'before_history',
+        limit: String(ITEMS_LIMIT),
+      })
+      try {
+        const res = await fetch(`${base}/items?${qs.toString()}`)
+        const json = res.ok ? await res.json() : null
+        if (!cancelled) setBeforeItems(((json?.data?.items ?? []) as ReconciliationItem[]))
+      } catch {
+        if (!cancelled) setBeforeItems([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [beforeOpen, beforeItems, base, window.from, window.to])
+
   const byBucket = useMemo(() => {
     const map = new Map<ReconciliationItemBucket, ReconciliationItem[]>()
     for (const b of BUCKET_ORDER) map.set(b, [])
-    for (const item of items?.items ?? []) map.get(item.bucket)?.push(item)
+    // A verifikat its proposals fully explain shows in its pair only, not again as missing on the other side.
+    for (const item of dropProposedLedgerDuplicates(items?.items ?? [])) map.get(item.bucket)?.push(item)
+    if (beforeOpen && beforeItems) map.set('before_history', beforeItems)
     return map
-  }, [items])
+  }, [items, beforeOpen, beforeItems])
 
   const proposedCount = status?.counts.proposed ?? 0
   const bookableIds = useMemo(
     () =>
       (byBucket.get('unmatched_external') ?? [])
-        .filter((i) => i.item_type === 'skattekonto_transaction' && i.actions.includes('book'))
+        // A row the ledger already holds (a summarised verifikat covers it)
+        // is linked, not booked: "Bokför N händelser" never counts it.
+        .filter((i) => i.item_type === 'skattekonto_transaction' && i.actions.includes('book') && !i.covered_by_ledger)
         .map((i) => i.item_id),
     [byBucket],
   )
@@ -175,7 +255,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   async function matchProposals() {
     setBusy('proposals')
     try {
-      const data = await postJson(`${base}/links`, { use_proposals: true })
+      // One click links every 1:1 proposal and same-date sum (0.95); a sum
+      // found within the 7-day window (0.85) waits for its own row's Koppla.
+      const data = await postJson(`${base}/links`, { use_proposals: true, set_confidence_threshold: 0.9 })
       if (data) {
         const applied = (data.applied as unknown[]).length
         const skipped = (data.skipped as unknown[]).length
@@ -199,14 +281,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         item.proposal.journal_entry_id,
       ]
       const data = await postJson(`${base}/links`, {
-        pairs: [{ external_ids: [item.item_id], journal_entry_ids: journalEntryIds }],
+        // A combined skattekonto proposal links every row of its group at once.
+        pairs: [{ external_ids: item.proposal.external_ids ?? [item.item_id], journal_entry_ids: journalEntryIds }],
       })
       if (data) {
         const skipped = data.skipped as Array<{ message: string }>
         if (skipped.length > 0) {
           toast({ title: t('toast_failed'), description: skipped[0].message, variant: 'destructive' })
         } else {
-          toast({ title: t('toast_matched', { applied: 1 }) })
+          toast({ title: t('toast_matched', { applied: (data.applied as unknown[] | undefined)?.length ?? 1 }) })
         }
         await refresh()
       }
@@ -218,7 +301,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   async function unmatchOne(item: ReconciliationItem) {
     setBusy(item.item_id)
     try {
-      const data = await postJson(`${base}/links/${item.item_id}`, undefined, 'DELETE')
+      // A verifikat linked to other verifikat is undone by its settlement id;
+      // a bank or skattekonto row by its own id.
+      const linkId = item.settlement?.settlement_id ?? item.item_id
+      const data = await postJson(`${base}/links/${linkId}`, undefined, 'DELETE')
       if (data) {
         toast({ title: t('toast_unmatched') })
         await refresh()
@@ -252,8 +338,23 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         const results = (data.results ?? []) as SkattekontoBatchRowResult[]
         const ok = results.filter((r) => r.ok).length
         const failed = results.length - ok
+        // Rows whose event the ledger already holds were skipped, not lost:
+        // say so, and that they are linked rather than booked.
+        const twins = results.filter((r) => r.error_code === 'LEDGER_TWIN_EXISTS').length
+        // The same for rows a summarised verifikat already covers.
+        const covered = results.filter((r) => r.error_code === 'LEDGER_COVER_EXISTS').length
+        // And for rows a bank verifikat already books without the
+        // skattekonto (PH 171): ignored rather than linked.
+        const direct = results.filter((r) => r.error_code === 'LEDGER_DIRECT_EXISTS').length
         toast({
           title: failed > 0 ? t('toast_book_partial', { ok, failed }) : t('toast_booked', { count: ok }),
+          ...(covered > 0
+            ? { description: t('toast_book_covered', { count: covered, skattekonto: skattekontoAccount }) }
+            : twins > 0
+              ? { description: t('toast_book_twins', { count: twins }) }
+              : direct > 0
+                ? { description: t('toast_book_direct', { count: direct }) }
+                : {}),
           variant: failed > 0 && ok === 0 ? 'destructive' : undefined,
         })
         await refresh()
@@ -412,24 +513,17 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
 
   // ---- render -------------------------------------------------------------
 
-  if (loadError) {
-    return (
-      <div>
-        <div className="min-w-0">
-          <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
-            {t('load_failed')}
-          </AttnLine>
-        </div>
-      </div>
-    )
+  // Nothing on screen yet: the load failure says so in place of the account.
+  if (loadError && (!status || !items)) {
+    return <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
   }
 
   if (!status || !items) {
     // The silhouette of the page that follows: the strip of figures, the
     // action row and the paired rows, so nothing moves when the data lands.
     return (
-      <div className="space-y-6" aria-busy>
-        <div className="grid grid-cols-2 gap-6 border-b border-border pb-4 md:grid-cols-4">
+      <LateReveal className="space-y-6">
+        <div className="grid grid-cols-2 gap-6 border-b-hairline pb-4 md:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="space-y-2">
               <Skeleton className="h-3 w-24" />
@@ -438,25 +532,25 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           ))}
         </div>
         <div className="flex items-center gap-4">
-          <Skeleton className="h-9 w-64 rounded-full" />
+          <Skeleton className="h-8 w-64 rounded-md" />
           <Skeleton className="h-3 w-24" />
           <Skeleton className="h-3 w-24" />
         </div>
         <div className="space-y-px">
-          <div className="flex items-center gap-6 border-b border-border py-2">
+          <div className="flex items-center gap-6 border-b-hairline py-2">
             <Skeleton className="h-3 w-12" />
             <Skeleton className="h-3 w-24" />
             <Skeleton className="ml-auto h-3 w-16" />
           </div>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-6 border-b border-border/60 py-3.5">
+            <div key={i} className="flex items-center gap-6 border-b-hairline py-3.5">
               <Skeleton className="h-3.5 w-20" />
               <Skeleton className="h-3.5 w-48" />
               <Skeleton className="ml-auto h-3.5 w-20" />
             </div>
           ))}
         </div>
-      </div>
+      </LateReveal>
     )
   }
 
@@ -469,6 +563,22 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const specificationLabel = specification ? (locale === 'en' ? specification.label_en : specification.label_sv) : null
 
   const bankRaw = status.bank as { bank_transaction_inflow?: number; bank_transaction_outflow?: number; bank_transaction_count?: number } | null
+  // The bank's history (crm#1221): verifikat dated before its first day are
+  // outside the comparison, which starts there. Said once, under the verdict.
+  const bankHistory =
+    !isSkv && !isManual
+      ? (status.bank as {
+          history_start?: string | null
+          before_history_count?: number
+          before_history_total?: number
+          opening_difference?: number | null
+        } | null)
+      : null
+  const historyStart = bankHistory?.history_start ?? null
+  const beforeCount = bankHistory?.before_history_count ?? 0
+  const openingDifference = beforeCount > 0 ? (bankHistory?.opening_difference ?? null) : null
+  // The period ends before the bank's first row: there is no bank side to compare.
+  const periodBeforeHistory = !!historyStart && window.to < historyStart
   const bankBreakdown =
     !isSkv && bankRaw && typeof bankRaw.bank_transaction_inflow === 'number' && typeof bankRaw.bank_transaction_outflow === 'number'
       ? t('tile_bank_breakdown', {
@@ -500,8 +610,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             ? status.external_balance
             : (status.bridge.find((l) => l.key === 'bank_transactions')?.amount ?? status.external_balance),
         ),
-        // Bank: the gross split makes the net self-explanatory; skattekonto: when it was fetched.
-        sub: bankBreakdown ?? (fetchedAt ? t('tile_synced', { date: formatDate(fetchedAt) }) : t('rail_never_synced')),
+        // Bank: the gross split makes the net self-explanatory; skattekonto:
+        // when it was fetched, or that the company is not connected (crm#1701).
+        sub:
+          bankBreakdown ??
+          (fetchedAt
+            ? t('tile_synced', { date: formatDate(fetchedAt) })
+            : skatteverketNotConnected(status)
+              ? t('tile_skv_not_connected')
+              : t('rail_never_synced')),
       }
 
   const tiles: Array<{ key: string; label: string; value: string; sub: string; tone?: 'ok' | 'attn'; help?: string }> = [
@@ -512,7 +629,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         ? t('tile_ledger', { account: status.account_number })
         : t('tile_ledger_bank', { account: status.account_number }),
       value: money(status.ledger_balance),
-      sub: t('tile_per', { date: formatDate(asOfDate) }),
+      sub:
+        beforeCount > 0 && historyStart
+          ? t('tile_from', { date: formatDate(historyStart) })
+          : t('tile_per', { date: formatDate(asOfDate) }),
     },
     { key: 'difference', label: t('tile_difference'), value: money(status.difference), sub: '' },
     {
@@ -555,7 +675,34 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           })
       : null
 
-  const unexplained = status.unexplained_difference
+  // The bank's balance against the books on the bank's own day
+  // (lib/reconciliation/bank-balance-check.ts). The tiles compare movements
+  // in the period and cannot see an opening balance that never reached the
+  // books, so this stands under the verdict instead of behind the bridge. Its
+  // parts sum to the difference.
+  const balanceCheck =
+    !isSkv && !isManual ? ((status.bank as { balance_check?: BankBalanceCheck | null } | null)?.balance_check ?? null) : null
+  const balanceDiffers = balanceCheck !== null && Math.abs(balanceCheck.difference) >= 0.005
+  const balanceParts =
+    balanceCheck && balanceDiffers
+      ? [
+          balanceCheck.unbooked.count > 0
+            ? t('balance_check_part_unbooked', {
+                count: balanceCheck.unbooked.count,
+                amount: formatCurrency(balanceCheck.unbooked.total, currency),
+              })
+            : null,
+          balanceCheck.before_history && Math.abs(balanceCheck.before_history.difference) >= 0.005
+            ? t('balance_check_part_before', {
+                date: formatDate(balanceCheck.before_history.history_start),
+                amount: formatCurrency(balanceCheck.before_history.difference, currency),
+              })
+            : null,
+          Math.abs(balanceCheck.rest) >= 0.005
+            ? t('balance_check_part_rest', { amount: formatCurrency(balanceCheck.rest, currency) })
+            : null,
+        ].filter((part): part is string => part !== null)
+      : []
 
   const bucketLabel = (bucket: ReconciliationItemBucket): string => {
     switch (bucket) {
@@ -571,6 +718,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         return t('bucket_ignored')
       case 'upcoming':
         return t('bucket_upcoming')
+      case 'before_history':
+        return isSkv ? t('bucket_before_history') : t('bucket_before_history_bank')
     }
   }
 
@@ -579,10 +728,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
     (byBucket.get('unmatched_external')?.length ?? 0) +
     (byBucket.get('unmatched_ledger')?.length ?? 0)
 
-  // The verdict in one sentence. The difference once, then what
-  // explains it as the bridge's own counted lines ("9 omatchade
-  // banktransaktioner"), then what is left unexplained only when it differs
-  // from the difference itself. The full bridge stays behind a disclosure.
+  // The verdict in one sentence: what the difference holds, as the bridge's
+  // own counted lines ("9 omatchade banktransaktioner"). The Differens and
+  // Oförklarat tiles above carry the amounts, so the sentence never repeats
+  // them; the full bridge stays behind a disclosure.
   const explained = status.bridge
     .filter((l) => !['bank_transactions', 'external_balance', 'specification', 'ledger_balance', 'opening_balance', 'movement'].includes(l.key))
     .filter((l) => l.count != null && l.count > 0)
@@ -590,26 +739,35 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       const label = locale === 'en' ? l.label_en : l.label_sv
       return `${l.count} ${label.charAt(0).toLowerCase()}${label.slice(1)}`
     })
-  const diffAbs = Math.abs(status.difference ?? 0)
-  const verdict =
-    status.is_reconciled || diffAbs < 0.005
-      ? isSkv
-        ? t('v2_verdict_ok_skv')
-        : isManual
-          ? t('v2_verdict_ok_manual')
-          : t('v2_verdict_ok_bank')
-      : explained.length > 0
-        ? t('v2_verdict_diff', { amount: formatCurrency(diffAbs, currency), explanations: explained.join(', ') })
-        : t('v2_verdict_diff_plain', { amount: formatCurrency(diffAbs, currency) })
-  const verdictUnexplained =
-    unexplained != null && Math.abs(unexplained) >= 0.005 && Math.abs(Math.abs(unexplained) - diffAbs) >= 0.005
-      ? t('v2_verdict_unexplained', { amount: formatCurrency(unexplained, currency) })
-      : null
+  // No bank row at all on the account (lib/reconciliation/service.ts): two
+  // zeros are no agreement, so the sentence says what is missing instead of
+  // "Banken och bokföringen stämmer" (PH 195). The same for a skattekonto
+  // with no saldo from Skatteverket (crm#1701).
+  const noBankRows = !isSkv && !isManual && (status.bank as { no_bank_rows?: boolean } | null)?.no_bank_rows === true
+  const verdict = noBankRows
+    ? fetchedAt
+      ? t('v2_verdict_no_bank_rows_synced', { date: formatDate(fetchedAt) })
+      : t('v2_verdict_no_bank_rows')
+    : lacksSkatteverketSaldo(status)
+      ? skatteverketNotConnected(status)
+        ? t('v2_verdict_skv_not_connected')
+        : t('v2_verdict_no_skv_saldo')
+      : sidesAgree(status)
+        ? isSkv
+          ? t('v2_verdict_ok_skv')
+          : isManual
+            ? t('v2_verdict_ok_manual')
+            : balanceDiffers
+              ? t('v2_verdict_ok_bank_balance_differs')
+              : t('v2_verdict_ok_bank')
+        : explained.length > 0
+          ? t('v2_verdict_diff', { explanations: explained.join(', ') })
+          : null
 
 
   // Default sign-off date: the window end, never past today nor past the
   // skattekonto snapshot. The button hides when that date is already signed.
-  const todayIso = new Date().toISOString().slice(0, 10)
+  const todayIso = todayIsoStockholm()
   const signoffMaxDate = isSkv ? (asOfDate < todayIso ? asOfDate : todayIso) : todayIso
   const signoffDefaultDate = window.to < signoffMaxDate ? window.to : signoffMaxDate
   const signoffEnabled = !status.signoff || status.signoff.through_date < signoffDefaultDate
@@ -622,16 +780,16 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         {/* The two sides and what separates them, on one line (Kick's
             reconciliation strip): the outside, the ledger, the difference,
             the part of it nothing explains. */}
-        <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-border pb-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b-hairline pb-4 md:grid-cols-4">
           {tiles.map((tile) => (
             <div key={tile.key} className="min-w-0">
-              <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+              <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
                 <span className="truncate">{tile.label}</span>
                 {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
               </div>
               <div
                 className={cn(
-                  'mt-1 text-[20px] font-semibold leading-tight tabular-nums',
+                  'mt-1 text-xl font-semibold leading-tight tabular-nums',
                   tile.tone === 'ok' && 'text-success',
                   tile.tone === 'attn' && 'text-warning',
                 )}
@@ -639,72 +797,181 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
               >
                 {tile.value}
               </div>
-              {tile.sub && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{tile.sub}</div>}
+              {tile.sub && <div className="mt-0.5 truncate text-xs text-muted-foreground">{tile.sub}</div>}
             </div>
           ))}
         </div>
-        <p className={cn('text-[13.5px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
+        <p className={cn('text-[13px]', status.is_reconciled && !balanceDiffers ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
           {verdict}
-          {verdictUnexplained && <span className="ml-1 text-warning">{verdictUnexplained}</span>}
-          <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3 text-[12.5px]')}>
+          <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, verdict && 'ml-3', 'text-xs')}>
             {bridgeOpen ? t('v2_hide_bridge') : t('v2_show_bridge')}
           </button>
         </p>
+        {balanceCheck && (
+          <div className="space-y-1 text-xs text-muted-foreground" data-ph-mask>
+            <p>
+              {balanceDiffers
+                ? t('balance_check_diff', {
+                    bank: formatCurrency(balanceCheck.bank_balance, currency),
+                    date: formatDate(balanceCheck.as_of),
+                    account: status.account_number,
+                    booked: formatCurrency(balanceCheck.booked_balance, currency),
+                    difference: formatCurrency(balanceCheck.difference, currency),
+                  })
+                : t('balance_check_ok', {
+                    date: formatDate(balanceCheck.as_of),
+                    amount: formatCurrency(balanceCheck.bank_balance, currency),
+                  })}
+            </p>
+            {balanceParts.length > 0 && (
+              <div className="flex items-center gap-1">
+                <span>{t('balance_check_parts', { parts: balanceParts.join(' · ') })}</span>
+                <InfoTooltip content={t('balance_check_help', { account: status.account_number })} iconClassName="h-3 w-3" />
+              </div>
+            )}
+          </div>
+        )}
         {bridgeOpen && (
           <div className="space-y-2">
             <ReconciliationSummary status={status} kind={account.kind} specificationLabel={specificationLabel} />
             {bankReportedLine && (
-              <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+              <p className="text-xs text-muted-foreground" data-ph-mask>
                 {bankReportedLine}
+              </p>
+            )}
+            {/* Where the books stood when the bank's history begins: part of
+                the bridge's story, so it waits behind the bridge. */}
+            {openingDifference != null && (
+              <p className="text-xs text-muted-foreground" data-ph-mask>
+                {Math.abs(openingDifference) < 0.005
+                  ? t('before_history_opening_ok', { account: status.account_number })
+                  : t('before_history_opening_diff', {
+                      account: status.account_number,
+                      amount: formatCurrency(Math.abs(openingDifference), currency),
+                    })}
               </p>
             )}
           </div>
         )}
+        {beforeCount > 0 && historyStart && (
+          <p className="text-xs text-muted-foreground" data-ph-mask>
+            {t('before_history_line', {
+              count: beforeCount,
+              date: formatDate(historyStart),
+              amount: formatCurrency(bankHistory?.before_history_total ?? 0, currency),
+            })}
+            <button type="button" onClick={() => setBeforeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3')}>
+              {beforeOpen ? t('hide') : t('before_history_show')}
+            </button>
+          </p>
+        )}
+        {periodBeforeHistory && historyStart && (
+          <p className="text-xs text-muted-foreground">
+            {t('before_history_window', { date: formatDate(historyStart) })}{' '}
+            <Link href="/import?mode=bank" className={QUIET_LINK_CLASS}>
+              {t('before_history_import')}
+            </Link>
+          </p>
+        )}
       </div>
 
-      {status.stale ? <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine> : null}
+      {/* One notice at a time: stale data first, else the rows a summarised
+          verifikat already covers, with the way to link them. One line: the
+          why behind the "?". A skattekonto without a saldo has nothing to be
+          stale: the verdict already says why there is none (crm#1701). */}
+      {loadError ? (
+        // A failed refresh keeps the rows and takes the one notice slot.
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : status.stale && !lacksSkatteverketSaldo(status) ? (
+        <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine>
+      ) : isSkv && status.skattekonto?.covered ? (
+        <AttnLine
+          action={
+            proposedCount > 0
+              ? { label: t('action_match_proposals', { count: proposedCount }), onClick: () => setLinkAllOpen(true) }
+              : onMatchManually
+                ? { label: t('mode_match'), onClick: onMatchManually }
+                : undefined
+          }
+          trailing={
+            <InfoTooltip
+              variant="help"
+              content={t('covered_help', { skattekonto: skattekontoAccount })}
+              className="ml-1 align-middle"
+              iconClassName="h-3 w-3"
+            />
+          }
+        >
+          {t('covered_line', {
+            count: status.skattekonto.covered.event_count,
+            date: formatDate(status.skattekonto.covered.through_date),
+          })}
+        </AttnLine>
+      ) : null}
 
-      {status.signoff && (
-        <p className="group flex items-center gap-2 text-[13px] text-muted-foreground">
-          <span>
-            {t('signed_off_line', { date: formatDate(status.signoff.through_date), when: formatDate(status.signoff.signed_at) })}
-            {status.signoff.note && <span className="ml-1">· {t('signed_off_forced')}</span>}
-          </span>
-          <button
-            type="button"
-            onClick={() => void reopen(status.signoff!.id)}
-            disabled={busy !== null}
-            className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
-          >
-            {t('reopen')}
-          </button>
-        </p>
-      )}
+      {/* The sign-off rides in the top bar beside "Senast avstämt" (the
+          workspace's slot), so the date is said once: whether it was signed
+          with a note, when it was signed, and the way to reopen it. */}
+      {headerSlot &&
+        status.signoff &&
+        createPortal(
+          <span title={t('signed_off_line', { date: formatDate(status.signoff.through_date), when: formatDate(status.signoff.signed_at) })}>
+            {status.signoff.note && <> · {t('signed_off_forced')}</>}
+            {' · '}
+            <button
+              type="button"
+              onClick={() => void reopen(status.signoff!.id)}
+              disabled={locked}
+              className={cn(QUIET_LINK_CLASS, 'text-xs')}
+            >
+              {t('reopen')}
+            </button>
+          </span>,
+          headerSlot,
+        )}
 
       {/* Actions row: the work, then the way to the richer surfaces. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {proposedCount > 0 && (
-          <Button size="sm" onClick={() => void matchProposals()} disabled={busy !== null}>
+          // Skattekonto: the proposals open as one previewed set (count, sum,
+          // verifikat) with Ångra afterwards, PH 171; a bank account links
+          // its proposals directly, as before. Outline: the one filled
+          // button on the page is the sign-off.
+          <Button
+            variant="outline"
+            onClick={() => (isSkv ? setLinkAllOpen(true) : void matchProposals())}
+            disabled={locked}
+          >
             {t('action_match_proposals', { count: proposedCount })}
           </Button>
         )}
         {isSkv && bookableIds.length > 0 && (
-          <Button size="sm" variant="outline" onClick={() => void bookAll()} disabled={busy !== null}>
+          <Button variant="outline" onClick={() => void bookAll()} disabled={locked}>
             {t('action_book_rows', { count: bookableIds.length })}
           </Button>
         )}
-        {signoffEnabled && (
-          <Button size="sm" onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
-            {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
-          </Button>
-        )}
+        {/* The page's one filled primary rides in the top bar when the
+            workspace gives a slot for it (V7 Pengar, Avstämning). */}
+        {signoffEnabled &&
+          (primarySlot ? (
+            createPortal(
+              <Button size="toolbar" onClick={() => setSignoffOpen(true)} disabled={locked}>
+                {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
+              </Button>,
+              primarySlot,
+            )
+          ) : (
+            <Button onClick={() => setSignoffOpen(true)} disabled={locked}>
+              {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
+            </Button>
+          ))}
         {!isSkv && !isManual && (
-          <button type="button" className={QUIET_LINK_CLASS} onClick={() => void runMatcher()} disabled={busy !== null} aria-busy={busy === 'matcher'}>
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => void runMatcher()} disabled={locked} aria-busy={busy === 'matcher'}>
             {t('action_run_bank_matcher')}
           </button>
         )}
         {onMatchManually && (
-          <button type="button" className={QUIET_LINK_CLASS} onClick={onMatchManually} disabled={busy !== null}>
+          <button type="button" className={QUIET_LINK_CLASS} onClick={onMatchManually} disabled={locked}>
             {t('mode_match')}
           </button>
         )}
@@ -712,6 +979,16 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           <span className="ml-auto">
             <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
               {t('action_open_skattekonto')}
+            </Link>
+          </span>
+        )}
+        {/* The account's own rows: the Konton row used to open them, and now
+            opens this view, so the way there lives here (as Skattekonto and
+            Huvudbok do for the other kinds). */}
+        {transactionsHref && (
+          <span className="ml-auto">
+            <Link href={transactionsHref} className={QUIET_LINK_CLASS}>
+              {t('action_open_transactions')}
             </Link>
           </span>
         )}
@@ -731,7 +1008,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         <MatcherPreview
           matches={matcher}
           currency={currency}
-          busy={busy !== null}
+          busy={locked}
           onApply={(pairs, strongOnly) => void applyMatches(pairs, strongOnly)}
           onClose={() => setMatcher(null)}
         />
@@ -742,7 +1019,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         <p className="max-w-[560px] text-[13px] text-muted-foreground">
           {specificationLabel ? t('manual_spec_hint', { label: specificationLabel }) : t('manual_hint')}
         </p>
-      ) : items.items.length === 0 ? (
+      ) : items.items.length === 0 && (byBucket.get('before_history')?.length ?? 0) === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       ) : (
         <div className="overflow-x-auto">
@@ -767,12 +1044,12 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                     <tr className="bg-muted/30">
                       <td
                         colSpan={7}
-                        className="px-0 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
+                        className="px-0 py-2 text-xs font-semibold text-muted-foreground"
                       >
                         <span className="flex items-center gap-3">
                           <span>
                             {bucketLabel(bucket)}
-                            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground/70" data-ph-mask>
+                            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground" data-ph-mask>
                               {rows.length}
                             </span>
                           </span>
@@ -780,9 +1057,22 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                             <button
                               type="button"
                               onClick={toggle}
-                              className="normal-case tracking-normal text-[12px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+                              className="normal-case tracking-normal text-xs font-normal text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
                             >
                               {folded ? t('show_all', { count: rows.length }) : t('hide')}
+                            </button>
+                          )}
+                          {/* A wrong verifikat and its hand-made rättelse can be
+                              linked to each other in the worksheet: offered where
+                              the engine can judge it (bank accounts in SEK). */}
+                          {bucket === 'unmatched_ledger' && account.kind === 'bank' && currency === 'SEK' && onMatchManually && (
+                            <button
+                              type="button"
+                              onClick={onMatchManually}
+                              disabled={locked}
+                              className="normal-case tracking-normal text-xs font-normal text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
+                            >
+                              {t('action_settle_ledger')}
                             </button>
                           )}
                         </span>
@@ -797,13 +1087,14 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                           sourceLabel={sourceLabel}
                           currency={currency}
                           busy={busy === item.item_id}
-                          anyBusy={busy !== null}
+                          anyBusy={locked}
                           onMatch={() => void matchOne(item)}
                           onUnmatch={() => void unmatchOne(item)}
                           onIgnore={() => void setIgnored(item, true)}
                           onUnignore={() => void setIgnored(item, false)}
                           onBook={() => setBookRow(item)}
-                          onMarkIb={!isSkv && item.side === 'ledger' && item.bucket === 'unmatched_ledger' ? () => void markOpeningBalance(item) : undefined}
+                          onLinkInstead={isSkv ? onMatchManually : undefined}
+                          onMarkIb={!isSkv && item.side === 'ledger' && (item.bucket === 'unmatched_ledger' || item.bucket === 'before_history') && item.ib_eligible ? () => void markOpeningBalance(item) : undefined}
                           moveTargets={!isSkv && item.item_type === 'transaction' && item.bucket === 'unmatched_external' ? otherBankAccounts : []}
                           onMove={(target) => void moveToAccount(item, target)}
                         />
@@ -814,7 +1105,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             </tbody>
           </table>
           {items.has_more && (
-            <p className="px-4 pt-3 text-[12px] text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
+            <p className="px-4 pt-3 text-xs text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
           )}
         </div>
       )}
@@ -823,9 +1114,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       )}
 
-      <div className="space-y-2 border-t border-border pt-4">
+      <div className="space-y-2 border-t-hairline pt-4">
         {items.older_unmatched_count > 0 && (
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {t('older_unmatched', { count: items.older_unmatched_count })}
             {isSkv && (
               <>
@@ -838,6 +1129,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           </p>
         )}
         <ReconciliationUnderlag
+          canWrite={canWrite}
           accountKey={account.account_key}
           throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
         />
@@ -846,6 +1138,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       {isSkv && (
         <SkattekontoBookDialog
           row={bookRow ? toDialogRow(bookRow) : null}
+          skattekontoAccount={skattekontoAccount}
           open={bookRow !== null}
           onOpenChange={(open) => {
             if (!open) setBookRow(null)
@@ -854,6 +1147,34 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             setBookRow(null)
             void refresh()
           }}
+          onMatch={() => {
+            if (bookRow) setMatchRow(toDialogRow(bookRow))
+            setBookRow(null)
+          }}
+          onLinkCovered={onMatchManually}
+          onLinked={() => void refresh()}
+        />
+      )}
+
+      {linkAllOpen && (
+        <SkattekontoLinkProposalsDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setLinkAllOpen(false)
+          }}
+          onLinked={() => void refresh()}
+          onManual={onMatchManually}
+          skattekontoAccount={skattekontoAccount}
+        />
+      )}
+
+      {isSkv && (
+        <SkattekontoMatchDialog
+          row={matchRow}
+          open={matchRow !== null}
+          onClose={() => setMatchRow(null)}
+          onMatched={() => void refresh()}
+          skattekontoAccount={skattekontoAccount}
         />
       )}
 

@@ -11,6 +11,7 @@ import { Theater, type TheaterLine, type TheaterModelInput } from '../ui/Theater
 import type { TheaterApi } from '../engines/theater-engine'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 /**
  * The act reopened while an import job was still running (a reload mid
@@ -125,15 +126,13 @@ export function ResumeStep({ ctx, importId }: { ctx: BooksCtx; importId: string 
           hold={!error ? t('sie_hold_open') : null}
           progress={{ phase: error ? 'failed' : jobPhase ?? 'checking', written: tick, total, prepared }}
           onApi={setApi}
-          groupLabels={{ tillgangar: t('grp_assets'), skulder: t('grp_liabilities'), intakter: t('grp_revenue'), kostnader: t('grp_costs') }}
-          reviewLabel={t('grp_review')}
         />
       ) : null}
       {error ? (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn-quiet" onClick={() => dispatch({ type: 'GO_BACK', flags: ctx.flags })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags: ctx.flags })}>
             {t('provider_change_source')}
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>

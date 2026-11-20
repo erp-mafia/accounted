@@ -1,8 +1,9 @@
 import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
-import { TokenBucketRateLimiter } from '../rate-limiter';
+import { TokenBucketRateLimiter, connectionRateKey } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { FORTNOX_BASE_URL, FORTNOX_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
+import { cleanProviderPayload } from '../provider-text';
 import { fortnoxRetryAfter } from './oauth-error';
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -19,12 +20,18 @@ export class FortnoxApiError extends Error {
   }
 }
 
-/** Fortnox documents numeric resource error codes separately from OAuth errors. */
+/**
+ * Fortnox documents numeric resource error codes separately from OAuth errors.
+ * The key is spelled both ways in live answers: `code` on a missing licence
+ * (2001101), `Code` on a per-register 403 (2003275), as fortnoxErrorMessage
+ * already reads `message` and `Message`. What a code means for a refusal is
+ * read in fortnoxRefusal, nowhere else.
+ */
 export function fortnoxApiErrorCode(error: unknown): string | undefined {
   if (!(error instanceof FortnoxApiError) || !error.body) return undefined;
   try {
     const parsed = JSON.parse(error.body);
-    const code = parsed?.ErrorInformation?.code;
+    const code = parsed?.ErrorInformation?.code ?? parsed?.ErrorInformation?.Code;
     return typeof code === 'number' || (typeof code === 'string' && /^\d+$/.test(code)) ? String(code) : undefined;
   } catch { return undefined; }
 }
@@ -51,16 +58,76 @@ export function fortnoxErrorMessage(error: unknown): string | null {
 }
 
 /**
- * Missing scope or licence. Fortnox documents 403 for failed authorisation,
- * but live answers for an unlicensed/unscoped resource have also come back
- * as 400 with a behörighet/scope/licens message, so both are recognised.
+ * Why Fortnox refused a call:
+ *
+ *   api_license  the Fortnox account has no API licence at all (2001103)
+ *   license      the Fortnox company lacks the module a scope needs (2001101)
+ *   permission   the call may not read this resource (2000663, or a register
+ *                the user who connected may not see)
  */
-export function isFortnoxPermissionError(error: unknown): error is FortnoxApiError {
-  if (!(error instanceof FortnoxApiError)) return false;
-  if (error.statusCode === 403) return true;
-  if (error.statusCode !== 400) return false;
+export type FortnoxRefusalReason = 'api_license' | 'license' | 'permission';
+
+export interface FortnoxRefusal {
+  reason: FortnoxRefusalReason;
+  /**
+   * Fortnox named the cause with a code it documents. A bare 403 or a
+   * sentence alone is not documented evidence; callers that suspend
+   * scheduled work on a refusal (fortnoxCompletionBlock) require it.
+   */
+  documented: boolean;
+}
+
+/** Fortnox developer docs, "Errors". */
+const DOCUMENTED_REFUSALS: Readonly<Record<string, FortnoxRefusalReason>> = {
+  '2001103': 'api_license', // "Api-licens saknas."
+  '2001101': 'license', // "Det finns ingen aktiv licens för önskat scope"
+  '2000663': 'permission', // "Har inte behörighet för scope"
+};
+
+const REFUSAL_TEXT = /beh[öo]righet|r[äa]ttighet|scope|licens|licence|license|permission|unauthori[sz]ed/i;
+
+/**
+ * The one reading of a Fortnox refusal: classifyProviderError,
+ * providerRefusalReason and fortnoxCompletionBlock all decide through it, so
+ * the migration job, the SIE preview, the underlag import, asset import and
+ * invoice completion cannot disagree about the same answer. Null when the
+ * error is not a refusal (a dead token answers 401, an outage 5xx).
+ *
+ * An ordinary Fortnox connection reads with the rights of the Fortnox user
+ * who approved it (only a service account, which we do not request, is
+ * detached from a person). A register that user may not see is refused
+ * although the integration's scopes cover it, and Fortnox names the register
+ * with an undocumented code per register, under either status. Live answers
+ * (prod logs 2026-10-05 and 2026-10-12):
+ *
+ *   403 2003275 "Saknar behörighet för leverantörsregister."
+ *   400 2002182 "Saknar behörighet för leverantörsfaktura."
+ *   400 2001538 "Saknar behörighet för kundregister."
+ *   403 (plain text) "Du saknar behörighet för GET-anrop mot /3/invoices"
+ *
+ * and elsewhere "Saknar rättighet för att använda verifikationer." (2001381).
+ * Those are read from the status (Fortnox answers 401 for a dead token, so a
+ * 403 is a refusal) or from the sentence on a 400.
+ */
+export function fortnoxRefusal(error: unknown): FortnoxRefusal | null {
+  if (!(error instanceof FortnoxApiError) || error.statusCode >= 500 || error.statusCode === 429) return null;
+  const code = fortnoxApiErrorCode(error);
+  const documented = code ? DOCUMENTED_REFUSALS[code] : undefined;
+  if (documented) return { reason: documented, documented: true };
+  if (error.statusCode !== 403 && error.statusCode !== 400) return null;
   const text = `${error.body ?? ''} ${fortnoxErrorMessage(error) ?? ''}`;
-  return /beh[öo]righet|scope|licens|licence|license|permission|unauthori[sz]ed/i.test(text);
+  if (error.statusCode === 400 && !REFUSAL_TEXT.test(text)) return null;
+  const reason: FortnoxRefusalReason = /api-licens/i.test(text)
+    ? 'api_license'
+    : /licens|licence|license/i.test(text)
+      ? 'license'
+      : 'permission';
+  return { reason, documented: false };
+}
+
+/** Any refusal, see fortnoxRefusal. */
+export function isFortnoxPermissionError(error: unknown): error is FortnoxApiError {
+  return fortnoxRefusal(error) !== null;
 }
 
 function isRetryableError(error: unknown): boolean {
@@ -86,7 +153,7 @@ export class FortnoxClient {
   async get<T>(accessToken: string, path: string): Promise<T> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {
@@ -113,52 +180,7 @@ export class FortnoxClient {
           );
         }
 
-        return response.json() as Promise<T>;
-      },
-      {
-        maxAttempts: 6,
-        initialDelayMs: 2000,
-        maxDelayMs: 60_000,
-        shouldRetry: isRetryableError,
-        getDelayMs: (error) => {
-          if (error instanceof FortnoxApiError && error.retryAfterMs) {
-            return error.retryAfterMs;
-          }
-          return undefined;
-        },
-      },
-    );
-  }
-
-  async getText(accessToken: string, path: string): Promise<string> {
-    return withRetry(
-      async () => {
-        await this.rateLimiter.acquire();
-        const url = `${this.baseUrl}${path}`;
-        const response = await fetchInExecutionBudget(url, {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        });
-
-        if (!response.ok) {
-          const body = await response.text().catch(() => '');
-          let retryAfterMs: number | undefined;
-          if (response.status === 429) {
-            const retryAfter = response.headers.get('Retry-After');
-            const seconds = fortnoxRetryAfter(retryAfter);
-            retryAfterMs = seconds === undefined ? undefined : seconds * 1000;
-          }
-          throw new FortnoxApiError(
-            `Fortnox API error: ${response.status} ${response.statusText}`,
-            response.status,
-            body,
-            retryAfterMs,
-          );
-        }
-
-        return response.text();
+        return cleanProviderPayload(await response.json()) as T;
       },
       {
         maxAttempts: 6,
@@ -184,7 +206,7 @@ export class FortnoxClient {
   async getBytes(accessToken: string, path: string): Promise<ArrayBuffer> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {
@@ -236,7 +258,7 @@ export class FortnoxClient {
   ): Promise<{ bytes: ArrayBuffer; contentType: string | null }> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {

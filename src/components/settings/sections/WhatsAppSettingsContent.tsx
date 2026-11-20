@@ -3,7 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { WhatsAppLinkPanel } from '@/components/extensions/general/WhatsAppLinkPanel'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
-import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SettingsBackLink, SettingsSectionHeader } from '@/components/settings/SettingsRows'
 
 export function WhatsAppSettingsContent() {
   const tNav = useTranslations('settings_nav')
@@ -11,6 +11,7 @@ export function WhatsAppSettingsContent() {
 
   return (
     <div>
+      <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       <SettingsSectionHeader
         title={tNav('whatsapp')}
         intro={tIntro('whatsapp')}

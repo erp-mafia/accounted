@@ -1,4 +1,10 @@
 import type { CategorizationTemplateSource, VatTreatment } from '@/types'
+import {
+  COUNTERPART_SEEN_FOR_DIRECT,
+  reviewReason,
+  ruleReviewFlags,
+  type DirectBookingSettings,
+} from '@/lib/transactions/direct-booking'
 
 /**
  * Regler (UI v2 PR 5): the pure view of a
@@ -36,6 +42,8 @@ export interface RuleRow {
   source: CategorizationTemplateSource
   mode: RuleMode
   paused_at: string | null
+  /** A person set the rule to ask for a review on every booking (accounted#130). */
+  always_review: boolean
   created_at: string
   updated_at: string
 }
@@ -110,6 +118,35 @@ export function hitsUntilAuto(
   threshold = AUTO_THRESHOLD,
 ): number {
   return Math.max(0, threshold - (row.occurrence_count - row.corrections))
+}
+
+/**
+ * Whether a hit of the rule books with the row's one click, and if not why,
+ * by the same decision the transactions page and the categorize route make
+ * (lib/transactions/direct-booking.ts reviewReason), read for the rule
+ * alone. A row can still ask on its own evidence (a contested match, a
+ * reverse-charge box the read disputes); the rule cannot tell that.
+ */
+export type RuleOneClick =
+  | { kind: 'yes' }
+  | { kind: 'company_off' | 'always_review' | 'import' | 'paused' | 'proposed' }
+  | { kind: 'hits'; remaining: number }
+
+export function ruleOneClick(
+  row: Pick<RuleRow, 'mode' | 'occurrence_count' | 'source' | 'always_review'>,
+  settings: DirectBookingSettings,
+): RuleOneClick {
+  const reason = reviewReason(
+    { source: 'counterparty', confidence: 1, seen_count: row.occurrence_count, rule_mode: row.mode, ...ruleReviewFlags(row) },
+    settings,
+  )
+  if (reason === null) return { kind: 'yes' }
+  if (reason === 'company_off') return { kind: 'company_off' }
+  if (reason === 'rule_always_review') return { kind: 'always_review' }
+  if (reason === 'rule_import_unconfirmed') return { kind: 'import' }
+  // The evidence: not yet on the ladder's propose step, or not booked enough times.
+  if (row.mode === 'paused' || row.mode === 'proposed') return { kind: row.mode }
+  return { kind: 'hits', remaining: Math.max(1, COUNTERPART_SEEN_FOR_DIRECT - row.occurrence_count) }
 }
 
 /** Modes a user may set from the UI today. 'auto' waits for the autopilot tier. */

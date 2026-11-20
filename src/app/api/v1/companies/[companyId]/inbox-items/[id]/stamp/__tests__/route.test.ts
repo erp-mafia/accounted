@@ -3,7 +3,7 @@
  * the real withApiV1 wrapper (auth, scope, membership, idempotency) with the
  * Supabase client mocked per table.
  *
- * The 401 case is the regression guard: the route had no V1_ENDPOINT_SCOPES
+ * The 401 case is the regression guard: the route once had no scope-map
  * entry, so the wrapper answered NOT_FOUND to every caller (valid key or not)
  * before this file existed.
  */
@@ -26,31 +26,13 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
 type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const ITEM_ID = '22222222-2222-4222-8222-222222222222'
@@ -77,11 +59,11 @@ const params = (id = ITEM_ID) => ({ params: Promise.resolve({ companyId: COMPANY
 
 function withTables(tables: Record<string, MockResult | MockResult[]>) {
   mockServiceClient.mockReturnValue(
-    makeFlexibleSupabase({
+    createTableMockSupabase({
       company_members: { data: { role: 'owner' } },
       idempotency_keys: { data: null },
       ...tables,
-    }),
+    }).supabase,
   )
 }
 
@@ -89,7 +71,10 @@ describe('POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     withTables({
-      invoice_inbox_items: { data: { id: ITEM_ID, created_journal_entry_id: null } },
+      invoice_inbox_items: [
+        { data: { id: ITEM_ID, created_journal_entry_id: null } }, // read
+        { data: [{ id: ITEM_ID }] }, // compare-and-set stamp: one row
+      ],
       journal_entries: { data: { id: JE_ID } },
     })
   })
@@ -135,7 +120,7 @@ describe('POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp', () => {
     const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data).toEqual({ id: ITEM_ID, created_journal_entry_id: JE_ID })
+    expect(body.data).toEqual({ id: ITEM_ID, handle: toHandle('inbox_item', ITEM_ID), created_journal_entry_id: JE_ID })
   })
 
   it('is idempotent when the item is already stamped with the same entry', async () => {
@@ -144,6 +129,44 @@ describe('POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp', () => {
     const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
     expect(res.status).toBe(200)
     expect((await res.json()).data.created_journal_entry_id).toBe(JE_ID)
+  })
+
+  // accounted#14: two stamps that both read an empty pointer no longer both
+  // answer 200 with the later one re-pointing the item.
+  it('409 when a concurrent stamp with a different entry landed after the read', async () => {
+    authOk(['documents:write'])
+    const tables = {
+      invoice_inbox_items: [
+        { data: { id: ITEM_ID, created_journal_entry_id: null } }, // read: still empty
+        { data: [] }, // compare-and-set: the other stamp landed first
+        { data: { created_journal_entry_id: OTHER_JE_ID } }, // re-read
+      ],
+      journal_entries: { data: { id: JE_ID } },
+      company_members: { data: { role: 'owner' } },
+      idempotency_keys: { data: null },
+    }
+    const mock = createTableMockSupabase(tables)
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.details.current_journal_entry_id).toBe(OTHER_JE_ID)
+    expect(mock.findCalls('invoice_inbox_items', 'is')).toContainEqual(['created_journal_entry_id', null])
+  })
+
+  it('200 when the concurrent stamp that landed first named the same entry', async () => {
+    authOk(['documents:write'])
+    withTables({
+      invoice_inbox_items: [
+        { data: { id: ITEM_ID, created_journal_entry_id: null } },
+        { data: [] },
+        { data: { created_journal_entry_id: JE_ID } },
+      ],
+      journal_entries: { data: { id: JE_ID } },
+    })
+    const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ id: ITEM_ID, handle: toHandle('inbox_item', ITEM_ID), created_journal_entry_id: JE_ID })
   })
 
   it('409 when the item is already stamped with a different entry', async () => {

@@ -101,7 +101,7 @@ describe('mapFortnoxToSupplierInvoice: VAT', () => {
 });
 
 describe('mapFortnoxToSalesInvoice: VATIncluded rows', () => {
-  // Profilio (2026-09-05): a 956 kr invoice priced with VAT inside. Its rows
+  // A migration (2026-09-05): a 956 kr invoice priced with VAT inside. Its rows
   // were stored as if net, summing to 956 with 25 % on top, beside a header
   // that read 764.80 + 191.20 correctly.
   const inclusive = {
@@ -171,7 +171,7 @@ describe('mapFortnoxToSalesInvoice: VATIncluded rows', () => {
 });
 
 describe('mapFortnoxToSalesInvoice: header-level freight and fee', () => {
-  // Live shapes from Profilio (2026-09-05). Fortnox keeps freight and the
+  // Live shapes from one migration (2026-09-05). Fortnox keeps freight and the
   // administration fee on the header: `Net` excludes them, `Total` and
   // `TotalVAT` include them, and the *VAT fields are amounts, not rates.
   const base = {

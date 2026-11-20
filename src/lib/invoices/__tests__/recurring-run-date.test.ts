@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   alignRunDateToDay,
+  firstRunDateOnOrAfter,
   projectRunDates,
   runDateMatchesDayOfMonth,
 } from '../recurring-run-date'
@@ -28,6 +29,58 @@ describe('runDateMatchesDayOfMonth', () => {
     expect(runDateMatchesDayOfMonth('2027-13-15', 15)).toBe(false)
     expect(runDateMatchesDayOfMonth('2027-02-31', 31)).toBe(false)
     expect(runDateMatchesDayOfMonth('', 15)).toBe(false)
+  })
+})
+
+describe('firstRunDateOnOrAfter', () => {
+  it("picks this month's occurrence when the day has not passed", () => {
+    expect(firstRunDateOnOrAfter('2026-10-11', 15)).toBe('2026-10-15')
+  })
+
+  it('picks today when the day is today', () => {
+    expect(firstRunDateOnOrAfter('2026-10-11', 11)).toBe('2026-10-11')
+  })
+
+  it('moves to next month when the day already passed this month (crm#1103)', () => {
+    expect(firstRunDateOnOrAfter('2026-10-11', 1)).toBe('2026-11-01')
+    expect(firstRunDateOnOrAfter('2026-10-11', 10)).toBe('2026-11-10')
+  })
+
+  it('rolls over the year boundary', () => {
+    expect(firstRunDateOnOrAfter('2026-12-20', 5)).toBe('2027-01-05')
+  })
+
+  it('clamps day 29-31 in shorter months, this month and next', () => {
+    expect(firstRunDateOnOrAfter('2027-02-10', 31)).toBe('2027-02-28')
+    expect(firstRunDateOnOrAfter('2028-02-10', 30)).toBe('2028-02-29')
+    expect(firstRunDateOnOrAfter('2026-04-30', 31)).toBe('2026-04-30')
+    // From Jan 31, day 31 is today.
+    expect(firstRunDateOnOrAfter('2027-01-31', 31)).toBe('2027-01-31')
+    // Day 30 passed on Jan 31: February clamps to its last day.
+    expect(firstRunDateOnOrAfter('2027-01-31', 30)).toBe('2027-02-28')
+  })
+
+  it('from the first of a later month stays in that month', () => {
+    expect(firstRunDateOnOrAfter('2027-02-01', 1)).toBe('2027-02-01')
+    expect(firstRunDateOnOrAfter('2027-02-01', 31)).toBe('2027-02-28')
+  })
+
+  it('always lands on the grid and never before the start', () => {
+    for (const from of ['2026-01-31', '2026-02-28', '2026-06-15', '2026-12-31', '2028-02-29']) {
+      for (let day = 1; day <= 31; day++) {
+        const got = firstRunDateOnOrAfter(from, day)
+        expect(got >= from).toBe(true)
+        expect(runDateMatchesDayOfMonth(got, day)).toBe(true)
+      }
+    }
+  })
+
+  it('throws on an invalid date or day', () => {
+    expect(() => firstRunDateOnOrAfter('', 15)).toThrow()
+    expect(() => firstRunDateOnOrAfter('2026-02-31', 15)).toThrow()
+    expect(() => firstRunDateOnOrAfter('2026-10-11', 0)).toThrow()
+    expect(() => firstRunDateOnOrAfter('2026-10-11', 32)).toThrow()
+    expect(() => firstRunDateOnOrAfter('2026-10-11', 15.5)).toThrow()
   })
 })
 

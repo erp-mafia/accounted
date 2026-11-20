@@ -3,9 +3,8 @@ import {
   decodeFileContent,
   decodeStringContent,
   hasEncodingIssues,
-  recoverStringWithFFFD,
-  recoverWordWithFFFD,
   stripBOM,
+  prepareContent,
 } from '../encoding'
 
 describe('decodeStringContent', () => {
@@ -20,6 +19,24 @@ describe('decodeStringContent', () => {
     expect(decodeStringContent('GÃ\u0096TEBORG')).toBe('GÖTEBORG')
     expect(decodeStringContent('HISINGS KÃ\u0084RRA')).toBe('HISINGS KÄRRA')
     expect(decodeStringContent('Ã\u0085NGE')).toBe('ÅNGE')
+  })
+
+  it('recovers UTF-8-as-Windows-1252 mojibake for uppercase Swedish chars', () => {
+    // A Windows-1252 read turns the second byte of Ö/Ä/Å (0x96/0x84/0x85)
+    // into U+2013/U+201E/U+2026, code points far above one byte.
+    expect(decodeStringContent('G\u00c3\u2013TEBORG')).toBe('GÖTEBORG')
+    expect(decodeStringContent('HISINGS K\u00c3\u201eRRA')).toBe('HISINGS KÄRRA')
+    expect(decodeStringContent('\u00c3\u2026NGE')).toBe('ÅNGE')
+    expect(decodeStringContent('\u00c3\u2026rets resultat f\u00c3\u00b6r \u00c3\u2013vriga')).toBe(
+      'Årets resultat för Övriga',
+    )
+  })
+
+  it('never half-repairs a string that is not one clean double encoding', () => {
+    // A correct "ö" next to a mojibake one: the strict reversal refuses,
+    // instead of turning the correct letter into U+FFFD.
+    expect(decodeStringContent('Malmö Malm\u00c3\u00b6')).toBe('Malmö Malm\u00c3\u00b6')
+    expect(decodeStringContent('Foo\ufffdbar')).toBe('Foo\ufffdbar')
   })
 
   it('is a no-op on already-correct Swedish strings', () => {
@@ -124,74 +141,27 @@ describe('stripBOM', () => {
   })
 })
 
-// --- U+FFFD heuristic recovery ---
-
-describe('recoverWordWithFFFD', () => {
-  it('recovers uppercase Ö in common Swedish stems', () => {
-    expect(recoverWordWithFFFD('F\uFFFDRENING')).toBe('FÖRENING')
-    expect(recoverWordWithFFFD('F\uFFFDRETAG')).toBe('FÖRETAG')
-    expect(recoverWordWithFFFD('G\uFFFDTEBORG')).toBe('GÖTEBORG')
-    expect(recoverWordWithFFFD('LINK\uFFFDPING')).toBe('LINKÖPING')
+// Excel writes `sep=;` as line 1 so a double-click picks the delimiter. The
+// format detectors read the FIRST line, so leaving it in place hid the real
+// header: a bank export saved through Excel matched no format at all and
+// landed on "Kunde inte identifiera bankformatet".
+describe('prepareContent: Excel separator hint', () => {
+  it('drops the hint so the real header comes first', () => {
+    const out = prepareContent('sep=;\r\nBokföringsdag;Belopp\r\n2026-01-15;-99,00')
+    expect(out.split('\n')[0]).toBe('Bokföringsdag;Belopp')
   })
 
-  it('recovers lowercase ö in common Swedish stems', () => {
-    expect(recoverWordWithFFFD('f\uFFFDrening')).toBe('förening')
-    expect(recoverWordWithFFFD('malm\uFFFD')).toBe('malmö')
-    expect(recoverWordWithFFFD('k\uFFFDp')).toBe('köp')
+  it('handles the quoted and comma variants, and a BOM in front', () => {
+    expect(prepareContent('"sep=,"\nDatum,Belopp').split('\n')[0]).toBe('Datum,Belopp')
+    expect(prepareContent('\uFEFFsep=;\nDatum;Belopp').split('\n')[0]).toBe('Datum;Belopp')
   })
 
-  it('recovers compound words via substring match', () => {
-    expect(recoverWordWithFFFD('BOSTADSR\uFFFDTTSF\uFFFDRENING')).toBe(
-      'BOSTADSRÄTTSFÖRENING'
-    )
-    expect(recoverWordWithFFFD('Idrottsf\uFFFDrening')).toBe('Idrottsförening')
+  it('leaves a data row that merely starts with sep= alone', () => {
+    const out = prepareContent('sep=1;2;3\nDatum;Belopp')
+    expect(out.split('\n')[0]).toBe('sep=1;2;3')
   })
 
-  it('is a no-op when the input has no U+FFFD', () => {
-    expect(recoverWordWithFFFD('FÖRENING')).toBe('FÖRENING')
-    expect(recoverWordWithFFFD('hello')).toBe('hello')
-  })
-
-  it('returns null for ambiguous words not in the dictionary', () => {
-    // Random 4-letter word with U+FFFD; no Swedish stem hits.
-    expect(recoverWordWithFFFD('Z\uFFFDXQ')).toBeNull()
-  })
-
-  it('returns null for words with too many U+FFFDs to disambiguate', () => {
-    expect(
-      recoverWordWithFFFD('\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD')
-    ).toBeNull()
-  })
-})
-
-describe('recoverStringWithFFFD', () => {
-  it('repairs the canonical "Levbet FÖRENING" case', () => {
-    expect(recoverStringWithFFFD('Levbet F\uFFFDRENING')).toBe('Levbet FÖRENING')
-  })
-
-  it('repairs city + business-name combos', () => {
-    expect(recoverStringWithFFFD('Sjöberg AB, Malm\uFFFD')).toBe('Sjöberg AB, Malmö')
-    expect(recoverStringWithFFFD('Faktura fr\uFFFDn G\uFFFDTEBORG AB')).toBe(
-      'Faktura från GÖTEBORG AB'
-    )
-  })
-
-  it('preserves punctuation, whitespace, and digits', () => {
-    expect(recoverStringWithFFFD('K\uFFFDp 1 234,56 SEK')).toBe('Köp 1 234,56 SEK')
-  })
-
-  it('is a no-op on clean strings', () => {
-    expect(recoverStringWithFFFD('Hello World')).toBe('Hello World')
-    expect(recoverStringWithFFFD('FÖRENING')).toBe('FÖRENING')
-  })
-
-  it('returns null when any word in the string is ambiguous', () => {
-    expect(recoverStringWithFFFD('FÖRENING Z\uFFFDXQ')).toBeNull()
-  })
-
-  it('is idempotent on recovered output', () => {
-    const once = recoverStringWithFFFD('F\uFFFDRENING')
-    expect(once).toBe('FÖRENING')
-    expect(recoverStringWithFFFD(once!)).toBe('FÖRENING')
+  it('survives a file that is nothing but the hint', () => {
+    expect(prepareContent('sep=;')).toBe('')
   })
 })

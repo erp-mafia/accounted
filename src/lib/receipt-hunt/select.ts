@@ -2,7 +2,7 @@
  * Which receipt gets proposed for which unbooked card purchase.
  *
  * The hunt attaches an underlag to a transaction *before* it is booked, so the
- * gap never forms: `commitAttachDocumentToTransaction` sets
+ * gap never forms: approving the attach (`attachDocumentToTransaction`) sets
  * `invoice_inbox_items.matched_transaction_id`, and when the user later books
  * the transaction `categorize-core.ts` propagates that document onto the new
  * verifikat. Chasing already-posted verifikat is deliberately NOT this job:
@@ -95,6 +95,16 @@ export interface HuntProposal {
   sek_total?: number | null
   /** Settled by a second opinion rather than by the formula alone. */
   wasAdjudicated?: boolean
+  /**
+   * Where the document came from, carried through from the inbox item so the
+   * proposal can say "found in your mailbox" rather than implying a human
+   * uploaded it.
+   */
+  mailProvenance: {
+    mailbox?: string
+    subject?: string
+    from?: string
+  } | null
 }
 
 export interface SuppressionSets {
@@ -171,6 +181,11 @@ export function selectProposals(
         // ("Insatt belopp") is guaranteed to pair with the wrong row. Those
         // documents stay reachable through the picker and agent candidates.
         candidate.amountSource !== 'prominent' &&
+        // Never propose on a sum that is only near the purchase's: a
+        // same-seller document a few kronor off scores well on name and date
+        // and is another charge's (crm#1962). It stays reachable through the
+        // picker and agent candidates, where both amounts are read.
+        candidate.amountAgrees &&
         !spentDocumentIds.has(candidate.document_id) &&
         !suppression.claimedDocumentIds.has(candidate.document_id) &&
         !suppression.rejectedPairs.has(pairKey(tx.id, candidate.document_id)),
@@ -183,7 +198,19 @@ export function selectProposals(
 
     const documentId = winner.document_id as string
     spentDocumentIds.add(documentId)
+    const context = poolById.get(winner.inbox_item_id)?.channel_context as
+      | { channel?: string; mail_mailbox?: string; mail_subject?: string; mail_from?: string }
+      | null
+      | undefined
     proposals.push({
+      mailProvenance:
+        context?.channel === 'mail_hunt'
+          ? {
+              mailbox: context.mail_mailbox,
+              subject: context.mail_subject,
+              from: context.mail_from,
+            }
+          : null,
       transaction_id: tx.id,
       document_id: documentId,
       inbox_item_id: winner.inbox_item_id,
@@ -214,9 +241,31 @@ export function selectProposals(
  *
  * Swedish bank statements truncate hard, which is why "skat" has to match as
  * well as "skatt": a real ledger row reads "Inbetalning skat BG 000005...".
+ *
+ * Swedish also compounds: "Löneutbetalning", "Preliminärskatt", "Prel
+ * Vinstskatt" and "Skattekonto" never matched a whole-word "lön" or "skatt",
+ * so imported salary and tax verifikat were offered for a mail search their
+ * underlag (the lönespecifikation, the skattekonto) can never satisfy (agent
+ * feedback seq 956543). Hence "skatt" anywhere in a word, the "löne-" stems
+ * as prefixes (they survive truncation; a bare "lone" would catch "Lonely")
+ * and the bank's "Prel" abbreviation.
  */
 const NO_EMAIL_RECEIPT_EXISTS =
-  /\bl[oö]n\b|\bl[oö]ner\b|\bskatt?\b|skatteverket|arbetsgivaravg|\bmoms\b|utdelning|amortering|\br[aä]nta\b|egen ins[aä]ttning/i
+  /\bl[oö]n\b|\bl[oö]ner\b|\bl[oö]ne(?:utb|spec|k[oö]rn)|skatt|\bskat\b|\bprel\b|arbetsgivaravg|\bmoms\b|utdelning|amortering|\br[aä]nta\b|egen ins[aä]ttning/i
+
+/**
+ * How a bookkeeper notes the VAT on a purchase, which reads like a tax word
+ * and is not one: a rate ("25% moms", "12 % moms", "0 USD moms", "moms 25%"),
+ * a qualifier ("ingen moms", "inkl. moms", "omvänd moms", "ej avdragsgill
+ * moms", "utan debiterad moms") or the liability itself ("omvänd
+ * skattskyldighet"). A verifikat whose bank row has no merchant name is
+ * described by its description, where the note sits, and in a trial run the
+ * note sent flights, hotels and subscriptions to the salary-and-tax errand
+ * (2026-10-28). A payment of VAT ("Betalning moms", "Skattekonto: moms") is
+ * no such note and still matches.
+ */
+const VAT_NOTE =
+  /skattskyldig[a-zåäö]*|\bmoms\s+\d+(?:[.,]\d+)?\s*%|(?:\d\s*(?:%|kr|sek|usd|eur)|\b(?:ingen|ej|utan|inkl|exkl|med|omv[aä]nd|svensk|utl[aä]ndsk|(?:s[aä]ljar)?debiterad|avdragsgill|ing[aä]ende))\.?(?:\s+(?:svensk|utl[aä]ndsk|(?:s[aä]ljar)?debiterad|avdragsgill|ing[aä]ende))*\s+moms\b/gi
 
 /**
  * Whether it is worth spending a mailbox search on this purchase.
@@ -226,7 +275,7 @@ const NO_EMAIL_RECEIPT_EXISTS =
  */
 export function canHaveEmailReceipt(description: string | null | undefined): boolean {
   if (!description) return true
-  return !NO_EMAIL_RECEIPT_EXISTS.test(description)
+  return !NO_EMAIL_RECEIPT_EXISTS.test(description.replace(VAT_NOTE, ' '))
 }
 
 /** Vendor names this alike are treated as the same merchant. */
@@ -271,7 +320,7 @@ export function worthFetching(
    * one of those appeared in the mail or inside its attachment. It rescues the
    * case where the two names genuinely differ, which is common and not an
    * error: the bank writes "Kontorsplatser j BG" and the landlord's invoice
-   * says "Stockholm Innovation & Growth AB".
+   * says "Nordisk Kontorshub AB".
    */
   retrievedFor: readonly HuntTransaction[] = [],
 ): boolean {

@@ -1,4 +1,5 @@
 import type { ObservabilityContext, ObservabilityLevel, ObservabilitySink } from '@/lib/observability'
+import { redactedError } from '@/lib/observability/redact'
 import { getPostHogServer, flushAnalytics } from './posthog-server'
 
 /**
@@ -40,6 +41,14 @@ function distinctIdFrom(context: ObservabilityContext): string | undefined {
   return typeof raw === 'string' && raw.length > 0 ? raw : undefined
 }
 
+/**
+ * The distinct id of a record with no user (a cron, a webhook, a migration
+ * run). posthog-node gives an exception without one a fresh id per event, so
+ * every event counted as another affected user: 180 of the 245 "[object
+ * Object]" events (2026-10-20..27) were "users" of their own.
+ */
+const SERVER_DISTINCT_ID = 'server'
+
 export const postHogSink: ObservabilitySink = {
   name: 'posthog',
 
@@ -47,10 +56,15 @@ export const postHogSink: ObservabilitySink = {
     try {
       const posthog = getPostHogServer()
       if (!posthog) return
+      // The sink hands over redact()'s serialized object, never a live Error
+      // (sink.ts contract). Wrapping it as new Error(String(error)) sent every
+      // logged error as "Error: [object Object]" with this frame as its only
+      // stack; redactedError rebuilds a real Error from its fields instead.
+      const exception = redactedError(error)
       posthog.captureException(
-        error instanceof Error ? error : new Error(String(error)),
-        distinctIdFrom(context),
-        toProperties(context)
+        exception,
+        distinctIdFrom(context) ?? SERVER_DISTINCT_ID,
+        toProperties(context, exception.code !== undefined ? { error_code: exception.code } : undefined)
       )
     } catch {
       // Contract: must not throw.
@@ -66,7 +80,7 @@ export const postHogSink: ObservabilitySink = {
         // PostHog requires a distinct id; fall back to a stable server marker
         // rather than inventing a per-event id, which would create a new
         // person for every log line.
-        distinctId: distinctId ?? 'server',
+        distinctId: distinctId ?? SERVER_DISTINCT_ID,
         event: '$log',
         properties: toProperties(context, { message, level }),
       })

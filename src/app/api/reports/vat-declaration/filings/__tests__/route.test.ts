@@ -1,5 +1,5 @@
 /**
- * Tests for /api/reports/vat-declaration/filings (issue #2746): the momsdeklaration
+ * Tests for /api/reports/vat-declaration/filings (issues #2746, #2786): the momsdeklaration
  * page's record of filed periods. The store is mocked (it has its own tests
  * in lib/vat/__tests__/filing-record-store.test.ts); what matters here is the
  * wrapper contract (401/403), the Zod contract (400) and the code-to-status
@@ -31,6 +31,9 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/vat/filing-record-store', () => store)
 
+const changes = vi.hoisted(() => ({ listVatFilingsWithChanges: vi.fn() }))
+vi.mock('@/lib/vat/filed-period-changes', () => changes)
+
 import { GET as getRoute, POST as postRoute, DELETE as deleteRoute } from '../route'
 
 // A static route still receives Next's route context as its second argument.
@@ -45,9 +48,23 @@ const RECORD = {
   year: 2026,
   period: 2,
   tax_period: '2026-Q2',
+  period_start: '2026-04-01',
+  period_end: '2026-06-30',
   filed_on: '2026-08-10',
   source: 'manual',
   reference: null,
+}
+
+// Helårsmoms for the räkenskapsår 2025-07-01 - 2026-06-30 (#2786).
+const YEARLY_RECORD = {
+  ...RECORD,
+  period_type: 'yearly',
+  year: 2026,
+  period: 1,
+  tax_period: '2025/2026',
+  period_start: '2025-07-01',
+  period_end: '2026-06-30',
+  filed_on: '2026-08-20',
 }
 
 function auth() {
@@ -76,14 +93,32 @@ describe('GET /api/reports/vat-declaration/filings', () => {
     expect(res.status).toBe(401)
   })
 
-  it('returns the filing records', async () => {
+  it('returns the filing records with what changed each period after it was filed', async () => {
     auth()
-    store.listVatFilings.mockResolvedValue([RECORD])
+    const changed = {
+      ...YEARLY_RECORD,
+      changed_after_filing: {
+        changed_after: '2026-08-20T21:59:59Z',
+        rutor_change: { ruta48: 162, ruta49: -162 },
+        verifikat: [
+          {
+            journal_entry_id: '22222222-2222-4222-8222-222222222222',
+            voucher: 'A18',
+            entry_date: '2026-04-25',
+            changed_at: '2026-09-24T23:19:00Z',
+            kind: 'posted',
+            rutor_change: { ruta48: 162, ruta49: -162 },
+          },
+        ],
+      },
+    }
+    changes.listVatFilingsWithChanges.mockResolvedValue([changed, { ...RECORD, changed_after_filing: null }])
     const res = await GET(createMockRequest('/api/reports/vat-declaration/filings'))
     const { status, body } = await parseJsonResponse<{ data: unknown[] }>(res)
     expect(status).toBe(200)
-    expect(body.data).toEqual([RECORD])
-    expect(store.listVatFilings).toHaveBeenCalledWith({}, 'company-1')
+    expect(body.data).toEqual([changed, { ...RECORD, changed_after_filing: null }])
+    expect(changes.listVatFilingsWithChanges).toHaveBeenCalledWith({}, 'company-1')
+    expect(store.listVatFilings).not.toHaveBeenCalled()
   })
 })
 
@@ -122,12 +157,12 @@ describe('POST /api/reports/vat-declaration/filings', () => {
     expect(store.markVatPeriodFiled).not.toHaveBeenCalled()
   })
 
-  it('returns 400 for a yearly period_type or a missing filed_on', async () => {
+  it('returns 400 for a yearly period other than 1 or a missing filed_on', async () => {
     auth()
     const yearly = await POST(
       createMockRequest('/api/reports/vat-declaration/filings', {
         method: 'POST',
-        body: { ...validBody, period_type: 'yearly', period: 1 },
+        body: { ...validBody, period_type: 'yearly', period: 2 },
       }),
     )
     expect(yearly.status).toBe(400)
@@ -157,9 +192,7 @@ describe('POST /api/reports/vat-declaration/filings', () => {
 
   it('answers 409 when the store loses a concurrent update', async () => {
     auth()
-    store.markVatPeriodFiled.mockRejectedValue(
-      Object.assign(new Error('row changed while it was being marked'), { code: 'CONFLICT' }),
-    )
+    store.markVatPeriodFiled.mockResolvedValue({ ok: false, code: 'CONFLICT' })
     const res = await POST(
       createMockRequest('/api/reports/vat-declaration/filings', { method: 'POST', body: validBody }),
     )
@@ -199,6 +232,67 @@ describe('POST /api/reports/vat-declaration/filings', () => {
       reference: 'KV-1',
       userId: 'user-1',
     })
+  })
+})
+
+describe('helårsmoms through the dashboard routes (#2786)', () => {
+  it('marks a räkenskapsår as filed, named by the year it ends', async () => {
+    auth()
+    store.markVatPeriodFiled.mockResolvedValue({
+      ok: true,
+      record: YEARLY_RECORD,
+      created: true,
+      changed: true,
+    })
+    const res = await POST(
+      createMockRequest('/api/reports/vat-declaration/filings', {
+        method: 'POST',
+        body: { period_type: 'yearly', year: 2026, period: 1, filed_on: '2026-08-20' },
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: typeof YEARLY_RECORD }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual(YEARLY_RECORD)
+    expect(store.markVatPeriodFiled).toHaveBeenCalledWith({}, 'company-1', {
+      periodType: 'yearly',
+      year: 2026,
+      period: 1,
+      filedOn: '2026-08-20',
+      reference: undefined,
+      userId: 'user-1',
+    })
+  })
+
+  it('refuses to unmark a Skatteverket-confirmed räkenskapsår', async () => {
+    auth()
+    store.unmarkVatPeriodFiled.mockResolvedValue({
+      ok: false,
+      code: 'VAT_FILING_CONFIRMED_BY_SKATTEVERKET',
+    })
+    const res = await DELETE(
+      createMockRequest('/api/reports/vat-declaration/filings', {
+        method: 'DELETE',
+        searchParams: { period_type: 'yearly', year: '2026', period: '1' },
+      }),
+    )
+    expect(res.status).toBe(409)
+    expect(store.unmarkVatPeriodFiled).toHaveBeenCalledWith({}, 'company-1', {
+      periodType: 'yearly',
+      year: 2026,
+      period: 1,
+    })
+  })
+
+  it('answers 404 when the räkenskapsår has no filing record', async () => {
+    auth()
+    store.unmarkVatPeriodFiled.mockResolvedValue({ ok: false, code: 'VAT_FILING_NOT_FOUND' })
+    const res = await DELETE(
+      createMockRequest('/api/reports/vat-declaration/filings', {
+        method: 'DELETE',
+        searchParams: { period_type: 'yearly', year: '2026', period: '1' },
+      }),
+    )
+    expect(res.status).toBe(404)
   })
 })
 

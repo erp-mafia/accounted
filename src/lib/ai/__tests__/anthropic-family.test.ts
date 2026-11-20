@@ -53,7 +53,7 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
     expect(result.ok).toBe(true)
     expect(mockCreate).toHaveBeenCalledTimes(1)
     expect(mockCreate.mock.calls[0][0]).toEqual({
-      model: 'eu.anthropic.claude-sonnet-5',
+      model: 'eu.anthropic.claude-haiku-5-5',
       max_tokens: 8192,
       system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [
@@ -69,6 +69,17 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
         },
       ],
     })
+  })
+
+  it('hands a caller\'s signal to the SDK as the request option, and sends none without one', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    const deadline = new AbortController()
+    const req = { document: { kind: 'text' as const, text: 'x' }, system: SYSTEM, instruction: INSTRUCTION, maxTokens: 1 }
+    await svc.extractFromDocument({ ...req, signal: deadline.signal })
+    await svc.extractFromDocument(req)
+    expect(mockCreate.mock.calls[0][1]).toEqual({ signal: deadline.signal })
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signal')
+    expect(mockCreate.mock.calls[1][1]).toBeUndefined()
   })
 
   it('sends an image as a base64 image block with its media type', async () => {
@@ -111,7 +122,7 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
     expect(result).toEqual({
       ok: true,
       text: '{"ok":true}',
-      model: 'eu.anthropic.claude-sonnet-5',
+      model: 'eu.anthropic.claude-haiku-5-5',
       usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 7 },
     })
     expect(result.ok && result.truncated).toBeFalsy()
@@ -144,7 +155,7 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
   it('reads with the cheap tier when the caller asks for it', async () => {
     const svc = createAnthropicFamilyService(readAiConfig())
     await svc.extractFromDocument({ document: { kind: 'text', text: 'x' }, system: SYSTEM, instruction: INSTRUCTION, maxTokens: 1, tier: 'cheap' })
-    expect(mockCreate.mock.calls[0][0].model).toBe('eu.anthropic.claude-haiku-4-5-20251001-v1:0')
+    expect(mockCreate.mock.calls[0][0].model).toBe('eu.anthropic.claude-haiku-5-5')
   })
 
   it('skips without a call when the deployment has no credentials', async () => {
@@ -223,12 +234,44 @@ describe('generateText / generateStructured', () => {
     expect(result.value).toEqual({ paired: true })
   })
 
+  it('generateStructured and generateText hand a signal to the SDK as the request option, never in the body', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    const limit = new AbortController()
+    mockCreate.mockResolvedValue({ content: [{ type: 'tool_use', name: 'pick', input: {} }, { type: 'text', text: 'ok' }], usage: {} })
+    await svc.generateStructured({ tier: 'cheap', prompt: 'p', maxTokens: 1, schema: { name: 'pick', jsonSchema: {} }, signal: limit.signal })
+    await svc.generateText({ tier: 'cheap', prompt: 'p', maxTokens: 1, signal: limit.signal })
+    await svc.generateStructured({ tier: 'cheap', prompt: 'p', maxTokens: 1, schema: { name: 'pick', jsonSchema: {} } })
+    expect(mockCreate.mock.calls.map((c) => c[1])).toEqual([{ signal: limit.signal }, { signal: limit.signal }, undefined])
+    for (const call of mockCreate.mock.calls) expect(call[0]).not.toHaveProperty('signal')
+  })
+
+  it('generateStructured marks the tool strict only when the caller asks, so every other request stays byte-identical', async () => {
+    const schema = { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['a', 'b'] } }, required: ['kind'] }
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'tool_use', id: 't1', name: 'pick', input: { kind: 'a' } }], usage: {} })
+    const svc = createAnthropicFamilyService(readAiConfig())
+    await svc.generateStructured({ tier: 'cheap', prompt: 'Pick', maxTokens: 50, schema: { name: 'pick', jsonSchema: schema, strict: true } })
+    expect(mockCreate.mock.calls[0][0].tools).toEqual([{ name: 'pick', input_schema: schema, strict: true }])
+    expect(mockCreate.mock.calls[0][0].tool_choice).toEqual({ type: 'tool', name: 'pick' })
+
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'tool_use', id: 't2', name: 'pick', input: { kind: 'a' } }], usage: {} })
+    await svc.generateStructured({ tier: 'cheap', prompt: 'Pick', maxTokens: 50, schema: { name: 'pick', jsonSchema: schema, strict: false } })
+    expect(mockCreate.mock.calls[1][0].tools).toEqual([{ name: 'pick', input_schema: schema }])
+  })
+
   it('generateStructured throws when the model ignored the forced tool', async () => {
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'nope' }], usage: {} })
     const svc = createAnthropicFamilyService(readAiConfig())
     await expect(
       svc.generateStructured({ tier: 'assistant', prompt: 'x', maxTokens: 10, schema: { name: 'v', jsonSchema: {} } })
     ).rejects.toThrow(/forced tool/)
+  })
+
+  it('generateStructured names a refusal in its error, so a declined request is not read as a cut-off one', async () => {
+    mockCreate.mockResolvedValueOnce({ content: [], stop_reason: 'refusal', usage: {} })
+    const svc = createAnthropicFamilyService(readAiConfig())
+    await expect(
+      svc.generateStructured({ tier: 'cheap', prompt: 'x', maxTokens: 10, schema: { name: 'v', jsonSchema: {} } })
+    ).rejects.toThrow(/stop_reason: refusal/)
   })
 })
 
@@ -381,6 +424,17 @@ describe('generateText read-only tool loop', () => {
     expect(mockCreate.mock.calls[2][0].tools[0].name).toBe('t')
     expect(mockCreate.mock.calls[2][0].tool_choice).toEqual({ type: 'none' })
     expect(result.text).toBe('Sammanfattning utan fler verktygsanrop.')
+    expect(result.forcedFinal).toBe('step_limit')
+    // The forced turn is TOLD to answer: the request rides on the closing
+    // tool-result turn, after the results, never as a second user message.
+    const finalMessages = mockCreate.mock.calls[2][0].messages
+    const lastTurn = finalMessages[finalMessages.length - 1]
+    expect(lastTurn.role).toBe('user')
+    expect(lastTurn.content[0].type).toBe('tool_result')
+    expect(lastTurn.content[lastTurn.content.length - 1]).toEqual({
+      type: 'text',
+      text: expect.stringContaining('Do not call any more tools'),
+    })
   })
 
   it('bounds an oversized tool result before feeding it back to the model', async () => {
@@ -409,22 +463,164 @@ describe('generateText read-only tool loop', () => {
     expect(toolResult.content).toContain('[avkortat: resultatet var')
   })
 
-  it('returns empty text (for the caller to guard on) when the loop ends on max_tokens with no text block', async () => {
+  // B04 (seen 2026-10-17..23): Claude Sonnet 5 thinks adaptively when a request
+  // sends no `thinking` field, thinking blocks come back with empty text, and
+  // max_tokens covers thinking and answer together. A turn that spent its whole
+  // budget thinking returned [thinking] only, and the loop returned '' as the
+  // answer ("Assistenten gav inget svar").
+  const thinkingOnly = (stop_reason: string) => ({
+    stop_reason,
+    content: [{ type: 'thinking', thinking: '', signature: 'sig' }],
+    usage: { input_tokens: 5, output_tokens: 100 },
+  })
+  const answered = (text: string, stop_reason = 'end_turn') => ({
+    stop_reason,
+    content: [{ type: 'text', text }],
+    usage: { input_tokens: 1, output_tokens: 1 },
+  })
+
+  it('asks for the answer in a final no-tools turn when a turn spends max_tokens on thinking', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce(thinkingOnly('max_tokens'))
+    mockCreate.mockResolvedValueOnce(answered('Ditt resultat i juli är 12 000 kr.'))
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'Hur gick juli?',
+      maxTokens: 100,
+      tools: [{ name: 't', description: 'd', jsonSchema: {}, execute: vi.fn() }],
+    })
+    expect(result.text).toBe('Ditt resultat i juli är 12 000 kr.')
+    expect(result.forcedFinal).toBe('no_text')
+    expect(result.truncated).toBeUndefined()
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+    const final = mockCreate.mock.calls[1][0]
+    expect(final.tool_choice).toEqual({ type: 'none' })
+    // The empty turn is dropped, not replayed: the question and the answer
+    // request share the one user turn.
+    expect(final.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Hur gick juli?' },
+          { type: 'text', text: expect.stringContaining('Answer the question now') },
+        ],
+      },
+    ])
+    // Usage is summed over both turns, the dropped one included.
+    expect(result.usage.outputTokens).toBe(101)
+  })
+
+  it('asks for the answer when the model ends its turn with no text after a tool result', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true })
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'tu_1', name: 't', input: {} }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    mockCreate.mockResolvedValueOnce(thinkingOnly('end_turn'))
+    mockCreate.mockResolvedValueOnce(answered('Svaret.'))
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'x',
+      maxTokens: 100,
+      tools: [{ name: 't', description: 'd', jsonSchema: {}, execute }],
+    })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(result.text).toBe('Svaret.')
+    expect(result.forcedFinal).toBe('no_text')
+    expect(mockCreate).toHaveBeenCalledTimes(3)
+    const finalMessages = mockCreate.mock.calls[2][0].messages
+    // user, assistant(tool_use), user(tool_result + answer request)
+    expect(finalMessages).toHaveLength(3)
+    expect(finalMessages[2].content.map((b: { type: string }) => b.type)).toEqual(['tool_result', 'text'])
+  })
+
+  it('never runs a tool call cut off at max_tokens, nor returns its preamble as the answer', async () => {
+    const execute = vi.fn()
     const svc = createAnthropicFamilyService(readAiConfig())
     mockCreate.mockResolvedValueOnce({
       stop_reason: 'max_tokens',
-      content: [],
-      usage: { input_tokens: 5, output_tokens: 100 },
+      content: [
+        { type: 'text', text: 'Jag hämtar huvudboken.' },
+        { type: 'tool_use', id: 'tu_cut', name: 't', input: { from: '2026-0' } },
+      ],
+      usage: { input_tokens: 1, output_tokens: 100 },
     })
+    mockCreate.mockResolvedValueOnce(answered('Utan huvudboken kan jag säga detta.'))
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'x',
+      maxTokens: 100,
+      tools: [{ name: 't', description: 'd', jsonSchema: {}, execute }],
+    })
+    expect(execute).not.toHaveBeenCalled()
+    expect(result.text).toBe('Utan huvudboken kan jag säga detta.')
+    expect(result.forcedFinal).toBe('no_text')
+    // The cut-off tool_use is never replayed (it has no tool_result).
+    const finalMessages = mockCreate.mock.calls[1][0].messages
+    expect(JSON.stringify(finalMessages)).not.toContain('tu_cut')
+  })
+
+  it('returns a text answer cut off at max_tokens as truncated, without another turn', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce(answered('Här är de tio största posterna: 1. ...', 'max_tokens'))
     const result = await svc.generateText({
       tier: 'assistant',
       prompt: 'x',
       maxTokens: 100,
       tools: [{ name: 't', description: 'd', jsonSchema: {}, execute: vi.fn() }],
     })
-    // The service stays a transport: it does not invent text. Callers
+    expect(result.text).toBe('Här är de tio största posterna: 1. ...')
+    expect(result.truncated).toBe(true)
+    expect(result.stopReason).toBe('max_tokens')
+    expect(result.forcedFinal).toBeUndefined()
+    expect(mockCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes a refusal as the answer and never re-asks around it', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce({ stop_reason: 'refusal', content: [], usage: { input_tokens: 1, output_tokens: 1 } })
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'x',
+      maxTokens: 100,
+      tools: [{ name: 't', description: 'd', jsonSchema: {}, execute: vi.fn() }],
+    })
+    expect(result.text).toBe('')
+    expect(result.stopReason).toBe('refusal')
+    expect(mockCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns empty text, flagged truncated, when the final answer turn also spends max_tokens', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce(thinkingOnly('max_tokens'))
+    mockCreate.mockResolvedValueOnce(thinkingOnly('max_tokens'))
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'x',
+      maxTokens: 100,
+      tools: [{ name: 't', description: 'd', jsonSchema: {}, execute: vi.fn() }],
+    })
+    // One final turn only; the service does not invent text. Callers
     // (ask-service) treat '' as a typed failure instead of a silent answer.
     expect(result.text).toBe('')
-    expect(mockCreate).toHaveBeenCalledTimes(1)
+    expect(result.truncated).toBe(true)
+    expect(result.forcedFinal).toBe('no_text')
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('generateText without tools reports how the turn ended', () => {
+  it('flags a max_tokens stop as truncated', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'max_tokens',
+      content: [{ type: 'text', text: 'Halvt svar' }],
+      usage: { input_tokens: 1, output_tokens: 50 },
+    })
+    const result = await svc.generateText({ tier: 'assistant', prompt: 'x', maxTokens: 50 })
+    expect(result.truncated).toBe(true)
+    expect(result.stopReason).toBe('max_tokens')
   })
 })

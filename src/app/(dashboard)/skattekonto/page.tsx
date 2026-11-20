@@ -3,25 +3,24 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { StartCard } from '@/components/dashboard/StartCard'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import {
   TH_CLASS,
   TD_CLASS,
   QUIET_LINK_CLASS,
   HOVER_REVEAL_CLASS,
-  CHECKBOX_REVEAL_CLASS,
+  RowSelectCheckbox,
 } from '@/components/ui/dry-table'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   Dialog,
   DialogContent,
@@ -31,13 +30,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { ToastAction } from '@/components/ui/toast'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import { cn } from '@/lib/utils'
+import { cn, formatRowAmount } from '@/lib/utils'
 import {
   formatCurrency,
   formatDate,
@@ -45,19 +45,17 @@ import {
   formatDateTime,
 } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
 import {
   skvAuthErrorNeedsReconnect,
   skvStatusNeedsReconnect,
   type SkvStatusLike,
 } from '@/lib/notices/predicates'
-import {
-  AlertCircle,
-  Copy,
-  RefreshCw,
-} from 'lucide-react'
-import { useCapability } from '@/contexts/CompanyContext'
+import { ArrowPathIcon, Square2StackIcon } from '@/components/icons'
+import { useCapability, useCompany } from '@/contexts/CompanyContext'
+import { createClient } from '@/lib/supabase/client'
+import { SKATTEKONTO_PAYMENT_COVER_STATUSES, skattekontoPaymentsCovering, type SkattekontoPaymentOrderCover } from '@/lib/payments/orders/skattekonto-underway'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type {
   SkatteverketSaldoResponse,
@@ -65,10 +63,36 @@ import type {
   StoredSkattekontoTransaction,
 } from '@/extensions/general/skatteverket/types'
 import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { SKATTEKONTO_ACCOUNT_DEFAULT, isSkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
+import { isOpenSkattekontoRow, isSkattekontoRowBeforeHistory } from '@/lib/skatteverket/skattekonto-open-rows'
+import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
+import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
+
+const SkattekontoMatchDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoMatchDialog').then(
+      (module) => module.SkattekontoMatchDialog,
+    ),
+  { loading: DialogLoadingSkeleton },
+)
+
+const PaySkattekontoViaBankDialog = dynamic(
+  () => import('@/components/payments/PaySkattekontoViaBankDialog'),
+  { loading: DialogLoadingSkeleton },
+)
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+
+const SkattekontoLinkProposalsDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoLinkProposalsDialog').then(
+      (module) => module.SkattekontoLinkProposalsDialog,
+    ),
   { loading: DialogLoadingSkeleton },
 )
 
@@ -85,28 +109,59 @@ interface TransaktionerEnvelope {
     upcoming: StoredSkattekontoTransaction[]
     ignored_count: number
     ignored?: StoredSkattekontoTransaction[]
+    /** The company's skattekonto account: 1630, or 2012 for an enskild firma that runs it there. */
+    skattekonto_account?: string
+    /** The date of the ingående balans on that account: an unbooked row before it is carried by it. */
+    opening_balance_date?: string | null
   }
-}
-
-interface MatchCandidate {
-  journal_entry_id: string
-  voucher_number: number | null
-  voucher_series: string | null
-  entry_date: string
-  description: string
-  status: 'draft' | 'posted' | 'reversed'
-  matched_amount: number
-  matched_side: 'debit' | 'credit'
 }
 
 export default function SkattekontoPage() {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('skattekonto')
+  const errorLocale = useLocale() as ErrorLocale
   const tStart = useTranslations('start_cards')
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [showPayment, setShowPayment] = useState(false)
+  // Betala via banken is offered where bank payments are switched on for the
+  // company (GET /api/payments/availability), beside the manual details.
+  const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
+  const [showBankPayment, setShowBankPayment] = useState(false)
+  // /skattekonto?betala=1 (the Hem row Betala in till Skatteverket) opens the
+  // payment at once: through the bank where it is switched on, else the
+  // details to pay by hand.
+  const [paymentAsked] = useState(
+    () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('betala') === '1',
+  )
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
+  // The company's bank payments to the skattekonto that the saldo may not
+  // show yet, each with its signing (members read payment_orders and
+  // payment_order_batches; a failed read counts nothing).
+  const companyId = useCompany().company?.id ?? null
+  const [skattekontoOrders, setSkattekontoOrders] = useState<SkattekontoPaymentOrderCover[]>([])
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    createClient()
+      .from('payment_orders')
+      .select('amount, status, executed_at, signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)')
+      .eq('company_id', companyId)
+      .eq('purpose', 'skattekonto')
+      .in('status', [...SKATTEKONTO_PAYMENT_COVER_STATUSES])
+      .then(({ data, error }) => {
+        if (!cancelled && !error) setSkattekontoOrders((data ?? []) as SkattekontoPaymentOrderCover[])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId, saldo])
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
+  // The company's skattekonto account (1630, or 2012 for an enskild firma that
+  // runs it there), as the rows' list route reports it.
+  const skattekontoAccount = isSkattekontoLedgerAccount(tx?.skattekonto_account)
+    ? tx.skattekonto_account
+    : SKATTEKONTO_ACCOUNT_DEFAULT
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   // Row whose inline booking dialog is open (null = closed).
@@ -115,6 +170,14 @@ export default function SkattekontoPage() {
   )
   const [notConnected, setNotConnected] = useState(false)
   const [loadError, setLoadError] = useState(false)
+  // Open rows a verifikat already holds (imported history, PH 171), linked
+  // in one action from the page's attention line.
+  const [linkAllOpen, setLinkAllOpen] = useState(false)
+  const openRowCount = tx?.booked.filter((r) => !r.journal_entry_id).length ?? 0
+  const { count: ledgerProposals, refresh: refreshLedgerProposals } = useSkattekontoLedgerProposalCount(
+    openRowCount > 0,
+    openRowCount,
+  )
   // Reason string from a failed call; the flag is the same state found
   // proactively by the /status probe. Two pieces so reload() stays
   // dependency-free. The banner renders on either.
@@ -123,21 +186,24 @@ export default function SkattekontoPage() {
   const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
-  const [matchCandidates, setMatchCandidates] = useState<MatchCandidate[] | null>(null)
-  const [matchLoading, setMatchLoading] = useState(false)
-  const [matchSubmitting, setMatchSubmitting] = useState<string | null>(null)
+  // Rows ticked together for "Matcha mot verifikat" (bulk bar): matched to
+  // ONE verifikat as a group; null = dialog closed.
+  const [groupMatchRows, setGroupMatchRows] = useState<StoredSkattekontoTransaction[] | null>(
+    null,
+  )
   // Ignored rows are always fetched (include_ignored=1) but rendered only on
   // demand: the count line below the table toggles the "Ignorerade" band.
   const [showIgnored, setShowIgnored] = useState(false)
+  // Skatteverket's informationstext: folded until asked for.
+  const [showSkvMessages, setShowSkvMessages] = useState(false)
   const { dialogProps: ignoreConfirmProps, confirm: confirmIgnore } =
     useDestructiveConfirm()
   // Bulk ignore (hover-checkbox pattern from /transactions and /orders): a
   // sole trader's skattekonto carries private tax rows that are not the
-  // firm's affärshändelser, often dozens at a time. Selection holds raw ids;
-  // the rendered set is re-derived against what is still ignorable after a
-  // reload, so a row that got booked or ignored meanwhile drops out on its
-  // own instead of being carried into the next bulk call.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // firm's affärshändelser, often dozens at a time. The selection itself
+  // (useBulkSelection below) holds only rows that are still ignorable, so a
+  // row booked or ignored meanwhile drops out on reload instead of being
+  // carried into the next bulk call.
 
   // The /status probe is fire-and-forget, so a slow response from an earlier
   // reload can land after a later one and overwrite the fresher banner state.
@@ -199,7 +265,7 @@ export default function SkattekontoPage() {
       setNotConnected(false)
 
       // A non-auth failure must NOT fall through to the "inget saldo hämtat
-      // ännu"-tomvy — that reads as "not configured" when the truth is "the
+      // ännu"-tomvy - that reads as "not configured" when the truth is "the
       // fetch broke". Surface it as an error with a retry instead.
       if (!saldoRes.ok) {
         setLoadError(true)
@@ -223,6 +289,34 @@ export default function SkattekontoPage() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  useEffect(() => {
+    let cancelled = false
+    const asked = () => {
+      if (!paymentAsked || cancelled) return
+      // Once: a reload of the page shows it without opening the payment again.
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+    fetchPaymentsAvailability()
+      .then((data) => {
+        if (cancelled) return
+        setBankPaymentsAvailable(data.available)
+        if (paymentAsked) {
+          if (data.available) setShowBankPayment(true)
+          else setShowPayment(true)
+        }
+        asked()
+      })
+      .catch(() => {
+        if (cancelled) return
+        setBankPaymentsAvailable(false)
+        if (paymentAsked) setShowPayment(true)
+        asked()
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [paymentAsked])
 
   // Auto-recover from the "inte anslutet" empty state when the user returns
   // to this tab: the connect flow lives in Inställningar (often completed in
@@ -258,19 +352,18 @@ export default function SkattekontoPage() {
       if (!res.ok) {
         // 401 covers several distinct auth states (see handleSkvError in the
         // skatteverket extension). Only NOT_CONNECTED means "no connection
-        // exists" — the rest (SESSION_EXPIRED, MISSING_SCOPE, TOKEN_REVOKED,
+        // exists" - the rest (SESSION_EXPIRED, MISSING_SCOPE, TOKEN_REVOKED,
         // …) fire while Inställningar truthfully shows the stored token as
         // "Ansluten". Showing the full "inte anslutet"-tomvy for those
         // contradicts the settings panel; show the server's actual reason
-        // with a reconnect CTA instead. The split lives in the shared
+        // with a reconnect CTA instead (the header's Anslut igen, the reason
+        // in a toast and its tooltip). The split lives in the shared
         // skvAuthErrorNeedsReconnect predicate (lib/notices), never inline.
         if (res.status === 401) {
           if (skvAuthErrorNeedsReconnect(res.status, json.code)) {
-            setReconnectMessage(
-              typeof json.error === 'string' && json.error
-                ? json.error
-                : t('attn_reconnect_body'),
-            )
+            const reason = getUserErrorMessage(json, { locale: errorLocale, fallback: t('attn_reconnect_body') })
+            setReconnectMessage(reason)
+            toast({ title: t('sync_failed'), description: reason, variant: 'destructive' })
           } else {
             setNotConnected(true)
           }
@@ -280,7 +373,7 @@ export default function SkattekontoPage() {
         // the Error constructor stringifies a non-string body field, and the
         // mapper would discard the route's own Swedish reason.
         toast({
-          title: 'Synk misslyckades',
+          title: t('sync_failed'),
           description: getUserErrorMessage(json, { statusCode: res.status }),
           variant: 'destructive',
         })
@@ -295,7 +388,7 @@ export default function SkattekontoPage() {
       await reload()
     } catch (err) {
       toast({
-        title: 'Synk misslyckades',
+        title: t('sync_failed'),
         description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
@@ -341,72 +434,13 @@ export default function SkattekontoPage() {
     void reload()
   }
 
-  async function openMatch(row: StoredSkattekontoTransaction) {
+  // The shared dialog fetches candidates (single, combined and joined, see
+  // findMatchCandidates) and links on its own; the page only reloads.
+  function openMatch(row: StoredSkattekontoTransaction) {
     setMatchOpenFor(row)
-    setMatchCandidates(null)
-    setMatchLoading(true)
-    try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match-candidates`,
-      )
-      const json = await res.json()
-      if (!res.ok) {
-        toast({
-          title: 'Kunde inte hämta kandidater',
-          description: getUserErrorMessage(json, { statusCode: res.status }),
-          variant: 'destructive',
-        })
-        setMatchOpenFor(null)
-        return
-      }
-      setMatchCandidates(json.data.candidates as MatchCandidate[])
-    } catch (err) {
-      toast({
-        title: 'Kunde inte hämta kandidater',
-        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
-        variant: 'destructive',
-      })
-      setMatchOpenFor(null)
-    } finally {
-      setMatchLoading(false)
-    }
   }
-
-  async function confirmMatch(journalEntryId: string) {
-    if (!matchOpenFor) return
-    setMatchSubmitting(journalEntryId)
-    try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${matchOpenFor.id}/match`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ journal_entry_id: journalEntryId }),
-        },
-      )
-      const json = await res.json()
-      if (!res.ok) {
-        toast({
-          title: 'Kunde inte koppla transaktionen',
-          description: getUserErrorMessage(json, { statusCode: res.status }),
-          variant: 'destructive',
-        })
-        return
-      }
-      toast({ title: 'Transaktion kopplad till verifikat' })
-      setMatchOpenFor(null)
-      setMatchCandidates(null)
-      await reload()
-    } catch (err) {
-      toast({
-        title: 'Kunde inte koppla transaktionen',
-        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setMatchSubmitting(null)
-    }
-  }
+  const closeMatch = useCallback(() => setMatchOpenFor(null), [])
+  const closeGroupMatch = useCallback(() => setGroupMatchRows(null), [])
 
   function copyOcr(ocr: string) {
     navigator.clipboard
@@ -560,7 +594,7 @@ export default function SkattekontoPage() {
       },
     )
     if (!ok) return
-    setSelectedIds(new Set())
+    selection.clear()
     const undo =
       outcome.done.length > 0 ? (
         <ToastAction
@@ -594,7 +628,7 @@ export default function SkattekontoPage() {
   const nextCharge = useMemo(() => {
     const dueOf = (r: StoredSkattekontoTransaction) =>
       r.forfallodatum ?? r.transaktionsdatum
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayIsoStockholm()
     const ignoredUpcoming = (tx?.ignored ?? []).filter(
       (r) => r.status !== 'booked' && dueOf(r) >= today,
     )
@@ -617,21 +651,36 @@ export default function SkattekontoPage() {
         .map((r) => r.id),
     [tx],
   )
-  const activeSelectedIds = useMemo(() => {
-    const selectable = new Set(selectableIds)
-    return new Set([...selectedIds].filter((id) => selectable.has(id)))
-  }, [selectableIds, selectedIds])
-  const range = useRangeSelect({ visibleIds: selectableIds, selectedIds, setSelectedIds })
-  const toggleSelect = useCallback(
-    (id: string, extend?: boolean) => range.toggle(id, extend),
-    [range],
+  const selection = useBulkSelection(selectableIds)
+  const activeSelectedIds = selection.selectedIds
+  // The bulk bar matches the ticked rows to one verifikat only when every
+  // one is settled (Genomförda): a kommande row cannot be linked yet. Date
+  // order, so the dialog lists them the way they happened.
+  const selectedSettledRows = useMemo(
+    () =>
+      (tx?.booked ?? [])
+        .filter((r) => activeSelectedIds.has(r.id) && !r.journal_entry_id)
+        .sort((a, b) =>
+          a.transaktionsdatum < b.transaktionsdatum ? -1 : a.transaktionsdatum > b.transaktionsdatum ? 1 : 0,
+        ),
+    [tx, activeSelectedIds],
   )
+  const canMatchSelection =
+    selectedSettledRows.length >= 2 && selectedSettledRows.length === activeSelectedIds.size
+  const toggleSelect = selection.toggle
 
   const saldoNow = saldo?.data ? saldo.data.saldoSkatteverket : null
-  const shortfall =
+  // A bank payment to the skattekonto is not in the saldo until the next
+  // sync: the shortfall counts it, by the rule Hem and the payment dialog use
+  // (lib/payments/orders/skattekonto-underway.ts), so this line never asks for
+  // money already on its way.
+  const fetchedAtMs = saldo?.fetchedAt ? Date.parse(saldo.fetchedAt) : Number.NaN
+  const paymentsCovering = skattekontoPaymentsCovering(skattekontoOrders, Number.isFinite(fetchedAtMs) ? fetchedAtMs : null)
+  const missing =
     nextCharge && saldoNow !== null && saldoNow < nextCharge.amount
-      ? Math.round((nextCharge.amount - saldoNow) * 100) / 100
+      ? Math.round((nextCharge.amount - saldoNow - paymentsCovering) * 100) / 100
       : null
+  const shortfall = missing !== null && missing > 0 ? missing : null
 
   const helpNode = (
     <HelpPopover>
@@ -643,10 +692,14 @@ export default function SkattekontoPage() {
     tx !== null &&
     tx.booked.length + tx.overdue.length + tx.upcoming.length + tx.ignored_count > 0
 
-  // Drives ONE ochre line and nothing else: nothing on this page is hidden or
-  // removed while it is true. needs_reconsent is the resting state for the
+  // Drives the header action and nothing else: nothing on this page is hidden
+  // or removed while it is true. needs_reconsent is the resting state for the
   // personal-token cohort (93% of connected companies on 2026-08-26), so
-  // anything that HIDES on this flag hides from nearly everyone.
+  // anything that HIDES on this flag hides from nearly everyone. The one
+  // swap is Synkronisera nu for Anslut igen: a sync cannot succeed on a
+  // session that needs reconsent (resolveReadAuth answers SESSION_EXPIRED),
+  // and a near-permanent ochre line would hold the page's one attention slot
+  // that the shortfall line needs.
   const showReconnect = needsReconnect || reconnectMessage !== null
   const reconnectBody = reconnectMessage ?? t('attn_reconnect_body')
 
@@ -660,7 +713,7 @@ export default function SkattekontoPage() {
             layout="side-right"
             title={tStart('skattekonto_title')}
             body={tStart('skattekonto_body')}
-            primary={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+            primary={{ label: tStart('skattekonto_primary'), href: '/settings/skatteverket' }}
             secondary={{ label: t('import_statement_action'), href: '/import?mode=skattekonto' }}
           />
         </div>
@@ -672,21 +725,21 @@ export default function SkattekontoPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Skattekonto" help={helpNode} />
-        <EmptyState
-          icon={AlertCircle}
+        <LoadError
           title="Kunde inte hämta skattekontot"
           description="Något gick fel när saldo och transaktioner skulle hämtas. Försök igen om en stund."
-        >
-          <Button variant="outline" onClick={() => void reload()}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Försök igen
-          </Button>
-        </EmptyState>
+          onRetry={() => void reload()}
+        />
       </div>
     )
   }
 
   const data = saldo?.data ?? null
+  // The page's one ochre line (convention 6). The shortfall outranks the
+  // ledger proposals: it has a date and costs kostnadsränta if missed, while
+  // linking the imported rows can wait. The proposals then stay as a quiet
+  // line, since hiding them invites a second booking of the same events.
+  const showShortfall = !notConnected && data !== null && shortfall !== null && nextCharge !== null
 
   return (
     <div className="space-y-8">
@@ -695,23 +748,31 @@ export default function SkattekontoPage() {
         help={helpNode}
         action={
           notConnected ? (
-            <Button
+            <Button size="toolbar"
               variant="ghost"
               asChild
               className="text-muted-foreground hover:text-foreground"
             >
               <Link href="/import?mode=skattekonto">{t('import_statement_action')}</Link>
             </Button>
+          ) : showReconnect ? (
+            // The same connect flow the reconnect line used to link; the
+            // reason (the server's own, when a sync just failed) in the tooltip.
+            <Button size="toolbar" variant="outline" asChild>
+              <Link href="/settings/skatteverket" title={reconnectBody}>
+                {t('attn_reconnect_action')}
+              </Link>
+            </Button>
           ) : (
             // The span carries the tooltip: `title` is suppressed on disabled elements.
-            <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
-              <Button
+            <span title={lockedTitle ?? (!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined)}>
+              <Button size="toolbar"
                 variant="ghost"
                 onClick={syncNow}
-                disabled={syncing || !hasSkvCapability}
+                disabled={!canWrite || syncing || !hasSkvCapability}
                 className="text-muted-foreground hover:text-foreground"
               >
-                <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                <ArrowPathIcon className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
                 {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
               </Button>
             </span>
@@ -719,21 +780,30 @@ export default function SkattekontoPage() {
         }
       />
 
-      {/* Page level, not nested in the saldo section: the line used to live
-          inside the `data` branch below, so a company with no snapshot got no
-          feedback at all when the sync it just clicked died. Coexists with the
-          shortfall line under convention 6's 2026-08-19 addendum (one
-          lib/notices notice plus one page-domain attn line). */}
-      {showReconnect ? (
-        <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}>
-          {reconnectBody}
-        </AttnLine>
+      {/* Page level, not nested in the saldo section. An expired Skatteverket
+          session is not a line here: the header action turns into Anslut
+          igen instead (see showReconnect). */}
+      {(ledgerProposals ?? 0) > 0 ? (
+        // Rows the imported books already hold win over the connect hint:
+        // without the link they read as unbooked and invite a second booking.
+        showShortfall ? (
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t('ledger_attn_body', { count: ledgerProposals ?? 0, skattekonto: skattekontoAccount })}{' '}
+            <button type="button" onClick={() => setLinkAllOpen(true)} disabled={!canWrite} title={lockedTitle} className={cn(QUIET_LINK_CLASS, 'print:hidden')}>
+              {t('ledger_attn_cta')}
+            </button>
+          </p>
+        ) : (
+          <AttnLine action={canWrite ? { label: t('ledger_attn_cta'), onClick: () => setLinkAllOpen(true) } : undefined}>
+            {t('ledger_attn_body', { count: ledgerProposals ?? 0, skattekonto: skattekontoAccount })}
+          </AttnLine>
+        )
       ) : notConnected ? (
         // File-imported rows without a connection: no saldo to show, but the
         // booking/matching flows below work on the local table. One ochre
         // sentence with the connect action, per the attn convention.
         <AttnLine
-          action={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+          action={{ label: tStart('skattekonto_primary'), href: '/settings/skatteverket' }}
         >
           {t('imported_not_connected_attn')}
         </AttnLine>
@@ -746,26 +816,21 @@ export default function SkattekontoPage() {
       {!notConnected && (
       <section className="space-y-4">
         {loading && !data ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <LateReveal className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Skeleton className="h-28 w-full rounded-lg" />
             <Skeleton className="h-28 w-full rounded-lg" />
-          </div>
+          </LateReveal>
         ) : !data ? (
+          // With a reconnect pending the header holds Anslut igen, not the
+          // sync button this sentence names: say why there is no saldo instead.
           <p className="py-4 text-sm text-muted-foreground">
-            Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.
+            {showReconnect ? reconnectBody : 'Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.'}
           </p>
         ) : (
           <>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-lg border border-border p-4">
-                <div className="flex items-center gap-2">
-                  <img
-                    src="/logos/skatteverket_color.svg"
-                    alt=""
-                    className="h-4 w-4 shrink-0 object-contain"
-                  />
-                  <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
-                </div>
+              <div className="rounded-lg p-4 bg-control shadow-raised">
+                <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
                 <p
                   className={cn(
                     'mt-2 font-display text-2xl tabular-nums tracking-tight',
@@ -805,7 +870,7 @@ export default function SkattekontoPage() {
                 )}
               </div>
 
-              <div className="rounded-lg border border-border p-4">
+              <div className="rounded-lg p-4 bg-control shadow-raised">
                 <p className="text-xs text-muted-foreground">Nästa dragning</p>
                 {nextCharge ? (
                   <>
@@ -825,11 +890,10 @@ export default function SkattekontoPage() {
               </div>
             </div>
 
-            {/* The reconnect line moved to page level; this slot keeps the
-                shortfall notice, which needs `data`. Deliberately still shown
-                while a reconnect is pending: it is the warning that prevents
-                kostnadsränta, and its action is this page's only route to the
-                bankgiro and OCR. */}
+            {/* The shortfall notice, which needs `data`. Deliberately still
+                shown while a reconnect is pending: it is the warning that
+                prevents kostnadsränta, and its action is this page's only
+                route to the bankgiro and OCR. */}
             {shortfall !== null && nextCharge ? (
               <AttnLine
                 action={{ label: t('attn_show_payment'), onClick: () => setShowPayment(true) }}
@@ -845,17 +909,25 @@ export default function SkattekontoPage() {
             {/* Optional chain on purpose: `data` is Skatteverket's raw saldo
                 JSON cast to our interface, and informationstext is not a
                 required field in SKV's own v2.1.0 schema. A response without
-                it blanked the whole Skattekonto page. */}
+                it blanked the whole Skattekonto page. Folded behind a quiet
+                disclosure: Skatteverket's general texts are read on demand,
+                not set in the page flow (convention 7). */}
             {(data.informationstext?.length ?? 0) > 0 && (
               <div className="space-y-1">
-                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Information från Skatteverket
-                </p>
-                {(data.informationstext ?? []).map((info, i) => (
-                  <p key={i} className="text-xs leading-5 text-muted-foreground">
-                    {info}
-                  </p>
-                ))}
+                <button
+                  type="button"
+                  onClick={() => setShowSkvMessages((v) => !v)}
+                  aria-expanded={showSkvMessages}
+                  className={QUIET_LINK_CLASS}
+                >
+                  {t('skv_messages', { count: data.informationstext?.length ?? 0 })}
+                </button>
+                {showSkvMessages &&
+                  (data.informationstext ?? []).map((info, i) => (
+                    <p key={i} className="text-xs leading-5 text-muted-foreground">
+                      {info}
+                    </p>
+                  ))}
               </div>
             )}
           </>
@@ -865,38 +937,22 @@ export default function SkattekontoPage() {
 
       {/* Bulkbar (transactions-page pattern): hidden until at least one
           ignorable row is selected via the hover checkboxes. */}
-      {activeSelectedIds.size > 0 && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
-          <span className="whitespace-nowrap">
-            {t('bulk_selected', { count: activeSelectedIds.size })}
-          </span>
-          <Button size="sm" onClick={() => void ignoreSelected([...activeSelectedIds])}>
-            {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
+      <BulkSelectionBar
+        selection={selection}
+        selectableCount={selectableIds.length}
+        countLabel={t('bulkbar_selected', { count: activeSelectedIds.size })}
+        selectAllLabel={t('bulk_select_all', { count: selectableIds.length })}
+        clearLabel={t('bulk_clear')}
+      >
+        <Button onClick={() => void ignoreSelected([...activeSelectedIds])}>
+          {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
+        </Button>
+        {canMatchSelection && (
+          <Button variant="outline" onClick={() => setGroupMatchRows(selectedSettledRows)}>
+            {t('bulk_match_cta')}
           </Button>
-          {activeSelectedIds.size < selectableIds.length && (
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => {
-                setSelectedIds(new Set(selectableIds))
-                range.resetAnchor()
-              }}
-            >
-              {t('bulk_select_all', { count: selectableIds.length })}
-            </button>
-          )}
-          <button
-            type="button"
-            className={QUIET_LINK_CLASS}
-            onClick={() => {
-              setSelectedIds(new Set())
-              range.resetAnchor()
-            }}
-          >
-            {t('bulk_clear')}
-          </button>
-        </div>
-      )}
+        )}
+      </BulkSelectionBar>
 
       {/* One dry table with band rows (concept): Kommande, Förfallna, Genomförda */}
       <SkattekontoTable
@@ -925,15 +981,12 @@ export default function SkattekontoPage() {
         </p>
       )}
 
-      <p className="px-1 text-xs leading-5 text-muted-foreground">
-        {t('pgnote', { amount: formatCurrency(data?.saldoKronofogden ?? 0) })}
-      </p>
-
       <DestructiveConfirmDialog {...ignoreConfirmProps} />
 
       {bookTarget && (
         <SkattekontoBookDialog
           row={bookTarget}
+          skattekontoAccount={skattekontoAccount}
           open
           onOpenChange={(o) => {
             if (!o) setBookTarget(null)
@@ -942,27 +995,53 @@ export default function SkattekontoPage() {
           onMatch={() => {
             const target = bookTarget
             setBookTarget(null)
-            void openMatch(target)
+            openMatch(target)
+          }}
+          onLinked={() => {
+            void reload()
+            refreshLedgerProposals()
           }}
         />
       )}
 
-      <MatchDialog
+      {linkAllOpen && (
+        <SkattekontoLinkProposalsDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setLinkAllOpen(false)
+          }}
+          onLinked={() => {
+            void reload()
+            refreshLedgerProposals()
+          }}
+          skattekontoAccount={skattekontoAccount}
+        />
+      )}
+
+      <SkattekontoMatchDialog
         row={matchOpenFor}
-        candidates={matchCandidates}
-        loading={matchLoading}
-        submittingId={matchSubmitting}
-        onClose={() => {
-          setMatchOpenFor(null)
-          setMatchCandidates(null)
+        open={!!matchOpenFor}
+        onClose={closeMatch}
+        onMatched={() => void reload()}
+        skattekontoAccount={skattekontoAccount}
+      />
+
+      <SkattekontoMatchDialog
+        row={null}
+        rows={groupMatchRows}
+        open={!!groupMatchRows}
+        onClose={closeGroupMatch}
+        onMatched={() => {
+          selection.clear()
+          void reload()
         }}
-        onConfirm={confirmMatch}
+        skattekontoAccount={skattekontoAccount}
       />
 
       <Dialog open={showPayment} onOpenChange={setShowPayment}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
-            <DialogTitle className="font-display text-lg tracking-tight">
+            <DialogTitle className="text-lg">
               {t('payment_title')}
             </DialogTitle>
             {nextCharge && (
@@ -990,7 +1069,7 @@ export default function SkattekontoPage() {
                     className="text-muted-foreground transition-colors hover:text-foreground"
                     aria-label="Kopiera OCR"
                   >
-                    <Copy className="h-3.5 w-3.5" />
+                    <Square2StackIcon className="h-3.5 w-3.5" />
                   </button>
                 )}
               </dd>
@@ -1002,8 +1081,32 @@ export default function SkattekontoPage() {
               </div>
             )}
           </dl>
+          {bankPaymentsAvailable && (
+            <DialogFooter>
+              <Button
+                disabled={!canWrite}
+                title={lockedTitle}
+                onClick={() => {
+                  setShowPayment(false)
+                  setShowBankPayment(true)
+                }}
+              >
+                {t('payment_pay_via_bank')}
+              </Button>
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
+
+      {showBankPayment && (
+        <PaySkattekontoViaBankDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setShowBankPayment(false)
+          }}
+          onDone={() => void reload()}
+        />
+      )}
     </div>
   )
 }
@@ -1047,6 +1150,10 @@ function SkattekontoTable({
   onUnignore: (row: StoredSkattekontoTransaction) => void
 }) {
   const t = useTranslations('skattekonto')
+  // Unbooked rows dated before the ingående balans on the skattekonto
+  // account are carried by it: no work, so the band count leaves them out
+  // and the row says so (isOpenSkattekontoRow, the reading Att göra counts).
+  const openingDate = tx?.opening_balance_date ?? null
 
   const allSections: TableSection[] = [
     { key: 'upcoming', label: t('band_upcoming'), rows: tx?.upcoming ?? [] },
@@ -1076,18 +1183,18 @@ function SkattekontoTable({
 
   if (sections.length === 0) {
     return (
-      <p className="py-8 text-center text-sm text-muted-foreground">
-        {t('no_transactions')}
-      </p>
+      <EmptyState title={t('no_transactions')} />
     )
   }
 
   return (
     // Negative margin + matching padding: lets the hover-revealed selection
     // checkbox hang into the page margins without being clipped by the
-    // overflow container (transactions-page pattern).
+    // overflow container (transactions-page pattern). It bleeds exactly the
+    // panel padding (MainContainer px-4, md:px-6): more scrolls the page
+    // sideways on a phone.
     <div
-      className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8"
+      className="-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4"
       role="region"
       aria-label="Skattekontohändelser"
     >
@@ -1107,12 +1214,12 @@ function SkattekontoTable({
               <tr className="bg-muted/30">
                 <td
                   colSpan={5}
-                  className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
+                  className="px-4 py-2 text-xs font-semibold text-muted-foreground"
                 >
                   {section.label}
-                  {section.key === 'booked' && section.rows.some((r) => !r.journal_entry_id) && (
+                  {section.key === 'booked' && section.rows.some((r) => isOpenSkattekontoRow(r, openingDate)) && (
                     <span className="ml-2 font-normal normal-case tracking-normal">
-                      · {t('band_not_booked_count', { count: section.rows.filter((r) => !r.journal_entry_id).length })}
+                      · {t('band_not_booked_count', { count: section.rows.filter((r) => isOpenSkattekontoRow(r, openingDate)).length })}
                     </span>
                   )}
                 </td>
@@ -1129,6 +1236,7 @@ function SkattekontoTable({
                   onIgnore={onIgnore}
                   onUnignore={onUnignore}
                   showInterestDate={section.interestDateRowIds.has(row.id)}
+                  inOpeningBalance={section.key === 'booked' && isSkattekontoRowBeforeHistory(row, openingDate)}
                 />
               ))}
             </Fragment>
@@ -1149,6 +1257,7 @@ function SkattekontoRow({
   onIgnore,
   onUnignore,
   showInterestDate,
+  inOpeningBalance,
 }: {
   row: SkattekontoTransactionWithSuggestion
   section: TableSection['key']
@@ -1159,6 +1268,8 @@ function SkattekontoRow({
   onIgnore: (row: StoredSkattekontoTransaction) => void
   onUnignore: (row: StoredSkattekontoTransaction) => void
   showInterestDate: boolean
+  /** Unbooked but dated before the ingående balans, which carries it. */
+  inOpeningBalance: boolean
 }) {
   const t = useTranslations('skattekonto')
   // Whether shift was held on the checkbox click, for range selection.
@@ -1166,7 +1277,8 @@ function SkattekontoRow({
   const amount = Number(row.belopp_skatteverket)
   const isBooked = !!row.journal_entry_id
   const isIgnoredSection = section === 'ignored'
-  const selectable = !isBooked && !isIgnoredSection
+  const { canWrite, lockedTitle } = useViewerLock()
+  const selectable = canWrite && !isBooked && !isIgnoredSection
   const displayDate = rowDisplayDate(row, section)
 
   return (
@@ -1182,21 +1294,18 @@ function SkattekontoRow({
           date column stays where it was. Selected rows keep it visible. */}
       <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
         {selectable && (
-          <Checkbox
+          <RowSelectCheckbox
             checked={isSelected}
             onClick={(e) => {
               shiftHeld.current = e.shiftKey
             }}
             onCheckedChange={() => onToggleSelect(row.id, shiftHeld.current)}
             aria-label={t('select_row_aria', { text: row.transaktionstext })}
-            className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
-              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
-            )}
+            className="absolute -left-4 top-1/2 -translate-y-1/2 md:-left-6"
           />
         )}
       </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
         {formatDate(displayDate)}
       </td>
       <td className={TD_CLASS}>
@@ -1206,7 +1315,7 @@ function SkattekontoRow({
               identical apart from ränteberäkningsdatum. Without this the rows
               read as duplicates from the automatic hämtning. */}
           {showInterestDate && row.ranteberakningsdatum && (
-            <span className="text-[12px] tabular-nums text-muted-foreground">
+            <span className="text-xs tabular-nums text-muted-foreground">
               {t('interest_from', { date: formatDate(row.ranteberakningsdatum) })}
             </span>
           )}
@@ -1228,8 +1337,11 @@ function SkattekontoRow({
               </Badge>
             ) : (
               /* Plain fact, not an exception: quiet text, and the band
-                 header carries the count once. */
-              <span className="text-[11.5px] text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
+                 header carries the count once (a row the IB carries is
+                 not in it). */
+              <span className="text-xs text-muted-foreground">
+                {inOpeningBalance ? t('chip_in_opening_balance') : t('chip_not_booked').toLowerCase()}
+              </span>
             )
           )}
         </span>
@@ -1241,7 +1353,7 @@ function SkattekontoRow({
           amount > 0 && 'text-success',
         )}
       >
-        {amount > 0 ? `+${formatCurrency(amount)}` : formatCurrency(amount)}
+        {amount > 0 ? `+${formatRowAmount(amount)}` : formatRowAmount(amount)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
         {isIgnoredSection ? (
@@ -1249,6 +1361,8 @@ function SkattekontoRow({
             <button
               type="button"
               onClick={() => onUnignore(row)}
+              disabled={!canWrite}
+              title={lockedTitle}
               className={QUIET_LINK_CLASS}
             >
               {t('action_unignore')}
@@ -1269,6 +1383,8 @@ function SkattekontoRow({
             <button
               type="button"
               onClick={() => onIgnore(row)}
+              disabled={!canWrite}
+              title={lockedTitle}
               className={QUIET_LINK_CLASS}
             >
               {t('ignore_action')}
@@ -1276,14 +1392,17 @@ function SkattekontoRow({
             <button
               type="button"
               onClick={() => onMatch(row)}
+              disabled={!canWrite}
               className={QUIET_LINK_CLASS}
-              title="Koppla till befintligt verifikat"
+              title={lockedTitle ?? 'Koppla till befintligt verifikat'}
             >
               {t('action_match')}
             </button>
             <button
               type="button"
               onClick={() => onBokfor(row.id)}
+              disabled={!canWrite}
+              title={lockedTitle}
               className={QUIET_LINK_CLASS}
             >
               {t('action_book')}
@@ -1292,116 +1411,5 @@ function SkattekontoRow({
         )}
       </td>
     </tr>
-  )
-}
-
-function MatchDialog({
-  row,
-  candidates,
-  loading,
-  submittingId,
-  onClose,
-  onConfirm,
-}: {
-  row: StoredSkattekontoTransaction | null
-  candidates: MatchCandidate[] | null
-  loading: boolean
-  submittingId: string | null
-  onClose: () => void
-  onConfirm: (journalEntryId: string) => void
-}) {
-  const open = !!row
-  return (
-    <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      {/* See SkattekontoMatchDialog for why 3xl and why the table below is
-          fixed layout. */}
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Matcha mot befintligt verifikat</DialogTitle>
-          {/* data-ph-mask: transaction text and amount are user data */}
-          <DialogDescription data-ph-mask="">
-            {row && (
-              <>
-                {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
-                <span className="tabular-nums">
-                  {formatCurrency(Number(row.belopp_skatteverket))}
-                </span>
-              </>
-            )}
-          </DialogDescription>
-        </DialogHeader>
-
-        {loading && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Söker kandidater…
-          </p>
-        )}
-
-        {!loading && candidates && candidates.length === 0 && (
-          <div className="space-y-2 py-4 text-sm">
-            <p>Hittade inga verifikat med en matchande rad på konto 1630.</p>
-            <p className="text-muted-foreground">
-              Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar
-              från transaktionsdatumet, och får inte redan vara kopplad till en
-              annan skattekonto-transaktion. Använd <strong>Bokför</strong> för
-              att skapa ett nytt verifikat istället.
-            </p>
-          </div>
-        )}
-
-        {!loading && candidates && candidates.length > 0 && (
-          <div className="max-h-[420px] overflow-y-auto rounded-lg border">
-            <Table className="table-fixed min-w-[470px] sm:min-w-[580px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[116px]">Datum</TableHead>
-                  <TableHead className="w-[128px]">Verifikat</TableHead>
-                  <TableHead>Beskrivning</TableHead>
-                  <TableHead className="hidden w-[112px] sm:table-cell">Status</TableHead>
-                  <TableHead className="sticky right-0 w-[124px] bg-background sm:static sm:bg-transparent"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {candidates.map(c => (
-                  <TableRow key={c.journal_entry_id}>
-                    <TableCell className="tabular-nums">{formatDate(c.entry_date)}</TableCell>
-                    <TableCell className="tabular-nums">
-                      {formatVoucher(c)}
-                    </TableCell>
-                    <TableCell>
-                      <div className="truncate">{c.description}</div>
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      {c.status === 'posted' ? (
-                        <Badge variant="secondary">Bokförd</Badge>
-                      ) : c.status === 'draft' ? (
-                        <Badge variant="outline">Utkast</Badge>
-                      ) : (
-                        <Badge variant="destructive">Makulerad</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="sticky right-0 bg-background text-right sm:static sm:bg-transparent">
-                      <Button
-                        size="sm"
-                        onClick={() => onConfirm(c.journal_entry_id)}
-                        disabled={submittingId === c.journal_entry_id}
-                      >
-                        {submittingId === c.journal_entry_id ? 'Kopplar…' : 'Koppla'}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Avbryt
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }

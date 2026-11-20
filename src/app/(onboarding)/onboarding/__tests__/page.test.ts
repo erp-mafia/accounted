@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { findCompanyRoleByOrgNumber } from '../page'
+import { findCompanyRoleByOrgNumber, findCompanyRoleByPick, findOwnCompanyByOrgNumber } from '../page'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 
 // `findCompanyRoleByOrgNumber` replaces the old prefetchLookup at /onboarding.
@@ -49,7 +49,7 @@ describe('findCompanyRoleByOrgNumber', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await findCompanyRoleByOrgNumber(supabase as any, 'user-1', '5560125790')
 
-    expect(result).toEqual({ legalName: 'Acme AB', legalEntityType: 'Aktiebolag' })
+    expect(result).toMatchObject({ legalName: 'Acme AB', legalEntityType: 'Aktiebolag' })
   })
 
   it('matches orgnrs with hyphens stripped (TIC returns "556012-5790")', async () => {
@@ -62,7 +62,7 @@ describe('findCompanyRoleByOrgNumber', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await findCompanyRoleByOrgNumber(supabase as any, 'user-1', '5560125790')
 
-    expect(result).toEqual({ legalName: 'Acme AB', legalEntityType: 'Aktiebolag' })
+    expect(result).toMatchObject({ legalName: 'Acme AB', legalEntityType: 'Aktiebolag' })
   })
 
   it('returns null when no enrichment row exists (user signed up without BankID)', async () => {
@@ -107,5 +107,97 @@ describe('findCompanyRoleByOrgNumber', () => {
     const result = await findCompanyRoleByOrgNumber(supabase as any, 'user-1', '8001011231')
 
     expect(result?.legalEntityType).toBe('Enskild firma')
+  })
+})
+
+describe('findCompanyRoleByPick', () => {
+  it('resolves the opaque TIC companyId against the user\'s own roles (#58)', async () => {
+    const supabase = mockSupabase([
+      makeRole({ companyId: 111, companyRegistrationNumber: '5560125790', legalName: 'Acme AB' }),
+      makeRole({ companyId: 222, companyRegistrationNumber: '1982010223430001', legalName: 'Firma', legalEntityType: 'Enskild firma' }),
+    ])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await findCompanyRoleByPick(supabase as any, 'user-1', '222')
+
+    expect(result).toMatchObject({ companyId: 222, legalName: 'Firma', companyRegistrationNumber: '1982010223430001' })
+  })
+
+  it('returns null for an id that is not one of the user\'s roles', async () => {
+    const supabase = mockSupabase([makeRole({ companyId: 111 })])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await findCompanyRoleByPick(supabase as any, 'user-1', '999')).toBeNull()
+  })
+
+  it('refuses a non-numeric pick without reading the roles', async () => {
+    const supabase = mockSupabase([makeRole({ companyId: 111 })])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await findCompanyRoleByPick(supabase as any, 'user-1', '1982010223430001x')).toBeNull()
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+})
+
+function mockMemberships(
+  companies: Array<{ id: string; org_number: string | null; archived_at: string | null }>,
+) {
+  return {
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({
+          data: companies.map((company) => ({ company })),
+          error: null,
+        }),
+      }),
+    }),
+  }
+}
+
+describe('findOwnCompanyByOrgNumber', () => {
+  it('finds the sole trader\'s own firm from the 16-digit picker link (crm#68)', async () => {
+    const supabase = mockMemberships([
+      { id: 'ef-1', org_number: '8201022343', archived_at: null },
+    ])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await findOwnCompanyByOrgNumber(supabase as any, 'user-1', '1982010223430001')
+
+    expect(result).toBe('ef-1')
+  })
+
+  it('matches an aktiebolag regardless of formatting', async () => {
+    const supabase = mockMemberships([
+      { id: 'ab-1', org_number: '556012-5790', archived_at: null },
+    ])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await findOwnCompanyByOrgNumber(supabase as any, 'user-1', '5560125790')).toBe('ab-1')
+  })
+
+  it('ignores archived companies so a restarted company can be set up again', async () => {
+    const supabase = mockMemberships([
+      { id: 'old', org_number: '8201022343', archived_at: '2026-09-01T00:00:00Z' },
+    ])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await findOwnCompanyByOrgNumber(supabase as any, 'user-1', '1982010223430001')).toBeNull()
+  })
+
+  it('returns null for a company the user does not have', async () => {
+    const supabase = mockMemberships([
+      { id: 'ab-1', org_number: '5560125790', archived_at: null },
+    ])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await findOwnCompanyByOrgNumber(supabase as any, 'user-1', '5591715734')).toBeNull()
+  })
+
+  it('returns null without querying for a non org-number value', async () => {
+    const supabase = mockMemberships([])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await findOwnCompanyByOrgNumber(supabase as any, 'user-1', 'abc')).toBeNull()
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 })

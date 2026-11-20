@@ -1,8 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { SupportLink } from '@/components/ui/support-link'
+import { StandaloneMessage } from '@/components/standalone/StandalonePage'
 
 /**
  * App-wide error boundary (rendered from app/error.tsx). It catches any render
@@ -75,6 +77,9 @@ export function AppErrorBoundary({
   scope: string
 }) {
   const [phase] = useState<'reloading' | 'fallback'>(decideInitialPhase)
+  // 'common' is a root namespace (src/i18n/root-client-namespaces.ts): this
+  // boundary renders under the root provider only.
+  const t = useTranslations('common')
 
   useEffect(() => {
     console.error(
@@ -90,17 +95,23 @@ export function AppErrorBoundary({
   // never flashes any UI at all.
   if (phase === 'reloading') return null
 
+  // The standalone frame of the sign-in pages: what happened, what to do,
+  // one way on.
   return (
-    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 px-6 text-center">
-      <h2 className="text-xl">Något gick fel</h2>
-      <p className="max-w-md text-sm text-muted-foreground">
-        Ett oväntat fel uppstod. Försök igen eller{' '}
-        <SupportLink variant="inline" subject="Oväntat fel">
-          kontakta support
-        </SupportLink>{' '}
-        om problemet kvarstår.
-      </p>
-      <Button onClick={() => window.location.reload()}>Försök igen</Button>
-    </div>
+    <StandaloneMessage
+      width="auth"
+      title={t('error_boundary_title')}
+      body={t.rich('error_boundary_body', {
+        support: (chunks) => (
+          <SupportLink variant="inline" subject={t('error_boundary_support_subject')} assistant={false}>
+            {chunks}
+          </SupportLink>
+        ),
+      })}
+    >
+      <Button size="lg" className="w-full" onClick={() => window.location.reload()}>
+        {t('retry')}
+      </Button>
+    </StandaloneMessage>
   )
 }

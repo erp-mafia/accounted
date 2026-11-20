@@ -36,6 +36,7 @@ import {
   AssetJamkningDataRequiredError,
 } from '@/lib/bokslut/assets/asset-service'
 import { POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -116,39 +117,15 @@ function postRequest(url: string, body: unknown): Request {
   })
 }
 
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
-
 const routeParams = { params: Promise.resolve({ companyId: COMPANY_ID, id: ASSET_ID }) }
 const URL_ = `https://x.test/api/v1/companies/${COMPANY_ID}/assets/${ASSET_ID}/dispose`
 
 beforeEach(() => {
   vi.clearAllMocks()
   mockServiceClient.mockReturnValue(
-    makeFlexibleSupabase({
+    createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-    }),
+    }).supabase,
   )
   mockValidate.mockResolvedValue({
     userId: 'user-1',

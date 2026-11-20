@@ -1,104 +1,27 @@
-'use client'
-
-import { useState, type ReactNode } from 'react'
-import { useTranslations } from 'next-intl'
-import { useCompany } from '@/contexts/CompanyContext'
-import { AgentPromo } from '@/components/dashboard/AgentPromo'
-import type { InitialSetupState } from '@/types'
+import type { ReactNode } from 'react'
 
 interface DashboardContentProps {
-  companyId: string
-  /** Signed-in user's first name for the greeting; null falls back to a
-   *  nameless greeting. */
-  userFirstName?: string | null
-  initialSetup: InitialSetupState
-  /**
-   * False until the company has a verified agent_profile. When false the hero
-   * slot shows a build-assistant prompt instead of the next-best-action card,
-   * so existing/migrated users are nudged to build the assistant without a
-   * full-screen onboarding takeover.
-   */
-  agentBuilt?: boolean
   /**
    * Streamed sections (server components behind Suspense in
-   * app/(dashboard)/page.tsx): the notice line, the setup checklist and the
-   * Att göra + Fortsätt panes. The shell renders the greeting immediately
-   * and each slot fills in as its queries resolve, instead of the whole page
-   * waiting for the slowest of ~30 queries.
+   * app/(dashboard)/page.tsx): the notice line and the Att göra pane. The
+   * shell renders at once and each slot fills in as its queries resolve.
    */
   notices: ReactNode
-  checklist: ReactNode
   panes: ReactNode
 }
 
 /**
- * Hem (concept scene 14): greeting, then the two panes side by side:
- * Att göra (obligations, lib/worklist) and Fortsätt (in-progress work,
- * lib/worklist/resume). KPI tiles, revenue/expense cards and the deadline/tax
- * widgets left the page (founder direction): the numbers live at /kpi and
- * /reports, deadlines render as Bevaka rows.
+ * Hem's shell (Att göra V8, "calm Hem"): the degraded-state notice line
+ * (lib/notices: one attn line, highest priority first, a quiet "+N till"),
+ * then the pane. The pane opens with the date and the headline, a template
+ * filled with counts, and carries Kom igång, Först, Behöver dig, Rutin,
+ * Fortsätt and the connections (components/dashboard/AttGoraSection).
+ * The greeting left the page with V8: the headline says how things stand.
  */
-export default function DashboardContent({
-  companyId,
-  userFirstName,
-  initialSetup,
-  agentBuilt = true,
-  notices,
-  checklist,
-  panes,
-}: DashboardContentProps) {
-  const t = useTranslations('dashboard')
-  const { company } = useCompany()
-
-  // Time-of-day greeting (concept: "God morgon, Jakob."). Client-side clock
-  // on purpose (the user's local morning, not the server's), captured once
-  // so render stays pure.
-  const [greetingNow] = useState(() => new Date())
-  const hour = greetingNow.getHours()
-  const greeting =
-    hour < 10 ? t('greeting_morning') : hour < 17 ? t('greeting_day') : t('greeting_evening')
-  const dateLine = new Intl.DateTimeFormat('sv-SE', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  }).format(greetingNow)
-
+export default function DashboardContent({ notices, panes }: DashboardContentProps) {
   return (
-    <div className="stagger-enter space-y-8">
-      {/* Degraded-state notices (lib/notices): one attn line, highest
-          priority first, quiet "+N till" expander. The wrong-account hint
-          participates in the same priority list instead of rendering its own
-          unconditional line, and the old boxed BackupHealthBanner card lives
-          on as the backup_failing category. */}
+    <div className="space-y-8">
       {notices}
-
-      {/* Greeting hero (concept scene 14) */}
-      <section>
-        <h1 className="font-display text-2xl leading-8 tracking-tight">
-          {userFirstName ? `${greeting}, ${userFirstName}.` : `${greeting}.`}
-        </h1>
-        <p className="mt-1.5 text-[13px] text-muted-foreground">
-          {dateLine}
-          {company?.name ? ` · ${company.name}` : ''}
-        </p>
-      </section>
-
-      {checklist}
-
-      {/* Build-assistant nudge: shown only until the company has a verified
-          agent_profile, so existing/migrated users get a clear prompt instead
-          of a full-screen onboarding takeover. While the stepped first-run
-          checklist is visible it already carries the assistant as its last
-          step, so the promo waits until that block is dismissed or completed. */}
-      {!agentBuilt && (initialSetup.dismissedAt || initialSetup.completedAt) && (
-        <AgentPromo companyId={companyId} />
-      )}
-
-      {/* The two panes (concept hem-grid). When nothing is in progress the
-          right pane renders null and Att göra takes the full width. */}
-      {/* The panes end with the Kopplingar strip (bank, Skatteverket) once the
-          checklist is closed; the old standalone Skatteverket promo sentence
-          lived here and is superseded by it. */}
       {panes}
     </div>
   )

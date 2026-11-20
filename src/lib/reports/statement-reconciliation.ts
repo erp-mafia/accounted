@@ -4,6 +4,7 @@ import { generateIncomeStatement } from './income-statement'
 import { generateINK2Declaration } from './ink2/ink2-engine'
 import { generateNEDeclaration } from './ne-bilaga/ne-engine'
 
+import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
 /**
  * Årets resultat, as every surface reports it, side by side.
  *
@@ -23,8 +24,7 @@ import { generateNEDeclaration } from './ne-bilaga/ne-engine'
  *                       lands (DECISIONS.md archive 2026-07-29) the families converge and
  *                       EXPECTED_OPERATIONAL_GAP can be dropped.
  *
- * Swedish labels: this surfaces next to the bokslut and declaration figures
- * (see .claude/rules/i18n.md).
+ * Swedish labels: this surfaces next to the bokslut and declaration figures.
  */
 
 /** Öre truncation across a form can legitimately accumulate a krona or two. */
@@ -110,10 +110,11 @@ export async function reconcileStatements(
   // skips, so a real bug in the declaration generator made this function report
   // isReconciled: true. That is the exact opposite of what it exists to do.
   const entityType = await resolveEntityType(supabase, companyId)
+  const filesInk2 = entityType !== null && isEntityType(entityType) && usesInk2(entityType)
 
-  if (entityType === 'aktiebolag' || entityType === 'enskild_firma') {
+  if (filesInk2 || entityType === 'enskild_firma') {
     try {
-      if (entityType === 'aktiebolag') {
+      if (filesInk2) {
         const ink2 = await generateINK2Declaration(supabase, companyId, fiscalPeriodId)
         figures.push({
           surface: 'INK2R (3.26/3.27)',
@@ -134,7 +135,7 @@ export async function reconcileStatements(
       // finding, not an absence: surface it instead of returning "reconciled".
       const reason = err instanceof Error ? err.message : String(err)
       figures.push({
-        surface: entityType === 'aktiebolag' ? 'INK2R (3.26/3.27)' : 'NE-bilaga (R11)',
+        surface: filesInk2 ? 'INK2R (3.26/3.27)' : 'NE-bilaga (R11)',
         family: 'statutory',
         aretsResultat: null,
         note: `Deklarationen kunde inte genereras: ${reason}`,

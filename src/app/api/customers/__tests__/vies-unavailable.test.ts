@@ -59,6 +59,11 @@ vi.mock('@/lib/vat/vies-client', async (importOriginal) => ({
   validateVatNumber: (vat: string) => validateVatNumberMock(vat),
 }))
 
+const syncDraftsMock = vi.fn().mockResolvedValue(0)
+vi.mock('@/lib/invoices/sync-draft-vat-headers', () => ({
+  syncDraftVatHeadersForCustomer: (...args: unknown[]) => syncDraftsMock(...args),
+}))
+
 import { PATCH } from '../[id]/route'
 
 const CUSTOMER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -116,14 +121,18 @@ describe('PATCH /api/customers/[id]: VIES re-validation', () => {
     validateVatNumberMock.mockResolvedValue(UNAVAILABLE)
     const response = await patch('FR12345678901')
     expect(response.status).toBe(200)
-    expect(validationWrites()).toEqual([{ vat_number_validated: false, vat_number_validated_at: null }])
+    expect(validationWrites()).toEqual([
+      expect.objectContaining({ vat_number_validated: false, vat_number_validated_at: null }),
+    ])
   })
 
   it('clears the flag on a definitive invalid verdict', async () => {
     validateVatNumberMock.mockResolvedValue({ valid: false })
     const response = await patch(STORED_VAT)
     expect(response.status).toBe(200)
-    expect(validationWrites()).toEqual([{ vat_number_validated: false, vat_number_validated_at: null }])
+    expect(validationWrites()).toEqual([
+      expect.objectContaining({ vat_number_validated: false, vat_number_validated_at: null }),
+    ])
   })
 
   it('stamps the flag on a valid verdict', async () => {
@@ -134,5 +143,12 @@ describe('PATCH /api/customers/[id]: VIES re-validation', () => {
     expect(writes).toHaveLength(1)
     expect(writes[0].vat_number_validated).toBe(true)
     expect(writes[0].vat_number_validated_at).toEqual(expect.any(String))
+  })
+
+  it('re-derives the customer open drafts after the save', async () => {
+    validateVatNumberMock.mockResolvedValue({ valid: true, vat_number: STORED_VAT })
+    const response = await patch(STORED_VAT)
+    expect(response.status).toBe(200)
+    expect(syncDraftsMock).toHaveBeenCalledWith(supabase, 'company-1', CUSTOMER_ID)
   })
 })

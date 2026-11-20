@@ -24,5 +24,3 @@ export const ArkivProposeFactParamsSchema = z.object({
     .nullable()
     .optional(),
 })
-
-export type ArkivProposeFactParams = z.infer<typeof ArkivProposeFactParamsSchema>

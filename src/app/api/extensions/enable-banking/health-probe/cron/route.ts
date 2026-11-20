@@ -1,16 +1,12 @@
 import { NextResponse } from 'next/server'
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
-import { withCronContext } from '@/lib/api/with-cron-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { extensionRegistry } from '@/lib/extensions/registry'
-import { ensureInitialized } from '@/lib/init'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import {
   probeSessionHealth,
   REAUTH_REQUIRED_MESSAGE,
 } from '@/extensions/general/enable-banking/lib/api-client'
 import { sendConsentExpiryNotification } from '@/extensions/general/enable-banking/lib/consent-expiry-notification'
-
-ensureInitialized()
+import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
+import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
 
 export const maxDuration = 300
 
@@ -34,25 +30,17 @@ const PROVEN_ALIVE_MS = 24 * 60 * 60 * 1000
  * Its own schedule, not a tail of the sync cron: that one runs hourly, and
  * the probes (and the expiry mail a dead session sends) are a daily job.
  */
-export const GET = withCronContext('cron.bank_session_probe', async (_request, ctx) => {
-  if (!extensionRegistry.get('enable-banking')) {
-    ctx.log.warn('enable-banking extension is not enabled; cron refused')
-    return NextResponse.json(
-      { error: 'Enable Banking extension is not enabled', code: 'EXTENSION_DISABLED' },
-      { status: 503 },
-    )
+export const GET = withServiceCronContext('cron.bank_session_probe', async (_request, ctx) => {
+  // The Enable Banking feed is over: a session probe would only spend a call
+  // at a provider that is gone, and a 'dead' verdict would tell the person to
+  // renew a consent nobody can use. The rows keep their state; the switch
+  // campaign says what to do (lib/bank-feed/switch-campaign.ts).
+  if (enableBankingSunset()) {
+    ctx.log.info('enable banking sunset: session probe skipped')
+    return NextResponse.json({ sunset: true, candidates: 0, sessions: 0, probed: 0, probedDead: 0, probeResults: [] })
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+  const supabase = ctx.supabase
   const startTime = Date.now()
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
   const probeResults: { connectionId: string; bankName: string }[] = []
@@ -60,6 +48,8 @@ export const GET = withCronContext('cron.bank_session_probe', async (_request, c
   const { data: candidates, error: candidatesError } = await supabase
     .from('bank_connections')
     .select('id, company_id, user_id, bank_name, session_id, status, last_synced_at, last_expiry_notification_at')
+    // Enable Banking sessions only: an Open Payments consent id means nothing to it.
+    .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
     .in('status', ['active', 'pending_selection'])
     .not('session_id', 'is', null)
     .order('last_synced_at', { ascending: true, nullsFirst: true })
@@ -158,4 +148,4 @@ export const GET = withCronContext('cron.bank_session_probe', async (_request, c
     probedDead: probeResults.length,
     probeResults,
   })
-})
+}, { requireExtension: 'enable-banking' })

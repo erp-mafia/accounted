@@ -2,6 +2,14 @@
 
 This reference compares Sweden's likely trajectory to the mandates already enacted or pending in other EU member states, and lays out the binding ViDA cross-border timeline.
 
+## Contents
+
+- ViDA, the binding EU floor
+- Country-by-country mandate status (April 2026)
+- Sweden's likely trajectory
+- Cross-border invoicing through Peppol, practical implications
+- Authoritative source list
+
 ## ViDA, the binding EU floor
 
 **VAT in the Digital Age** package adopted by ECOFIN on 11 March 2025; in force 14 April 2025; transposition deadline 31 December 2026.

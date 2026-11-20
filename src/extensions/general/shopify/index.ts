@@ -21,11 +21,6 @@ export const shopifyExtension: Extension = {
   version: '1.0.0',
   sector: 'general',
 
-  settingsPanel: {
-    label: 'Shopify',
-    path: '/import?mode=shopify',
-  },
-
   apiRoutes: shopifyApiRoutes,
 }
 

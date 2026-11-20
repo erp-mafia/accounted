@@ -1,9 +1,10 @@
 /**
  * POST /api/v1/companies/{companyId}/salary-runs/{id}/approve
  *
- * Mirrors the dashboard's `/approve` route: validates every employee on the
- * run has the data the bookkeeping engine + payment will need (bank details
- * for transfer, calculation_breakdown proving :calculate ran), then advances
+ * The dashboard's `/approve` step through the same service
+ * (lib/salary/approve-run.ts): validates every employee on the run has the
+ * data the booking and payment need (calculation_breakdown proving
+ * :calculate ran, bank details for an employee with a payout), then advances
  * status `review` → `approved` with an optimistic-lock UPDATE. Records the
  * approver in `approved_by` + `approved_at`. Emits `salary_run.approved`.
  *
@@ -21,9 +22,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { eventBus } from '@/lib/events'
-import { refreshRunYtd } from '@/lib/salary/ytd'
-import { employeeBankDetailsRemark } from '@/lib/salary/payment/bank-account'
+import { approveReviewedSalaryRun } from '@/lib/salary/approve-run'
 
 const SalaryRunApproved = z.object({
   id: z.string().uuid(),
@@ -41,16 +40,16 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/approve',
   summary: 'Approve a reviewed salary run.',
   description:
-    'Advances a salary run from `review` to `approved` after validating every employee has the data required for the payment step (bank account + clearing number for the bank transfer) and the booking step (`calculation_breakdown` proves `:calculate` ran). Records the approving user + timestamp. Strict-mode: validation errors return a complete list rather than failing on the first one.',
+    'Advances a salary run from `review` to `approved` after validating every employee has the data required for the payment step (bank account + clearing number for an employee with a payout) and the booking step (`calculation_breakdown` proves `:calculate` ran). Records the approving user + timestamp. Strict-mode: validation errors return a complete list rather than failing on the first one.',
   useWhen:
     'You have a salary run in `review` status and want to authorize it for payment. This is the human (or agent) signoff step before money moves; the verifikation is still pending and won\'t exist until `:book` runs.',
   doNotUseFor:
-    'Posting journal entries (use `:book` after `:mark-paid`). Reverting an approval (the lifecycle has no `:unapprove`: call `:correct` once the run is booked if you need to undo).',
+    'Posting journal entries (use `:book` after `:mark-paid`). Reverting an approval (POST /salary-runs/{id}/unapprove while the run is unpaid and its AGI unfiled; call `:correct` once the run is booked).',
   pitfalls: [
     'Run must be in `review`: non-`review` runs return 400 SALARY_RUN_APPROVE_NOT_REVIEW.',
-    'Every employee on the run needs a `clearing_number` + `bank_account_number` that name a payable account (clearing 4 digits, or 5 starting with 8; account 5-10 digits without the clearing number). Missing or invalid bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list; the list names employees, never account numbers.',
+    'Every employee with a payout (net after any tax override > 0) needs a `clearing_number` + `bank_account_number` that name a payable account (clearing 4 digits, or 5 starting with 8; account 5-10 digits without the clearing number). Missing or invalid bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list; the list names employees, never account numbers. An employee with nothing to pay out (nollkörning, or a net fully used by a nettolöneavdrag) needs none: the payment file has no line for them.',
     'Every employee on the run needs `calculation_breakdown` populated. If you skipped `:calculate` somehow, approve fails.',
-    'Employees without email get a non-blocking warning (lönebesked can\'t be sent automatically).',
+    'Employees without email get a non-blocking warning (lönebesked can\'t be sent automatically), and so does an employee whose F-skatt is not verified (30% skatteavdrag and full avgifter apply).',
     'No period-lock check here: that lives on `:book` where the verifikation is posted. An agent can approve a run whose payment date falls in a now-locked period; `:book` will later refuse.',
   ],
   example: {
@@ -86,78 +85,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const salaryRunId = idParse.data
 
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('salary_runs')
-      .select('id, status')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', salaryRunId)
-      .maybeSingle()
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-    if ((existing as { status: string }).status !== 'review') {
-      return v1ErrorResponseFromCode('SALARY_RUN_APPROVE_NOT_REVIEW', ctx.log, {
-        requestId: ctx.requestId,
-        details: { current_status: (existing as { status: string }).status },
-      })
-    }
+    // The rules and the step are lib/salary/approve-run.ts, shared with the
+    // dashboard and the MCP book tool. v1 has no override: bank details for
+    // an employee with a payout are a validation failure here.
+    const result = await approveReviewedSalaryRun(
+      ctx.supabase,
+      { companyId: ctx.companyId!, userId: ctx.userId, salaryRunId, log: ctx.log },
+      { dryRun: ctx.dryRun, columns: APPROVE_RESPONSE_COLUMNS },
+    )
 
-    // Validation: pull every employee on the run with the fields we need
-    // to assess. We accumulate ALL errors so the caller fixes everything
-    // in one pass.
-    const { data: runEmployees, error: empErr } = await ctx.supabase
-      .from('salary_run_employees')
-      .select(
-        'calculation_breakdown, employee:employees(first_name, last_name, clearing_number, bank_account_number, email)',
-      )
-      .eq('salary_run_id', salaryRunId)
-      // Defense-in-depth: every query carries the company_id filter per
-      // CLAUDE.md, even when salary_run_id already constrains to the
-      // company via FK + RLS.
-      .eq('company_id', ctx.companyId!)
-    if (empErr) {
-      return v1ErrorResponse(empErr, ctx.log, { requestId: ctx.requestId })
-    }
-
-    const validationErrors: string[] = []
-    const warnings: string[] = []
-    // Supabase's generated types model nested FK joins as arrays even when
-    // the FK is non-null one-to-one. Cast through `unknown` (matches the
-    // pattern used by suppliers/customers in Phase 4) so the route stays
-    // type-clean. The runtime shape is { employee: T | null } per the
-    // single-FK join.
-    for (const sre of ((runEmployees ?? []) as unknown) as Array<{
-      calculation_breakdown: unknown
-      employee: {
-        first_name: string
-        last_name: string
-        clearing_number: string | null
-        bank_account_number: string | null
-        email: string | null
-      } | null
-    }>) {
-      const emp = sre.employee
-      if (!emp) continue
-      const name = `${emp.first_name} ${emp.last_name}`
-      // Missing, or present but naming no payable account: the same verdict
-      // the payment-file generators apply, so an approved run is one the
-      // payment step will not refuse on its bank details.
-      const bankRemark = employeeBankDetailsRemark(name, emp.clearing_number, emp.bank_account_number)
-      if (bankRemark) validationErrors.push(bankRemark)
-      if (!sre.calculation_breakdown) {
-        validationErrors.push(`${name}: Beräkning saknas, kör beräkning först`)
+    if (!result.ok) {
+      if (result.dbError) return v1ErrorResponse(result.dbError, ctx.log, { requestId: ctx.requestId })
+      // Every problem across every employee, so the caller fixes them in
+      // one pass.
+      if (result.verdict) {
+        return v1ErrorResponseFromCode('SALARY_RUN_APPROVE_VALIDATION_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            issues: [...result.verdict.blocking, ...result.verdict.bankDetails],
+            warnings: result.verdict.warnings,
+          },
+        })
       }
-      if (!emp.email) {
-        warnings.push(`${name}: E-post saknas, lönebesked kan inte skickas`)
-      }
-    }
-    if (validationErrors.length > 0) {
-      return v1ErrorResponseFromCode('SALARY_RUN_APPROVE_VALIDATION_FAILED', ctx.log, {
+      return v1ErrorResponseFromCode(result.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { issues: validationErrors, warnings },
+        details: result.details,
       })
     }
 
@@ -168,69 +120,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_advance_status_from: 'review',
           would_advance_status_to: 'approved',
           would_record_approver: ctx.userId,
-          warnings,
+          warnings: result.data.warnings,
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
 
-    // Optimistic-lock the UPDATE on status='review' so a concurrent caller
-    // (or a replay racing this one) yields a clean 409 instead of
-    // silently re-approving and re-emitting the salary_run.approved event.
-    const { data, error } = await ctx.supabase
-      .from('salary_runs')
-      .update({
-        status: 'approved',
-        approved_by: ctx.userId,
-        approved_at: new Date().toISOString(),
-      })
-      .eq('company_id', ctx.companyId!)
-      .eq('id', salaryRunId)
-      .eq('status', 'review')
-      .select(APPROVE_RESPONSE_COLUMNS)
-      .maybeSingle()
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!data) {
-      return v1ErrorResponseFromCode('SALARY_RUN_APPROVE_NOT_REVIEW', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: 'race' },
-      })
-    }
-
-    // Approval is the first status from which lönebesked can be sent, so the
-    // payslip's "Ackumulerat" snapshot is refreshed here: a run calculated
-    // before an earlier month was authorized still carries a YTD missing
-    // that month. Non-fatal, YTD is display only.
-    const ytdRefresh = await refreshRunYtd(ctx.supabase, {
-      companyId: ctx.companyId!,
-      salaryRunId,
-    })
-    if (!ytdRefresh.ok) {
-      ctx.log.warn('YTD refresh failed after approval', {
-        salaryRunId,
-        message: ytdRefresh.message,
-      })
-    }
-
-    try {
-      await eventBus.emit({
-        type: 'salary_run.approved',
-        payload: {
-          salaryRunId,
-          approvedBy: ctx.userId,
-          userId: ctx.userId,
-          companyId: ctx.companyId!,
-        },
-      })
-    } catch (err) {
-      ctx.log.warn('salary_run.approved emit failed', err as Error)
-    }
-
     return ok(
-      { ...(data as Record<string, unknown>), warnings },
+      { ...(result.data.run as Record<string, unknown>), warnings: result.data.warnings },
       { requestId: ctx.requestId },
     )
   },

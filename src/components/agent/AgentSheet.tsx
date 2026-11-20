@@ -2,17 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  X,
-  Expand,
-  Shrink,
-  PanelRight,
-  PanelRightClose,
-  PictureInPicture2,
-  Eraser,
-  History,
-  ChevronLeft,
-  Loader2,
-} from 'lucide-react'
+  ArrowsPointingInIcon,
+  ArrowsPointingOutIcon,
+  BackspaceIcon,
+  ChevronDoubleRightIcon,
+  ChevronLeftIcon,
+  ClockIcon,
+  ViewColumnsIcon,
+  WindowIcon,
+  XMarkIcon,
+} from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import { LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import AgentChat, {
   attachStagedOperations,
   normalizeStoredMessages,
@@ -30,6 +32,7 @@ import {
   containFloatRect,
   defaultFloatRect,
   expandedDockWidth,
+  navWidthFromParts,
   resizeFloatRect,
   type ResizeEdges,
 } from '@/lib/agent-panel/geometry'
@@ -120,16 +123,24 @@ function useMinWidthMd() {
   return md
 }
 
-/** Current sidebar column width (--nav-w, read from #dash-shell). */
+/**
+ * Current nav column width: the rail plus the area sidebar, read from
+ * #dash-shell as the two lengths --nav-w is the sum of (--nav-w itself is a
+ * calc(), see navWidthFromParts). With no shell to read (a server render, a
+ * page outside the dashboard) the clamp keeps the width it has always assumed.
+ */
 function readNavWidth(): number {
-  if (typeof document === 'undefined') return 248
-  const shell = document.getElementById('dash-shell')
-  const px = shell ? parseInt(getComputedStyle(shell).getPropertyValue('--nav-w'), 10) : NaN
-  return Number.isFinite(px) ? px : 248
+  const shell = typeof document === 'undefined' ? null : document.getElementById('dash-shell')
+  if (shell) {
+    const style = getComputedStyle(shell)
+    const px = navWidthFromParts(style.getPropertyValue('--rail-w'), style.getPropertyValue('--side-w'))
+    if (Number.isFinite(px)) return px
+  }
+  return 248
 }
 
 /**
- * Reactive sidebar width: a change to #dash-shell's inline --nav-w fires
+ * Reactive nav column width: a change to #dash-shell's inline widths fires
  * no resize event, so observe the style attribute instead of forcing a
  * computed-style read on every render.
  */
@@ -142,7 +153,12 @@ function useNavWidth(): number {
     update()
     const mo = new MutationObserver(update)
     mo.observe(shell, { attributes: true, attributeFilter: ['style'] })
-    return () => mo.disconnect()
+    // The sidebar is wider from a 1440px window up (globals.css), so a resize can move it too.
+    window.addEventListener('resize', update)
+    return () => {
+      mo.disconnect()
+      window.removeEventListener('resize', update)
+    }
   }, [])
   return w
 }
@@ -240,6 +256,8 @@ export default function AgentSheet({
   // and would create a stray conversation before the restore replaced it.
   const [loadingConversation, setLoadingConversation] = useState(!!resumeConversationId)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // The conversation whose open failed, for "Försök igen".
+  const [failedConversationId, setFailedConversationId] = useState<string | null>(null)
   // Enlarge the panel IN PLACE (no navigation): the user stays on the current
   // page (e.g. /bookkeeping) with a wider reading/verifying surface. Transient
   // focus mode, deliberately not persisted (unlike the dock width below).
@@ -521,6 +539,7 @@ export default function AgentSheet({
     } catch {
       if (seq === selectSeqRef.current) {
         setLoadError('Kunde inte öppna konversationen.')
+        setFailedConversationId(id)
         // A thread that no longer opens must not be retried on every reload.
         clearAgentSheetSession()
       }
@@ -576,8 +595,8 @@ export default function AgentSheet({
         floating
           ? // Undocked window: free rect from inline styles; overlay chrome
             // (rounded, hairline border, shadow) like every other overlay.
-            'overflow-hidden rounded-lg border border-border shadow-lg'
-          : 'inset-y-0 right-0 w-full border-l border-border shadow-lg transition-[max-width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+            'overflow-hidden shadow-[var(--shadow-lg)]'
+          : 'inset-y-0 right-0 w-full border-l-hairline shadow-[var(--shadow-lg)] transition-[max-width] duration-300 ease-drawer',
         // Arrive along the same edge, on the same curve and duration, as the
         // page panel that animates its margin to make room (layout.tsx). Gated
         // on first mount only: the panel stays mounted while collapsed, and
@@ -654,26 +673,26 @@ export default function AgentSheet({
         <header
           onPointerDown={floating ? onFloatMoveStart : undefined}
           className={cn(
-            'flex items-center gap-3 border-b border-border px-5 py-4',
+            'flex items-center gap-3 border-b-hairline px-5 py-4',
             floating && 'cursor-move touch-none select-none',
           )}
         >
           <button
             onClick={() => setView('chat')}
-            className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
             aria-label="Tillbaka"
             title="Tillbaka"
           >
-            <ChevronLeft className="h-4 w-4" />
+            <ChevronLeftIcon className="h-4 w-4" />
           </button>
-          <h2 className="font-display text-lg tracking-tight truncate">Konversationer</h2>
+          <h2 className="text-lg truncate">Konversationer</h2>
           <button
             onClick={onClose}
-            className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
             aria-label="Stäng"
             title="Avsluta sessionen"
           >
-            <X className="h-4 w-4" />
+            <XMarkIcon className="h-4 w-4" />
           </button>
         </header>
       ) : (
@@ -682,23 +701,23 @@ export default function AgentSheet({
           // (buttons excluded inside onFloatMoveStart).
           onPointerDown={floating ? onFloatMoveStart : undefined}
           className={cn(
-            'flex items-center gap-2 border-b border-border px-4 py-4',
+            'flex items-center gap-2 border-b-hairline px-4 py-4',
             floating && 'cursor-move touch-none select-none',
           )}
         >
           {!isSandbox && (
             <button
               onClick={() => setView('list')}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
               aria-label="Tidigare konversationer"
               title="Tidigare konversationer"
             >
-              <History className="h-4 w-4" />
+              <ClockIcon className="h-4 w-4" />
             </button>
           )}
           <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
           <div className="min-w-0 flex-1">
-            <h2 className="font-display text-lg leading-tight tracking-tight truncate">
+            <h2 className="text-lg leading-tight truncate">
               {displayTitle}
             </h2>
             {/* What this conversation is anchored to. context_ref has been
@@ -714,7 +733,7 @@ export default function AgentSheet({
             {!isSandbox && (
               <button
                 onClick={toggleFloating}
-                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
                 aria-label={floating ? 'Docka mot högerkanten' : 'Frigör panelen'}
                 title={
                   floating
@@ -723,9 +742,9 @@ export default function AgentSheet({
                 }
               >
                 {floating ? (
-                  <PanelRight className="h-4 w-4" />
+                  <ViewColumnsIcon className="h-4 w-4" />
                 ) : (
-                  <PictureInPicture2 className="h-4 w-4" />
+                  <WindowIcon className="h-4 w-4" />
                 )}
               </button>
             )}
@@ -736,11 +755,11 @@ export default function AgentSheet({
             {!isSandbox && !floating && (
               <button
                 onClick={() => setExpanded((v) => !v)}
-                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
                 aria-label={expanded ? 'Förminska' : 'Förstora'}
                 title={expanded ? 'Förminska' : 'Förstora'}
               >
-                {expanded ? <Shrink className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
+                {expanded ? <ArrowsPointingInIcon className="h-4 w-4" /> : <ArrowsPointingOutIcon className="h-4 w-4" />}
               </button>
             )}
             {/* Labeled (not icon-only) so it isn't mistaken for close/minimize,
@@ -749,29 +768,29 @@ export default function AgentSheet({
             {activeConversationId && !isSandbox && (
               <button
                 onClick={onRestart}
-                className="h-9 inline-flex items-center gap-2 rounded-sm px-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="h-9 inline-flex items-center gap-2 rounded-sm px-2 text-xs font-medium text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
                 aria-label="Rensa: börja en ny konversation"
                 title="Rensa: börja en ny konversation"
               >
-                <Eraser className="h-4 w-4" />
+                <BackspaceIcon className="h-4 w-4" />
                 Rensa
               </button>
             )}
             <button
               onClick={handleCollapse}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
               aria-label="Minimera"
               title="Minimera: behåll sessionen"
             >
-              <PanelRightClose className="h-4 w-4" />
+              <ChevronDoubleRightIcon className="h-4 w-4" />
             </button>
             <button
               onClick={onClose}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
               aria-label="Stäng"
               title="Avsluta sessionen"
             >
-              <X className="h-4 w-4" />
+              <XMarkIcon className="h-4 w-4" />
             </button>
           </div>
         </header>
@@ -785,18 +804,23 @@ export default function AgentSheet({
           onSelect={handleSelectConversation}
         />
       ) : loadingConversation ? (
-        <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Öppnar konversation…
-        </div>
+        // The thread's shape while it opens: a few message bubbles.
+        <LateReveal aria-label="Öppnar konversation" className="flex flex-1 flex-col gap-4 p-5">
+          <Skeleton className="h-10 w-2/3 rounded-lg" />
+          <Skeleton className="ml-auto h-10 w-1/2 rounded-lg" />
+          <Skeleton className="h-16 w-3/4 rounded-lg" />
+        </LateReveal>
       ) : loadError ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm">
-          <p className="text-destructive">{loadError}</p>
-          <button
-            onClick={() => setView('list')}
-            className="text-xs font-medium text-foreground hover:underline"
-          >
+        <div className="flex-1 px-5">
+          <LoadError
+            title={loadError}
+            onRetry={() => {
+              if (failedConversationId) void loadConversation(failedConversationId)
+            }}
+          />
+          <Button variant="link" onClick={() => setView('list')}>
             Tillbaka till konversationer
-          </button>
+          </Button>
         </div>
       ) : loaded ? (
         loaded.intentId === CHAT_INTENT_ID ? (

@@ -15,15 +15,6 @@ export interface TeamBrandRef {
   appName: string
 }
 
-export interface ForeignCompanyRef {
-  id: string
-  name: string
-  /** The host where this company is actually worked in. */
-  domain: string
-  /** Brand app name for the signpost copy; canonical app name when brandless. */
-  appName: string
-}
-
 export interface HomeDomainPartition<T> {
   /** Companies homed on the current host: the only ones the switcher offers. */
   visible: T[]

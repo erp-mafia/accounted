@@ -34,45 +34,10 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { PATCH as updateLine, DELETE as deleteLine } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-  count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const tableCalls: string[] = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null, count: null })
-            resolve({ count: null, ...next })
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    tableCalls,
-    from: vi.fn((table: string) => {
-      tableCalls.push(table)
-      return buildChain(table)
-    }),
-  }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -131,14 +96,14 @@ beforeEach(() => {
 describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:lineId', () => {
   it('updates the amount and returns the qualified resource (happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         ...noIdempotencyHit,
         employee_recurring_lines: [
           { data: STORED_LINE, error: null }, // fetch existing
           { data: { ...STORED_LINE, amount: -700 }, error: null }, // update
         ],
-      }),
+      }).supabase,
     )
 
     const res = await updateLine(
@@ -156,11 +121,11 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
 
   it('returns 404 NOT_FOUND when the line is not under this employee', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         ...noIdempotencyHit,
         employee_recurring_lines: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateLine(
@@ -175,12 +140,12 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
   })
 
   it('rejects an amount whose sign contradicts the stored item_type', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       ...membership,
       ...noIdempotencyHit,
       employee_recurring_lines: { data: STORED_LINE, error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await updateLine(
       makeRequest(LINE_URL, { method: 'PATCH', body: JSON.stringify({ amount: 700 }) }),
@@ -195,11 +160,11 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
 
   it('rejects a patched valid_to that lands before the stored valid_from', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         ...noIdempotencyHit,
         employee_recurring_lines: { data: { ...STORED_LINE, valid_from: '2026-06-01' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateLine(
@@ -213,7 +178,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
   })
 
   it('rejects an empty body with VALIDATION_ERROR', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ ...membership, ...noIdempotencyHit }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ ...membership, ...noIdempotencyHit }).supabase)
 
     const res = await updateLine(
       makeRequest(LINE_URL, { method: 'PATCH', body: JSON.stringify({}) }),
@@ -226,7 +191,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
   })
 
   it('rejects a non-UUID lineId with VALIDATION_ERROR', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ ...membership, ...noIdempotencyHit }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ ...membership, ...noIdempotencyHit }).supabase)
 
     const res = await updateLine(
       makeRequest(LINE_URL.replace(LINE_ID, 'nope'), { method: 'PATCH', body: JSON.stringify({ amount: -700 }) }),
@@ -239,12 +204,12 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
   })
 
   it('returns a dry-run preview of the merged row without writing', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       ...membership,
       ...noIdempotencyHit,
       employee_recurring_lines: { data: STORED_LINE, error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await updateLine(
       makeRequest(`${LINE_URL}?dry_run=true`, {
@@ -260,11 +225,11 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
     expect(body.data.preview.amount).toBe(-700)
     expect(body.data.preview.valid_to).toBe('2026-12-31')
     // One read (the fetch), no write.
-    expect(supabaseMock.tableCalls.filter((t) => t === 'employee_recurring_lines')).toHaveLength(1)
+    expect(supabaseMock.tables().filter((t) => t === 'employee_recurring_lines')).toHaveLength(1)
   })
 
   it('returns 400 when Idempotency-Key is missing', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase(membership))
+    mockServiceClient.mockReturnValue(createTableMockSupabase(membership).supabase)
 
     const res = await updateLine(
       new Request(LINE_URL, {
@@ -287,7 +252,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
       scopes: ['payroll:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await updateLine(
       makeRequest(LINE_URL, { method: 'PATCH', body: JSON.stringify({ amount: -700 }) }),
@@ -300,11 +265,11 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:line
 describe('DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lineId', () => {
   it('hard-deletes a line no run has derived from', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         ...noIdempotencyHit,
         employee_recurring_lines: { data: { id: LINE_ID }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteLine(
@@ -319,14 +284,14 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lin
 
   it('deactivates instead of deleting when derived rows reference the line', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         ...noIdempotencyHit,
         employee_recurring_lines: [
           { data: null, error: { code: '23503', message: 'violates foreign key constraint' } }, // delete
           { data: null, error: null }, // is_active=false update
         ],
-      }),
+      }).supabase,
     )
 
     const res = await deleteLine(
@@ -345,11 +310,11 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lin
 
   it('returns 404 NOT_FOUND when the delete matches nothing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         ...noIdempotencyHit,
         employee_recurring_lines: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteLine(
@@ -363,13 +328,13 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lin
   })
 
   it('previews the deactivation outcome on dry run without writing', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       ...membership,
       ...noIdempotencyHit,
       employee_recurring_lines: { data: { id: LINE_ID }, error: null },
       salary_line_items: { data: null, error: null, count: 1 },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await deleteLine(
       makeRequest(`${LINE_URL}?dry_run=true`, { method: 'DELETE' }),
@@ -396,12 +361,12 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lin
       mode: 'test',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         ...noIdempotencyHit,
         employee_recurring_lines: { data: { id: LINE_ID }, error: null },
         salary_line_items: { data: null, error: null, count: 0 },
-      }),
+      }).supabase,
     )
 
     const res = await deleteLine(
@@ -417,7 +382,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lin
   })
 
   it('returns 400 when Idempotency-Key is missing', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase(membership))
+    mockServiceClient.mockReturnValue(createTableMockSupabase(membership).supabase)
 
     const res = await deleteLine(
       new Request(LINE_URL, {
@@ -432,7 +397,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lin
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await deleteLine(
       new Request(LINE_URL, { method: 'DELETE' }),

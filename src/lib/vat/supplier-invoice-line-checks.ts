@@ -81,6 +81,14 @@ export function findReverseChargeAccountWarningRows(
 const FOREIGN_SUPPLIER_TYPES: readonly string[] = ['eu_business', 'non_eu_business']
 
 /**
+ * Whether a supplier of this type is a foreign business, from the EU or
+ * outside it: the editor switches omvand skattskyldighet on for one.
+ */
+export function isForeignSupplierType(supplierType: string | null | undefined): boolean {
+  return !!supplierType && FOREIGN_SUPPLIER_TYPES.includes(supplierType)
+}
+
+/**
  * Indices of 0 %-VAT lines on a FOREIGN supplier invoice where omvand
  * skattskyldighet is switched off (issue #1042).
  *
@@ -108,7 +116,7 @@ export function findUnflaggedForeignZeroVatRows(
   supplierType: string | undefined | null,
 ): number[] {
   if (reverseCharge) return []
-  if (!supplierType || !FOREIGN_SUPPLIER_TYPES.includes(supplierType)) return []
+  if (!isForeignSupplierType(supplierType)) return []
   const rows: number[] = []
   items.forEach((item, index) => {
     if (item.vat_rate === 0) rows.push(index)

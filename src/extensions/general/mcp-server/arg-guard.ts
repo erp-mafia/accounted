@@ -10,7 +10,9 @@
  *
  * company_id is tolerated everywhere: the company-routing layer strips it for
  * company-dependent tools, and a client that always sends it must not break
- * on the few tools that ignore it.
+ * on the few tools that ignore it. A tool's `undeclaredArgs` (McpTool) are
+ * tolerated on that tool only: arguments it takes without declaring them, so
+ * they cost nothing in tools/list.
  */
 export function listArgKeys(inputSchema: Record<string, unknown>): string[] {
   const properties = inputSchema.properties
@@ -18,12 +20,19 @@ export function listArgKeys(inputSchema: Record<string, unknown>): string[] {
   return Object.keys(properties as Record<string, unknown>)
 }
 
+/** The top-level keys the schema requires, for the "did you mean" fallback. */
+export function listRequiredArgKeys(inputSchema: Record<string, unknown>): string[] {
+  const required = inputSchema.required
+  return Array.isArray(required) ? required.filter((key): key is string => typeof key === 'string') : []
+}
+
 export function findUnknownArgKeys(
   inputSchema: Record<string, unknown>,
   args: Record<string, unknown>,
+  undeclaredArgs: readonly string[] = [],
 ): string[] {
   if (inputSchema.additionalProperties !== false) return []
-  const allowed = new Set(listArgKeys(inputSchema))
+  const allowed = new Set([...listArgKeys(inputSchema), ...undeclaredArgs])
   return Object.keys(args).filter((key) => key !== 'company_id' && !allowed.has(key))
 }
 
@@ -31,7 +40,7 @@ export function findUnknownArgKeys(
  * The shortest worked example a tool publishes, serialized for an error
  * message, or '' when it has none or the shortest is too long to help.
  *
- * "Valid parameters: period_id" told DueCue's agent which key was wrong but
+ * "Valid parameters: period_id" told one agent which key was wrong but
  * not what a correct call looks like, and the same rejected call repeated for
  * seven days (604 of them). One example costs nothing in tools/list, because
  * it only ships on the response to a call that already failed.

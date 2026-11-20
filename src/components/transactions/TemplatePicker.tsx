@@ -5,7 +5,15 @@ import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Search, ChevronDown, ChevronUp, AlertTriangle, Info, PenLine, Briefcase } from 'lucide-react'
+import {
+  BriefcaseIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+  MagnifyingGlassIcon,
+  PencilSquareIcon,
+} from '@/components/icons'
 import {
   getCommonTemplates,
   getAdvancedTemplates,
@@ -14,20 +22,22 @@ import {
   type TemplateGroup,
 } from '@/lib/bookkeeping/booking-templates'
 import {
+  buildAccountIndex,
   buildActiveAccountIndex,
   searchAccounts,
   type AccountSearchItem,
+  type SearchableAccount,
 } from '@/lib/bookkeeping/account-search'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
-import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
+import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-template-format'
 import { convertLibraryToBookingTemplate, LIBRARY_TEMPLATE_PREFIX, isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
 import { GROUP_LABEL_KEYS, GROUP_ORDER, libraryTemplateGroup } from '@/lib/bookkeeping/template-groups'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import type { BookingTemplateLibrary, EntityType } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { useAccounts, useBookingTemplates } from '@/lib/reference-data/hooks'
+import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
 import { cn } from '@/lib/utils'
-import { HUE_DOT_CLASS, accountHue, templateGroupHue, type TemplateHue } from '@/lib/bookkeeping/template-group-colors'
 
 /** The account a template books against: the leg that is not the cash account. */
 function categoryAccount(debit: string, credit: string): string {
@@ -39,14 +49,12 @@ function categoryAccount(debit: string, credit: string): string {
  * template with a colour dot for its family, the name, and the account.
  */
 function DenseRow({
-  hue,
   name,
   account,
   note,
   selected,
   onClick,
 }: {
-  hue: TemplateHue
   name: string
   account?: string | null
   note?: string | null
@@ -62,10 +70,9 @@ function DenseRow({
         selected && 'bg-secondary',
       )}
     >
-      <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', HUE_DOT_CLASS[hue])} aria-hidden />
       <span className="min-w-0 flex-1 truncate">{name}</span>
-      {note && <span className="shrink-0 text-[10.5px] text-muted-foreground">{note}</span>}
-      {account && <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-muted-foreground">{account}</span>}
+      {note && <span className="shrink-0 text-xs text-muted-foreground">{note}</span>}
+      {account && <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{account}</span>}
     </button>
   )
 }
@@ -131,14 +138,14 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
   const vatLabelKey = converted ? getVatLabelKey(converted) : null
   if (dense) {
     const account = converted ? categoryAccount(converted.debit_account, converted.credit_account) : (shownLine?.account ?? null)
-    return <DenseRow hue={templateGroupHue(libraryTemplateGroup(raw))} name={raw.name} account={account} note={vatLabelKey ? t(vatLabelKey) : null} selected={selected} onClick={onClick} />
+    return <DenseRow name={raw.name} account={account} note={vatLabelKey ? t(vatLabelKey) : null} selected={selected} onClick={onClick} />
   }
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted/50 ${
+      className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-secondary/60 ${
         selected
           ? 'border-primary bg-primary/5 ring-1 ring-primary'
           : 'border-border'
@@ -160,14 +167,14 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
             {vatLabelKey && (
               <Badge
                 variant={getVatBadgeVariant(converted?.vat_treatment)}
-                className="text-[10px] px-1.5 py-0"
+                className="text-xs px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {!converted && (
-              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-                <PenLine className="h-3 w-3" />
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                <PencilSquareIcon className="h-3 w-3" />
                 {t('opens_editor_badge')}
               </span>
             )}
@@ -175,7 +182,7 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
         </div>
       </div>
       {raw.description && (
-        <p className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
+        <p className="text-xs text-muted-foreground mt-1.5 leading-snug">
           {raw.description}
         </p>
       )}
@@ -189,7 +196,6 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
   if (dense) {
     return (
       <DenseRow
-        hue={templateGroupHue(template.group)}
         name={template.name_sv}
         account={categoryAccount(template.debit_account, template.credit_account)}
         note={vatLabelKey ? t(vatLabelKey) : null}
@@ -203,7 +209,7 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
     <button
       type="button"
       onClick={onClick}
-      className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted/50 ${
+      className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-secondary/60 ${
         selected
           ? 'border-primary bg-primary/5 ring-1 ring-primary'
           : 'border-border'
@@ -221,25 +227,25 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
             {vatLabelKey && (
               <Badge
                 variant={getVatBadgeVariant(template.vat_treatment)}
-                className="text-[10px] px-1.5 py-0"
+                className="text-xs px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {template.requires_vat_registration_data && (
-              <Badge variant="warning" className="text-[10px] px-1.5 py-0 gap-0.5">
-                <AlertTriangle className="h-2.5 w-2.5" />
+              <Badge variant="warning" className="text-xs px-1.5 py-0 gap-0.5">
+                <ExclamationTriangleIcon className="h-2.5 w-2.5" />
                 {t('requires_vat_reg')}
               </Badge>
             )}
           </div>
         </div>
         {template.requires_review && (
-          <Info className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />
+          <InformationCircleIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />
         )}
       </div>
       {template.special_rules_sv && !compact && (
-        <p className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
+        <p className="text-xs text-muted-foreground mt-1.5 leading-snug">
           {template.special_rules_sv}
         </p>
       )}
@@ -253,23 +259,27 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
 // no template covers the account.
 function AccountResultCard({ account, onClick, dense }: { account: AccountSearchItem; onClick: () => void; dense?: boolean }) {
   const t = useTranslations('tx_template_picker')
+  const tJournal = useTranslations('journal_form')
+  // A catalogue account the company has not added says so, as in the
+  // booking dialogs' kontoväljare: the booking adds it.
+  const note = account.isActive ? t('opens_editor_badge') : tJournal('account_not_activated')
   if (dense) {
-    return <DenseRow hue={accountHue(account.account_number)} name={account.account_name} account={account.account_number} note={t('opens_editor_badge')} onClick={onClick} />
+    return <DenseRow name={account.account_name} account={account.account_number} note={note} onClick={onClick} />
   }
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-muted/50"
+      className="w-full text-left rounded-lg px-3 py-2.5 transition-colors hover:bg-secondary/60 bg-control shadow-raised"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className="font-mono text-sm shrink-0">{account.account_number}</span>
           <span className="font-medium text-sm leading-tight truncate">{account.account_name}</span>
         </div>
-        <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
-          <PenLine className="h-3 w-3" />
-          {t('opens_editor_badge')}
+        <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+          <PencilSquareIcon className="h-3 w-3" />
+          {note}
         </span>
       </div>
     </button>
@@ -290,6 +300,13 @@ interface TemplatePickerProps {
   // into the manual booking flow with the account prefilled. Omitting it
   // keeps the picker template-only (and skips the accounts fetch).
   onSelectAccount?: (accountNumber: string) => void
+  /**
+   * Standard BAS accounts the company has not added, searched in the Konton
+   * group beside the active chart and marked as activated at booking. Only
+   * for a host whose account pick books through the engine, which adds a
+   * missing standard account (BankRowTemplatePicker).
+   */
+  accountCatalog?: SearchableAccount[]
   /** One line per template, colour dot, no cards (the picker sits beside the row). */
   dense?: boolean
   selectedTemplateId?: string
@@ -310,6 +327,7 @@ export default function TemplatePicker({
   onSelectCounterparty,
   onPickLibraryTemplate,
   onSelectAccount,
+  accountCatalog,
   dense = false,
   selectedTemplateId,
   includeSystemLibrary = false,
@@ -349,7 +367,13 @@ export default function TemplatePicker({
   const templateDirection = direction === 'income' ? 'income' : 'expense'
   const bothDirections = direction === 'all'
 
-  const accountIndex = useMemo(() => buildActiveAccountIndex(chartAccounts), [chartAccounts])
+  const accountIndex = useMemo(
+    () =>
+      accountCatalog
+        ? buildAccountIndex({ active: chartAccounts.filter((a) => a.is_active !== false), catalog: accountCatalog })
+        : buildActiveAccountIndex(chartAccounts),
+    [chartAccounts, accountCatalog],
+  )
 
   // Lazy convertibility map. A template is "convertible" if it fits the
   // simple debit/credit pair shape the QuickReview booking path expects.
@@ -519,7 +543,8 @@ export default function TemplatePicker({
   }, [suggestedTemplates])
   const resolvedSuggestions = useMemo(() => {
     if (!suggestedTemplates) return []
-    return suggestedTemplates.filter(s => !isCounterpartyTemplateId(s.template_id) && s.source !== 'assistant')
+    // A clearing proposal is no template: the row and its review carry it.
+    return suggestedTemplates.filter(s => !isCounterpartyTemplateId(s.template_id) && s.source !== 'assistant' && s.source !== 'clearing')
   }, [suggestedTemplates])
   const hasCounterparty = counterpartySuggestions.length > 0 && !!onSelectCounterparty
   const hasSuggestions = resolvedSuggestions.length > 0
@@ -528,7 +553,7 @@ export default function TemplatePicker({
     <div className="flex flex-col h-full">
       {/* Search bar */}
       <div className={dense ? 'relative px-3 pt-2.5 pb-1.5' : 'relative px-4 pt-3 pb-2'}>
-        <Search className={cn('absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground mt-0.5', dense ? 'left-6' : 'left-7')} />
+        <MagnifyingGlassIcon className={cn('absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground mt-0.5', dense ? 'left-6' : 'left-7')} />
         <Input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -604,10 +629,10 @@ export default function TemplatePicker({
                 own templates are shown regardless of expense/income context. */}
             {sortedLibraryRaw.length > 0 && (
               <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Briefcase className="h-3 w-3" />
+                <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <BriefcaseIcon className="h-3 w-3" />
                   {t('my_templates')}
-                </p>
+                </div>
                 <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
                   {sortedLibraryRaw.map((raw) => (
                     <LibraryTemplateCard
@@ -631,7 +656,6 @@ export default function TemplatePicker({
                   {counterpartySuggestions.slice(0, 3).map((s) => dense ? (
                     <DenseRow
                       key={s.template_id}
-                      hue={accountHue(s.line_pattern?.find((lp) => lp.type === 'business')?.account ?? categoryAccount(s.debit_account, s.credit_account))}
                       name={s.name_sv}
                       account={s.line_pattern?.find((lp) => lp.type === 'business')?.account ?? categoryAccount(s.debit_account, s.credit_account)}
                       note={s.description_sv}
@@ -642,7 +666,7 @@ export default function TemplatePicker({
                       key={s.template_id}
                       type="button"
                       onClick={() => onSelectCounterparty!(s.template_id)}
-                      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-muted/50"
+                      className="w-full text-left rounded-lg px-3 py-2.5 transition-colors hover:bg-secondary/60 bg-control shadow-raised"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
@@ -661,7 +685,7 @@ export default function TemplatePicker({
                             )}
                           </div>
                         </div>
-                        <span className="text-[10px] text-muted-foreground flex-shrink-0 mt-0.5">
+                        <span className="text-xs text-muted-foreground flex-shrink-0 mt-0.5">
                           {s.description_sv}
                         </span>
                       </div>
@@ -702,7 +726,7 @@ export default function TemplatePicker({
               <div className="space-y-3">
                 {commonGroups.map((group) => (
                   <div key={group}>
-                    <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-1">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">
                       {t(GROUP_LABEL_KEYS[group])}
                     </p>
                     <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
@@ -737,22 +761,21 @@ export default function TemplatePicker({
               <div>
                 <Button
                   variant="ghost"
-                  size="sm"
-                  className="w-full justify-between text-xs text-muted-foreground h-8"
+                  className="w-full justify-between text-muted-foreground"
                   onClick={() => setShowAdvanced(!showAdvanced)}
                 >
                   {t('more_templates', { count: allAdvanced.length })}
                   {showAdvanced ? (
-                    <ChevronUp className="h-3.5 w-3.5" />
+                    <ChevronUpIcon className="h-3.5 w-3.5" />
                   ) : (
-                    <ChevronDown className="h-3.5 w-3.5" />
+                    <ChevronDownIcon className="h-3.5 w-3.5" />
                   )}
                 </Button>
                 {showAdvanced && (
                   <div className="space-y-3 mt-2">
                     {GROUP_ORDER.filter((g) => advancedGrouped.has(g)).map((group) => (
                       <div key={group}>
-                        <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-1">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">
                           {t(GROUP_LABEL_KEYS[group])}
                         </p>
                         <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
@@ -778,4 +801,17 @@ export default function TemplatePicker({
       </div>
     </div>
   )
+}
+
+/**
+ * The picker a bank row's Bokför opens (Transaktioner): its Konton search
+ * also finds the standard BAS accounts the company has not added, marked as
+ * activated at booking, as the booking dialogs' kontoväljare do (crm#1101).
+ * An account pick opens the manual booking dialog, whose engine path adds
+ * the account. A deactivated account stays out, as in the plain picker. The
+ * catalogue loads only while the picker is open.
+ */
+export function BankRowTemplatePicker(props: TemplatePickerProps) {
+  const { catalog } = useBasCatalog()
+  return <TemplatePicker {...props} accountCatalog={catalog} />
 }

@@ -10,6 +10,34 @@
  * focus on the dispatcher/executor wiring + status mapping.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The signed bank payment read: mocked so it takes no slot in the Supabase
+// mock; pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: vi.fn(async () => null),
+}))
+
+// The registration-first rule (defer_invoice_booking) has its own suites
+// (registration-first.test.ts and the deferred-door tests); here no invoice
+// needs its registration booked first.
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planRegistrationBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+  planRegistrationsBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+  bookRegistrationsBeforeBatchSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryIds: {},
+    postedJournalEntryIds: {},
+    warnings: [],
+  })),
+}))
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase, makeSupplierInvoice } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
@@ -98,6 +126,85 @@ describe('commitPendingOperation: link_supplier_invoice_voucher', () => {
       payment_id: 'sip-1',
       journal_entry_id: JE_UUID,
     })
+  })
+
+  it('commits the staged share: the RPC gets the amount the approver was shown', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'sip-1',
+        invoice_status: 'paid',
+        paid_amount: 1250,
+        remaining_amount: 0,
+        payment_amount: 1250,
+        journal_entry_id: JE_UUID,
+        currency: 'SEK',
+        voucher_remaining: 4000,
+      },
+      error: null,
+    })
+    enqueue({
+      data: makeSupplierInvoice({ id: SI_UUID, status: 'paid', total: 1250, remaining_amount: 0 }),
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher commit update
+
+    const op = makePendingOp({
+      params: { supplier_invoice_id: SI_UUID, journal_entry_id: JE_UUID, amount: 1250 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ invoice_status: 'paid', payment_amount: 1250 })
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'link_supplier_invoice_to_voucher',
+      expect.objectContaining({ p_supplier_invoice_id: SI_UUID, p_journal_entry_id: JE_UUID, p_amount: 1250 }),
+    )
+  })
+
+  it('refuses a staged share that is not a number instead of committing another amount', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: { supplier_invoice_id: SI_UUID, journal_entry_id: JE_UUID, amount: '1250' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/amount/i)
+    expect(supabase.rpc).not.toHaveBeenCalledWith('link_supplier_invoice_to_voucher', expect.anything())
+  })
+
+  it('fails with 400, like every amount refusal, when the share no longer fits the verifikat at approval', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_VOUCHER',
+        details: { amount: 1250, available: 750, ap_debit: 5250, already_linked: 4500 },
+      },
+      error: null,
+    }) // RPC
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: { supplier_invoice_id: SI_UUID, journal_entry_id: JE_UUID, amount: 1250 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // A 400 is a normal failure the UI explains (voucherLinkOutcomeToResult),
+    // not a silent auto-reject: nothing was linked.
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/more than the voucher has left/)
   })
 
   it('auto-rejects with 404 when the RPC reports the invoice is gone', async () => {

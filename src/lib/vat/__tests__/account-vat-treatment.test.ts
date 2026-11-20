@@ -2,10 +2,42 @@ import { describe, expect, it } from 'vitest'
 import {
   defaultRateForVatTreatment,
   isVatTreatmentAllowedForAccountClass,
+  NOT_DOMESTIC_SALE,
   resolveVatTreatmentRuta,
   suggestVatTreatment,
+  vatRateFromLabel,
   vatTreatmentsForAccountClass,
 } from '../account-vat-treatment'
+import { inferDomesticSalesRate } from '@/lib/reports/vat-revenue-accounts'
+import { CLASS_4_ACCOUNTS } from '@/lib/bookkeeping/bas-data/class-4-purchases'
+
+// One veto: the import suggestion and the declaration's inference used to hold
+// a list each, and each missed words the other had.
+describe('a label that says a class 3 account is no domestic taxable sale', () => {
+  it.each([
+    'Försäljning undantag 25 % moms',
+    'Försäljning momsbefriad 25 % moms',
+    'Försäljning ej moms 25 % moms',
+    'Försäljning eu-land 25 % moms',
+    'Försäljning momsfri 25 % moms',
+    'Försäljning export 25 % moms',
+    'Försäljning 0 % 25 % moms',
+    'FÖRSÄLJNING UNDANTAG 25 % MOMS',
+  ])('%s vetoes the rate on both doors', (label) => {
+    expect(NOT_DOMESTIC_SALE.test(label)).toBe(true)
+    expect(inferDomesticSalesRate('3041', label)).toBeNull()
+    expect(suggestVatTreatment('3041', label)?.treatment).not.toBe('standard_25')
+  })
+
+  it('a plain taxable label keeps its rate on both doors', () => {
+    expect(inferDomesticSalesRate('3041', 'Försäljning tjänster 25 % moms')).toBe(0.25)
+    expect(suggestVatTreatment('3041', 'Försäljning tjänster 25 % moms')).toEqual({ treatment: 'standard_25', rate: 0.25 })
+  })
+
+  it('a decimal that ends in 0 % is no zero rate', () => {
+    expect(NOT_DOMESTIC_SALE.test('Försäljning 1,0 % avgift 25 % moms')).toBe(false)
+  })
+})
 
 describe('resolveVatTreatmentRuta', () => {
   it('maps revenue treatments to their momsdeklaration boxes', () => {
@@ -39,6 +71,44 @@ describe('resolveVatTreatmentRuta', () => {
     expect(vatTreatmentsForAccountClass(3)).not.toContain('reverse_charge_non_eu_services')
     expect(vatTreatmentsForAccountClass(4)).not.toContain('oss')
     expect(defaultRateForVatTreatment('oss', 3)).toBeNull()
+  })
+})
+
+describe('omvänd betalningsskyldighet inom Sverige on the BAS group 44 accounts (crm#1754)', () => {
+  // BAS 2026 names what each account buys, and that decides the ruta:
+  // råvaror och material file ruta 23, tjänster file ruta 24. Read from the
+  // repo's BAS data rather than a hand-kept list, so a renamed or added group
+  // 44 account is checked too. 4400 is the group account for both and is
+  // left out.
+  const group44 = CLASS_4_ACCOUNTS.filter(
+    (a) => a.account_group === '44' && a.account_number !== '4400',
+  )
+
+  it('covers the varor and tjänster accounts, with and without a stated sats', () => {
+    expect(group44.map((a) => a.account_number)).toEqual(
+      ['4410', '4415', '4416', '4417', '4420', '4425', '4426', '4427'],
+    )
+  })
+
+  it.each(group44.map((a) => [a.account_number, a.account_name] as const))(
+    '%s %s files the ruta its BAS name gives',
+    (account, name) => {
+      const box = /tjänster/.test(name) ? 'ruta24' : 'ruta23'
+      expect(resolveVatTreatmentRuta('reverse_charge_domestic', 4, account)).toEqual({ box, side: 'debit' })
+    },
+  )
+
+  it('files 4420 in ruta 24, where its SIE label suggestion now lands too', () => {
+    expect(resolveVatTreatmentRuta('reverse_charge_domestic', 4, '4420')).toEqual({ box: 'ruta24', side: 'debit' })
+    const suggested = suggestVatTreatment('4420', 'Inköp av tjänster i Sverige, omvänd betalningsskyldighet')
+    expect(suggested).toEqual({ treatment: 'reverse_charge_domestic', rate: 0.25 })
+    expect(resolveVatTreatmentRuta(suggested!.treatment, 4, '4420')?.box).toBe('ruta24')
+  })
+
+  it('leaves the group account and numbers outside BAS on the varor default', () => {
+    for (const account of ['4400', '4421', '4428', '4429']) {
+      expect(resolveVatTreatmentRuta('reverse_charge_domestic', 4, account)?.box).toBe('ruta23')
+    }
   })
 })
 
@@ -253,5 +323,183 @@ describe('suggestVatTreatment', () => {
       treatment: 'vmb', rate: null,
     })
     expect(defaultRateForVatTreatment('vmb', 3)).toBeNull()
+  })
+})
+
+// crm#1146: a custom account named "... (ej EU)" missed the outside-union
+// matcher, hit the union matcher on the bare word and was suggested as an EU
+// reverse charge (ruta 21) when the label says the opposite (ruta 22).
+describe('a negated union name reads as outside the union', () => {
+  const NON_EU_SERVICES = { treatment: 'reverse_charge_non_eu_services', rate: 0.25 }
+
+  it.each([
+    ['6541', 'IT-tjänster utlandet (ej EU)'],
+    ['6542', 'Inköp tjänster ej EU'],
+    ['6543', 'Inköp tjänster inte EU'],
+    ['6544', 'Inköp tjänster icke EU'],
+    ['6545', 'Inköp tjänster icke-EU'],
+    ['6546', 'Inköp tjänster utom EU'],
+    ['6547', 'Inköp tjänster exkl EU'],
+    ['6548', 'Inköp tjänster exkl. EU'],
+    ['6549', 'Inköp tjänster exklusive EU'],
+    ['4531', 'Inköp tjänster non-EU'],
+    ['4532', 'Inköp tjänster (ej EG)'],
+    ['4533', 'Inköp tjänster icke-EG'],
+    ['5611', 'Tjänster utlandet, EJ EU-land'],
+  ])('purchase of services %s "%s" is ruta 22, not ruta 21', (accountNumber, accountName) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toEqual(NON_EU_SERVICES)
+  })
+
+  it('still takes the rate the label names', () => {
+    expect(suggestVatTreatment('6541', 'IT-tjänster utlandet (ej EU) 12%')).toEqual({
+      treatment: 'reverse_charge_non_eu_services', rate: 0.12,
+    })
+  })
+
+  // Goods from outside the union are an import, which has no supported
+  // purchase treatment: the row is left for review, exactly like its
+  // "utanför EU" spelling, instead of falling through to ruta 20.
+  it.each([
+    ['4541', 'Inköp varor utlandet (ej EU)'],
+    ['4542', 'Inköp varor icke-EU 25%'],
+    ['4543', 'Inköp varor exkl. EG'],
+    ['4544', 'Inköp varor utom EU'],
+  ])('purchase of goods %s "%s" is not an EU acquisition', (accountNumber, accountName) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toBeNull()
+  })
+
+  it.each([
+    ['3055', 'Försäljning varor (ej EU)', 'export_goods'],
+    ['3056', 'Försäljn varor icke-EG momsfri', 'export_goods'],
+    ['3057', 'Försäljning varor utom EU', 'export_goods'],
+    ['3045', 'Försäljning tjänster ej EU', 'export_services'],
+    ['3046', 'Försäljn tjänst exkl. EG momsfri', 'export_services'],
+    ['3047', 'Försäljning tjänster inte EU 25%', 'export_services'],
+  ])('sale %s "%s" is %s, not an EU supply', (accountNumber, accountName, treatment) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toEqual({ treatment, rate: 0 })
+  })
+
+  // The negation has to sit directly in front of the union word. Every label
+  // here carries both a negation and the union name, and none of them says
+  // the trade is outside the union.
+  it.each([
+    ['6540', 'IT-tjänster EU, ej avdragsgill moms', 'reverse_charge_eu_services'],
+    ['4535', 'Ej avdragsgill moms, inköp tjänster EU', 'reverse_charge_eu_services'],
+    ['4536', 'Inköp tjänster EU (ej Sverige)', 'reverse_charge_eu_services'],
+    ['4537', 'Inköp tjänster inom EU, inte Norge', 'reverse_charge_eu_services'],
+    ['4515', 'Inköp varor EU exkl moms', 'reverse_charge_eu_goods'],
+    ['4516', 'Inköp varor exkl. frakt EU', 'reverse_charge_eu_goods'],
+    ['4517', 'Inköp varor Canon EU', 'reverse_charge_eu_goods'],
+    // The moms is what is excluded here, not the union.
+    ['4538', 'Inköp tjänster exkl. EU-moms', 'reverse_charge_eu_services'],
+    ['4539', 'Inköp tjänster ej EU-moms', 'reverse_charge_eu_services'],
+  ])('purchase %s "%s" stays %s', (accountNumber, accountName, treatment) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toEqual({ treatment, rate: 0.25 })
+  })
+
+  it.each([
+    ['3308', 'Försäljning tjänster EU, ej momspliktig', 'reverse_charge_eu_services'],
+    ['3108', 'Försäljning varor EU exkl frakt', 'reverse_charge_eu_goods'],
+  ])('sale %s "%s" stays %s', (accountNumber, accountName, treatment) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toEqual({ treatment, rate: 0 })
+  })
+
+  it('does not read a negated wider place name as outside the union', () => {
+    // Same word boundary that keeps "utanför Europa" out.
+    expect(suggestVatTreatment('3055', 'Försäljning varor (ej Europa)')).toBeNull()
+    expect(suggestVatTreatment('6541', 'Inköp tjänster icke-europeiska')).toBeNull()
+  })
+})
+
+describe('a label that names a Swedish sats', () => {
+  it('reads a fee account with a rate as a domestic sale at that rate', () => {
+    // Company-numbered 35xx accounts: in no static ruta map, so without a
+    // suggestion the basis reached no ruta while the moms still did.
+    expect(suggestVatTreatment('3543', 'Faktureringavgift 12%')).toEqual({
+      treatment: 'reduced_12', rate: 0.12,
+    })
+    expect(suggestVatTreatment('3544', 'Faktureringavgift 6%')).toEqual({
+      treatment: 'reduced_6', rate: 0.06,
+    })
+    expect(suggestVatTreatment('3545', 'Fakturerade frakter 25 %')).toEqual({
+      treatment: 'standard_25', rate: 0.25,
+    })
+  })
+
+  it('keeps reading a sales label with a spaced rate', () => {
+    expect(suggestVatTreatment('3002', 'Försäljning 12 %')).toEqual({
+      treatment: 'reduced_12', rate: 0.12,
+    })
+  })
+
+  it('accepts procent and a trailing moms', () => {
+    expect(suggestVatTreatment('3590', 'Övriga intäkter 25 procent moms')).toEqual({
+      treatment: 'standard_25', rate: 0.25,
+    })
+    expect(suggestVatTreatment('3591', 'Serviceavgift 6% moms')).toEqual({
+      treatment: 'reduced_6', rate: 0.06,
+    })
+  })
+
+  it('lets the exempt, export and reverse-charge rules win over the percentage', () => {
+    expect(suggestVatTreatment('3004', 'Momsfri försäljning 25%')).toEqual({
+      treatment: 'exempt', rate: 0,
+    })
+    expect(suggestVatTreatment('3305', 'Försäljning tjänster export 25%')).toEqual({
+      treatment: 'export_services', rate: 0,
+    })
+    expect(suggestVatTreatment('3231', 'Försäljning omvänd moms 25%')).toEqual({
+      treatment: 'reverse_charge_domestic', rate: 0,
+    })
+  })
+
+  it('leaves a rate label with an unresolved non-domestic marker for review', () => {
+    expect(suggestVatTreatment('3541', 'Faktureringsavgift EU 25%')).toBeNull()
+    expect(suggestVatTreatment('3542', 'Faktureringsavgift export 25%')).toBeNull()
+    expect(suggestVatTreatment('3549', 'Faktureringsavgift 0% / 25%')).toBeNull()
+  })
+
+  it('leaves a rate label with an exempt wording other than momsfri for review', () => {
+    expect(suggestVatTreatment('3009', 'Försäljning undantagen moms 25%')).toBeNull()
+    expect(suggestVatTreatment('3990', 'Övr intäkter ej momspliktiga 25%')).toBeNull()
+    expect(suggestVatTreatment('3991', 'Intäkter ej moms 12%')).toBeNull()
+    expect(suggestVatTreatment('3992', 'Momsbefriad försäljning 6%')).toBeNull()
+  })
+
+  it('does not suggest ruta 05 for premises rental with a rate but no frivillig marker', () => {
+    // Premises rental carries moms only under frivillig skattskyldighet,
+    // which is ruta 08; the frivillig rule handles labels that say so.
+    expect(suggestVatTreatment('3911', 'Hyra lokal 25%')).toBeNull()
+    expect(suggestVatTreatment('3912', 'Uthyrning lokaler 25%')).toBeNull()
+    expect(suggestVatTreatment('3913', 'Frivillig uthyrning lokal 25%')).toEqual({
+      treatment: 'rental_voluntary', rate: 0.25,
+    })
+    // Renting out equipment is an ordinary taxable supply.
+    expect(suggestVatTreatment('3914', 'Uthyrning maskiner 25%')).toEqual({
+      treatment: 'standard_25', rate: 0.25,
+    })
+  })
+
+  it('does not guess a purchase treatment from a rate alone', () => {
+    // The treatment model has no domestic purchase treatment: a domestic
+    // purchase has no base ruta, and its moms reaches ruta 48 via 2641.
+    expect(suggestVatTreatment('4010', 'Inköp varor 12%')).toBeNull()
+    expect(suggestVatTreatment('5460', 'Förbrukningsmaterial 25 %')).toBeNull()
+  })
+})
+
+describe('vatRateFromLabel', () => {
+  it('reads one sats in any common spelling', () => {
+    expect(vatRateFromLabel('Faktureringavgift 12%')).toBe(0.12)
+    expect(vatRateFromLabel('Försäljning 6 % moms')).toBe(0.06)
+    expect(vatRateFromLabel('Intäkter 25 Procent')).toBe(0.25)
+  })
+
+  it('names no sats for a decimal, two rates, or none', () => {
+    expect(vatRateFromLabel('Ränta 0,6 %')).toBeNull()
+    expect(vatRateFromLabel('Provision 1.25%')).toBeNull()
+    expect(vatRateFromLabel('Livsmedel 12% och övrigt 25%')).toBeNull()
+    expect(vatRateFromLabel('Faktureringsavgifter')).toBeNull()
+    expect(vatRateFromLabel('Försäljning 16%')).toBeNull()
   })
 })

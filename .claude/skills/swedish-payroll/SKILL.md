@@ -1,6 +1,6 @@
 ---
 name: swedish-payroll
-description: Swedish payroll (lön & arbetsgivaravgifter) compliance reference for developers building payroll or accounting software. Covers arbetsgivardeklaration (AGI) filing, sociala avgifter (31.42% breakdown and age reductions), skatteavdrag (tax table lookup, column system, jämkning), förmånsbeskattning (bilförmån calculation, kostförmån, friskvård, KPO), semesterlöneskuld (procentregeln 12%, sammalöneregeln, BAS 2920/7090), OB-tillägg and övertid (Arbetstidslagen limits, CBA divisors), traktamente (domestic/international rates, tremånadersregeln, meal reductions), utlägg vs kostnadsersättning (milersättning, körjournal), F-skatt vs A-skatt distinction and verification, BAS 7xxx series account mapping (7010-7699 wages, 7510 avgifter, 7321-7332 traktamente/resor), nettolöneavdrag vs bruttolöneavdrag processing order, löneväxling (1.058 factor, pension cap), and sjuklön (karensavdrag, day 2-14 at 80%, Försäkringskassan day 15+). Trigger on any mention of lön, lönehantering, payroll, arbetsgivardeklaration, AGI, arbetsgivaravgifter, skatteavdrag, skattetabell, förmånsbeskattning, bilförmån, kostförmån, friskvårdsbidrag, semesterlön, semesterlöneskuld, OB-tillägg, övertidsersättning, traktamente, milersättning, utlägg, F-skatt, A-skatt, FA-skatt, sjuklön, karensavdrag, löneväxling, bruttolöneavdrag, nettolöneavdrag, BAS 7xxx accounts, or any Swedish payroll compliance question. Also trigger when the user asks how to book salary, employer contributions, vacation pay, or sick pay in a Swedish context, or when implementing payroll calculations, AGI XML generation, or tax table lookups. This skill is a developer compliance oracle, not an end-user payroll guide.
+description: Swedish payroll (lön & arbetsgivaravgifter) compliance reference for developers building payroll or accounting software. Covers arbetsgivardeklaration (AGI), sociala avgifter (31.42% and age reductions), skatteavdrag (skattetabell, jämkning), förmånsbeskattning (bilförmån, kostförmån, friskvårdsbidrag), semesterlön and semesterlöneskuld (procentregeln, sammalöneregeln, BAS 2920/7090), OB-tillägg and övertid, traktamente, milersättning, utlägg vs kostnadsersättning, F-skatt, A-skatt and FA-skatt, BAS 7xxx accounts, nettolöneavdrag vs bruttolöneavdrag, löneväxling, and sjuklön (karensavdrag, Försäkringskassan day 15+). Trigger on any Swedish payroll compliance question or mention of these terms, lön, lönehantering, payroll or övertidsersättning. Also trigger when the user asks how to book salary, employer contributions, vacation pay or sick pay, or when implementing payroll calculations, AGI XML generation or tax table lookups. A developer compliance oracle, not an end-user payroll guide.
 ---
 
 # Swedish Payroll Compliance
@@ -19,7 +19,7 @@ This skill has a router structure. The SKILL.md contains the most critical rules
 | `references/social-charges.md` | Questions about arbetsgivaravgifter component breakdown, age-based reductions, egenavgifter, växa-stöd, forskningsavdrag, youth discount, thresholds (PBB/IBB/SGI) |
 | `references/tax-tables.md` | Questions about skatteavdrag, skattetabeller, column system, jämkning, sidoinkomst, statlig inkomstskatt brytpunkt, Skatteverket tax table data format |
 | `references/benefits.md` | Questions about förmånsbeskattning: bilförmån (all 3 formula generations, miljöbil reductions), kostförmån, friskvård, KPO, telefon/internet, bostadsförmån |
-| `references/vacation-pay.md` | Questions about semesterlön, semesterlöneskuld, procentregeln, sammalöneregeln, semestertillägg, sparade dagar, intjänandeår, BAS 2920/7090 accounting |
+| `references/vacation-pay.md` | Questions about semesterlön, semesterlöneskuld, procentregeln, sammalöneregeln, semestertillägg, sparade dagar, intjänandeår, BAS 2920/7090 accounting, deltid and fewer than five workdays a week (nettometoden, Semesterlagen 12 a §) |
 | `references/ob-overtime.md` | Questions about OB-tillägg, övertid, Arbetstidslagen limits, CBA divisors, mertid, kompensationsledighet |
 | `references/travel-expenses.md` | Questions about traktamente (domestic/international), tremånadersregeln, meal reductions, utlägg vs kostnadsersättning, milersättning, körjournal |
 | `references/f-skatt.md` | Questions about F-skatt vs A-skatt vs FA-skatt, verification workflow, employer liability, Skatteverket Företagsuppgifter API |
@@ -38,15 +38,15 @@ Total rate unchanged since 2009. Calculated on full gross salary + taxable benef
 | Birth year condition | Rate |
 |---|---|
 | Born 1937 or earlier | 0% |
-| Turned 66+ at year start (67+ from 2026) | 10.21% (only ålderspensionsavgift) |
+| Born 1938-1958 (2025 and 2026) | 10.21% (only ålderspensionsavgift) |
 | Standard (all others) | 31.42% |
-| Temporary youth (Apr 2026 to Sep 2027) | 20.81% on salary up to 25,000 SEK/month. Eligible: vid årets ingång fyllt 18, inte 23 (i.e. age 18-22 at Jan 1; born 2003-2007 in 2026, 2004-2008 in 2027). NOT during-year age: Skatteverket rejects 23-year-olds at year start. Source: Prop. 2025/26:66 |
+| Temporary youth (Apr 2026 to Sep 2027) | 20.81% on salary up to 25,000 SEK/month (Lag 2026:100; compensation paid Apr 1, 2026 to Sep 30, 2027). Eligible: vid årets ingång fyllt 18, inte 23 (i.e. age 18-22 at Jan 1; born 2003-2007 in 2026, 2004-2008 in 2027). NOT during-year age: Skatteverket rejects 23-year-olds at year start. Source: Prop. 2025/26:66 |
 
 No avgifter required if total annual compensation from one employer < 1,000 SEK.
 
 ### AGI filing deadline
 
-12th of month following pay period (17th in Jan/Aug for turnover ≤40 MSEK). Late = 625 SEK first offense, 1,250 SEK if repeated.
+12th of month following pay period (17th in Jan/Aug for turnover ≤40 MSEK). Late = 625 SEK; 1,250 SEK if the declaration was due under a föreläggande (SFL 48:6).
 
 ### Skatteavdrag lookup chain
 
@@ -64,17 +64,19 @@ Karensavdrag = 20% of one week's sjuklön (80% of weekly pay). Day 2-14: 80% of 
 
 2024-2025: 290 SEK/hel dag. 2026: 300 SEK/hel dag. Halv dag = 50%. After 3 months same location: 70%. After 2 years: 50%.
 
-### Key thresholds 2025
+### Key thresholds 2026
 
 | Parameter | Value |
 |---|---|
-| Prisbasbelopp (PBB) | 58,800 SEK |
-| Inkomstbasbelopp (IBB) | 80,600 SEK |
-| Max PGI (7.5 × IBB) | 604,500 SEK |
-| SGI ceiling (10 × PBB) | 588,000 SEK |
+| Prisbasbelopp (PBB) | 59,200 SEK |
+| Inkomstbasbelopp (IBB) | 83,400 SEK |
+| Max PGI (7.5 × IBB) | 625,500 SEK |
+| Pension ceiling (8.07 × IBB) | 673,038 SEK |
+| SGI ceiling (10 × PBB) | 592,000 SEK |
 | Friskvård tax-free cap | 5,000 SEK/year |
 | Milersättning (own car) | 25 SEK/mil |
-| Statlig skatt brytpunkt | 660,400 SEK/year (2026) |
+| Statlig skatt skiktgräns | 643,000 SEK/year |
+| Statlig skatt brytpunkt | 660,400 SEK/year |
 
 ### BAS 7xxx quick reference
 
@@ -103,7 +105,7 @@ bruttolöneavdrag → förmånsvärden (reduced by nettolöneavdrag) → tax bas
 
 ### Löneväxling factor
 
-For every 1 SEK salary reduction: pension contribution = 1.058 SEK. Flag if post-reduction salary drops below ~54,204 SEK/month (8.07 × IBB / 12 for 2025).
+For every 1 SEK salary reduction: pension contribution = 1.058 SEK. Flag if post-reduction salary drops below ~56,087 SEK/month (8.07 × IBB / 12 for 2026).
 
 ### F-skatt verification
 
@@ -111,4 +113,4 @@ A-skatt: withhold tax + pay avgifter. F-skatt: neither. FA-skatt: split. No F-sk
 
 ## Rate update schedule
 
-Rates shift annually with PBB, IBB, and SLR. Subscribe to Skatteverket's annual publications each December. Bilförmån formulas use SLR from November 30 of prior year (floor 0.50%). Kostförmån tied to PBB. Traktamente normalbelopp published annually.
+Rates shift annually with PBB, IBB, and SLR. Subscribe to Skatteverket's annual publications each December. Bilförmån formulas use SLR from November 30 of prior year (floor 0.50%). Kostförmån tied to PBB. Traktamente normalbelopp published annually. PBB 2027: 59,600 SEK, set by the government in September 2026.

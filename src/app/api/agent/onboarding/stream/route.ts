@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { readOnlyResponse } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -103,14 +105,14 @@ export async function POST(request: Request) {
   if (!membership) {
     return NextResponse.json({ error: 'Not a member of this company' }, { status: 403 })
   }
-  // The pipeline upserts agent_profiles — a mutation, so viewers are refused
+  // The pipeline upserts agent_profiles - a mutation, so viewers are refused
   // (same rule as /api/agent/profile and /verify).
-  if (membership.role === 'viewer') {
-    return NextResponse.json(
-      { error: 'Du har endast läsbehörighet i detta företag.' },
-      { status: 403 },
-    )
+  // The invoicing-only role (lib/auth/invoicer-role.ts) never reaches the
+  // assistant: it runs as the service role and reads the whole company.
+  if (isInvoicerRole(membership.role)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+  if (membership.role === 'viewer') return readOnlyResponse()
 
   // No live composer run for sandbox companies: they ship with a pre-built
   // verified agent_profile so the chrome is visible without burning Bedrock.
@@ -134,22 +136,10 @@ export async function POST(request: Request) {
 
       try {
         // Step 1: TIC: read companies.tic_snapshot; if missing or stale,
-        // live-fetch from the TIC extension (cookies forwarded from the
-        // incoming request) and persist. Falls through gracefully when TIC is
-        // disabled, the company has no org_number, or the request times out.
+        // live-fetch through the TIC extension's profile service and persist.
+        // Falls through gracefully when TIC is disabled, the company has no
+        // org_number, or the fetch times out.
         send({ step: 'tic', status: 'in_progress' })
-        const cookieHeader = request.headers.get('cookie') ?? ''
-        // SSRF guard: derive origin from NEXT_PUBLIC_APP_URL (a required env
-        // var per CLAUDE.md) instead of request.headers.host. On self-hosted
-        // Docker the Host header can be attacker-controlled and would
-        // otherwise let an attacker redirect the cookie-bearing TIC fetch to
-        // a host they control.
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, '') ?? ''
-        const fallbackHost = request.headers.get('host') ?? 'localhost:3000'
-        const fallbackProto =
-          request.headers.get('x-forwarded-proto') ??
-          (fallbackHost.startsWith('localhost') ? 'http' : 'https')
-        const origin = appUrl || `${fallbackProto}://${fallbackHost}`
         const ticResult = await withTimeout(
           // upgradeV1: agent build is the consumer of the v2-only sections;
           // bounded to companies actively creating an agent, so the TIC
@@ -160,10 +150,9 @@ export async function POST(request: Request) {
           ensureTicSnapshot({
             supabase,
             companyId,
-            cookieHeader,
-            origin,
             upgradeV1: true,
             timeoutMs: TIC_BUDGET_MS,
+            purpose: 'composer',
           }),
           TIC_BUDGET_MS,
         ).catch(() => ({ snapshot: null, source: 'fallback' as const }))

@@ -21,6 +21,12 @@ import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 const URL = '/api/salary/runs/run-1/employees/emp-1/expense-claims'
 const PARAMS = createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' })

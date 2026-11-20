@@ -42,14 +42,18 @@
  * The accrual clearing builder below and the kontantmetoden builder
  * (`buildSupplierInvoiceCashLines`, via `resolveSupplierCashSettlement`) both
  * go through them, so the two methods cannot drift apart again (#2852: the
- * cash path credited the exact öre while the user paid whole kronor).
+ * cash path credited the exact öre while the user paid whole kronor). They
+ * are the supplier side of the rule the customer side uses too
+ * (./ore-rounding).
  */
 import type { CreateJournalEntryLineInput } from '@/types'
-import { roundOre, ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { roundOre } from '@/lib/money'
+import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { RESIDUAL_KINDS } from '@/lib/reconciliation/residual'
 import {
   supplierInvoiceDisplayFigures,
   type SupplierInvoiceDisplayInput,
-} from '@/lib/supplier-invoices/display-figures'
+} from '@/lib/bookkeeping/supplier-invoice-display-figures'
 
 export interface SupplierClearingArgs {
   /** SEK on 2440 to clear for this settlement: the full remaining when an öre
@@ -59,6 +63,8 @@ export interface SupplierClearingArgs {
   bankSek: number
   /** Bank/clearing account credited (e.g. 1930). */
   paymentAccount: string
+  /** Bank fee on top of the invoice (splitSupplierBankFee), booked on 6570. */
+  bankFeeSek?: number
 }
 
 export interface SupplierClearingResult {
@@ -80,18 +86,55 @@ export interface SupplierClearingResult {
  *   < 0: the bank paid MORE than owed  -> öresavrundningsförlust -> Dr 3740
  */
 export function supplierOreResidual(owedSek: number, bankSek: number): number {
-  const diff = roundOre(roundOre(owedSek) - roundOre(bankSek))
-  return diff !== 0 && Math.abs(diff) < ORE_ROUNDING_SETTLEMENT_MAX ? diff : 0
+  return oreSettlementResidual(owedSek, bankSek)
 }
 
 /** The 3740 line for a non-zero `supplierOreResidual`. 3740 carries no VAT. */
 export function supplierOreRoundingLine(residual: number): CreateJournalEntryLineInput {
-  return {
-    account_number: ORE_ROUNDING_ACCOUNT,
-    debit_amount: residual < 0 ? Math.abs(residual) : 0,
-    credit_amount: residual > 0 ? residual : 0,
-    line_description: 'Öresavrundning',
+  return oreRoundingLine(residual, 'supplier')
+}
+
+/**
+ * Book a bank fee that left the bank together with a supplier payment
+ * (splitSupplierBankFee): Dr 6570 Bankavgift, and the payment-account credit
+ * grows by the same amount so it equals the whole bank row. Mutates `lines`.
+ * Shared by every supplier-match builder and the preview, so the fee is
+ * booked the same way on each path.
+ *
+ * `dimensions`: the settled invoice's bag, for a builder that tags its own
+ * lines as it builds them (the kontantmetod cash builder): the fee belongs to
+ * the same payment, so the lines added here carry it too. Builders whose
+ * caller stamps every line afterwards leave it out.
+ */
+export function addSupplierBankFeeLine(
+  lines: CreateJournalEntryLineInput[],
+  paymentAccount: string,
+  feeSek: number | undefined,
+  dimensions?: Record<string, string>,
+): void {
+  const fee = roundOre(feeSek ?? 0)
+  if (fee <= 0) return
+  // A copy per line: a shared bag object would let one line's edit leak.
+  const tag = () => (dimensions ? { dimensions: { ...dimensions } } : {})
+  const bankLine = lines.find((l) => l.account_number === paymentAccount && l.credit_amount > 0)
+  if (bankLine) {
+    bankLine.credit_amount = roundOre(bankLine.credit_amount + fee)
+  } else {
+    lines.push({
+      account_number: paymentAccount,
+      debit_amount: 0,
+      credit_amount: fee,
+      line_description: 'Utbetalning från bank',
+      ...tag(),
+    })
   }
+  lines.push({
+    account_number: RESIDUAL_KINDS.bank_fee.account,
+    debit_amount: fee,
+    credit_amount: 0,
+    line_description: RESIDUAL_KINDS.bank_fee.label_sv,
+    ...tag(),
+  })
 }
 
 export interface SupplierCashSettlementArgs {
@@ -181,6 +224,7 @@ export function buildSupplierPaymentClearingLines(
     })
     // Paid fewer kronor than owed → vinst → 3740 credit; more → förlust → debit.
     lines.push(supplierOreRoundingLine(diff))
+    addSupplierBankFeeLine(lines, args.paymentAccount, args.bankFeeSek)
     return { apSek, bankSek, oreDiffSek: diff, lines }
   }
 
@@ -199,5 +243,6 @@ export function buildSupplierPaymentClearingLines(
     credit_amount: amount,
     line_description: 'Utbetalning från bank',
   })
+  addSupplierBankFeeLine(lines, args.paymentAccount, args.bankFeeSek)
   return { apSek, bankSek, oreDiffSek: 0, lines }
 }

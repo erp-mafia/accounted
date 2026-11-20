@@ -6,12 +6,13 @@ import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { fetchSIEJob } from '@/lib/import/sie-job-client'
+import { announceSIEHoldsChanged } from '@/lib/import/sie-holds-client'
 import { describeSIEJobFailure, formatImportFailureReference } from '@/lib/import/import-failure'
 import type { SIEJob } from '@/lib/import/sie-job-contract'
 import type { ImportResult } from '@/lib/import/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import Link from 'next/link'
-import { LoaderCircle } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 
 export default function SIEJobProgress({importId,onCompleted,onUndone}:{
   importId:string;onCompleted?:(result:ImportResult)=>void;onUndone?:()=>void
@@ -21,6 +22,9 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
   const [error,setError] = useState<string|null>(null)
   const [confirmUndo,setConfirmUndo] = useState(false)
   const [busy,setBusy] = useState(false)
+  // The job holds its year: the dashboard hold banner refetches now instead
+  // of waiting for its next nudge.
+  useEffect(() => {announceSIEHoldsChanged()},[importId])
   useEffect(() => {
     const controller = new AbortController()
     let timer:ReturnType<typeof setTimeout>
@@ -49,6 +53,7 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
       const body = await response.json()
       if (!response.ok) throw new Error(getErrorMessage(body))
       setJob(body.data);setError(null);setConfirmUndo(false)
+      announceSIEHoldsChanged()
     } catch (err) {setError(getErrorMessage(err))}
     finally {setBusy(false)}
   }
@@ -64,13 +69,13 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
     : job.job_state === 'preparing' ? t('preparingProgress',{count:job.prepared_through})
     : job.chunks_total > 0 ? t('progress',{done:job.chunks_done,total:job.chunks_total,count:job.transactions_count})
     : t('savedProgress',{count:job.transactions_count})
-  return <section className="space-y-4 rounded-lg border border-border p-6" aria-label={t('title')}>
+  return <section className="space-y-4 rounded-lg p-6 bg-control shadow-raised" aria-label={t('title')}>
     <div role="status" aria-live="polite" className="space-y-2">
       <p className="text-sm font-medium">{job?.job_result?.repairOutcome === 'stopped' ? t('repairStopped') : job ? t(`states.${job.job_state}`) : t('loading')}</p>
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        {job?.job_state === 'preparing' && <LoaderCircle aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none"/>}
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        {job?.job_state === 'preparing' && <SpinnerIcon aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none"/>}
         {progressText}
-      </p>
+      </div>
       {job && job.chunks_total > 0 && <Progress value={100*job.chunks_done/job.chunks_total}/>}
     </div>
     {!terminal && <p className="text-sm text-muted-foreground">{t('durable')}</p>}

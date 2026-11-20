@@ -61,7 +61,14 @@ beforeEach(() => {
 describe('attachmentStoragePath', () => {
   it('lives under documents/<company>/ so the bucket RLS applies, with the key colon replaced', () => {
     const p = attachmentStoragePath(COMPANY, 'manual:2350', '2026-12-31', 'Kontoutdrag dec/2026.pdf', 'abc')
-    expect(p).toBe(`documents/${COMPANY}/reconciliation/manual_2350/2026-12-31/abc_Kontoutdrag dec_2026.pdf`)
+    expect(p).toBe(`documents/${COMPANY}/reconciliation/manual_2350/2026-12-31/abc_Kontoutdrag_dec_2026.pdf`)
+  })
+
+  it('never puts non-ASCII in the key: Storage refuses it with "Invalid key" (O13)', () => {
+    const p = attachmentStoragePath(COMPANY, 'skattekonto', '2026-10-26', 'Byrån - Skattekontoutdrag - 2026-01-01 -- 2026-10-26.pdf', 'abc')
+    expect(p).toBe(`documents/${COMPANY}/reconciliation/skattekonto/2026-10-26/abc_Byr_n_-_Skattekontoutdrag_-_2026-01-01_--_2026-10-26.pdf`)
+    // Supabase Storage's own key rule: ASCII word characters plus a short list of punctuation.
+    expect(p).toMatch(/^[\w/!.*'() &$@=;:+,?-]+$/)
   })
 })
 
@@ -104,6 +111,22 @@ describe('attachUnderlag', () => {
       }),
     )
     expect(result.file_name).toBe('engagemangsbesked.pdf')
+  })
+
+  it('stores a Swedish file name under an ASCII key but keeps the name as uploaded on the row', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    insertRowMock.mockImplementation(async (_s: unknown, _c: unknown, input: Record<string, unknown>) => row(input))
+    const name = 'Bokförda transaktioner _ Skatteverket q3-26.pdf'
+    const result = await attachUnderlag(supabase as never, COMPANY, USER, 'skattekonto', {
+      through_date: '2026-10-23',
+      file: { name, type: 'application/pdf', size: PDF_BYTES.byteLength, buffer: PDF_BYTES },
+    })
+    const upload = supabase.storage.from('documents').upload as ReturnType<typeof vi.fn>
+    const [path] = upload.mock.calls[0] as [string]
+    expect(path).toMatch(/\/[0-9a-f-]{36}_Bokf_rda_transaktioner_Skatteverket_q3-26\.pdf$/)
+    expect(path).not.toMatch(/[^\x20-\x7e]/)
+    expect(insertRowMock).toHaveBeenCalledWith(supabase, COMPANY, expect.objectContaining({ file_name: name, storage_path: path }))
+    expect(result.file_name).toBe(name)
   })
 
   it('refuses unsupported types and content that does not match the declared type without uploading', async () => {

@@ -211,6 +211,70 @@ describe('POST /api/team/invite', () => {
     })
   })
 
+  it('stores the chosen companies on a member invitation', async () => {
+    const companyA = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const companyB = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+    enqueue({ data: [byraMembership('owner')] })
+    enqueue({ data: [{ id: companyA }, { id: companyB }] }) // both are clients of the team
+    enqueue({ data: null }) // profiles lookup
+    enqueue({ data: null }) // existing invitation lookup
+    enqueue({ data: { id: 'invite-2' } }) // insert
+
+    const res = await POST(
+      makeReq({ email: 'konsult@byra.se', role: 'member', companyIds: [companyA, companyB, companyA] }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { company_ids: string[] } }>(res)
+
+    expect(status).toBe(200)
+    // Duplicates are dropped by the schema.
+    expect(body.data.company_ids).toEqual([companyA, companyB])
+    expect(findCalls('team_invitations', 'insert')[0]![0]).toMatchObject({
+      company_ids: [companyA, companyB],
+    })
+    expect(findCalls('companies', 'eq')).toContainEqual(['team_id', BYRA_TEAM_ID])
+  })
+
+  it('stores NULL (every company) when no companies are chosen', async () => {
+    enqueue({ data: [byraMembership('owner')] })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: { id: 'invite-3' } })
+
+    const res = await POST(makeReq({ email: 'konsult@byra.se' }))
+    expect(res.status).toBe(200)
+    expect(findCalls('team_invitations', 'insert')[0]![0]).toMatchObject({ company_ids: null })
+  })
+
+  it('returns 400 when a chosen company is not a client of the team', async () => {
+    const companyA = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const elsewhere = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+    enqueue({ data: [byraMembership('owner')] })
+    enqueue({ data: [{ id: companyA }] }) // only one of the two is on the team
+
+    const res = await POST(makeReq({ email: 'konsult@byra.se', companyIds: [companyA, elsewhere] }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe('Ett eller flera bolag hör inte till byrån.')
+    expect(findCalls('team_invitations', 'insert')).toHaveLength(0)
+  })
+
+  it('returns 400 for chosen companies on an admin invitation', async () => {
+    const res = await POST(
+      makeReq({
+        email: 'konsult@byra.se',
+        role: 'admin',
+        companyIds: ['dddddddd-dddd-4ddd-8ddd-dddddddddddd'],
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 for an empty company choice', async () => {
+    const res = await POST(makeReq({ email: 'konsult@byra.se', companyIds: [] }))
+    expect(res.status).toBe(400)
+  })
+
   it('sends the invite mail in the byrå brand: brand sender, brand-domain link', async () => {
     resolveBrandForTeamMock.mockResolvedValue(SIFFRA_BRAND)
     enqueue({ data: [byraMembership('admin')] })

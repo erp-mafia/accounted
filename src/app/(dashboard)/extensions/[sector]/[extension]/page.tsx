@@ -1,19 +1,18 @@
 import { notFound } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
-import { getExtensionDefinition, getSector } from '@/lib/extensions/sectors'
+import { getExtensionDefinition } from '@/lib/extensions/sectors'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 import {
   extensionNameKey,
   extensionDescriptionKey,
   extensionLongDescriptionKey,
-  sectorNameKey,
 } from '@/lib/extensions/i18n'
-import type { SectorSlug } from '@/lib/extensions/types'
 import { getRequestAppName } from '@/lib/branding/request-brand'
 import CategoryBadge from '@/components/extensions/CategoryBadge'
 import { WORKSPACES } from '@/lib/extensions/_generated/workspace-map'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
+import { PageHeader } from '@/components/ui/page-header'
 
 export default async function ExtensionDetailPage({
   params,
@@ -24,8 +23,6 @@ export default async function ExtensionDetailPage({
 
   const definition = getExtensionDefinition(sectorSlug, extensionSlug)
   if (!definition) notFound()
-
-  const sector = getSector(sectorSlug as SectorSlug)
 
   const t = await getTranslations('extensions')
   // Some long descriptions carry the {appName} ICU parameter (WL-12 appName
@@ -39,12 +36,6 @@ export default async function ExtensionDetailPage({
   const extensionDescription = descriptionKey ? t(descriptionKey, { appName }) : definition.description
   const extensionLongDescription = longDescriptionKey ? t(longDescriptionKey, { appName }) : definition.longDescription
 
-  const sectorLabel = (() => {
-    if (!sector) return sectorSlug
-    const key = sectorNameKey(sector.slug)
-    return key ? t(key) : sector.name
-  })()
-
   const Icon = resolveIcon(definition.icon)
 
   const hasWorkspace = `${sectorSlug}/${extensionSlug}` in WORKSPACES
@@ -57,56 +48,44 @@ export default async function ExtensionDetailPage({
 
   return (
     <div>
-      {/* Breadcrumb */}
-      <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-6">
-        <Link href="/extensions" className="hover:text-foreground transition-colors">
-          {t('breadcrumb')}
-        </Link>
-        <span>/</span>
-        <Link
-          href={`/extensions/${sectorSlug}`}
-          className="hover:text-foreground transition-colors"
-        >
-          {sectorLabel}
-        </Link>
-        <span>/</span>
-        <span className="text-foreground">{extensionName}</span>
-      </nav>
+      <PageHeader
+        title={extensionName}
+        parent={{ label: t('breadcrumb'), href: '/extensions' }}
+        action={
+          hasWorkspace ? (
+            <Button size="toolbar" asChild>
+              <Link href={`/e/${sectorSlug}/${extensionSlug}`}>
+                {t('open')}
+              </Link>
+            </Button>
+          ) : undefined
+        }
+      />
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-8">
-        <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary flex-shrink-0">
-            <Icon className="h-6 w-6 text-foreground" />
-          </div>
-          <div>
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{extensionName}</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">{extensionDescription}</p>
-            <div className="mt-2">
-              <CategoryBadge category={definition.category} />
-            </div>
+      <div className="flex items-start gap-4 mb-8">
+        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary flex-shrink-0">
+          <Icon className="h-6 w-6 text-foreground" />
+        </div>
+        <div>
+          <p className="text-sm text-muted-foreground">{extensionDescription}</p>
+          <div className="mt-2">
+            <CategoryBadge category={definition.category} />
           </div>
         </div>
-        {hasWorkspace && (
-          <Button asChild>
-            <Link href={`/e/${sectorSlug}/${extensionSlug}`}>
-              {t('open')}
-            </Link>
-          </Button>
-        )}
       </div>
 
       {/* Details */}
       <div className="space-y-6">
         <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('description_heading')}</h2>
+          <h2 className="text-sm text-muted-foreground mb-2">{t('description_heading')}</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
             {extensionLongDescription}
           </p>
         </div>
 
         <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('data_source_heading')}</h2>
+          <h2 className="text-sm text-muted-foreground mb-2">{t('data_source_heading')}</h2>
           <p className="text-sm text-muted-foreground">
             {dataPatternLabels[definition.dataPattern]}
           </p>

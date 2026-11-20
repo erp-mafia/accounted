@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeIban } from '@/lib/cash-accounts/service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
+import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import type { StoredAccount } from '../types'
 
 const log = createLogger('enable-banking/session-sharing')
@@ -25,7 +26,7 @@ const log = createLogger('enable-banking/session-sharing')
  * and sync its own accounts from it, with no second BankID and nothing revoked.
  *
  * What is shared is exactly the consent: `session_id` and `consent_expires`.
- * Everything else stays per-company — its own bank_connections row, its own
+ * Everything else stays per-company - its own bank_connections row, its own
  * accounts_data subset, its own cash_accounts and transactions. Company B's
  * row never carries an account company A already claimed, so the shared
  * session is not a window into another company's books.
@@ -155,6 +156,9 @@ export async function findReusableSessions(
     .from('bank_connections')
     .select('id, company_id, bank_name, provider, session_id, psu_type, consent_expires, accounts_data')
     .eq('user_id', userId)
+    // Only an Enable Banking session is shareable; an Open Payments consent is
+    // bound to the one company that signed it.
+    .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
     .eq('status', 'active')
     .neq('company_id', activeCompanyId)
     .not('session_id', 'is', null)
@@ -261,6 +265,28 @@ async function fetchIbanCarriers(
   return carriers
 }
 
+/** The claimant companies' names and whether each is archived; empty when the lookup fails. */
+async function fetchClaimantCompanies(
+  supabase: SupabaseClient,
+  companyIds: readonly string[],
+): Promise<Map<string, { name: string | null; archived: boolean }>> {
+  if (companyIds.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('companies')
+    .select('id, name, archived_at')
+    .in('id', [...companyIds])
+  if (error) {
+    log.warn('claimant company lookup failed', { error: error.message })
+    return new Map()
+  }
+  return new Map(
+    ((data ?? []) as Array<{ id: string; name: string | null; archived_at?: string | null }>).map(c => [
+      c.id,
+      { name: c.name || null, archived: Boolean(c.archived_at) },
+    ]),
+  )
+}
+
 async function fetchCompanyNames(
   supabase: SupabaseClient,
   companyIds: readonly string[],
@@ -329,7 +355,11 @@ export interface CrossCompanyAccountContext {
  *
  * Runs on the callback's SERVICE-ROLE client, so nothing is RLS-scoped:
  * every query below filters on the user's own rows explicitly
- * (bank_connections.user_id, cash_accounts.company_id via company_members).
+ * (bank_connections.user_id, cash_accounts.company_id via company_members),
+ * and "the user's companies" is the set RLS would give: memberships in
+ * companies that are not archived, as user_company_ids() and
+ * attach_shared_bank_session define it. An archived company books nothing,
+ * so it claims nothing (crm#1241).
  *
  * Returns null when any lookup failed. The caller must fail closed (treat
  * every unrecognized account as not-safe-to-pre-check): an empty result is
@@ -354,8 +384,8 @@ export async function fetchCrossCompanyAccountContext(
   // accounts with no cash_accounts rows until its picker is saved, and
   // ignoring that window lets a second company take the same physical
   // account (the exact failure fetchIbanCarriers documents). Their DISABLED
-  // flags are unconfirmed callback output though — including this guard's
-  // own fail-closed writes — so they never feed the deselection memory:
+  // flags are unconfirmed callback output though - including this guard's
+  // own fail-closed writes - so they never feed the deselection memory:
   // one abandoned picker or transient lookup error must not poison every
   // later connect.
   let connectionRows: Array<{
@@ -373,7 +403,7 @@ export async function fetchCrossCompanyAccountContext(
         .neq('id', excludeConnectionId)
         .in('status', ['active', 'pending_selection', 'expired', 'error'])
         // Unique-column order: fetchAllRows pages with .range(), and an
-        // unordered paged read can silently SKIP rows at page boundaries —
+        // unordered paged read can silently SKIP rows at page boundaries:
         // a skipped row here is a missed claim, which fails open.
         .order('id')
         .range(range.from, range.to),
@@ -386,7 +416,34 @@ export async function fetchCrossCompanyAccountContext(
     return null
   }
 
+  // The user's live companies: archived ones are filtered out in PostgREST,
+  // the same set user_company_ids() gives RLS. cash_accounts is read for
+  // these below, and a connection row counts only when its company is one.
+  const { data: membershipRows, error: membershipError } = await serviceSupabase
+    .from('company_members')
+    .select('company_id, companies!inner(archived_at)')
+    .eq('user_id', userId)
+    .is('companies.archived_at', null)
+
+  if (membershipError) {
+    log.error('cross-company claim lookup failed (company_members)', {
+      activeCompanyId,
+      error: membershipError.message,
+    })
+    return null
+  }
+
+  const memberCompanyIds = [
+    ...new Set(
+      ((membershipRows ?? []) as Array<{ company_id: string }>).map(r => r.company_id),
+    ),
+  ]
+  const liveCompanyIds = new Set(memberCompanyIds)
+
   for (const row of connectionRows) {
+    // An archived company's row (or one in a company the user has left) is
+    // neither a claim nor a remembered deselection.
+    if (!liveCompanyIds.has(row.company_id)) continue
     for (const account of row.accounts_data ?? []) {
       const iban = normalizeIban(account.iban)
       if (!iban) continue
@@ -402,28 +459,9 @@ export async function fetchCrossCompanyAccountContext(
 
   // cash_accounts catches standing state the connection rows no longer carry
   // (older connects, CSV-era rows promoted onto a feed, a row a supersede is
-  // about to demote). ALL of the user's companies are read: sibling rows
+  // about to demote). ALL of the user's live companies are read: sibling rows
   // become claims, the active company's rows become its own standing set.
   // Scoped via memberships, since the service client sees everything.
-  const { data: membershipRows, error: membershipError } = await serviceSupabase
-    .from('company_members')
-    .select('company_id')
-    .eq('user_id', userId)
-
-  if (membershipError) {
-    log.error('cross-company claim lookup failed (company_members)', {
-      activeCompanyId,
-      error: membershipError.message,
-    })
-    return null
-  }
-
-  const memberCompanyIds = [
-    ...new Set(
-      ((membershipRows ?? []) as Array<{ company_id: string }>).map(r => r.company_id),
-    ),
-  ]
-
   if (memberCompanyIds.length > 0) {
     let cashRows: Array<{ company_id: string; iban: string | null }>
     try {
@@ -472,99 +510,30 @@ export async function fetchCrossCompanyAccountContext(
   for (const iban of claims.keys()) deselectedIbans.delete(iban)
 
   if (claims.size > 0) {
-    const names = await fetchCompanyNames(serviceSupabase, [
+    const claimants = await fetchClaimantCompanies(serviceSupabase, [
       ...new Set([...claims.values()].map(c => c.companyId)),
     ])
-    for (const claim of claims.values()) {
-      claim.companyName = names.get(claim.companyId) ?? null
+    for (const [iban, claim] of claims) {
+      const company = claimants.get(claim.companyId)
+      // An archived company reads and books nothing: its accounts are
+      // released territory, like a revoked row's. A company made anew (Gör
+      // om migrering archives the old one) otherwise found every account
+      // locked to its archived copy. An unknown claimant (the lookup
+      // failed) keeps its claim: this guard fails closed.
+      if (company?.archived) {
+        claims.delete(iban)
+        continue
+      }
+      claim.companyName = company?.name ?? null
     }
   }
 
   return { claims, deselectedIbans, activeCompanyIbans }
 }
 
-/**
- * How many OTHER connections still depend on this session.
- *
- * Must run on a service-role client. RLS would hide a sibling living in a
- * company the user has since left, and an invisible sibling reads as zero,
- * which is precisely the case where revoking kills a feed that is still in use.
- *
- * Counts every non-revoked sibling, including ones parked in 'expired' or
- * 'error'. The asymmetry is deliberate: leaving a consent un-revoked costs us
- * nothing but a row at Enable Banking that lapses on its own within 90 days,
- * while revoking one that another company is still syncing from takes down a
- * working bank feed with no warning.
- */
-export async function countLiveSiblings(
-  serviceSupabase: SupabaseClient,
-  sessionId: string,
-  excludeConnectionId: string,
-): Promise<number> {
-  const { count, error } = await serviceSupabase
-    .from('bank_connections')
-    .select('id', { count: 'exact', head: true })
-    .eq('session_id', sessionId)
-    .neq('id', excludeConnectionId)
-    .neq('status', 'revoked')
-
-  if (error) {
-    log.error('sibling count failed, treating session as shared', {
-      sessionId: '[REDACTED]',
-      error: error.message,
-    })
-    // Fail closed again: pretend a sibling exists rather than revoke a session
-    // we could not prove is unshared.
-    return 1
-  }
-  return count ?? 0
-}
-
 export interface SessionRenewalResult {
   /** Sibling rows moved onto the new session. */
   movedCount: number
-}
-
-/**
- * Point a company's stored accounts at the uids the renewed session issued.
- *
- * Several ASPSPs mint fresh account uids on every re-authorization. The company
- * that clicked "renew" gets remapped by the callback's own IBAN matching, but a
- * sibling still holds the previous session's uids, and
- * GET /accounts/{uid}/transactions against a superseded uid fails. So the
- * quarterly renewal would keep breaking exactly the companies this feature
- * exists to keep alive, one layer further down.
- *
- * The sibling's own choices (which accounts are enabled, which ledger each
- * books to) are preserved: only the uid moves. An account whose IBAN is absent
- * from the new session is left untouched rather than dropped, since silently
- * discarding a mapped account is worse than a visible sync error.
- */
-export function remapAccountUids(
-  accounts: readonly StoredAccount[],
-  sessionAccounts: readonly { uid: string; iban?: string | null }[],
-): { accounts: StoredAccount[]; remapped: number; unmatched: number } {
-  const uidByIban = new Map<string, string>()
-  for (const account of sessionAccounts) {
-    const iban = normalizeIban(account.iban)
-    if (iban) uidByIban.set(iban, account.uid)
-  }
-
-  let remapped = 0
-  let unmatched = 0
-  const out = accounts.map(account => {
-    const iban = normalizeIban(account.iban)
-    const newUid = iban ? uidByIban.get(iban) : undefined
-    if (!newUid) {
-      unmatched += 1
-      return account
-    }
-    if (newUid === account.uid) return account
-    remapped += 1
-    return { ...account, uid: newUid }
-  })
-
-  return { accounts: out, remapped, unmatched }
 }
 
 /**
@@ -588,90 +557,54 @@ export async function fanOutSessionRenewal(
     consentExpires: string | null
     excludeConnectionId: string
     /** Accounts the renewed session returned, for remapping sibling uids. */
-    sessionAccounts?: readonly { uid: string; iban?: string | null }[]
+    sessionAccounts: readonly { uid: string; iban?: string | null; currency: string }[]
   },
 ): Promise<SessionRenewalResult> {
   const { oldSessionId, newSessionId, consentExpires, excludeConnectionId, sessionAccounts } = input
   if (!oldSessionId || oldSessionId === newSessionId) return { movedCount: 0 }
 
-  const { data: siblings, error: siblingError } = await supabase
-    .from('bank_connections')
-    .select('id, status, accounts_data')
-    .eq('session_id', oldSessionId)
-    .neq('id', excludeConnectionId)
-    .neq('status', 'revoked')
-
-  if (siblingError) {
-    log.error('failed to load siblings for session renewal', { error: siblingError.message })
+  let siblings: Array<{ id: string; company_id: string }>
+  try {
+    siblings = await fetchAllRows(range => supabase
+      .from('bank_connections')
+      .select('id, company_id')
+      .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
+      .eq('session_id', oldSessionId)
+      .neq('id', excludeConnectionId)
+      .neq('status', 'revoked')
+      .order('id')
+      .range(range.from, range.to))
+  } catch (error) {
+    log.error('failed to load siblings for session renewal', { error: error instanceof Error ? error.message : String(error) })
     return { movedCount: 0 }
   }
-  if (!siblings || siblings.length === 0) return { movedCount: 0 }
+  if (siblings.length === 0) return { movedCount: 0 }
 
   let movedCount = 0
-  for (const sibling of siblings as Array<{
-    id: string
-    status: string
-    accounts_data: StoredAccount[] | null
-  }>) {
-    // Payloads stay object literals (never a built-up Record) so the
-    // no-phantom-columns guard can actually verify the column names.
-    // A session was the only thing a dead sibling was missing, so bring it
-    // back. 'pending_selection' is left alone: that company still owes an
-    // account selection, and flipping it to active would skip the picker.
-    const isDead = sibling.status === 'expired' || sibling.status === 'error'
-    const { error: updateError } = isDead
-      ? await supabase
-          .from('bank_connections')
-          .update({
-            session_id: newSessionId,
-            consent_expires: consentExpires,
-            status: 'active',
-            error_message: null,
-          })
-          .eq('id', sibling.id)
-      : await supabase
-          .from('bank_connections')
-          .update({ session_id: newSessionId, consent_expires: consentExpires })
-          .eq('id', sibling.id)
-
-    if (updateError) {
-      log.error('failed to move sibling onto renewed session', {
+  for (const sibling of siblings) {
+    const { data, error } = await supabase.rpc('renew_shared_bank_connection', {
+      p_company_id: sibling.company_id,
+      p_connection_id: sibling.id,
+      p_source_connection_id: excludeConnectionId,
+      p_old_session_id: oldSessionId,
+      p_new_session_id: newSessionId,
+      p_consent_expires: consentExpires,
+      p_session_accounts: sessionAccounts,
+    })
+    if (error || !data?.applied) {
+      log.warn('shared session renewal was not applied', {
         connectionId: sibling.id,
-        error: updateError.message,
+        error: error?.message,
+        reason: data?.reason,
       })
       continue
     }
     movedCount += 1
-
-    // Re-pointing the uids is a separate write, and deliberately so: it only
-    // happens when the ASPSP actually reissued them, and keeping it out of the
-    // payload above means neither write needs a dynamically built object.
-    if (sessionAccounts && sessionAccounts.length > 0) {
-      const { accounts, remapped, unmatched } = remapAccountUids(
-        sibling.accounts_data ?? [],
-        sessionAccounts,
-      )
-      if (unmatched > 0) {
-        // The renewed consent no longer covers an account this company books
-        // to. Worth surfacing: it usually means the user unticked it at the
-        // bank, and that company's next sync will report the gap.
-        log.warn('renewed session does not cover every account a company uses', {
-          connectionId: sibling.id,
-          unmatched,
-        })
-      }
-      if (remapped > 0) {
-        const { error: remapError } = await supabase
-          .from('bank_connections')
-          .update({ accounts_data: accounts })
-          .eq('id', sibling.id)
-        if (remapError) {
-          log.error('failed to re-point sibling accounts at the renewed session', {
-            connectionId: sibling.id,
-            error: remapError.message,
-          })
-        }
-      }
+    if (data.unmatched > 0) {
+      log.warn('renewed session does not cover every account a company uses', {
+        connectionId: sibling.id,
+        unmatched: data.unmatched,
+      })
     }
   }
 

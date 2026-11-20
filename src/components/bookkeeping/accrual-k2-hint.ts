@@ -5,7 +5,12 @@
  *
  * K2 (BFNAR 2016:10) lets a smaller company skip accruing individual
  * recurring costs below 5 000 kr that do not fluctuate more than 20 % year
- * over year; personnel costs must always be accrued. It is a simplification
+ * over year; personnel costs must always be accrued. BFNAR 2025:2 raises the
+ * limit to 7 000 kr per post (2.4) for räkenskapsår beginning after
+ * 2025-12-31; K1 (BFNAR 2006:1, förenklat årsbokslut) keeps its 5 000 kr; K3
+ * has no blanket limit at all. The limit therefore follows the framework and
+ * the fiscal year the line is booked in (accrualThresholdSek, which reads
+ * accrualMateriality, the year-end auto-detect's rule). It is a simplification
  * the company MAY use, never an obligation, so the UI copy it drives is
  * advisory only. That is exactly why it must not fire on an amount we cannot
  * express in kronor: an advisory nudge based on the wrong unit is worse than
@@ -20,11 +25,45 @@
  * shows nothing, rather than guessing a branch.
  */
 
-/** BFNAR 2016:10: the K2 accrual simplification ceiling, in SEK. */
-import type { EntityType } from '@/types'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import type { AccountingFramework, Company, EntityType } from '@/types'
 import { simplifiedYearEndRegelverk } from '@/lib/company/entity-type'
+import { accrualMateriality } from '@/lib/bokslut/accruals/materiality'
 
+/** BFNAR 2016:10 before BFNAR 2025:2, and K1 (BFNAR 2006:1): the accrual simplification ceiling, in SEK. */
 export const K2_ACCRUAL_THRESHOLD_SEK = 5000
+
+/**
+ * The framework the accrual hints follow, read from the company in context:
+ * the one place client code reads it for them. Null without a company.
+ */
+export function accrualFrameworkOf(
+  company: Pick<Company, 'accounting_framework'> | null | undefined,
+): AccountingFramework | null {
+  const framework = company?.accounting_framework
+  return framework === 'k2' || framework === 'k3' ? framework : null
+}
+
+/**
+ * The accrual simplification ceiling for a line booked in the fiscal year
+ * starting `fiscalYearStart` (and ending `fiscalYearEnd`, when known), by the
+ * rules that apply (accrualMateriality): K1 5 000 kr; K2 7 000 kr when BFNAR
+ * 2025:2 applies to the year, else 5 000 kr; K3 null, no blanket limit. An
+ * unknown year keeps 5 000 kr under K2, the lower of the two: advice under
+ * it holds under either.
+ */
+export function accrualThresholdSek(input: {
+  entityType?: EntityType | null
+  framework?: AccountingFramework | null
+  fiscalYearStart?: string | null
+  fiscalYearEnd?: string | null
+}): number | null {
+  return accrualMateriality({
+    entityType: input.entityType ?? null,
+    framework: input.framework ?? null,
+    fiscalYear: { period_start: input.fiscalYearStart ?? '', period_end: input.fiscalYearEnd ?? '' },
+  }).limitSek
+}
 
 export interface AccrualAmountInput {
   /** Net line amount, expressed in `currency`. */
@@ -62,19 +101,32 @@ export function resolveAccrualAmountSek({
     return null
   }
 
-  return Math.round(amount * exchangeRate * 100) / 100
+  return sekOfForeign(amount, exchangeRate)
 }
 
 /**
- * Whether to show the "below 5 000 kr need not be deferred" hint.
+ * Whether to show the "below 5 000 kr (7 000 kr) need not be deferred" hint.
  *
  * False whenever the SEK value is unknown: no hint beats a hint measured in
- * the wrong currency.
+ * the wrong currency. False without a limit (K3): nothing is ever "below" it.
  */
-export function shouldShowK2AccrualHint(input: AccrualAmountInput): boolean {
+export function shouldShowK2AccrualHint(input: AccrualAmountInput & { thresholdSek?: number | null }): boolean {
+  if (input.thresholdSek === null) return false
   const amountSek = resolveAccrualAmountSek(input)
   if (amountSek === null) return false
-  return amountSek > 0 && amountSek < K2_ACCRUAL_THRESHOLD_SEK
+  return amountSek > 0 && amountSek < (input.thresholdSek ?? K2_ACCRUAL_THRESHOLD_SEK)
+}
+
+/**
+ * Whether a line's periodisering is worth opening on its own (the reading's
+ * service period): at or above the ceiling, or of a kronor value not yet
+ * known (a foreign line before its rate), which a person then judges. Every
+ * line is, without a limit (K3).
+ */
+export function accrualWorthOpening(input: AccrualAmountInput & { thresholdSek: number | null }): boolean {
+  if (input.thresholdSek === null) return true
+  const amountSek = resolveAccrualAmountSek(input)
+  return amountSek === null || amountSek >= input.thresholdSek
 }
 
 /**

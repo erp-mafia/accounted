@@ -6,6 +6,7 @@
  * outflows and the single biggest inflow, labelled with the counterpart's
  * own text and carrying their signed amount for the chart's lane.
  */
+import { roundOre } from '@/lib/money'
 
 export interface CashTx {
   date: string
@@ -37,10 +38,6 @@ export interface CashSeriesInput {
 
 const DAY_MS = 86_400_000
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
 function dayKey(iso: string): string {
   return iso.slice(0, 10)
 }
@@ -63,9 +60,9 @@ export function buildCashSeries(input: CashSeriesInput): CashPoint[] {
   for (const tx of input.transactions) {
     const k = dayKey(tx.date)
     const row = perDay.get(k) ?? { inflow: 0, outflow: 0, net: 0, big: null }
-    if (tx.amount >= 0) row.inflow = round2(row.inflow + tx.amount)
-    else row.outflow = round2(row.outflow - tx.amount)
-    row.net = round2(row.net + tx.amount)
+    if (tx.amount >= 0) row.inflow = roundOre(row.inflow + tx.amount)
+    else row.outflow = roundOre(row.outflow - tx.amount)
+    row.net = roundOre(row.net + tx.amount)
     if (tx.amount < 0 && (!row.big || -tx.amount > row.big.amount)) row.big = { amount: -tx.amount, text: tx.description }
     if (tx.amount > 0 && (!row.big || tx.amount > row.big.amount)) row.big = { amount: tx.amount, text: tx.description }
     perDay.set(k, row)
@@ -75,10 +72,10 @@ export function buildCashSeries(input: CashSeriesInput): CashPoint[] {
   const values = new Array<number>(days)
   let v = input.balanceToday
   for (let i = days - 1; i >= 0; i--) {
-    values[i] = round2(v)
+    values[i] = roundOre(v)
     const iso = new Date(from + i * DAY_MS).toISOString().slice(0, 10)
     const row = perDay.get(iso)
-    if (row) v = round2(v - row.net)
+    if (row) v = roundOre(v - row.net)
   }
 
   const points: CashPoint[] = []

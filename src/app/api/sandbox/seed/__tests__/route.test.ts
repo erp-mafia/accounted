@@ -33,8 +33,37 @@ vi.mock('@/lib/bookkeeping/bas-reference', () => ({
     k2_excluded: false,
   }),
 }))
-vi.mock('@/lib/salary/personnummer', () => ({
+vi.mock('@/lib/salary/personnummer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/personnummer')>()),
   encryptPersonnummer: (value: string) => `encrypted:${value}`,
+  decryptPersonnummer: (value: string) => value.replace(/^encrypted:/, ''),
+}))
+// The year's payroll figures and tax table the seed hands the salary engine.
+vi.mock('@/lib/salary/payroll-config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/payroll-config')>()),
+  loadPayrollConfig: async (_db: unknown, year: number) => ({
+    configYear: year,
+    avgifterTotal: 0.3142,
+    avgifterReduced65plus: 0.1021,
+    avgifterYouthRate: 0.2081,
+    avgifterYouthSalaryCap: 25000,
+    avgifterVaxaStodRate: 0.1021,
+    avgifterVaxaStodCap: 35000,
+    reducedAvgiftAge: 67,
+    slpRate: 0.2426,
+    sjuklonRate: 0.8,
+    karensavdragFactor: 0.2,
+  }),
+}))
+vi.mock('@/lib/salary/tax-tables', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/tax-tables')>()),
+  fetchTaxTableRates: async (year: number, tableNumber: number, column: number) => ({
+    rates: [{
+      tableYear: year, tableNumber, columnNumber: column,
+      incomeFrom: 0, incomeTo: 9999999, kind: 'amount', taxAmount: 5000,
+    }],
+    source: 'fallback',
+  }),
 }))
 vi.mock('../customers', () => ({
   buildSandboxCustomers: () => [
@@ -57,6 +86,7 @@ function makeClient() {
   let attempt = 0
   let state = 'new'
   const deadlineInserts: unknown[][] = []
+  const tableInserts: Array<{ table: string; payload: unknown }> = []
 
   const from = vi.fn((table: string) => {
     if (table === 'journal_entries' || table === 'journal_entry_lines') throw new Error('Seed must use the engine')
@@ -74,6 +104,7 @@ function makeClient() {
 
     chain.insert = (payload: unknown) => {
       insertPayload = payload
+      tableInserts.push({ table, payload })
       if (table === 'deadlines') deadlineInserts.push(payload as unknown[])
       return chain
     }
@@ -108,7 +139,7 @@ function makeClient() {
     }),
   }
 
-  return Object.assign(supabase, { deadlineInserts })
+  return Object.assign(supabase, { deadlineInserts, tableInserts })
 }
 
 function createMockSupabase(): MockSupabaseResult {
@@ -190,7 +221,7 @@ describe('POST /api/sandbox/seed', () => {
     expect((await POST(request())).status).toBe(200)
     const inputs = mocks.createJournalEntry.mock.calls.map(call => call[3])
     expect(new Set(inputs.map(input => input.source_type))).toEqual(
-      new Set(['manual', 'invoice_created', 'invoice_paid', 'salary_payment']),
+      new Set(['manual', 'invoice_created', 'invoice_paid', 'supplier_invoice_registered', 'salary_payment']),
     )
     for (const input of inputs) {
       expect(input).not.toHaveProperty('committed_at')
@@ -202,6 +233,81 @@ describe('POST /api/sandbox/seed', () => {
     expect(db.rpc).toHaveBeenLastCalledWith('finish_sandbox_seed', {
       p_attempt_id: 'attempt-1', p_success: true,
     })
+  })
+
+  it('records the paid demo invoice in invoice_payments through the single writer (#2019)', async () => {
+    const db = makeClient()
+    authenticate(db)
+    expect((await POST(request())).status).toBe(200)
+    const paymentVoucherIndex = mocks.createJournalEntry.mock.calls.findIndex(call => call[3].source_type === 'invoice_paid')
+    expect(paymentVoucherIndex).toBeGreaterThanOrEqual(0)
+    const paymentRows = db.tableInserts.filter(insert => insert.table === 'invoice_payments')
+    expect(paymentRows).toHaveLength(1)
+    expect(paymentRows[0].payload).toMatchObject({
+      company_id: 'company-1',
+      user_id: 'user-1',
+      amount: 18750,
+      currency: 'SEK',
+      payment_date: '2026-04-30',
+      journal_entry_id: `entry-${paymentVoucherIndex + 1}`,
+      transaction_id: null,
+      source: 'manual',
+    })
+  })
+
+  it('posts only balanced verifikat (BFL: debit equals credit, both above zero)', async () => {
+    for (const now of [new Date(2026, 4, 15, 12), new Date(2026, 0, 3, 12)]) {
+      vi.setSystemTime(now)
+      mocks.createJournalEntry.mockClear()
+      authenticate(makeClient())
+      expect((await POST(request())).status).toBe(200)
+      expect(mocks.createJournalEntry.mock.calls.length).toBeGreaterThan(0)
+      for (const call of mocks.createJournalEntry.mock.calls) {
+        const input = call[3] as { description: string; lines: Array<{ debit_amount: number; credit_amount: number }> }
+        const debit = Math.round(input.lines.reduce((n, l) => n + l.debit_amount, 0) * 100) / 100
+        const credit = Math.round(input.lines.reduce((n, l) => n + l.credit_amount, 0) * 100) / 100
+        expect(debit, input.description).toBe(credit)
+        expect(debit, input.description).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('books the representation lunch on 6072 with its deductible VAT, syfte and deltagare (accounted#80, crm#1342)', async () => {
+    const db = makeClient()
+    authenticate(db)
+    expect((await POST(request())).status).toBe(200)
+
+    const registrations = mocks.createJournalEntry.mock.calls
+      .map(call => call[3])
+      .filter(input => input.source_type === 'supplier_invoice_registered')
+    expect(registrations).toHaveLength(1)
+    const [representation] = registrations
+    const byAccount = Object.fromEntries(
+      representation.lines.map((l: { account_number: string }) => [l.account_number, l]),
+    )
+    expect(Object.keys(byAccount).sort()).toEqual(['2440', '2641', '6072'])
+    expect(byAccount['6072']).toMatchObject({ debit_amount: 240, credit_amount: 0 })
+    expect(byAccount['2641']).toMatchObject({ debit_amount: 28.8, credit_amount: 0 })
+    expect(byAccount['2440']).toMatchObject({ debit_amount: 0, credit_amount: 268.8 })
+    expect(representation.notes).toMatch(/Syfte: .+Deltagare: .+\(.+\)/)
+
+    // Every place the lunch appears books the same account: the registered
+    // invoice's row and the inbox item behind the staged operation.
+    const itemRows = db.tableInserts
+      .filter(insert => insert.table === 'supplier_invoice_items')
+      .flatMap(insert => insert.payload as Array<{ account_number: string; vat_rate: number; vat_amount: number }>)
+    expect(itemRows.find(row => row.vat_rate === 0.12)).toMatchObject({ account_number: '6072', vat_amount: 28.8 })
+    expect(itemRows.some(row => row.account_number === '5810')).toBe(false)
+    const inbox = db.tableInserts.find(insert => insert.table === 'invoice_inbox_items')!.payload as {
+      extracted_data: { lineItems: Array<{ account_number: string }> }
+    }
+    expect(inbox.extracted_data.lineItems.map(item => item.account_number)).toEqual(['6072'])
+
+    // The account exists in the chart before anything posts to it.
+    const chartRows = db.tableInserts
+      .filter(insert => insert.table === 'chart_of_accounts')
+      .flatMap(insert => insert.payload as Array<{ account_number: string }>)
+    expect(chartRows.map(row => row.account_number)).toContain('6072')
   })
 
   it('does not seed again after completion', async () => {

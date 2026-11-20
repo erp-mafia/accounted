@@ -4,61 +4,51 @@ import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
-import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { backfillDateErrorMessage, parseBackfillFrom } from '@/lib/feed-sync/cursor-window'
+import { feedConnectorRoutes, type FeedConnectorSpec } from '@/lib/feed-sync/connector-routes'
+import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
 import { isShopifyConfigured, encryptCredential } from './lib/credentials'
-import { normalizeShopDomain, testConnectionAndFetchShopInfo } from './lib/api-client'
-import { syncShopifyOrders } from './lib/order-sync'
+import {
+  normalizeShopDomain,
+  ShopifyConnectError,
+  testConnectionAndFetchShopInfo,
+} from './lib/api-client'
+import { connectFailureMessage, connectFailureStatus } from './lib/connect-failure'
+import { syncShopifyOrders, type ShopifySyncSummary } from './lib/order-sync'
 import { MAX_BACKFILL_YEARS } from './types'
-import type { ShopifyConnection, ShopifyStatusResponse } from './types'
+import type { ShopifyConnection } from './types'
+import { shopifyOrderContactRoute } from './lib/order-contact-route'
 
-// Per-user limits: connect probes the merchant's store, sync pages its
-// order history.
+// Per-user limit: connect probes the merchant's store.
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
-
-/**
- * Wall clock a single manual run may spend before it stops and resumes later.
- * Without a deadline a huge sync would be killed at the dispatcher's
- * maxDuration with no cursor persisted; with one it stops cleanly, reports a
- * partial sync and resumes where it stopped on the next press.
- */
-const MANUAL_SYNC_BUDGET_MS = 240_000
 
 const NOT_CONFIGURED_MESSAGE =
   'Shopify-integrationen är inte konfigurerad på den här installationen.'
 
-/** Columns safe to hand to the browser: never the encrypted credentials. */
-const STATUS_COLUMNS =
-  'id, status, shop_domain, shop_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at'
-
-type AuthedContext = {
-  supabase: ExtensionContext['supabase']
-  userId: string
-  isAnonymous: boolean
-  companyId: string
-}
-
-/** Shared auth preamble: cookie user + company context, or an error response. */
-async function requireUserAndCompany(
-  ctx: ExtensionContext | undefined,
-): Promise<AuthedContext | NextResponse> {
-  const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  if (!ctx?.companyId) {
-    return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-  }
-  return {
-    supabase,
-    userId: user.id,
-    isAnonymous: Boolean(user.is_anonymous),
-    companyId: ctx.companyId,
-  }
+/**
+ * Status, sync, backfill, the nightly toggle and disconnect: the shared feed
+ * routes (lib/feed-sync/connector-routes). There is no remote revoke API for
+ * a merchant-owned custom app: only the merchant can delete it in their Dev
+ * Dashboard, so disconnect drops our copy of the credentials and the panel
+ * tells the user to remove the app in Shopify too.
+ */
+export const shopifyFeed: FeedConnectorSpec<ShopifyConnection, ShopifySyncSummary> = {
+  extensionId: 'shopify',
+  table: 'shopify_connections',
+  capability: CAPABILITY.shopify_sync,
+  cursorColumn: 'last_order_synced_at',
+  maxBackfillYears: MAX_BACKFILL_YEARS,
+  // Orders book against the payment account, 1686 unless the store maps another.
+  settlementAccounts: [DEFAULT_PAYMENT_ACCOUNT],
+  notConnectedMessage: 'Ingen ansluten Shopify-butik.',
+  statusColumns:
+    'id, status, shop_domain, shop_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at',
+  isConfigured: isShopifyConfigured,
+  sync: (supabase, connection, deadlineMs) => syncShopifyOrders(supabase, connection, undefined, deadlineMs),
+  disconnect: {
+    columns: 'shop_domain',
+    clearColumns: ['client_id_encrypted', 'client_secret_encrypted'],
+    eventIdentity: (connection) => ({ shopDomain: (connection.shop_domain as string | null) ?? null }),
+  },
 }
 
 /**
@@ -66,52 +56,25 @@ async function requireUserAndCompany(
  * the Stripe/WooCommerce connects), and the feed is a paid capability
  * (shopify_sync).
  */
-async function guardConnectPreconditions(auth: AuthedContext): Promise<NextResponse | null> {
-  if (auth.isAnonymous) return sandboxBlockedResponse()
-  const sandboxBlocked = await guardSandbox(auth.supabase, auth.companyId)
+async function guardConnectPreconditions(ctx: ExtensionContext): Promise<NextResponse | null> {
+  if (ctx.isAnonymous) return sandboxBlockedResponse()
+  const sandboxBlocked = await guardSandbox(ctx.supabase, ctx.companyId)
   if (sandboxBlocked) return sandboxBlocked
-  return requireCapability(auth.supabase, auth.companyId, CAPABILITY.shopify_sync)
+  return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.shopify_sync)
 }
 
 export const shopifyApiRoutes: ApiRouteDefinition[] = [
   {
-    method: 'GET',
-    path: '/status',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      // Prefer the active connection; otherwise surface the most recent row
-      // so the panel can show error/revoked states.
-      const { data: rows } = await auth.supabase
-        .from('shopify_connections')
-        .select(STATUS_COLUMNS)
-        .eq('company_id', auth.companyId)
-        .order('created_at', { ascending: false })
-        .limit(10)
-
-      const connection = rows?.find((r) => r.status === 'active') ?? rows?.[0] ?? null
-      const payload: ShopifyStatusResponse = {
-        configured: isShopifyConfigured(),
-        connection,
-      }
-      return NextResponse.json(payload)
-    },
-  },
-  {
     method: 'POST',
     path: '/connect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const blocked = await guardConnectPreconditions(auth)
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
+      const blocked = await guardConnectPreconditions(ctx)
       if (blocked) return blocked
 
       const rl = await checkRateLimit({
         prefix: 'shopify:connect',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_CONNECT,
       })
       if (!rl.ok) return rl.response!
@@ -143,10 +106,10 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const { data: existing } = await auth.supabase
+      const { data: existing } = await ctx.supabase
         .from('shopify_connections')
         .select('id, status')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (existing && existing.length > 0) {
         return NextResponse.json(
@@ -156,7 +119,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       }
 
       // Verify before storing: a typo'd secret or missing read_orders scope
-      // must fail here, not at 03:15.
+      // must fail here, not at 03:15, and say which of the two it was.
       let shopInfo
       try {
         shopInfo = await testConnectionAndFetchShopInfo({
@@ -166,15 +129,16 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         })
       } catch (probeError) {
         log.warn('[shopify] Credential probe failed', {
-          companyId: auth.companyId,
+          companyId: ctx.companyId,
           message: probeError instanceof Error ? probeError.message : String(probeError),
+          ...(probeError instanceof ShopifyConnectError
+            ? { kind: probeError.kind, grantedScopes: probeError.grantedScopes }
+            : {}),
         })
+        // Name what Shopify refused and what to change there (PH 161).
         return NextResponse.json(
-          {
-            error:
-              'Kunde inte ansluta till butiken med de angivna uppgifterna. Kontrollera adressen och att appen har behörigheten read_orders.',
-          },
-          { status: 400 },
+          { error: connectFailureMessage(probeError, shopDomain) },
+          { status: connectFailureStatus(probeError) },
         )
       }
 
@@ -184,11 +148,11 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       // duplicates (#2631). Reaching further back is an explicit choice: POST
       // /api/extensions/ext/shopify/backfill with a start date.
       const connectedAt = new Date().toISOString()
-      const { data: created, error: insertError } = await auth.supabase
+      const { data: created, error: insertError } = await ctx.supabase
         .from('shopify_connections')
         .insert({
-          company_id: auth.companyId,
-          user_id: auth.userId,
+          company_id: ctx.companyId,
+          user_id: ctx.userId,
           shop_domain: shopDomain,
           shop_name: shopInfo.name,
           currency: shopInfo.currency,
@@ -207,7 +171,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         log.error('[shopify] Failed to create connection', {
           message: insertError?.message,
           code: insertError?.code,
-          companyId: auth.companyId,
+          companyId: ctx.companyId,
         })
         return NextResponse.json(
           {
@@ -219,15 +183,15 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      if (ctx?.emit) {
+      if (ctx.emit) {
         try {
           await ctx.emit({
             type: 'shopify.connected',
             payload: {
               connectionId: created.id,
               shopDomain: created.shop_domain,
-              userId: auth.userId,
-              companyId: auth.companyId,
+              userId: ctx.userId,
+              companyId: ctx.companyId,
             },
           })
         } catch {
@@ -238,282 +202,6 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       return NextResponse.json({ success: true, connection_id: created.id })
     },
   },
-  {
-    method: 'POST',
-    path: '/sync',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
-        CAPABILITY.shopify_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'shopify:sync',
-        identifier: auth.userId,
-        ...RATE_LIMIT_SYNC,
-      })
-      if (!rl.ok) return rl.response!
-
-      // Membership-scoped lookup via the user client; the sync itself runs on
-      // the service client (cursor updates and ingest are service paths). The
-      // manual button ignores transaction_sync_enabled (that flag gates the
-      // nightly cron): pressing it IS the opt-in.
-      const { data: connection } = await auth.supabase
-        .from('shopify_connections')
-        .select('*')
-        .eq('company_id', auth.companyId)
-        .eq('status', 'active')
-        .maybeSingle()
-
-      if (!connection) {
-        return NextResponse.json(
-          { error: 'Ingen ansluten Shopify-butik.' },
-          { status: 404 },
-        )
-      }
-
-      try {
-        const serviceClient = createServiceClientNoCookies()
-        // Bounded like the cron (see MANUAL_SYNC_BUDGET_MS).
-        const summary = await syncShopifyOrders(
-          serviceClient,
-          connection as ShopifyConnection,
-          undefined,
-          Date.now() + MANUAL_SYNC_BUDGET_MS,
-        )
-        return NextResponse.json({ success: true, transactions: summary })
-      } catch (error) {
-        log.error('[shopify] Manual sync failed', {
-          message: error instanceof Error ? error.message : String(error),
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Synkroniseringen misslyckades. Försök igen.' },
-          { status: 502 },
-        )
-      }
-    },
-  },
-  {
-    method: 'POST',
-    path: '/backfill',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
-        CAPABILITY.shopify_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'shopify:backfill',
-        identifier: auth.userId,
-        ...RATE_LIMIT_BACKFILL,
-      })
-      if (!rl.ok) return rl.response!
-
-      const body = (await request.json().catch(() => ({}))) as { from?: unknown }
-      const parsed = parseBackfillFrom(body.from, MAX_BACKFILL_YEARS)
-      if ('error' in parsed) {
-        return NextResponse.json(
-          { error: backfillDateErrorMessage(parsed.error, MAX_BACKFILL_YEARS) },
-          { status: 400 },
-        )
-      }
-
-      const { data: connection } = await auth.supabase
-        .from('shopify_connections')
-        .select('*')
-        .eq('company_id', auth.companyId)
-        .eq('status', 'active')
-        .maybeSingle()
-
-      if (!connection) {
-        return NextResponse.json(
-          { error: 'Ingen ansluten Shopify-butik.' },
-          { status: 404 },
-        )
-      }
-
-      // The cursor is the start date, so a backfill is just the cursor moved
-      // back: no second column that could disagree with it. The run pushes it
-      // forward to now again once the window is exhausted, and the ingest
-      // upserts by external_id, so re-reading an already imported range
-      // changes nothing.
-      const { error: cursorError } = await auth.supabase
-        .from('shopify_connections')
-        .update({ last_order_synced_at: parsed.iso, error_message: null })
-        .eq('id', connection.id)
-        .eq('company_id', auth.companyId)
-        .eq('status', 'active')
-      if (cursorError) {
-        log.error('[shopify] Failed to move order cursor for backfill', {
-          message: cursorError.message,
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Kunde inte spara startdatumet. Försök igen.' },
-          { status: 500 },
-        )
-      }
-
-      try {
-        const serviceClient = createServiceClientNoCookies()
-        const summary = await syncShopifyOrders(
-          serviceClient,
-          { ...(connection as ShopifyConnection), last_order_synced_at: parsed.iso },
-          undefined,
-          Date.now() + MANUAL_SYNC_BUDGET_MS,
-        )
-        return NextResponse.json({ success: true, from: parsed.iso, transactions: summary })
-      } catch (error) {
-        // The cursor stays at the chosen date on purpose: the next run
-        // resumes the backfill from where this one failed.
-        log.error('[shopify] Backfill sync failed', {
-          message: error instanceof Error ? error.message : String(error),
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Synkroniseringen misslyckades. Försök igen.' },
-          { status: 502 },
-        )
-      }
-    },
-  },
-  {
-    method: 'POST',
-    path: '/transaction-sync',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
-        CAPABILITY.shopify_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'shopify:transaction-sync-toggle',
-        identifier: auth.userId,
-        ...RATE_LIMIT_SYNC,
-      })
-      if (!rl.ok) return rl.response!
-
-      const body = (await request.json().catch(() => ({}))) as { enabled?: unknown }
-      if (typeof body.enabled !== 'boolean') {
-        return NextResponse.json({ error: 'enabled (boolean) krävs.' }, { status: 400 })
-      }
-
-      const { data: updated, error: updateError } = await auth.supabase
-        .from('shopify_connections')
-        .update({ transaction_sync_enabled: body.enabled })
-        .eq('company_id', auth.companyId)
-        .eq('status', 'active')
-        .select('id')
-
-      if (updateError) {
-        return NextResponse.json(
-          { error: 'Kunde inte spara inställningen. Försök igen.' },
-          { status: 500 },
-        )
-      }
-      if (!updated || updated.length === 0) {
-        return NextResponse.json(
-          { error: 'Ingen ansluten Shopify-butik.' },
-          { status: 404 },
-        )
-      }
-      return NextResponse.json({ success: true, enabled: body.enabled })
-    },
-  },
-  {
-    method: 'DELETE',
-    path: '/disconnect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const rl = await checkRateLimit({
-        prefix: 'shopify:disconnect',
-        identifier: auth.userId,
-        ...RATE_LIMIT_DISCONNECT,
-      })
-      if (!rl.ok) return rl.response!
-
-      const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
-      const base = auth.supabase
-        .from('shopify_connections')
-        .select('id, status, shop_domain')
-        .eq('company_id', auth.companyId)
-      const query = body.connection_id
-        ? base.eq('id', body.connection_id).limit(1)
-        : base.neq('status', 'revoked').order('created_at', { ascending: false }).limit(1)
-      const { data: rows, error: findError } = await query
-      const connection = rows?.[0]
-
-      if (findError || !connection) {
-        return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
-      }
-
-      // There is no remote revoke API for a merchant-owned custom app: the
-      // app lives in the merchant's Dev Dashboard and only they can delete it
-      // or rotate its secret. We drop our copy of the credentials outright
-      // (nothing reads them after revoke, and a reconnect inserts a fresh
-      // row); the audit row keeps shop_domain and the connect/disconnect
-      // timestamps. The panel tells the user to remove the app in Shopify too.
-      const { error: updateError } = await auth.supabase
-        .from('shopify_connections')
-        .update({
-          status: 'revoked',
-          client_id_encrypted: null,
-          client_secret_encrypted: null,
-          disconnected_at: new Date().toISOString(),
-        })
-        .eq('id', connection.id)
-        .eq('company_id', auth.companyId)
-
-      if (updateError) {
-        log.error('[shopify] Failed to mark connection revoked', {
-          message: updateError.message,
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Kunde inte koppla från. Försök igen.' },
-          { status: 500 },
-        )
-      }
-
-      if (ctx?.emit) {
-        try {
-          await ctx.emit({
-            type: 'shopify.disconnected',
-            payload: {
-              connectionId: connection.id,
-              shopDomain: connection.shop_domain ?? null,
-              reason: 'user',
-              userId: auth.userId,
-              companyId: auth.companyId,
-            },
-          })
-        } catch {
-          // Audit event failure must not block the disconnect itself.
-        }
-      }
-
-      return NextResponse.json({ success: true })
-    },
-  },
+  shopifyOrderContactRoute,
+  ...feedConnectorRoutes(shopifyFeed),
 ]

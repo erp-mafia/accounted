@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { createMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -64,6 +64,12 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+// Pass-through: one test below says which fiscal year a completed import holds.
+vi.mock('@/lib/import/sie-import', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/import/sie-import')>()
+  return { ...actual, findOverlappingPeriodImports: vi.fn(actual.findOverlappingPeriodImports) }
+})
+
 import { arcimMigrationExtension } from '../index'
 import { getConsent, resolveConsent, fetchCompanyInfoDirect } from '../lib/provider-client'
 import {
@@ -72,6 +78,7 @@ import {
   FiscalYearSelectionError,
   MAX_SELECTED_FISCAL_YEARS,
 } from '../lib/sie-fetcher'
+import { findOverlappingPeriodImports } from '@/lib/import/sie-import'
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
 
@@ -110,7 +117,7 @@ function buildCtx(): ExtensionContext {
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
   }
-  return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+  return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
 
 function request(path: string, consentId = 'consent-1') {
@@ -131,7 +138,6 @@ beforeEach(() => {
   ;(getAllowedFiscalYears as Mock).mockReturnValue(new Set([CY - 2, CY - 1, CY]))
   ;(fetchProviderSieFiles as Mock).mockResolvedValue({
     files: [{ fiscalYear: CY, rawContent: SIE_IN_WINDOW }],
-    availableYears: [CY],
     sourceYears: SOURCE_YEARS,
     failedYears: [],
     omittedYears: OMITTED,
@@ -139,15 +145,17 @@ beforeEach(() => {
 })
 
 describe('GET /preview: every source year, with the default selection marked (#2211)', () => {
-  it('answers 401 without a user', async () => {
-    const ctx = buildCtx()
-    ;(ctx.supabase as unknown as { auth: { getUser: Mock } }).auth.getUser.mockResolvedValue({
-      data: { user: null },
-    })
 
-    const res = await handler('/preview')(request('/preview'), ctx)
+  it('answers 400 VALIDATION_ERROR without a consentId, before touching the provider', async () => {
+    const res = await handler('/preview')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/preview'),
+      buildCtx(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
 
-    expect(res.status).toBe(401)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(fetchProviderSieFiles).not.toHaveBeenCalled()
   })
 
   it('carries every source year with its bounds and default flag, on the default selection', async () => {
@@ -165,8 +173,69 @@ describe('GET /preview: every source year, with the default selection marked (#2
     // "2022-09-01 till 2023-12-31", not as a wrong calendar year, and it is
     // unticked by default rather than absent.
     expect(body.sourceYears).toEqual(SOURCE_YEARS)
-    // The preview never sends a selection: its stats are the default's.
+    // The preview never sends a selection: it reads the default years only.
     expect((fetchProviderSieFiles as Mock).mock.calls[0][3]).toBeUndefined()
+  })
+
+  it('counts the read years together and names exactly them (crm#1037)', async () => {
+    const yearWithSale = (year: number, salesAccount: string) => [
+      '#FLAGGA 0',
+      '#SIETYP 4',
+      '#FNAMN "Bolaget AB"',
+      `#RAR 0 ${year}0101 ${year}1231`,
+      '#KONTO 1930 "Företagskonto"',
+      `#KONTO ${salesAccount} "Försäljning"`,
+      `#VER A 1 ${year}0115 "Sale"`, '{', '#TRANS 1930 {} 100.00', `#TRANS ${salesAccount} {} -100.00`, '}',
+      '',
+    ].join('\n')
+    ;(fetchProviderSieFiles as Mock).mockResolvedValue({
+      files: [
+        { fiscalYear: CY - 1, rawContent: yearWithSale(CY - 1, '3010') },
+        { fiscalYear: CY, rawContent: yearWithSale(CY, '3011') },
+      ],
+      sourceYears: [
+        BROKEN_FIRST_YEAR,
+        { year: CY - 1, fromDate: `${CY - 1}-01-01`, toDate: `${CY - 1}-12-31`, inDefaultSelection: true },
+        CURRENT_YEAR,
+      ],
+      failedYears: [],
+      omittedYears: [BROKEN_FIRST_YEAR],
+    })
+
+    const res = await handler('/preview')(request('/preview'), buildCtx())
+    const { status, body } = await parseJsonResponse<{
+      sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] }
+    }>(res)
+
+    expect(status).toBe(200)
+    // 1930, 3010 and 3011 across both charts; one sale a year. The older
+    // source year is not read, so it is neither counted nor named: the wizard
+    // shows these counts only while exactly CY-1 and CY are ticked.
+    expect(body.sieStats).toEqual({ accountCount: 3, transactionCount: 2, fiscalYears: [CY - 1, CY] })
+  })
+
+  it('leaves a default year whose export failed out of the years it names, as it is out of the counts (crm#1037)', async () => {
+    ;(fetchProviderSieFiles as Mock).mockResolvedValue({
+      files: [{ fiscalYear: CY, rawContent: SIE_IN_WINDOW }],
+      sourceYears: [
+        { year: CY - 1, fromDate: `${CY - 1}-01-01`, toDate: `${CY - 1}-12-31`, inDefaultSelection: true },
+        CURRENT_YEAR,
+      ],
+      failedYears: [{ year: CY - 1, error: 'Provider returned an empty SIE export' }],
+      omittedYears: [],
+    })
+
+    const res = await handler('/preview')(request('/preview'), buildCtx())
+    const { status, body } = await parseJsonResponse<{
+      sieAvailable: boolean
+      sieStats: { fiscalYears: number[] }
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.sieAvailable).toBe(true)
+    // Before crm#1037 this named the attempted years (CY-1 and CY) while the
+    // counts held CY alone, so a default selection of both got CY's counts.
+    expect(body.sieStats.fiscalYears).toEqual([CY])
   })
 
   it('hands the picker the same cap /sie-data enforces', async () => {
@@ -179,7 +248,6 @@ describe('GET /preview: every source year, with the default selection marked (#2
   it('still lists the source years when nothing inside the default selection came back', async () => {
     ;(fetchProviderSieFiles as Mock).mockResolvedValue({
       files: [],
-      availableYears: [],
       sourceYears: [BROKEN_FIRST_YEAR],
       failedYears: [],
       omittedYears: [BROKEN_FIRST_YEAR],
@@ -239,7 +307,6 @@ describe('GET /sie-data: the ticked years are fetched, the rest are named (#2211
         { fiscalYear: CY - 4, rawContent: SIE_IN_WINDOW.replace(`#RAR 0 ${CY}0101 ${CY}1231`, `#RAR 0 ${CY - 4}0901 ${CY - 3}1231`) },
         { fiscalYear: CY, rawContent: SIE_IN_WINDOW },
       ],
-      availableYears: [CY - 4, CY],
       sourceYears: SOURCE_YEARS,
       failedYears: [],
       omittedYears: [],
@@ -313,7 +380,6 @@ describe('GET /sie-data: the ticked years are fetched, the rest are named (#2211
   it('names the selection in PROVIDER_SIE_NO_YEARS when none of the ticked years exist at the source', async () => {
     ;(fetchProviderSieFiles as Mock).mockResolvedValue({
       files: [],
-      availableYears: [],
       sourceYears: SOURCE_YEARS,
       failedYears: [],
       omittedYears: SOURCE_YEARS,
@@ -330,5 +396,52 @@ describe('GET /sie-data: the ticked years are fetched, the rest are named (#2211
     expect(status).toBe(404)
     expect(body.error.code).toBe('PROVIDER_SIE_NO_YEARS')
     expect(body.error.message).toContain(String(CY - 7))
+  })
+})
+
+describe('GET /sie-data: previousImport per fetched file, on the entry that carries its path', () => {
+  // The books act's provider step skips a file whose status carries
+  // previousImport (lib/onboarding-books/provider-years). Without the field
+  // it imports every file again, and a retry dies on the year already in.
+  afterEach(() => {
+    ;(findOverlappingPeriodImports as Mock).mockReset()
+  })
+
+  it('marks the year a completed import holds, at the index of its own file', async () => {
+    const previousYear = SIE_IN_WINDOW.replace(`#RAR 0 ${CY}0101 ${CY}1231`, `#RAR 0 ${CY - 1}0101 ${CY - 1}1231`)
+    ;(fetchProviderSieFiles as Mock).mockResolvedValue({
+      files: [
+        { fiscalYear: CY - 1, rawContent: previousYear },
+        { fiscalYear: CY, rawContent: SIE_IN_WINDOW },
+      ],
+      sourceYears: SOURCE_YEARS,
+      failedYears: [],
+      omittedYears: [],
+    })
+    ;(findOverlappingPeriodImports as Mock).mockImplementation(async (_supabase: unknown, _company: string, start: string) =>
+      start.startsWith(String(CY - 1))
+        ? [{ id: 'import-1', imported_at: `${CY}-01-15T10:00:00Z`, fiscal_year_start: `${CY - 1}-01-01`, fiscal_year_end: `${CY - 1}-12-31` }]
+        : [])
+
+    const res = await handler('/sie-data')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+        searchParams: { consentId: 'consent-1', years: `${CY - 1},${CY}` },
+      }),
+      buildCtx(),
+    )
+    const { status, body } = await parseJsonResponse<{
+      fileStatuses: { fiscalYear: number; storagePath: string; previousImport: { id: string } | null }[]
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body).not.toHaveProperty('rawContent')
+    expect(body.fileStatuses.map((f) => f.fiscalYear)).toEqual([CY - 1, CY])
+    expect(body.fileStatuses.map((f) => f.storagePath)).toEqual([
+      expect.stringMatching(/^company-1\/sie-intake\/[a-f0-9-]{36}\.se$/),
+      expect.stringMatching(/^company-1\/sie-intake\/[a-f0-9-]{36}\.se$/),
+    ])
+    expect(body.fileStatuses[0].storagePath).not.toBe(body.fileStatuses[1].storagePath)
+    expect(body.fileStatuses[0].previousImport).toMatchObject({ id: 'import-1' })
+    expect(body.fileStatuses[1].previousImport).toBeNull()
   })
 })

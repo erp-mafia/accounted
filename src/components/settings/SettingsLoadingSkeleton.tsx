@@ -36,7 +36,7 @@ export function SettingsLoadingSkeleton() {
           <Skeleton className="h-10 w-24" />
         </div>
       </div>
-      <div className="space-y-4 border-t border-border pt-8">
+      <div className="space-y-4 border-t-hairline pt-8">
         <Skeleton className="h-4 w-32" />
         <div className="space-y-2">
           <Skeleton className="h-3.5 w-24" />

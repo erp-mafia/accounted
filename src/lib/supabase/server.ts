@@ -1,5 +1,13 @@
 import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
+import {
+  requestProtocolFromHeaders,
+  supabaseAuthCookieOptions,
+} from '@/lib/supabase/cookie-options'
+import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { userSessionFetch } from '@/lib/supabase/auth-call-budget'
+import { withActorHeader } from '@/lib/supabase/actor-header'
+import { withEmptyPagePastEnd } from '@/lib/supabase/page-past-end'
 
 // During Docker builds, NEXT_PUBLIC_* vars are placeholder sentinels
 // replaced at runtime by docker-entrypoint.sh.
@@ -27,14 +35,29 @@ const safeKey = isBuildPlaceholder ? 'placeholder' : key
  * encoding only together with those call sites, and identically here, in
  * client.ts and in middleware.ts: @supabase/ssr requires the two sides to
  * match.
+ *
+ * The session cookie is server-held: HttpOnly, and Secure over TLS
+ * (lib/supabase/cookie-options.ts). Only server code reads it; the browser
+ * client gets a short-lived access token from /api/auth/session-token.
+ *
+ * Its GoTrue calls carry the end user's IP when IP address forwarding is
+ * configured (lib/supabase/auth-forwarding.ts), and a refresh for the same
+ * refresh token is asked once, not once per request
+ * (lib/supabase/auth-call-budget.ts). A counted page past the last row reads
+ * as an empty page, not a 416 (lib/supabase/page-past-end.ts).
  */
 export async function createClient() {
   const cookieStore = await cookies()
+  const requestHeaders = await currentRequestHeaders()
+  const requestProtocol = requestProtocolFromHeaders(requestHeaders)
+  const sessionFetch = userSessionFetch(clientIpFromHeaders(requestHeaders))
 
   return createServerClient(
     safeUrl,
     safeKey,
     {
+      global: { fetch: withEmptyPagePastEnd(sessionFetch) },
+      cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {
           return cookieStore.getAll()
@@ -55,6 +78,20 @@ export async function createClient() {
   )
 }
 
+/**
+ * The headers of the request being served, when there is one. Outside a
+ * request scope (scripts, tests without a request) headers() throws: the
+ * cookie attributes then follow the deployment alone, and GoTrue calls go
+ * out without a forwarded IP.
+ */
+async function currentRequestHeaders(): Promise<Pick<Headers, 'get'> | null> {
+  try {
+    return await headers()
+  } catch {
+    return null
+  }
+}
+
 export function createServiceClient() {
   // Stateless service-role client: no cookies.
   // Passing user session cookies causes @supabase/ssr to send the
@@ -62,9 +99,11 @@ export function createServiceClient() {
   // service role key and re-enables RLS. A cookie-less client
   // ensures the service role key is used for authorization,
   // properly bypassing RLS on every query.
+  // Without a session the audit log reads who acts from the request's
+  // actor header (lib/supabase/actor-header.ts).
   return createServerClient(
     safeUrl,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} } }
+    { cookies: { getAll: () => [], setAll: () => {} }, global: { fetch: withEmptyPagePastEnd(withActorHeader()) } }
   )
 }

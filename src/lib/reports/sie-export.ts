@@ -1,12 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
+import { fetchEntryLines, fetchLinesByEntryIds, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getBranding } from '@/lib/branding/service'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import { getOpeningBalances } from './opening-balances'
+import { excludeYearEndChain, fetchYearEndEntryIds, generateTrialBalance } from './trial-balance'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
+import { isAretsResultatAccount, isResultatkonto } from '@/lib/bookkeeping/bas-data/result-accounts'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('reports:sie-export')
 
@@ -23,25 +28,31 @@ function sanitizeProgramName(str: string): string {
  * Format: CP437 encoded text file (we'll use UTF-8 as modern systems accept it)
  * Line format: #TAG field1 field2 ...
  */
-// Unicode codepoint → CP437 byte for characters used in Swedish accounting data.
-// Covers all six Swedish vowel variants plus common Western European accented letters.
-const CP437: Record<number, number> = {
-  0x00C7: 0x80, 0x00FC: 0x81, 0x00E9: 0x82, 0x00E2: 0x83,
-  0x00E4: 0x84, 0x00E0: 0x85, 0x00E5: 0x86, 0x00E7: 0x87,
-  0x00EA: 0x88, 0x00EB: 0x89, 0x00E8: 0x8A, 0x00EF: 0x8B,
-  0x00EE: 0x8C, 0x00EC: 0x8D, 0x00C4: 0x8E, 0x00C5: 0x8F,
-  0x00C9: 0x90, 0x00E6: 0x91, 0x00C6: 0x92, 0x00F4: 0x93,
-  0x00F6: 0x94, 0x00F2: 0x95, 0x00FB: 0x96, 0x00F9: 0x97,
-  0x00FF: 0x98, 0x00D6: 0x99, 0x00DC: 0x9A, 0x00A2: 0x9B,
-  0x00A3: 0x9C, 0x00A5: 0x9D, 0x00E1: 0xA0, 0x00ED: 0xA1,
-  0x00F3: 0xA2, 0x00FA: 0xA3, 0x00F1: 0xA4, 0x00D1: 0xA5,
-}
+// Code page 437, bytes 0x80-0xFF in order: the character at index i is byte
+// 0x80 + i (the last one, 0xFF, is the no-break space). The whole upper half
+// of the code page, so every character PC8 can carry is carried and only what
+// it cannot represent becomes '?'. A hand-picked list of letters wrote "·" in
+// a verifikat text as "?" (crm#1869).
+const CP437_UPPER_HALF =
+  'ÇüéâäàåçêëèïîìÄÅ' +
+  'ÉæÆôöòûùÿÖÜ¢£¥₧ƒ' +
+  'áíóúñÑªº¿⌐¬½¼¡«»' +
+  '░▒▓│┤╡╢╖╕╣║╗╝╜╛┐' +
+  '└┴┬├─┼╞╟╚╔╩╦╠═╬╧' +
+  '╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀' +
+  'αßΓπΣσµτΦΘΩδ∞φε∩' +
+  '≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ '
+
+/** Unicode code point → CP437 byte, for the characters above 0x7F. */
+const CP437 = new Map<number, number>(
+  [...CP437_UPPER_HALF].map((char, index) => [char.codePointAt(0)!, 0x80 + index]),
+)
 
 export function encodeSIEToCP437(text: string): Uint8Array {
   const bytes: number[] = []
   for (const char of text) {
     const cp = char.codePointAt(0)!
-    bytes.push(cp < 0x80 ? cp : (CP437[cp] ?? 0x3F))
+    bytes.push(cp < 0x80 ? cp : (CP437.get(cp) ?? 0x3F))
   }
   return new Uint8Array(bytes)
 }
@@ -68,15 +79,16 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
     throw new Error('Fiscal period not found')
   }
 
-  // Fetch previous fiscal year for #RAR -1 (per SIE spec, both years should be present)
-  const { data: prevPeriod } = await supabase
-    .from('fiscal_periods')
-    .select('period_start, period_end')
-    .eq('company_id', companyId)
-    .lt('period_end', period.period_start)
-    .order('period_end', { ascending: false })
-    .limit(1)
-    .single()
+  // The previous fiscal year for #RAR -1 (per SIE spec, both years should be
+  // present) and its #IB -1 / #UB -1 / #RES -1 balances below: the year ending
+  // the day before this one starts. A year across a gap is not year -1 (its
+  // UB is not this year's IB), so the file then announces no previous year.
+  const prevPeriod = await resolvePreviousFiscalPeriod<{
+    id: string
+    period_start: string
+    period_end: string
+    opening_balance_entry_id: string | null
+  }>(supabase, companyId, period, 'id, period_start, period_end, opening_balance_entry_id')
 
   // Fetch all accounts
   const accounts = await fetchAllRows(({ from, to }) =>
@@ -95,6 +107,16 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
   // truncated large periods (~30 vouchers). Fetch entries and lines as two
   // separate paginated queries and stitch them together in memory, mirroring
   // journal-register.ts.
+  //
+  // exclude_year_end_closing drops the year-end entries the way the trial
+  // balance's 'exclude-all-year-end' does (fetchYearEndEntryIds): every
+  // source_type 'year_end' entry plus the storno and correction of a reversed
+  // one, and a resultatavslut booked in a previous system or by hand.
+  // Dropping the reversed bokslut alone kept its storno, so an undone bokslut
+  // read as its own negation in #VER, #UB and #RES.
+  const yearEndEntryIds = options.exclude_year_end_closing
+    ? await fetchYearEndEntryIds(supabase, companyId, options.fiscal_period_id)
+    : []
   const entries = await fetchAllRows<JournalEntry>(({ from, to }) => {
     let q = supabase
       .from('journal_entries')
@@ -104,7 +126,7 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
       .in('status', ['posted', 'reversed'])
 
     if (options.exclude_year_end_closing) {
-      q = q.neq('source_type', 'year_end')
+      q = excludeYearEndChain(q, yearEndEntryIds)
     }
 
     // Stable TOTAL order: voucher_series + voucher_number is unique per
@@ -147,17 +169,32 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
   // serialize into #TRANS object lists, and Visma rejects files whose #TRANS
   // references an undeclared #OBJEKT (plan §5 latent bug #2: the legacy
   // cost_centers/projects read filtered is_active=true and dropped them).
-  const { data: registryDimensions } = await supabase
-    .from('dimensions')
-    .select('id, sie_dim_no, parent_sie_dim_no, name')
-    .eq('company_id', companyId)
-    .order('sie_dim_no')
+  //
+  // Paginated: PostgREST silently caps a read at 1000 rows and an SIE
+  // history can mint thousands of object codes. The unpaginated read
+  // declared every code past the cap with a synthesized name = code, a
+  // placeholder in a file kept for seven years. Both orders are unique
+  // (sie_dim_no per company, code per dimension), as fetchAllRows requires.
+  const registryDimensions = await fetchAllRows<RegistryDimension>(({ from, to }) =>
+    supabase
+      .from('dimensions')
+      .select('id, sie_dim_no, parent_sie_dim_no, name')
+      .eq('company_id', companyId)
+      .order('sie_dim_no', { ascending: true })
+      .range(from, to)
+  )
 
-  const { data: registryValues } = await supabase
-    .from('dimension_values')
-    .select('dimension_id, code, name')
-    .eq('company_id', companyId)
-    .order('code')
+  const registryValues = await fetchAllRows<RegistryValue>(
+    ({ from, to }) =>
+      supabase
+        .from('dimension_values')
+        .select('dimension_id, code, name')
+        .eq('company_id', companyId)
+        .order('dimension_id', { ascending: true })
+        .order('code', { ascending: true })
+        .range(from, to),
+    { dedupeBy: (v) => `${v.dimension_id}|${v.code}` }
+  )
 
   const lines: string[] = []
   const now = new Date()
@@ -176,7 +213,7 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
 
   if (options.org_number) {
     // Spec format is nnnnnn-nnnn; company_settings may store it without the hyphen.
-    lines.push(`#ORGNR ${formatOrgNumber(options.org_number)}`)
+    lines.push(`#ORGNR ${formatOrgNumberDisplay(options.org_number)}`)
   }
 
   lines.push(`#FNAMN "${escapeQuotes(options.company_name)}"`)
@@ -192,7 +229,7 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
 
   // === Dimension definitions (#DIM / #UNDERDIM) + objects (#OBJEKT) ===
   lines.push(
-    ...buildDimensionSection(registryDimensions ?? [], registryValues ?? [], allLines)
+    ...buildDimensionSection(registryDimensions, registryValues, allLines)
   )
 
   // === Chart of accounts ===
@@ -225,9 +262,83 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
     openingBalancesByAccount.set(accountNumber, amount)
   }
 
+  // The previous year's balances. #RAR -1 alone announces a year the file
+  // then says nothing about, and importers (årsredovisning programs) read an
+  // empty prior-year income statement and balance sheet from it.
+  // exclude_year_end_closing never applies here: it shapes year 0 for a
+  // receiver that closes that year itself, while year -1 is already closed and
+  // its closing is part of #IB 0. See computePriorYearBalances for the rules.
+  const priorYear = prevPeriod
+    ? await computePriorYearBalances(supabase, companyId, prevPeriod, (accounts as BASAccount[]) || [])
+    : null
+  if (priorYear) {
+    for (const [accountNumber, amount] of priorYear.openingBalances) {
+      lines.push(`#IB -1 ${accountNumber} ${formatAmount(amount)}`)
+    }
+  }
+
   // Exclude the OB entry from VER/TRANS and from movement calculations to
   // prevent double-counting: it is already represented by the #IB records above.
   const periodEntries = (entries as JournalEntry[])?.filter(e => e.id !== obEntryId) ?? []
+
+  // === Closing balances (UB for balance sheet, RES for income statement) ===
+  // Written with the other balance items, before the verifications, which is
+  // the record order SIE 4 prescribes (#IB, #UB, #RES, then #VER).
+  // Movement balances from journal entries
+  const movementBalances = calculateBalances(periodEntries)
+  // #RES 0 is the year's result per account before the resultatavslut, the
+  // same rule as #RES -1 (computePriorYearBalances) and the årsredovisning:
+  // after the closing every result account reads 0 and a receiver got an
+  // all-zero resultaträkning (crm#1727). #UB and #VER keep the closing.
+  // Which verifikat that is, is netOfClosingEntries' to say, for both years.
+  const resultClosingNet = await resultClosingNetOf(supabase, companyId, period, periodEntries)
+
+  // Merge all accounts that have either IB or movements
+  const allAccountNumbers = new Set([
+    ...openingBalancesByAccount.keys(),
+    ...movementBalances.keys(),
+  ])
+
+  const closingRecords: string[] = []
+  const resultRecords: string[] = []
+  for (const accountNumber of [...allAccountNumbers].sort()) {
+    const accountClass = parseInt(accountNumber[0])
+    const ib = openingBalancesByAccount.get(accountNumber) || 0
+    const movement = movementBalances.get(accountNumber) || 0
+
+    if (accountClass <= 2) {
+      // Balance sheet: UB = IB + movements during period
+      const ub = Math.round((ib + movement) * 100) / 100
+      closingRecords.push(`#UB 0 ${accountNumber} ${formatAmount(ub)}`)
+    } else {
+      // Income statement: RES = movements only (IB should be zero), less the
+      // resultatavslut.
+      const result = resultBeforeClosing(accountNumber, movement, resultClosingNet)
+      resultRecords.push(`#RES 0 ${accountNumber} ${formatAmount(result)}`)
+    }
+  }
+
+  const priorClosingRecords: string[] = []
+  const priorResultRecords: string[] = []
+  if (priorYear) {
+    const priorAccountNumbers = new Set([
+      ...priorYear.openingBalances.keys(),
+      ...priorYear.movements.keys(),
+    ])
+    for (const accountNumber of [...priorAccountNumbers].sort()) {
+      const accountClass = parseInt(accountNumber[0])
+      if (accountClass <= 2) {
+        const ib = priorYear.openingBalances.get(accountNumber) || 0
+        const movement = priorYear.movements.get(accountNumber) || 0
+        priorClosingRecords.push(`#UB -1 ${accountNumber} ${formatAmount(Math.round((ib + movement) * 100) / 100)}`)
+      } else {
+        const result = priorYear.resultMovements.get(accountNumber) || 0
+        priorResultRecords.push(`#RES -1 ${accountNumber} ${formatAmount(result)}`)
+      }
+    }
+  }
+
+  lines.push(...closingRecords, ...priorClosingRecords, ...resultRecords, ...priorResultRecords)
 
   // === Journal entries (VER + TRANS) ===
   for (const entry of periodEntries) {
@@ -263,42 +374,189 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
     lines.push('}')
   }
 
-  // === Closing balances (UB for balance sheet, RES for income statement) ===
-  // Movement balances from journal entries
-  const movementBalances = calculateBalances(periodEntries)
+  return lines.join('\r\n') + '\r\n'
+}
 
-  // Merge all accounts that have either IB or movements
-  const allAccountNumbers = new Set([
-    ...openingBalancesByAccount.keys(),
-    ...movementBalances.keys(),
+/**
+ * The previous fiscal year's balances for #IB -1 / #UB -1 / #RES -1.
+ *
+ * - openingBalances: non-zero IB per account, from getOpeningBalances (the
+ *   year's IB entry, or the compute_prior_opening_balances fallback), as for
+ *   year 0 and in the same order: the IB entry's line order.
+ * - movements: the 'include' trial balance's period activity, which is every
+ *   posted or reversed entry of the year except its IB entry, closing
+ *   included. #UB -1 = IB + these, which is exactly what the next year opened
+ *   from, so #UB -1 equals #IB 0 when the years are continuous. A year left
+ *   unclosed is the exception: #IB 0 carries its result on the closing
+ *   account (2099), as a source system's own export does.
+ * - resultMovements: the same without the resultatavslut that closes the
+ *   result accounts (netOfClosingEntries, the rule #RES 0 reads too), among
+ *   the entries of result_closing_entry_ids (the linked closing_entry_id plus
+ *   any closing booked by hand or in a previous system). Depreciation, tax
+ *   and appropriations (also source_type 'year_end') stay in, and a closed
+ *   year's #RES -1 is not zeroed by the transfer to 2099. It is the trial
+ *   balance less the resultatavslut's own lines, not an 'exclude-final'
+ *   balance: that one refuses a closed year without the closing link, which
+ *   this export has always written, and it drops a result booked through
+ *   8999, which #RES keeps.
+ *
+ * Only the IB entry and the resultatavslut are read line by line; the year's
+ * other vouchers arrive as one sum per account.
+ */
+async function computePriorYearBalances(
+  supabase: SupabaseClient,
+  companyId: string,
+  prevPeriod: { id: string; period_start: string; opening_balance_entry_id: string | null },
+  chart: BASAccount[],
+): Promise<{
+  openingBalances: Map<string, number>
+  movements: Map<string, number>
+  resultMovements: Map<string, number>
+}> {
+  const [{ balances }, { rows }, closing] = await Promise.all([
+    getOpeningBalances(supabase, companyId, {
+      period_start: prevPeriod.period_start,
+      opening_balance_entry_id: prevPeriod.opening_balance_entry_id ?? null,
+    }),
+    // The #KONTO chart already read: it only labels the rows, and these
+    // records read nothing but account numbers and amounts (an inactive
+    // account's row is labelled "Konto nnnn", never written).
+    generateTrialBalance(supabase, companyId, prevPeriod.id, { closingEntry: 'include', chart }),
+    resultClosingMovements(supabase, companyId, prevPeriod),
   ])
-
-  for (const accountNumber of [...allAccountNumbers].sort()) {
-    const accountClass = parseInt(accountNumber[0])
-    const ib = openingBalancesByAccount.get(accountNumber) || 0
-    const movement = movementBalances.get(accountNumber) || 0
-
-    if (accountClass <= 2) {
-      // Balance sheet: UB = IB + movements during period
-      const ub = Math.round((ib + movement) * 100) / 100
-      lines.push(`#UB 0 ${accountNumber} ${formatAmount(ub)}`)
-    } else {
-      // Income statement: RES = movements only (IB should be zero)
-      lines.push(`#RES 0 ${accountNumber} ${formatAmount(movement)}`)
-    }
+  const openingBalances = new Map<string, number>()
+  for (const [accountNumber, { debit, credit }] of balances) {
+    const amount = Math.round(((Number(debit) || 0) - (Number(credit) || 0)) * 100) / 100
+    if (amount === 0) continue
+    openingBalances.set(accountNumber, amount)
   }
 
-  return lines.join('\r\n') + '\r\n'
+  const movements = new Map<string, number>()
+  const resultMovements = new Map<string, number>()
+  for (const row of rows) {
+    // An account with no activity in the year carries only its IB.
+    if (row.period_debit === 0 && row.period_credit === 0) continue
+    const movement = roundOre(row.period_debit - row.period_credit)
+    movements.set(row.account_number, movement)
+    resultMovements.set(row.account_number, resultBeforeClosing(row.account_number, movement, closing))
+  }
+
+  return { openingBalances, movements, resultMovements }
+}
+
+type ClosingLine = Pick<JournalEntryLine, 'account_number' | 'debit_amount' | 'credit_amount'>
+
+/**
+ * Net (debit - credit) per account of the resultatavslut #RES is read before,
+ * the one rule for #RES 0 and #RES -1. `closingEntries` holds the lines of
+ * each entry of result_closing_entry_ids, one array per verifikat.
+ *
+ * Only a verifikat that closes result accounts counts: one that books a
+ * result account outside årets resultat (8990-8999). A verifikat that books
+ * nothing but 899x against the equity account (Dr 8999 / Cr 2099 for a
+ * profit) is the year's result booked the BAS way, which is how a previous
+ * system closes a year. It zeroes no account: 899x carries the booked result,
+ * and that is the balance a receiver reads from #RES. Taken out, 8999 was
+ * written as 0.00 while #UB held the result on 2099, so the year's #RES no
+ * longer summed to zero and a bokslut program read the result as not booked
+ * (crm#1869). year_end_chain_entry_ids draws the same line for the
+ * operational resultaträkning.
+ */
+function netOfClosingEntries(closingEntries: ReadonlyArray<ReadonlyArray<ClosingLine>>): Map<string, number> {
+  const net = new Map<string, number>()
+  for (const lines of closingEntries) {
+    const closesResultAccounts = lines.some(
+      (line) => isResultatkonto(line.account_number) && !isAretsResultatAccount(line.account_number),
+    )
+    if (!closesResultAccounts) continue
+    for (const line of lines) {
+      const amount = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+      net.set(line.account_number, roundOre((net.get(line.account_number) ?? 0) + amount))
+    }
+  }
+  return net
+}
+
+/** #RES of one result account: the year's movement less the resultatavslut (netOfClosingEntries). */
+function resultBeforeClosing(accountNumber: string, movement: number, closingNet: Map<string, number>): number {
+  return roundOre(movement - (closingNet.get(accountNumber) ?? 0))
+}
+
+/** The year's resultatavslut (result_closing_entry_ids): posted only, so an undone one nets with its storno. */
+async function fetchResultClosingEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<string[]> {
+  const { data: closingIds, error: closingIdsError } = await supabase.rpc('result_closing_entry_ids', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+  })
+  if (closingIdsError) throw new Error(closingIdsError.message)
+  return Array.isArray(closingIds) ? (closingIds as string[]) : []
+}
+
+/**
+ * Net (debit - credit) per account of the export year's resultatavslut among
+ * the entries the file writes. A resultatavslut is dated on the year's last
+ * day (Accounted's own and the shape rule alike), so a year without a posted
+ * entry on that day has none and the lookup is skipped. With
+ * exclude_year_end_closing the closing is not among the entries: nothing to
+ * subtract.
+ */
+async function resultClosingNetOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: { id: string; period_end: string },
+  entries: JournalEntry[],
+): Promise<Map<string, number>> {
+  if (!entries.some((e) => e.entry_date === period.period_end && e.status === 'posted')) return new Map()
+  const ids = new Set(await fetchResultClosingEntryIds(supabase, companyId, period.id))
+  return netOfClosingEntries(entries.filter((e) => ids.has(e.id)).map((e) => (e.lines as JournalEntryLine[]) || []))
+}
+
+/**
+ * Net (debit - credit) per account of the previous year's resultatavslut: the
+ * entries of result_closing_entry_ids among those the 'include' trial balance
+ * sums (the year's posted and reversed entries except its IB entry), read by
+ * the same netOfClosingEntries as the export year's.
+ */
+async function resultClosingMovements(
+  supabase: SupabaseClient,
+  companyId: string,
+  prevPeriod: { id: string; opening_balance_entry_id: string | null },
+): Promise<Map<string, number>> {
+  const ids = (await fetchResultClosingEntryIds(supabase, companyId, prevPeriod.id)).filter(
+    (id) => id !== prevPeriod.opening_balance_entry_id,
+  )
+  if (ids.length === 0) return new Map()
+  // journal_entry_id comes with every line (fetchEntryLines adds it): the
+  // lines are kept per verifikat, since netOfClosingEntries judges each one.
+  const lines = await fetchEntryLines<ClosingLine & { journal_entry_id: string }>({
+    supabase,
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', prevPeriod.id)
+        .in('status', ['posted', 'reversed'])
+        .in('id', ids),
+    attachEntriesAs: null,
+  })
+  const linesByEntry = new Map<string, ClosingLine[]>()
+  for (const line of lines) {
+    const list = linesByEntry.get(line.journal_entry_id)
+    if (list) list.push(line)
+    else linesByEntry.set(line.journal_entry_id, [line])
+  }
+  return netOfClosingEntries([...linesByEntry.values()])
 }
 
 /**
  * Format a Date object for SIE: YYYYMMDD
  */
 function formatSIEDate(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}${m}${d}`
+  return todayIsoStockholm(date).replace(/-/g, '')
 }
 
 /**

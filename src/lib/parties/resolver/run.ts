@@ -17,9 +17,11 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { GENERIC_WORDS } from '@/lib/parties/classify'
 import { ledgerKey } from '@/lib/parties/ledger-key'
 import { preclean, type Precleaned } from './preclean'
+import { isAiSwitchedOff, isPoolingOn } from '@/lib/legal/data-choices-store'
 import { lookupDirectory, promoteIfShared } from './directory'
 import { readCounterparts, readerAvailable, verifyCounterparts, type ModelReading, type ReaderCandidate, type ReaderLine } from './model-reading'
 import { planAlias, type AliasDecision, type DocumentHit, type IdentityHit, type LedgerHit, type RegisterMatch } from './plan'
@@ -51,6 +53,8 @@ export interface RunSummary {
   byBand: Record<'link' | 'tentative' | 'nil', number>
   bySource: Record<string, number>
   modelLines: number
+  /** Strings whose model batch failed: left without an alias, so the next run reads them again. */
+  modelFailed: number
   verified: number
   promoted: number
   written: number
@@ -168,15 +172,21 @@ async function loadDocumentHits(supabase: SupabaseClient, companyId: string, txI
 }
 
 async function loadParties(supabase: SupabaseClient, companyId: string): Promise<PartyRow[]> {
-  const { data, error } = await supabase
-    .from('parties')
-    .select('id, display_name, alias_keys, status')
-    .eq('company_id', companyId)
-    .is('archived_at', null)
-    .is('merged_into', null)
-    .limit(5000)
-  if (error) throw new Error(`parties: ${error.message}`)
-  return (data ?? []) as PartyRow[]
+  // Paged: a party missing from the register is a missed match, and PostgREST cuts a single read at 1000 rows.
+  try {
+    return await fetchAllRows<PartyRow>((range) =>
+      supabase
+        .from('parties')
+        .select('id, display_name, alias_keys, status')
+        .eq('company_id', companyId)
+        .is('archived_at', null)
+        .is('merged_into', null)
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+  } catch (error) {
+    throw new Error(`parties: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 // Words that name a kind of thing, not a company: a candidate offered on
@@ -220,17 +230,22 @@ interface IdentityRow {
 /** Giro numbers the register already knows, by digits only. */
 async function loadPartyGiros(supabase: SupabaseClient, companyId: string): Promise<Map<string, string>> {
   const out = new Map<string, string>()
-  const { data, error } = await supabase
-    .from('party_identities')
-    .select('party_id, scheme, value')
-    .eq('company_id', companyId)
-    .in('scheme', ['bankgiro', 'plusgiro'])
-    .limit(5000)
-  if (error) {
-    log.info('party_identities not readable, skipping giro anchors', { message: error.message })
+  let data: IdentityRow[]
+  try {
+    data = await fetchAllRows<IdentityRow>((range) =>
+      supabase
+        .from('party_identities')
+        .select('party_id, scheme, value')
+        .eq('company_id', companyId)
+        .in('scheme', ['bankgiro', 'plusgiro'])
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+  } catch (error) {
+    log.info('party_identities not readable, skipping giro anchors', { message: error instanceof Error ? error.message : String(error) })
     return out
   }
-  for (const r of (data ?? []) as IdentityRow[]) {
+  for (const r of data) {
     const digits = r.value.replace(/\D/g, '').replace(/^0+/, '')
     if (digits) out.set(`${r.scheme === 'plusgiro' ? 'pg' : 'bg'}:${digits}`, r.party_id)
   }
@@ -260,7 +275,8 @@ function partyByName(parties: PartyRow[]): Map<string, string> {
 export async function resolveCompanyCounterparts(supabase: SupabaseClient, companyId: string, options: RunOptions = {}): Promise<RunSummary> {
   const sinceDays = options.sinceDays ?? 400
   const maxModelLines = options.maxModelLines ?? 400
-  const useModel = options.useModel ?? true
+  // A company that switched AI off gets every rung but the model.
+  const useModel = (options.useModel ?? true) && !(await isAiSwitchedOff(supabase, companyId))
   const dryRun = options.dryRun ?? false
   const summary: RunSummary = {
     companyId,
@@ -270,6 +286,7 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
     byBand: { link: 0, tentative: 0, nil: 0 },
     bySource: {},
     modelLines: 0,
+    modelFailed: 0,
     verified: 0,
     promoted: 0,
     written: 0,
@@ -340,10 +357,22 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
   // Rung five and six: the model, then the verify pass on the medium band.
   const readings = new Map<number, ModelReading>()
   const verdicts = new Map<number, 'yes' | 'no' | 'unsure'>()
+  // Lines whose model batch failed. Planned without a reading they would be
+  // stored as a live nil alias, and a string with a live alias is never read
+  // again: one outage would leave nobody named behind them for good.
+  const unread = new Set<number>()
   if (forModel.length && readerAvailable()) {
     summary.modelLines = forModel.length
-    const got = await readCounterparts(forModel.map((f) => f.line))
+    const got = await readCounterparts(forModel.map((f) => f.line), undefined, unread)
     for (const [k, v] of got) readings.set(k, v)
+    summary.modelFailed = unread.size
+    if (unread.size) {
+      log.error('counterpart model reading failed; the strings stay unresolved for the next run', {
+        companyId,
+        modelFailed: unread.size,
+        modelLines: forModel.length,
+      })
+    }
     const toVerify = forModel
       .map((f) => ({ f, r: readings.get(f.line.i) }))
       .filter(({ f, r }) => r && planAlias({ pre: f.group.pre, model: r, candidatesById: f.candidatesById }).needsVerify)
@@ -362,6 +391,7 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
       decisions.push(decision)
       continue
     }
+    if (unread.has(m.line.i)) continue
     const reading = readings.get(m.line.i) ?? null
     const final = planAlias({ pre: group.pre, model: reading, candidatesById: m.candidatesById, verify: verdicts.get(m.line.i) ?? null })
     if (final.partyId === null && final.displayName) final.partyId = byName.get(final.displayName.toLowerCase()) ?? null
@@ -407,10 +437,14 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
     summary.written += slice.length
   }
 
-  for (const d of decisions) {
-    if (d.source !== 'model' || d.band !== 'link' || !d.displayName) continue
-    const ok = await promoteIfShared(supabase, { aliasKey: d.aliasKey, displayName: d.displayName, kind: d.kind, rail: d.rail, country: d.country, what: d.what })
-    if (ok) summary.promoted += 1
+  // A company that opted out of pooling offers nothing to the shared
+  // directory; promoteIfShared also leaves it out of every count.
+  const offers = decisions.filter((d) => d.source === 'model' && d.band === 'link' && d.displayName)
+  if (offers.length > 0 && (await isPoolingOn(supabase, companyId))) {
+    for (const d of offers) {
+      const ok = await promoteIfShared(supabase, { aliasKey: d.aliasKey, displayName: d.displayName!, kind: d.kind, rail: d.rail, country: d.country, what: d.what })
+      if (ok) summary.promoted += 1
+    }
   }
 
   log.info('counterparts resolved', { ...summary, bySource: JSON.stringify(summary.bySource) })

@@ -1,12 +1,28 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { mockBlGet, mockBokioGetCompany, mockWintGet, mockLoginWint } = vi.hoisted(() => ({
+const { mockBlGet, mockBokioGetCompany, mockWintGet, mockLoginWint, mockLogWarn } = vi.hoisted(() => ({
   mockBlGet: vi.fn(),
   mockBokioGetCompany: vi.fn(),
   mockWintGet: vi.fn(),
   mockLoginWint: vi.fn(),
+  mockLogWarn: vi.fn(),
 }))
+
+// Capture only provider-client's own warnings (what a Bokio refusal logs);
+// every other module keeps the real logger.
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Record<string, unknown>) => {
+      const logger = actual.createLogger(module, base)
+      return module === 'extensions/arcim-migration/provider-client'
+        ? { ...logger, warn: mockLogWarn }
+        : logger
+    },
+  }
+})
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
@@ -67,6 +83,7 @@ vi.mock('@/lib/providers/wint/oauth', async (importOriginal) => {
 })
 
 import { createServiceClient } from '@/lib/supabase/server'
+import { openConsentToken } from '@/lib/providers/consent-tokens'
 import { BjornLundenApiError } from '@/lib/providers/bjornlunden/client'
 import { BokioApiError } from '@/lib/providers/bokio/client'
 import { WintApiError } from '@/lib/providers/wint/client'
@@ -78,14 +95,20 @@ import {
   ConsentNotFoundError,
 } from '../provider-client'
 
+// Bokio company ids are GUIDs.
+const BOKIO_ID = '9b408943-7a1e-47ac-85a7-ac52b2c210d3'
+const UNKNOWN_BOKIO_ID = '00000000-0000-4000-8000-000000000000'
+
 describe('submitProviderToken', () => {
   let mock: ReturnType<typeof createQueuedMockSupabase>
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'test-personnummer-key')
     mock = createQueuedMockSupabase()
     vi.mocked(createServiceClient).mockReturnValue(mock.supabase as never)
   })
+  afterEach(() => vi.unstubAllEnvs())
 
   const tablesTouched = () => vi.mocked(mock.supabase.from).mock.calls.map((c) => c[0])
 
@@ -97,7 +120,7 @@ describe('submitProviderToken', () => {
     mock.enqueue({ data: [] })
 
     await expect(
-      submitProviderToken('consent-other-tenant', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+      submitProviderToken('consent-other-tenant', 'bokio', 'tok', BOKIO_ID, 'company-A'),
     ).rejects.toBeInstanceOf(ConsentNotFoundError)
 
     // Only the ownership read happened: no token upsert, no consent update.
@@ -114,12 +137,12 @@ describe('submitProviderToken', () => {
       organizationNumber: '5560125790',
     })
 
-    const result = await submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A')
+    const result = await submitProviderToken('consent-1', 'bokio', 'tok', BOKIO_ID, 'company-A')
 
     expect(result).toEqual({ success: true, consentId: 'consent-1' })
     expect(tablesTouched()).toEqual([
       'provider_consents',
-      'companies',
+      'company_settings',
       'provider_consents',
       'provider_consent_tokens',
     ])
@@ -143,7 +166,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -157,7 +180,18 @@ describe('submitProviderToken', () => {
     // Nothing was stored and the consent was NOT labelled: the connection must
     // not exist in any form, or the next step would import from it.
     expect(tablesTouched()).not.toContain('provider_consent_tokens')
-    expect(tablesTouched()).toEqual(['provider_consents', 'companies'])
+    expect(tablesTouched()).toEqual(['provider_consents', 'company_settings'])
+  })
+
+  it('checks against a number held in settings alone, and one whose check digit fails', async () => {
+    for (const stored of ['5560125790', '5560125791']) {
+      mock.reset()
+      mock.enqueue({ data: [{ id: 'consent-1' }] })
+      mock.enqueue({ data: { org_number: stored } })
+      mockBokioGetCompany.mockResolvedValueOnce({ name: 'Någon Annans Bolag AB', organizationNumber: '5566778899' })
+      const err: unknown = await submitProviderToken('consent-1', 'bokio', 'tok', BOKIO_ID, 'company-A').catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(ProviderCompanyMismatchError)
+    }
   })
 
   it('compares org numbers canonically, so formatting differences are not a mismatch', async () => {
@@ -172,7 +206,7 @@ describe('submitProviderToken', () => {
     })
 
     await expect(
-      submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+      submitProviderToken('consent-1', 'bokio', 'tok', BOKIO_ID, 'company-A'),
     ).resolves.toEqual({ success: true, consentId: 'consent-1' })
 
     expect(tablesTouched()).toContain('provider_consent_tokens')
@@ -189,7 +223,7 @@ describe('submitProviderToken', () => {
     })
 
     await expect(
-      submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+      submitProviderToken('consent-1', 'bokio', 'tok', BOKIO_ID, 'company-A'),
     ).resolves.toEqual({ success: true, consentId: 'consent-1' })
 
     // Labelled anyway: the wizard showing WHICH company was linked is what
@@ -206,7 +240,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bad-guid',
+      UNKNOWN_BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -214,6 +248,39 @@ describe('submitProviderToken', () => {
     expect(err).toMatchObject({ kind: 'company-not-found' })
 
     expect(tablesTouched()).not.toContain('provider_consent_tokens')
+  })
+
+  // 2026-10-27: a value without a GUID drew a Bokio 400 that the route
+  // answered with "try again", five times for one user.
+  it.each([
+    ['an org number', '556012-5790'],
+    ['the integration token in the wrong field', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl'],
+    ['two GUIDs to choose between', `${BOKIO_ID} ${UNKNOWN_BOKIO_ID}`],
+  ])('refuses %s as the company id before asking Bokio, storing nothing', async (_case, pasted) => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+
+    const err: unknown = await submitProviderToken('consent-1', 'bokio', 'tok', pasted, 'company-A')
+      .catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'company-id-invalid' })
+    expect(mockBokioGetCompany).not.toHaveBeenCalled()
+    expect(tablesTouched()).toEqual(['provider_consents'])
+  })
+
+  it('takes the GUID out of a pasted Bokio address and asks Bokio with it alone', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mock.enqueue({ data: { org_number: '5560125790' } })
+    mock.enqueue({ data: null })
+    mock.enqueue({ data: null })
+    mockBokioGetCompany.mockResolvedValueOnce({ name: 'Testbolaget AB', organizationNumber: '5560125790' })
+
+    await expect(submitProviderToken('consent-1', 'bokio', 'tok',
+      ` https://app.bokio.se/${BOKIO_ID}/overview `, 'company-A')).resolves.toEqual({ success: true, consentId: 'consent-1' })
+
+    expect(mockBokioGetCompany).toHaveBeenCalledWith('tok', BOKIO_ID)
+    const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as { provider_company_id?: string } | undefined
+    expect(upsert?.provider_company_id).toBe(BOKIO_ID)
   })
 
   it.each([401, 403])('maps a %s from the Bokio probe to invalid credentials', async (status) => {
@@ -226,11 +293,93 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
     expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'credentials' })
+  })
+
+  // ── Bokio plan refusal ────────────────────────────────────────────
+  //
+  // A plan without API access (Basic, or an expired plan) answers 403
+  // price_plan_feature_required on every company endpoint. The token can be
+  // fine, so this is its own verdict, not "check the credentials".
+
+  const PLAN_REFUSAL_BODY = JSON.stringify({
+    error: 'price_plan_feature_required',
+    message: 'This feature requires a plan with API access',
+    details: { requiredFeature: 'PrivateApi', availableIn: ['Plus', 'Premium', 'Business'] },
+  })
+
+  it('maps a 403 plan refusal from the Bokio probe to plan-no-api, stores nothing and logs only the status and code', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(
+      new BokioApiError('Bokio API error: 403 Forbidden', 403, PLAN_REFUSAL_BODY),
+    )
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'secret-integration-token',
+      BOKIO_ID,
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'plan-no-api' })
+    expect(tablesTouched()).not.toContain('provider_consent_tokens')
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Bokio refused the integration token probe',
+      { consentId: 'consent-1', status: 403, bokioErrorCode: 'price_plan_feature_required' },
+    )
+    const logged = JSON.stringify(mockLogWarn.mock.calls)
+    expect(logged).not.toContain('secret-integration-token')
+    expect(logged).not.toContain('This feature requires')
+  })
+
+  it('keeps any other Bokio 403 as invalid credentials and still logs its code', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(
+      new BokioApiError(
+        'Bokio API error: 403 Forbidden',
+        403,
+        JSON.stringify({ code: 'forbidden', message: 'The token lacks a required scope' }),
+      ),
+    )
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      BOKIO_ID,
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'credentials' })
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Bokio refused the integration token probe',
+      { consentId: 'consent-1', status: 403, bokioErrorCode: 'forbidden' },
+    )
+  })
+
+  it('treats only a 403 as a plan refusal, never a 401 that happens to carry the string', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(
+      new BokioApiError('Bokio API error: 401 Unauthorized', 401, PLAN_REFUSAL_BODY),
+    )
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      BOKIO_ID,
+      'company-A',
+    ).catch((e: unknown) => e)
+
     expect(err).toMatchObject({ kind: 'credentials' })
   })
 
@@ -248,15 +397,14 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       '  Bearer copied-token==\r\n',
-      '  bokio-guid  ',
+      `  ${BOKIO_ID}  `,
       'company-A',
     )
 
-    expect(mockBokioGetCompany).toHaveBeenCalledWith('copied-token==', 'bokio-guid')
-    expect(mock.findCall('provider_consent_tokens', 'upsert')?.[0]).toMatchObject({
-      access_token: 'copied-token==',
-      provider_company_id: 'bokio-guid',
-    })
+    expect(mockBokioGetCompany).toHaveBeenCalledWith('copied-token==', BOKIO_ID)
+    const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, string>
+    expect(upsert).toMatchObject({ provider_company_id: BOKIO_ID })
+    expect(openConsentToken(upsert.access_token!)).toBe('copied-token==')
   })
 
   it('does NOT map another Bokio 4xx to invalid credentials', async () => {
@@ -267,7 +415,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -283,7 +431,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -486,19 +634,17 @@ describe('submitProviderToken', () => {
       expect(mockLoginWint).toHaveBeenCalledWith('user@bolag.se', 'hemligt')
       expect(tablesTouched()).toEqual([
         'provider_consents',
-        'companies',
+        'company_settings',
         'provider_consents',
         'provider_consent_tokens',
       ])
       // The stored row carries the token pair and the WINT company id; the
       // login mail and password must never reach the database.
-      const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, unknown>
-      expect(upsert).toMatchObject({
-        provider: 'wint',
-        access_token: 'wint-jwt',
-        refresh_token: 'wint-refresh',
-        provider_company_id: '4711',
-      })
+      const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, string>
+      expect(upsert).toMatchObject({ provider: 'wint', provider_company_id: '4711' })
+      expect(openConsentToken(upsert.access_token!)).toBe('wint-jwt')
+      expect(openConsentToken(upsert.refresh_token!)).toBe('wint-refresh')
+      expect(JSON.stringify(upsert)).not.toContain('wint-jwt')
       expect(JSON.stringify(upsert)).not.toContain('user@bolag.se')
       expect(JSON.stringify(upsert)).not.toContain('hemligt')
     })
@@ -540,7 +686,7 @@ describe('submitProviderToken', () => {
       expect(err).toBeInstanceOf(ProviderCompanyMismatchError)
       expect((err as ProviderCompanyMismatchError).actualOrgNumber).toBe('5560125790')
       // No token upsert, no consent label write
-      expect(tablesTouched()).toEqual(['provider_consents', 'companies'])
+      expect(tablesTouched()).toEqual(['provider_consents', 'company_settings'])
     })
 
     it('rethrows transient login failures (5xx) as generic errors, not invalid credentials', async () => {

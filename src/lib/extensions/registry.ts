@@ -1,6 +1,8 @@
-import { eventBus } from '@/lib/events/bus'
+import { subscribeEventConsumers, type EventConsumer } from '@/lib/events/consumers'
+import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
 import type { CoreEventType } from '@/lib/events/types'
-import type { Extension, ExtensionContext } from './types'
+import type { Extension, ExtensionContext, ExtensionEventHandler } from './types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 /** Factory function type for creating extension contexts */
@@ -11,15 +13,23 @@ export type ContextFactory = (
   extensionId: string
 ) => ExtensionContext
 
-/** Lazy-loaded context factory: set during initialization */
-let contextFactory: ContextFactory | null = null
+/**
+ * The context factory, set during initialization. Process-wide like the
+ * registry itself (lib/global-singleton.ts): lib/init sets it through its own
+ * copy of this module, and the handler wrappers read it from whichever copy
+ * created the registry.
+ */
+const contextFactoryHolder = globalSingleton(
+  'extensionContextFactory',
+  (): { factory: ContextFactory | null } => ({ factory: null }),
+)
 
 /**
  * Set the context factory used to build ExtensionContext for event handlers.
  * Called once during system initialization.
  */
 export function setContextFactory(factory: ContextFactory): void {
-  contextFactory = factory
+  contextFactoryHolder.factory = factory
 }
 
 /**
@@ -27,18 +37,18 @@ export function setContextFactory(factory: ContextFactory): void {
  *
  * - register() stores extension and wires event handlers to the bus
  * - unregister() unhooks handlers and removes extension
- * - getAll(), get(), getByCapability() for querying
+ * - getAll(), get() for querying; async because they wait for lib/init, which
+ *   instrumentation.ts loads when the server boots (lib/initialized.ts), so a
+ *   read can never see the registry before lib/init has filled it
+ * - One registry per process, kept on globalThis (lib/global-singleton.ts)
  */
 class ExtensionRegistry {
   private extensions = new Map<string, Extension>()
   private unsubscribers = new Map<string, (() => void)[]>()
 
   /**
-   * Register an extension: store it and wire its event handlers to the bus.
-   *
-   * Each handler is wrapped so it receives `(payload, ctx)`. The context is
-   * built lazily when the event fires, using the userId from the payload and
-   * a Supabase client created from the current request cookies.
+   * Register an extension: store it and wire its event handlers to the bus,
+   * as the extension's event consumer (extensionEventConsumer below).
    */
   register(extension: Extension): void {
     if (this.extensions.has(extension.id)) {
@@ -48,33 +58,8 @@ class ExtensionRegistry {
 
     this.extensions.set(extension.id, extension)
 
-    // Wire event handlers to the bus
-    const unsubs: (() => void)[] = []
-    if (extension.eventHandlers) {
-      for (const { eventType, handler } of extension.eventHandlers) {
-        // Wrap handler to inject ExtensionContext as second argument
-        const wrappedHandler = async (payload: { userId: string; companyId?: string; [key: string]: unknown }) => {
-          let ctx: ExtensionContext | undefined
-          if (contextFactory && payload.userId) {
-            try {
-              // Dynamic import to avoid circular deps at module load time
-              const { createClient } = await import('@/lib/supabase/server')
-              const supabase = await createClient()
-              const companyId = payload.companyId ?? payload.userId // fallback for legacy events
-              ctx = contextFactory(supabase, payload.userId, companyId, extension.id)
-            } catch {
-              // Context creation failed (e.g. no request cookies in cron jobs).
-              // Handler still gets called: ctx will be undefined.
-            }
-          }
-          return handler(payload, ctx)
-        }
-
-        const unsub = eventBus.on(eventType as CoreEventType, wrappedHandler)
-        unsubs.push(unsub)
-      }
-    }
-    this.unsubscribers.set(extension.id, unsubs)
+    const consumer = extensionEventConsumer(extension)
+    this.unsubscribers.set(extension.id, consumer ? subscribeEventConsumers([consumer]) : [])
   }
 
   /**
@@ -92,20 +77,15 @@ class ExtensionRegistry {
   }
 
   /** Get all registered extensions. */
-  getAll(): Extension[] {
+  async getAll(): Promise<Extension[]> {
+    await whenInitialized()
     return [...this.extensions.values()]
   }
 
   /** Get a specific extension by ID. */
-  get(id: string): Extension | undefined {
+  async get(id: string): Promise<Extension | undefined> {
+    await whenInitialized()
     return this.extensions.get(id)
-  }
-
-  /** Get all extensions that have a specific capability. */
-  getByCapability(key: keyof Extension): Extension[] {
-    return [...this.extensions.values()].filter(
-      (ext) => ext[key] !== undefined && ext[key] !== null
-    )
   }
 
   /** Clear all extensions (useful for testing). */
@@ -116,5 +96,76 @@ class ExtensionRegistry {
   }
 }
 
-/** Module-level singleton */
-export const extensionRegistry = new ExtensionRegistry()
+/** Process-wide singleton, shared by every copy of this module. */
+export const extensionRegistry = globalSingleton('extensionRegistry', () => new ExtensionRegistry())
+
+/**
+ * An extension's event handlers as one event consumer, `ext:<extension id>`,
+ * subscribed to each event type it handles; null when it handles none.
+ *
+ * Each handler receives `(payload, ctx)`. The context is built lazily when
+ * the event fires, from the payload's userId and companyId, on the
+ * service-role client (runExtensionHandler below). Several handlers of one
+ * extension for the same event type run concurrently and all settle before
+ * the delivery does; the first failure is the one rethrown to the bus.
+ */
+export function extensionEventConsumer(extension: Extension): EventConsumer | null {
+  const handlersByType = new Map<CoreEventType, ExtensionEventHandler['handler'][]>()
+  for (const { eventType, handler } of extension.eventHandlers ?? []) {
+    handlersByType.set(eventType, [...(handlersByType.get(eventType) ?? []), handler])
+  }
+  if (handlersByType.size === 0) return null
+
+  const id = `ext:${extension.id}` as const
+  return {
+    id,
+    owner: id,
+    eventTypes: [...handlersByType.keys()],
+    handle(event) {
+      const handlers = handlersByType.get(event.type) ?? []
+      const payload = event.payload as ExtensionEventPayload
+      if (handlers.length === 1) return runExtensionHandler(extension.id, handlers[0], payload)
+      return settleAll(handlers.map((handler) => runExtensionHandler(extension.id, handler, payload)))
+    },
+  }
+}
+
+type ExtensionEventPayload = { userId: string; companyId?: string; [key: string]: unknown }
+
+/**
+ * Run one extension handler with its context.
+ *
+ * `ctx.supabase` is the service-role client, never the request's cookie
+ * client: an event fires from whatever emitted it, and only a dashboard
+ * request carries a session cookie. Under a v1 API key, an MCP bearer token
+ * or a provider webhook the cookie client was the anon role and read nothing,
+ * silently (a credited invoice kept its Stripe payment link). The core event
+ * consumers already work this way (lib/composition/event-consumers.ts), so a
+ * handler filters every query by `ctx.companyId`, which server code set after
+ * authorising the write that emitted the event.
+ */
+async function runExtensionHandler(
+  extensionId: string,
+  handler: ExtensionEventHandler['handler'],
+  payload: ExtensionEventPayload,
+): Promise<void> {
+  let ctx: ExtensionContext | undefined
+  const contextFactory = contextFactoryHolder.factory
+  if (contextFactory && payload.userId) {
+    try {
+      // Dynamic import to avoid circular deps at module load time
+      const { createServiceClientNoCookies } = await import('@/lib/auth/api-keys')
+      const companyId = payload.companyId ?? payload.userId // fallback for legacy events
+      ctx = contextFactory(createServiceClientNoCookies(), payload.userId, companyId, extensionId)
+    } catch {
+      // Context creation failed (e.g. no service-role configuration). The
+      // handler still gets called: ctx will be undefined.
+    }
+  }
+  return handler(payload, ctx)
+}
+
+async function settleAll(deliveries: Promise<void>[]): Promise<void> {
+  const failed = (await Promise.allSettled(deliveries)).find((r) => r.status === 'rejected')
+  if (failed) throw failed.reason
+}

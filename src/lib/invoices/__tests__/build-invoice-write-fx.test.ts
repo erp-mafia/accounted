@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { makeCustomer } from '@/tests/helpers'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
+import { resetExchangeRateStateForTests } from '@/lib/currency/riksbanken'
 
 /**
  * Currency leg of buildInvoiceWriteData.
@@ -81,9 +82,34 @@ function build(supabase: SupabaseClient, input: Partial<InvoiceWriteInput> = {})
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // A fetched year is memoised in-process: one test's Riksbanken must not
+  // answer the next one's.
+  resetExchangeRateStateForTests()
 })
 
 describe('buildInvoiceWriteData exchange rate', () => {
+  it('stores the SEK twins in whole öre', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { supabase } = createRecordingSupabase((q) => {
+      if (q.table === 'company_settings') return { data: { vat_registered: true }, error: null }
+      if (q.table === 'exchange_rates') {
+        return { data: { rate: 11.2345, observation_date: '2026-06-15' }, error: null }
+      }
+      return { data: null, error: null }
+    })
+
+    // 10 x 100.01 = 1000.10 EUR; x 11.2345 = 11235.62345 SEK unrounded.
+    const result = await build(supabase, {
+      items: [{ description: 'Konsult', quantity: 10, unit: 'tim', unit_price: 100.01, vat_rate: 0 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.subtotal_sek).toBe(11235.62)
+    expect(result.invoiceFields.vat_amount_sek).toBe(0)
+    expect(result.invoiceFields.total_sek).toBe(11235.62)
+  })
+
   it('reads the taxable-event rate from the exchange_rates cache instead of calling Riksbanken', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -135,6 +161,41 @@ describe('buildInvoiceWriteData exchange rate', () => {
     // date), not the invoice date, whenever the two differ.
     expect(cacheRead!.eq.rate_date).toBe('2026-05-20')
     expect(result.invoiceFields.exchange_rate_date).toBe('2026-05-20')
+  })
+
+  it('does not take an earlier day\'s rate cached before the invoice date was published (crm#1740)', async () => {
+    // Riksbanken today: Friday 12 June and Monday 15 June are both published.
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify([
+          { date: '2026-06-12', value: '11.11' },
+          { date: '2026-06-15', value: '11.3' },
+        ]),
+        { status: 200 },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { supabase } = createRecordingSupabase((q) => {
+      if (q.table === 'company_settings') return { data: { vat_registered: true }, error: null }
+      if (q.table === 'exchange_rates') {
+        // Stored on the Monday morning, before Monday's rate existed.
+        return {
+          data: { rate: 11.11, observation_date: '2026-06-12', fetched_at: '2026-06-15T03:00:00+00:00' },
+          error: null,
+        }
+      }
+      return { data: null, error: null }
+    })
+
+    const result = await build(supabase)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(result.invoiceFields.exchange_rate).toBe(11.3)
+    expect(result.invoiceFields.exchange_rate_date).toBe('2026-06-15')
+    expect(result.invoiceFields.total_sek).toBe(11300)
   })
 
   it('falls back to the latest cached observation when Riksbanken rate-limits', async () => {

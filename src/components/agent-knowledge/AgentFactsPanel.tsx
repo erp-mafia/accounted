@@ -4,11 +4,13 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import type { FactListItem } from '@/app/api/arkiv/facts/route'
 
 /**
@@ -18,7 +20,9 @@ import type { FactListItem } from '@/app/api/arkiv/facts/route'
  */
 export function AgentFactsPanel() {
   const t = useTranslations('arkiv')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [facts, setFacts] = useState<FactListItem[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [reverting, setReverting] = useState<string | null>(null)
@@ -61,14 +65,32 @@ export function AgentFactsPanel() {
     }
   }
 
-  if (failed) return <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
-  if (!facts) return <Skeleton className="h-24 w-full" />
+  if (failed && !facts) {
+    return (
+      <LoadError
+        onRetry={() => {
+          setFailed(false)
+          void load()
+        }}
+      />
+    )
+  }
+  if (!facts) {
+    return (
+      <LateReveal>
+        <Skeleton className="h-24 w-full" />
+      </LateReveal>
+    )
+  }
   if (facts.length === 0) return <EmptyState title={t('facts_empty_title')} description={t('facts_empty_body')} />
 
   return (
     <div className="space-y-3">
+      {failed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
       <p className="max-w-[65ch] text-[13px] text-muted-foreground">{t('facts_help')}</p>
-      <table className="w-full border-collapse text-[13px]">
+      <table className="-mx-2 w-[calc(100%+1rem)] border-collapse text-[13px]">
         <thead>
           <tr>
             <th className={`${TH_CLASS} pl-0`}>{t('facts_col_fact')}</th>
@@ -87,7 +109,7 @@ export function AgentFactsPanel() {
                   <span className="ml-2 text-xs text-muted-foreground">
                     {t('facts_earlier', { count: f.earlier_readings })}
                     {reverting === f.fact_id ? null : (
-                      <button type="button" className={`${QUIET_LINK_CLASS} ml-2`} onClick={() => setReverting(f.fact_id)}>
+                      <button type="button" className={`${QUIET_LINK_CLASS} ml-2 disabled:cursor-not-allowed disabled:opacity-50`} disabled={!canWrite} title={lockedTitle} onClick={() => setReverting(f.fact_id)}>
                         {t('facts_revert')}
                       </button>
                     )}
@@ -96,7 +118,7 @@ export function AgentFactsPanel() {
                 {reverting === f.fact_id && (
                   <div className="mt-2 flex items-center gap-2">
                     <Input id={`revert-${f.fact_id}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t('facts_revert_reason')} className="h-8 w-64 text-[13px]" />
-                    <Button size="sm" disabled={busy || !reason.trim()} onClick={() => revert(f.fact_id)}>
+                    <Button disabled={!canWrite || busy || !reason.trim()} title={lockedTitle} onClick={() => revert(f.fact_id)}>
                       {t('facts_revert')}
                     </Button>
                   </div>

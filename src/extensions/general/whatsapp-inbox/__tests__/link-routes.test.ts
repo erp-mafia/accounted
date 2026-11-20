@@ -4,7 +4,7 @@
  * counters GET /link exposes for the settings panel.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 vi.mock('@supabase/supabase-js', () => ({
@@ -34,7 +34,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { whatsappInboxExtension } from '@/extensions/general/whatsapp-inbox'
 
 function findRoute(method: string, path: string) {
-  return whatsappInboxExtension.apiRoutes!.find((r) => r.method === method && r.path === path)!
+  return testRoutes(whatsappInboxExtension).find((r) => r.method === method && r.path === path)!
 }
 
 function makeCtx(supabase: unknown): ExtensionContext {
@@ -55,11 +55,6 @@ describe('POST /link/unmute', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('401s without an authenticated context', async () => {
-    const response = await route.handler(request('/link/unmute'))
-    expect(response.status).toBe(401)
   })
 
   it('clears muted_at on the caller own active link', async () => {
@@ -105,11 +100,6 @@ describe('GET /link', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('401s without an authenticated context', async () => {
-    const response = await route.handler(request('/link', 'GET'))
-    expect(response.status).toBe(401)
   })
 
   it('includes the 7-day health counters for the caller link only', async () => {
@@ -181,11 +171,6 @@ describe('POST /link/default-company', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('401s without an authenticated context', async () => {
-    const response = await route.handler(jsonRequest({ companyId: COMPANY }))
-    expect(response.status).toBe(401)
   })
 
   it('400s on a malformed body', async () => {

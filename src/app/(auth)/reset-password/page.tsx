@@ -2,15 +2,19 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { useTranslations, useLocale } from 'next-intl'
+import { fetchSessionUser, signOutEverywhereAndLeave, verifyOtp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, KeyRound } from 'lucide-react'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { StandaloneHeading, StandalonePage, StandaloneStack } from '@/components/standalone/StandalonePage'
+import { Skeleton } from '@/components/ui/skeleton'
 import { INVITE_PROBLEM_MESSAGE_KEYS } from '@/lib/auth/consume-invite-cookie'
 import { handoffPendingInvite } from './invite-handoff'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { passwordSavedDespiteFailure } from '@/lib/auth/password-change-result'
 
 /**
  * Three entry modes:
@@ -33,7 +37,9 @@ type Mode = 'loading' | 'set-password' | 'confirm-link' | 'enter-code'
 
 function ResetPasswordInner() {
   const t = useTranslations('reset_password')
+  const errorLocale = useLocale() as ErrorLocale
   const tInvite = useTranslations('invite')
+  const tCommon = useTranslations('common')
   const searchParams = useSearchParams()
   const tokenHash = searchParams.get('token_hash')
   const [mode, setMode] = useState<Mode>('loading')
@@ -42,15 +48,24 @@ function ResetPasswordInner() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  // A failed step says so in the form, under the heading, never in a toast
+  // that leaves the page looking untouched.
+  const [formError, setFormError] = useState<string | null>(null)
+  // The password IS saved, but the auth server did not confirm that the other
+  // devices were signed out (POST /api/account/password answers that as an
+  // error). The form is gone then: the same password sent again is refused
+  // as unchanged. In its place is the way out the message names.
+  const [savedUnconfirmed, setSavedUnconfirmed] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
     let cancelled = false
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // The session is server-held (HttpOnly cookie): ask the server whether
+    // one exists instead of reading it in the browser.
+    fetchSessionUser().then((user) => {
       if (cancelled) return
-      if (session) setMode('set-password')
+      if (user) setMode('set-password')
       else if (tokenHash) setMode('confirm-link')
       else setMode('enter-code')
     })
@@ -61,17 +76,14 @@ function ResetPasswordInner() {
   }, [])
 
   const verifyFailed = (description: string) => {
-    toast({
-      title: t('verify_failed_title'),
-      description,
-      variant: 'destructive',
-    })
+    setFormError(description)
   }
 
   const handleConfirmLink = async () => {
     if (!tokenHash) return
     setIsLoading(true)
-    const { error } = await supabase.auth.verifyOtp({
+    setFormError(null)
+    const { error } = await verifyOtp({
       token_hash: tokenHash,
       type: 'recovery',
     })
@@ -89,7 +101,8 @@ function ResetPasswordInner() {
   const handleVerifyCode = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
-    const { error } = await supabase.auth.verifyOtp({
+    setFormError(null)
+    const { error } = await verifyOtp({
       email: email.trim(),
       token: code.trim(),
       type: 'recovery',
@@ -105,6 +118,7 @@ function ResetPasswordInner() {
   const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
+    setFormError(null)
 
     const strong = password.length >= 8
       && /[a-z]/.test(password)
@@ -113,21 +127,13 @@ function ResetPasswordInner() {
       && /[^a-zA-Z0-9]/.test(password)
 
     if (!strong) {
-      toast({
-        title: t('weak_title'),
-        description: t('weak_description'),
-        variant: 'destructive',
-      })
+      setFormError(t('weak_description'))
       setIsLoading(false)
       return
     }
 
     if (password !== confirmPassword) {
-      toast({
-        title: t('mismatch_title'),
-        description: t('mismatch_description'),
-        variant: 'destructive',
-      })
+      setFormError(`${t('mismatch_title')}. ${t('mismatch_description')}`)
       setIsLoading(false)
       return
     }
@@ -146,11 +152,13 @@ function ResetPasswordInner() {
 
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
-        toast({
-          title: t('save_failed_title'),
-          description: body.error || t('save_failed_description'),
-          variant: 'destructive',
-        })
+        setFormError(
+          getErrorMessage(body, {
+            locale: errorLocale,
+            fallback: `${t('save_failed_title')}. ${t('save_failed_description')}`,
+          }),
+        )
+        if (passwordSavedDespiteFailure(body)) setSavedUnconfirmed(true)
         return
       }
 
@@ -165,10 +173,14 @@ function ResetPasswordInner() {
       // /mfa/verify already do, and it is the only chance an invitee who
       // already has a company of their own gets: the server-side retry on
       // /onboarding never sees them. See ./invite-handoff.ts.
+      // One /api/auth/me read (only if an invite is pending) serves both:
+      // the user's MFA flags and the session's assurance levels, which the
+      // server reads from verified sources, never from the cookie.
+      let sessionUserRead: ReturnType<typeof fetchSessionUser> | null = null
+      const sessionUser = () => (sessionUserRead ??= fetchSessionUser())
       const inviteDestination = await handoffPendingInvite({
-        getUser: async () => (await supabase.auth.getUser()).data.user,
-        getAssuranceLevel: async () =>
-          (await supabase.auth.mfa.getAuthenticatorAssuranceLevel()).data,
+        getUser: sessionUser,
+        getAssuranceLevel: async () => (await sessionUser())?.aal ?? null,
         reportProblem: (problem) => {
           const keys = INVITE_PROBLEM_MESSAGE_KEYS[problem]
           toast({
@@ -190,14 +202,17 @@ function ResetPasswordInner() {
       router.push('/')
       router.refresh()
     } catch {
-      toast({
-        title: t('save_failed_title'),
-        description: t('save_failed_description'),
-        variant: 'destructive',
-      })
+      setFormError(`${t('save_failed_title')}. ${t('save_failed_description')}`)
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleSignOutEverywhere = async () => {
+    setIsLoading(true)
+    // Leaves for /login with a full page load; a pending invitation is picked
+    // up there, after the sign-in with the new password.
+    await signOutEverywhereAndLeave()
   }
 
   const subtitle =
@@ -208,50 +223,40 @@ function ResetPasswordInner() {
         : t('subtitle')
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="text-center mb-10">
-          <div className="flex justify-center mb-4">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <KeyRound className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-          <h1 className="text-2xl tracking-tight">{t('title')}</h1>
-          <p className="text-muted-foreground text-sm mt-2">{subtitle}</p>
-        </div>
-
-        <div className="rounded-lg border bg-card p-6">
+    <StandalonePage>
+        <StandaloneHeading title={t('title')} sub={subtitle} />
+        <StandaloneStack>
+          {formError && <AuthFormError message={formError} />}
           {mode === 'loading' && (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <div className="flex flex-col gap-3" aria-busy="true">
+              <Skeleton className="h-4 w-1/3" />
+              <Skeleton className="h-11 w-full" />
+              <Skeleton className="h-11 w-full" />
             </div>
           )}
 
           {mode === 'confirm-link' && (
-            <div className="space-y-5">
+            <div className="flex flex-col gap-3">
               <Button
                 type="button"
-                className="w-full h-11"
+                size="lg" className="w-full"
                 onClick={handleConfirmLink}
-                disabled={isLoading}
+                loading={isLoading}
               >
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('confirm_verifying')}
-                  </>
+                  t('confirm_verifying')
                 ) : (
                   t('confirm_button')
                 )}
               </Button>
-              <p className="text-xs text-muted-foreground text-center">
+              <p className="text-xs text-muted-foreground">
                 {t('confirm_hint')}
               </p>
             </div>
           )}
 
           {mode === 'enter-code' && (
-            <form onSubmit={handleVerifyCode} className="space-y-5">
+            <form onSubmit={handleVerifyCode} className="flex flex-col gap-3">
               <div className="space-y-2">
                 <Label htmlFor="email">{t('email_label')}</Label>
                 <Input
@@ -282,24 +287,32 @@ function ResetPasswordInner() {
                   className="h-11 tracking-widest"
                 />
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading}>
+              <Button type="submit" size="lg" className="w-full" loading={isLoading}>
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('code_verifying')}
-                  </>
+                  t('code_verifying')
                 ) : (
                   t('code_button')
                 )}
               </Button>
-              <p className="text-xs text-muted-foreground text-center">
+              <p className="text-xs text-muted-foreground">
                 {t('code_hint')}
               </p>
             </form>
           )}
 
-          {mode === 'set-password' && (
-            <form onSubmit={handleResetPassword} className="space-y-5">
+          {mode === 'set-password' && savedUnconfirmed && (
+            <Button
+              type="button"
+              size="lg" className="w-full"
+              onClick={handleSignOutEverywhere}
+              loading={isLoading}
+            >
+              {tCommon('logout_everywhere')}
+            </Button>
+          )}
+
+          {mode === 'set-password' && !savedUnconfirmed && (
+            <form onSubmit={handleResetPassword} className="flex flex-col gap-3">
               <div className="space-y-2">
                 <Label htmlFor="password">{t('new_password_label')}</Label>
                 <Input
@@ -330,21 +343,17 @@ function ResetPasswordInner() {
                   className="h-11"
                 />
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading}>
+              <Button type="submit" size="lg" className="w-full" loading={isLoading}>
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('submitting')}
-                  </>
+                  t('submitting')
                 ) : (
                   t('submit')
                 )}
               </Button>
             </form>
           )}
-        </div>
-      </div>
-    </div>
+        </StandaloneStack>
+    </StandalonePage>
   )
 }
 

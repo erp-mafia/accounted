@@ -1,28 +1,27 @@
 'use client'
 
-import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Switch } from '@/components/ui/switch'
-import { AttnLine } from '@/components/ui/attn-line'
+import { Button } from '@/components/ui/button'
 import {
   SettingsGroup,
   SettingsInput,
   SettingsReveal,
   SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
-import { REMINDERS_SENDING_ENABLED } from '@/lib/invoices/reminders-enabled'
+import { useFormat } from '@/lib/hooks/use-format'
 import type { CompanySettings } from '@/types'
 
 interface InvoiceSettingsFormProps {
   settings: CompanySettings
-  /** Rendered between Fakturainställningar and Påminnelser (self-saving controls). */
+  /** Rendered after Fakturainställningar (self-saving controls). */
   afterInvoiceSettings?: React.ReactNode
 }
 
 export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceSettingsFormProps) {
   const t = useTranslations('settings_invoice_form')
-  const [sendReminders, setSendReminders] = useState(settings.send_invoice_reminders ?? true)
   return (
     <>
       <SettingsGroup label={t('heading')}>
@@ -109,24 +108,49 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
 
       {afterInvoiceSettings}
 
-      <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
-        {!REMINDERS_SENDING_ENABLED && (
-          <AttnLine className="px-1 pt-2">{t('sending_disabled_notice')}</AttnLine>
-        )}
-        <SettingsRow
-          label={t('send_reminders_label')}
-          htmlFor="send_invoice_reminders"
-          help={t('send_reminders_help')}
-          borderless={sendReminders}
-        >
-          <Switch
-            id="send_invoice_reminders"
-            checked={sendReminders}
-            onCheckedChange={(v) => setSendReminders(v === true)}
-          />
-          <input type="hidden" name="send_invoice_reminders" value={sendReminders ? 'true' : 'false'} />
+    </>
+  )
+}
+
+/**
+ * Betalningspåminnelser: whether reminders are on and after how many days.
+ * Lives on Försäljning → Utskick since 2026-09-24; the host wraps it in its
+ * own SettingsFormWrapper and mounts it only while REMINDERS_SENDING_ENABLED.
+ *
+ * Reminders go on and off in TurnOnRemindersSheet, the same sheet as on the
+ * invoice list (the collections rule, the pick list and the turn-off
+ * warning live there): this row shows the state and opens it, also for a
+ * company with no overdue invoice to offer. The form saves only the days, so
+ * a stale tab can never turn reminders off with the state it read on mount.
+ */
+export function InvoiceReminderSettingsForm({
+  settings,
+  onOpenReminders,
+}: {
+  settings: CompanySettings
+  onOpenReminders: () => void
+}) {
+  const t = useTranslations('settings_invoice_form')
+  const { formatDateLong } = useFormat()
+  const on = settings.send_invoice_reminders === true
+  const enabledAt = settings.reminders_enabled_at ?? null
+  return (
+    <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
+        <SettingsRow label={t('send_reminders_label')} help={t('send_reminders_help')} borderless={on}>
+          <SettingsRowNote fill className={on ? 'text-foreground' : undefined}>
+            {on
+              ? enabledAt
+                ? t('send_reminders_on', { date: formatDateLong(enabledAt) })
+                : t('send_reminders_on_undated')
+              : t('send_reminders_off')}
+          </SettingsRowNote>
+          <SettingsRowEnd>
+            <Button type="button" variant="outline" onClick={onOpenReminders}>
+              {on ? t('send_reminders_manage') : t('send_reminders_turn_on')}
+            </Button>
+          </SettingsRowEnd>
         </SettingsRow>
-        <SettingsReveal open={sendReminders}>
+        <SettingsReveal open={on}>
           <SettingsRow
             label={t('reminder_days_level_1')}
             htmlFor="reminder_days_level_1"
@@ -139,7 +163,7 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
               min="1"
               max="365"
               defaultValue={settings.reminder_days_level_1 ?? 15}
-              className="max-w-24 flex-none tabular-nums"
+              className="tabular-nums"
             />
           </SettingsRow>
           <SettingsRow
@@ -154,7 +178,7 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
               min="1"
               max="365"
               defaultValue={settings.reminder_days_level_2 ?? 30}
-              className="max-w-24 flex-none tabular-nums"
+              className="tabular-nums"
             />
           </SettingsRow>
           <SettingsRow
@@ -169,11 +193,10 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
               min="1"
               max="365"
               defaultValue={settings.reminder_days_level_3 ?? 45}
-              className="max-w-24 flex-none tabular-nums"
+              className="tabular-nums"
             />
           </SettingsRow>
         </SettingsReveal>
       </SettingsGroup>
-    </>
   )
 }

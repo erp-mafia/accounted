@@ -2,14 +2,18 @@
 
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { useTranslations } from 'next-intl'
+import { fetchSessionUser, signOutEverywhereAndLeave } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, KeyRound } from 'lucide-react'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { StandaloneHeading, StandalonePage, StandaloneStack } from '@/components/standalone/StandalonePage'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { passwordSavedDespiteFailure } from '@/lib/auth/password-change-result'
 
 export default function SetPasswordPage() {
   return (
@@ -23,10 +27,17 @@ function SetPasswordContent() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  // A failed save says so in the form, not in a toast.
+  const [formError, setFormError] = useState<string | null>(null)
+  // The password IS saved, but the auth server did not confirm that the other
+  // devices were signed out (POST /api/account/password answers that as an
+  // error). The form is gone then: the same password sent again is refused
+  // as unchanged. In its place is the way out the message names.
+  const [savedUnconfirmed, setSavedUnconfirmed] = useState(false)
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase = createClient()
 
   const returnTo = safeReturnTo(searchParams.get('returnTo'), '/settings/account')
 
@@ -34,9 +45,7 @@ function SetPasswordContent() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (cancelled) return
       if (!user) {
         router.replace('/login')
@@ -55,6 +64,7 @@ function SetPasswordContent() {
   const handleSetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
+    setFormError(null)
 
     const strong =
       password.length >= 8 &&
@@ -64,22 +74,15 @@ function SetPasswordContent() {
       /[^a-zA-Z0-9]/.test(password)
 
     if (!strong) {
-      toast({
-        title: 'Lösenordet är för svagt',
-        description:
-          'Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.',
-        variant: 'destructive',
-      })
+      setFormError(
+        'Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.',
+      )
       setIsLoading(false)
       return
     }
 
     if (password !== confirmPassword) {
-      toast({
-        title: 'Lösenorden matchar inte',
-        description: 'Kontrollera att du skrev samma lösenord i båda fälten.',
-        variant: 'destructive',
-      })
+      setFormError('Lösenorden matchar inte. Kontrollera att du skrev samma lösenord i båda fälten.')
       setIsLoading(false)
       return
     }
@@ -93,11 +96,8 @@ function SetPasswordContent() {
 
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
-        toast({
-          title: 'Kunde inte spara lösenord',
-          description: body.error || 'Försök igen senare.',
-          variant: 'destructive',
-        })
+        setFormError(getErrorMessage(body, { fallback: 'Kunde inte spara lösenord. Försök igen senare.' }))
+        if (passwordSavedDespiteFailure(body)) setSavedUnconfirmed(true)
         return
       }
 
@@ -109,79 +109,72 @@ function SetPasswordContent() {
       router.push(returnTo)
       router.refresh()
     } catch {
-      toast({
-        title: 'Något gick fel',
-        description: 'Försök igen senare.',
-        variant: 'destructive',
-      })
+      setFormError('Något gick fel. Försök igen senare.')
     } finally {
       setIsLoading(false)
     }
   }
 
-  return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="text-center mb-10">
-          <div className="flex justify-center mb-4">
-            <div className="h-14 w-14 rounded-lg bg-secondary flex items-center justify-center">
-              <KeyRound className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-          <h1 className="font-display text-3xl tracking-tight">
-            Sätt ett lösenord
-          </h1>
-          <p className="text-muted-foreground text-sm mt-2">
-            Du loggade in med BankID. För att aktivera tvåfaktorsautentisering
-            eller logga in med e-post behöver du först sätta ett lösenord.
-          </p>
-        </div>
+  const handleSignOutEverywhere = async () => {
+    setIsLoading(true)
+    await signOutEverywhereAndLeave()
+  }
 
-        <div className="rounded-lg border border-border bg-card p-6">
-          <form onSubmit={handleSetPassword} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="password">Lösenord</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="new-password"
-                placeholder="Minst 8 tecken, Aa1!"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
-                disabled={isLoading}
-                className="h-11"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirm_password">Bekräfta lösenord</Label>
-              <Input
-                id="confirm_password"
-                type="password"
-                autoComplete="new-password"
-                placeholder="Upprepa lösenordet"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                minLength={8}
-                disabled={isLoading}
-                className="h-11"
-              />
-            </div>
-            <Button type="submit" className="w-full h-11" disabled={isLoading}>
-              {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Sparar...
-                </>
-              ) : (
-                'Spara lösenord'
-              )}
+  return (
+    <StandalonePage>
+        <StandaloneHeading
+          title="Sätt ett lösenord"
+          sub="Du loggade in med BankID. För att aktivera tvåfaktorsautentisering eller logga in med e-post behöver du först sätta ett lösenord."
+        />
+        <StandaloneStack>
+          {formError && <AuthFormError message={formError} />}
+          {savedUnconfirmed ? (
+            <Button
+              type="button"
+              size="lg" className="w-full"
+              onClick={handleSignOutEverywhere}
+              loading={isLoading}
+            >
+              {tCommon('logout_everywhere')}
             </Button>
-          </form>
-        </div>
-      </div>
-    </div>
+          ) : (
+            <form onSubmit={handleSetPassword} className="flex flex-col gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="password">Lösenord</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Minst 8 tecken, Aa1!"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={8}
+                  disabled={isLoading}
+                  className="h-11"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="confirm_password">Bekräfta lösenord</Label>
+                <Input
+                  id="confirm_password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Upprepa lösenordet"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  minLength={8}
+                  disabled={isLoading}
+                  className="h-11"
+                />
+              </div>
+              <Button type="submit" size="lg" className="w-full" loading={isLoading}>
+                {isLoading ? 'Sparar...' : 'Spara lösenord'}
+              </Button>
+            </form>
+          )}
+        </StandaloneStack>
+    </StandalonePage>
   )
 }

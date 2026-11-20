@@ -1,7 +1,7 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import { CircleAlert } from 'lucide-react'
+import { ExclamationCircleIcon } from '@/components/icons'
 
 /**
  * Inline error line for the auth forms (login, register, reset).
@@ -21,15 +21,15 @@ export function AuthFormError({
   action?: ReactNode
 }) {
   return (
-    <p
+    <div
       role="alert"
       className="animate-fade-in flex items-start gap-2 text-[13px] leading-5 text-destructive"
     >
-      <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <ExclamationCircleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       <span>
         {message}
         {action && <> {action}</>}
       </span>
-    </p>
+    </div>
   )
 }

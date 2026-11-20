@@ -1,3 +1,5 @@
+import { bankNameForAlias } from '@/lib/bank-sync/bank-search'
+
 /**
  * Resolve a user-stated bank name ("swedbank", "SEB", "handelsbanken") to
  * one ASPSP from the Enable Banking list, so a deep link can start that
@@ -8,7 +10,9 @@
  * or unknown name returns null and the caller falls back to the picker
  * with the query prefilled: guessing between "Länsförsäkringar Bank" and a
  * regional "Länsförsäkringar Skåne" would start a consent at the wrong
- * institution.
+ * institution. When no name matches at all, a complete search alias ("Bokio"
+ * is held at Svea Bank, lib/bank-sync/bank-search.ts) resolves to its bank,
+ * again only when that bank is listed exactly once.
  */
 export function matchBankByName<T extends { name: string }>(
   banks: T[],
@@ -27,6 +31,10 @@ export function matchBankByName<T extends { name: string }>(
 
   const substring = banks.filter((b) => b.name.toLowerCase().includes(q))
   if (substring.length === 1) return substring[0]
+  if (substring.length > 1) return null
 
-  return null
+  const aliased = bankNameForAlias(q)?.toLowerCase()
+  if (!aliased) return null
+  const viaAlias = banks.filter((b) => b.name.toLowerCase() === aliased)
+  return viaAlias.length === 1 ? viaAlias[0] : null
 }

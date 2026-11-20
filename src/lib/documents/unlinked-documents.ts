@@ -1,13 +1,14 @@
 /**
  * Documents in the archive that are attached to nothing.
  *
- * A `document_attachments` row is reachable from eight places: a journal
+ * A `document_attachments` row is reachable from eleven places: a journal
  * entry (its own `journal_entry_id`), a bank transaction, a receipt, an
- * inbox item, a supplier invoice, an invoice delivery, an inbound Peppol
- * document, an årsredovisning submission, and a ROT/RUT payout request. A
+ * inbox item, a supplier invoice, an invoice delivery, an invoice attachment,
+ * an invoice's underlag, an inbound Peppol document, an årsredovisning
+ * submission, and a ROT/RUT payout request. A
  * row referenced by none of them is stored, retained for seven years under
  * BFL, and connected to no bookkeeping at all. Nothing surfaces those today,
- * so they accumulate silently: 4 497 of them across 210 companies as of
+ * so they accumulate silently: thousands of them across many companies as of
  * 2026-08-27, 481 of them created in the preceding week.
  *
  * ## Why the mime allow-list is the whole design
@@ -20,7 +21,7 @@
  * them on an attention surface and an agent is handed 11 309 items of busywork
  * that it must not action, which is worse than showing nothing.
  *
- * Measured on production 2026-08-27: of the unreferenced rows,
+ * Measured 2026-08-27: of the unreferenced rows,
  * `application/json` was 11 309 of 11 309 PSD2 archive, and pdf / png / jpeg /
  * heic were 0 of 4 495. The split is clean, so the rule is an allow-list of
  * the mime types an underlag can actually be, not a filename exclusion. A new
@@ -47,10 +48,10 @@ export const UNDERLAG_MIME_TYPES = [
  * The candidate scan is bounded, and the bound is set by URL length rather
  * than by table size.
  *
- * Every candidate id is sent back through eight `.in(column, ids)` lookups,
+ * Every candidate id is sent back through ten `.in(column, ids)` lookups,
  * and a UUID costs ~38 bytes in a PostgREST query string, so 300 ids is
  * already a ~12 KB URL per lookup. A cap in the thousands would exceed what
- * the gateway accepts and the eight lookups would start failing, which the
+ * the gateway accepts and the ten lookups would start failing, which the
  * error handling below would read as "nothing claims these" and would turn
  * every candidate into a false positive. Small and honest beats large and
  * silently wrong.
@@ -87,7 +88,7 @@ export interface UnlinkedDocumentsResult {
 const COLUMNS = 'id, file_name, mime_type, file_size_bytes, upload_source, created_at'
 
 /**
- * The eight tables that can claim a document, as [table, column] pairs.
+ * The ten tables that can claim a document, as [table, column] pairs.
  *
  * `journal_entry_id` is deliberately absent: it lives on the document row
  * itself and is already excluded by the column filter below.
@@ -98,6 +99,9 @@ const REFERENCING_COLUMNS: ReadonlyArray<readonly [table: string, column: string
   ['invoice_inbox_items', 'document_id'],
   ['supplier_invoices', 'document_id'],
   ['invoice_deliveries', 'document_attachment_id'],
+  ['invoice_attachments', 'document_id'],
+  // Underlag a customer invoice rests on (accounted#42): filed, not waiting for a verifikat.
+  ['invoice_underlag', 'document_id'],
   ['peppol_inbound_documents', 'xml_document_id'],
   ['arsredovisning_submissions', 'dokument_id'],
   ['rot_rut_payout_requests', 'file_document_id'],
@@ -107,7 +111,7 @@ const REFERENCING_COLUMNS: ReadonlyArray<readonly [table: string, column: string
  * Underlag-shaped documents in this company's archive that nothing references.
  *
  * Two passes, the same shape as `fetchPurchasesWithoutUnderlag`: the column
- * filter is the cheap part the database can index, and the eight reference
+ * filter is the cheap part the database can index, and the ten reference
  * lookups settle it afterwards for the candidates that survived. They run only
  * when there are candidates, so the common case (a company with none) costs
  * exactly one query.

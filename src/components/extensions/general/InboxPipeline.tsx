@@ -28,7 +28,7 @@ export function InboxPipeline({
 }) {
   const t = useTranslations('inbox_workspace')
   return (
-    <div className="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-border" role="tablist" aria-label={t('pipe_aria')}>
+    <div className="flex min-w-0 flex-1 overflow-hidden" role="tablist" aria-label={t('pipe_aria')}>
       {INBOX_PIPE_STAGES.map((s) => {
         const on = active === s
         return (
@@ -40,12 +40,12 @@ export function InboxPipeline({
             title={t(`pipe_${s}_help`)}
             onClick={() => onSelect(s)}
             className={cn(
-              'flex h-10 min-w-0 flex-1 items-center justify-center gap-2 border-r border-border px-2 text-[12.5px] transition-colors duration-150 last:border-r-0',
+              'flex h-10 min-w-0 flex-1 items-center justify-center gap-2 border-r-hairline px-2 text-xs transition-colors duration-150 last:border-r-0',
               on ? 'bg-secondary text-foreground shadow-[inset_0_-2px_0_hsl(var(--foreground))]' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
             )}
           >
             <span className="truncate">{t(`pipe_${s}`)}</span>
-            {AUTO.has(s) && <span className="text-[10.5px] text-muted-foreground">{t('pipe_auto')}</span>}
+            {AUTO.has(s) && <span className="text-xs text-muted-foreground">{t('pipe_auto')}</span>}
             <span
               className={cn('font-medium tabular-nums', s === 'missing' && counts[s] > 0 ? 'text-warning' : 'text-foreground')}
               data-ph-mask

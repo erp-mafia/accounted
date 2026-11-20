@@ -5,7 +5,9 @@ import { companyFactsFrom, deriveCompanyFacts, periodStart, type CompanyFactInpu
 import { PREDICATES } from '../predicates'
 import { getCompanyGraph, markCompanyGraphStale } from '@/lib/arkiv/graph/snapshot'
 import { listLiveFacts, recordFact, revertFact } from '../store'
+import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
 
+vi.mock('@/lib/bookkeeping/account-balance', () => ({ accountBalanceThrough: vi.fn() }))
 vi.mock('@/lib/arkiv/graph/snapshot', () => ({ getCompanyGraph: vi.fn(), markCompanyGraphStale: vi.fn() }))
 vi.mock('../store', () => ({ listLiveFacts: vi.fn(), recordFact: vi.fn(), revertFact: vi.fn() }))
 
@@ -15,6 +17,7 @@ function inputs(over: Partial<CompanyFactInputs> = {}): CompanyFactInputs {
   return {
     today: '2026-09-22',
     lines: [],
+    loanBalances: [],
     accountName: (a) => ({ '5420': 'Programvaror', '7210': 'Löner till tjänstemän' })[a] ?? null,
     activeEmployees: null,
     accountingMethod: null,
@@ -33,11 +36,12 @@ describe('companyFactsFrom', () => {
   it('every predicate it writes is in the vocabulary, on the company, with the right cardinality', () => {
     const drafts = companyFactsFrom(
       inputs({
-        lines: [line('7210', '2026-07-25', 70000), line('7210', '2026-08-25', 70000), line('3010', '2026-08-01', 0, 100000), line('2359', '2026-02-02', 0, 500000), line('5420', '2026-06-01', 30000), line('5420', '2026-07-01', 20000), line('5420', '2026-08-01', 50000)],
+        lines: [line('7210', '2026-07-25', 70000), line('7210', '2026-08-25', 70000), line('3010', '2026-08-01', 0, 100000), line('5420', '2026-06-01', 30000), line('5420', '2026-07-01', 20000), line('5420', '2026-08-01', 50000)],
+        loanBalances: [{ account: '2359', balance: 500000 }],
         activeEmployees: 2,
         accountingMethod: 'accrual',
         fiscalYearStartMonth: 1,
-        tic: { sniCodes: [{ code: '62010', name: 'Dataprogrammering' }], beneficialOwners: [{ name: 'Jakob Wennberg', extentDescription: '100 %' }], employeeRange: 'Inga anställda' },
+        tic: { sniCodes: [{ code: '62010', name: 'Dataprogrammering' }], beneficialOwners: [{ name: 'Anna Exempel', extentDescription: '100 %' }], employeeRange: 'Inga anställda' },
         bankConnections: [{ bank_name: 'Swedbank', created_at: '2026-02-01T10:00:00Z' }],
         counterparties: [{ name: 'Almi', flow: 60000 }],
       }),
@@ -51,7 +55,7 @@ describe('companyFactsFrom', () => {
     }
   })
 
-  it('averages salary over the months that had any, nets revenue, and reads the loan balance from every posting', () => {
+  it('averages salary over the months that had any, nets revenue, and states the loan balance it is handed', () => {
     const drafts = companyFactsFrom(
       inputs({
         lines: [
@@ -60,9 +64,9 @@ describe('companyFactsFrom', () => {
           line('7290', '2026-08-25', 8400),
           line('3010', '2026-08-01', 0, 100000),
           line('3010', '2026-08-15', 20000), // a credit note
-          line('2359', '2025-02-02', 0, 500000), // paid out before the period: still a loan
-          line('2359', '2026-03-31', 10417), // one amortisation
         ],
+        // Paid out before the period and amortised once: what stands on 2359 today.
+        loanBalances: [{ account: '2359', balance: 489583 }],
       }),
     )
     expect(by(drafts, 'monthly_salary_cost')[0]).toMatchObject({ value: 64200, valueText: '64 200 kr/mån (2 mån med lön)', sourceKind: 'ledger' })
@@ -71,7 +75,7 @@ describe('companyFactsFrom', () => {
   })
 
   it('counts a convertible on 2320 as a loan and breaks the balance down per account', () => {
-    const drafts = companyFactsFrom(inputs({ lines: [line('2320', '2025-10-16', 0, 400000), line('2359', '2026-02-02', 0, 500000), line('2359', '2026-02-02', 492610), line('2440', '2026-03-31', 0, 15100)] }))
+    const drafts = companyFactsFrom(inputs({ loanBalances: [{ account: '2359', balance: 7390 }, { account: '2320', balance: 400000 }] }))
     expect(by(drafts, 'loan_balance')[0]).toMatchObject({ value: 407390, valueText: '407 390 kr (2320: 400 000 kr; 2359: 7 390 kr)' })
   })
 
@@ -104,9 +108,9 @@ describe('companyFactsFrom', () => {
   })
 
   it('reads industry, owners and the registry employee range from the Bolagsverket snapshot', () => {
-    const drafts = companyFactsFrom(inputs({ tic: { sniCodes: [{ code: '62010', name: 'Dataprogrammering' }, { code: '64920', name: 'Annan kreditgivning' }], beneficialOwners: [{ name: 'Jakob Wennberg', extentDescription: '100 %' }], employeeRange: 'Inga anställda' } }))
+    const drafts = companyFactsFrom(inputs({ tic: { sniCodes: [{ code: '62010', name: 'Dataprogrammering' }, { code: '64920', name: 'Annan kreditgivning' }], beneficialOwners: [{ name: 'Anna Exempel', extentDescription: '100 %' }], employeeRange: 'Inga anställda' } }))
     expect(by(drafts, 'sni_codes')[0].valueText).toBe('62010 Dataprogrammering; 64920 Annan kreditgivning')
-    expect(by(drafts, 'beneficial_owners')[0].valueText).toBe('Jakob Wennberg (100 %)')
+    expect(by(drafts, 'beneficial_owners')[0].valueText).toBe('Anna Exempel (100 %)')
     expect(by(drafts, 'employee_range_registry')[0].valueText).toBe('Inga anställda (enligt registret)')
   })
 
@@ -126,6 +130,7 @@ describe('deriveCompanyFacts', () => {
     mock.reset()
     ;(listLiveFacts as ReturnType<typeof vi.fn>).mockResolvedValue([])
     ;(recordFact as ReturnType<typeof vi.fn>).mockResolvedValue('fact-id')
+    ;(accountBalanceThrough as ReturnType<typeof vi.fn>).mockResolvedValue(0)
   })
 
   /** The reads, in the order deriveCompanyFacts awaits them: recent lines, loan lines, employees, settings, company, banks. */
@@ -139,7 +144,15 @@ describe('deriveCompanyFacts', () => {
   }
 
   it('reads every loan account, halves the graph flow into money moved, keeps the node ref, retires what an earlier run derived and this one does not, and marks the graph stale', async () => {
-    enqueueReads({ loans: [{ account_number: '2320', debit_amount: 0, credit_amount: 400000, journal_entries: { entry_date: '2025-10-16' } }] })
+    // Two years of 2320: the loan and the ingående balans that restates it. The sum of the
+    // postings is 800 000; what stands on the account is 400 000 (debit minus credit: -400 000).
+    enqueueReads({
+      loans: [
+        { account_number: '2320', debit_amount: 0, credit_amount: 400000, journal_entries: { entry_date: '2025-10-16' } },
+        { account_number: '2320', debit_amount: 0, credit_amount: 400000, journal_entries: { entry_date: '2026-01-01' } },
+      ],
+    })
+    ;(accountBalanceThrough as ReturnType<typeof vi.fn>).mockResolvedValue(-400000)
     ;(getCompanyGraph as ReturnType<typeof vi.fn>).mockResolvedValue({ nodes: [node('party:p-almi', 'party', 'Almi', 1000000), node('merchant:konsult', 'merchant', 'Konsult', 394260), node('account:1930', 'account', '1930', 5)], links: [] })
     ;(listLiveFacts as ReturnType<typeof vi.fn>).mockResolvedValue([
       { id: 'f-old-utb', predicate: 'top_counterparty', value_text: 'Utbetalning: 502 713 kr (12 mån)', source_kind: 'ledger', rank: 'normal' },
@@ -156,6 +169,8 @@ describe('deriveCompanyFacts', () => {
     expect(mock.findCalls('journal_entry_lines', 'in')).toEqual(expect.arrayContaining([['journal_entries.status', ['posted', 'reversed']]]))
     const recorded = (recordFact as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1] as { predicate: string; value: unknown; valueText: string; evidence: Record<string, unknown> })
     expect(recorded.find((r) => r.predicate === 'loan_balance')).toMatchObject({ value: 400000, valueText: '400 000 kr (2320)' })
+    // One read per loan account, as of the run's day, through the balance reader every surface shares.
+    expect((accountBalanceThrough as ReturnType<typeof vi.fn>).mock.calls).toEqual([[supabase, 'co-1', '2320', '2026-09-22']])
     expect(recorded.filter((r) => r.predicate === 'top_counterparty').map((r) => [r.valueText, r.evidence.node])).toEqual([
       ['Almi: 500 000 kr (12 mån)', 'party:p-almi'],
       ['Konsult: 197 130 kr (12 mån)', 'merchant:konsult'],

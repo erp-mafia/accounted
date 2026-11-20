@@ -1,13 +1,16 @@
 'use client'
 
+import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Copy, Link2, Loader2 } from 'lucide-react'
+import { LinkIcon, Square2StackIcon } from '@/components/icons'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  holdEscapeWhileUnsaved,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
 export interface CopyPrefill {
@@ -60,39 +63,44 @@ export default function NewJournalEntryDialog({
 }: Props) {
   const t = useTranslations('bookkeeping')
   const activeSkvPrefill = copyPrefill ? null : (skvPrefill ?? null)
+  const [hasUnsavedInput, setHasUnsavedInput] = useState(false)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        // Wide: the konteringsrader table (konto, radtext, debet, kredit,
-        // saldo) is the point of this dialog, and at 3xl the amount columns
-        // were squeezed against the account search. Capped at 6xl so it stays
-        // a dialog on an ultrawide screen.
-        className="sm:max-w-5xl lg:max-w-6xl max-h-[95dvh] sm:max-h-[92vh] overflow-y-auto"
-        // A half-typed verifikat must survive an accidental backdrop click or a
-        // stray Escape (easy to hit across multiple windows/screens, or when you
-        // only meant to dismiss a combobox dropdown). Closing is explicit: the
-        // header X. This also stops nested popovers (AccountCombobox, date
-        // pickers) and the form's own confirm dialogs from collapsing the parent
-        // when they portal outside it.
-        onEscapeKeyDown={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
+      <DialogContent size="document"
+ // Wide: the konteringsrader table (konto, radtext, debet, kredit,
+ // saldo) is the point of this dialog, and at 3xl the amount columns
+ // were squeezed against the account search. Capped at 6xl so it stays
+ // a dialog on an ultrawide screen.
+ className="lg:max-w-6xl"
+ // Escape closes an untouched dialog, like every other overlay, but a
+ // half-typed verifikat must survive a stray Escape (easy to hit across
+ // multiple windows/screens, or when you only meant to dismiss a
+ // combobox dropdown): then closing is explicit, the header X. See
+ // holdEscapeWhileUnsaved. A backdrop click never closes it. This also
+ // stops nested popovers (AccountCombobox, date pickers) and the form's
+ // own confirm dialogs from collapsing the parent when they portal
+ // outside it.
+ onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, hasUnsavedInput)}
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
         <DialogHeader>
           <DialogTitle>{t('new_entry_dialog_title')}</DialogTitle>
         </DialogHeader>
 
         {isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm">{t('loading_source_voucher')}</span>
+          <div className="space-y-3 py-4" aria-busy="true" aria-label={t('loading_source_voucher')}>
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-2/3" />
           </div>
         ) : (
           <>
             {copyPrefill && (
-              <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-                <Copy className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+              <div className="flex items-start gap-3 rounded-lg p-3 text-sm bg-control shadow-raised">
+                <Square2StackIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
                 <div className="flex-1">
                   <p className="font-medium">
                     {t('copy_banner_title', {
@@ -104,8 +112,8 @@ export default function NewJournalEntryDialog({
               </div>
             )}
             {activeSkvPrefill && (
-              <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-                <Link2 className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+              <div className="flex items-start gap-3 rounded-lg p-3 text-sm bg-control shadow-raised">
+                <LinkIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
                 <div className="flex-1">
                   <p className="font-medium">
                     {t('skv_link_banner_title', { label: activeSkvPrefill.bannerLabel })}
@@ -123,6 +131,7 @@ export default function NewJournalEntryDialog({
               initialDate={activeSkvPrefill?.date}
               initialDescription={copyPrefill?.description ?? activeSkvPrefill?.description}
               initialNotes={copyPrefill?.notes}
+              onHasContentChange={setHasUnsavedInput}
             />
           </>
         )}

@@ -7,6 +7,7 @@ import {
   calculateMerchantSimilarity,
   calculateMatchConfidence,
   amountVarianceForMatch,
+  amountAgreesForMatch,
   bestProminentAmountVariance,
 } from '../core-receipt-matcher'
 import { roundOre } from '@/lib/money'
@@ -163,6 +164,33 @@ describe('amountVarianceForMatch', () => {
 
   it('treats currency codes case-insensitively', () => {
     expect(amountVarianceForMatch(100, 'eur', null, -100, 'EUR', -1150)).toBe(0)
+  })
+})
+
+describe('amountAgreesForMatch', () => {
+  it('agrees on the same sum to the öre in one currency, sign-agnostic', () => {
+    expect(amountAgreesForMatch(182, 'SEK', null, -182, 'SEK', -182)).toBe(true)
+    expect(amountAgreesForMatch(182.004, 'SEK', null, -182, 'SEK', -182)).toBe(true)
+    expect(amountAgreesForMatch(100, 'eur', null, -100, 'EUR', -1150)).toBe(true)
+  })
+
+  it('does not agree on a near sum the score still rewards (crm#1962)', () => {
+    // 185 against 182 is inside AMOUNT_TOLERANCE_PERCENT and is another sum.
+    expect(amountVarianceForMatch(185, 'SEK', null, -182, 'SEK', -182)!).toBeLessThan(0.05)
+    expect(amountAgreesForMatch(185, 'SEK', null, -182, 'SEK', -182)).toBe(false)
+    expect(amountAgreesForMatch(182.01, 'SEK', null, -182, 'SEK', -182)).toBe(false)
+  })
+
+  it('agrees on a converted total within the rate spread, not beyond it', () => {
+    // 750 EUR ≈ 8625 SEK: -8505 SEK is 1.4% off, -7500 SEK 13% off.
+    expect(amountAgreesForMatch(750, 'EUR', 8625, -8505, 'SEK', -8505)).toBe(true)
+    expect(amountAgreesForMatch(750, 'EUR', 8625, -7500, 'SEK', -7500)).toBe(false)
+  })
+
+  it('cannot say without a comparable amount', () => {
+    expect(amountAgreesForMatch(null, 'SEK', null, -100, 'SEK', -100)).toBeNull()
+    expect(amountAgreesForMatch(0, 'SEK', null, -100, 'SEK', -100)).toBeNull()
+    expect(amountAgreesForMatch(750, 'EUR', null, -750, 'SEK', -750)).toBeNull()
   })
 })
 

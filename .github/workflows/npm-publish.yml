@@ -1,16 +1,17 @@
-name: Publish MCP bridges to npm
+name: Publish packages to npm
 
 # Publishes the two stdio-to-HTTP MCP bridges, packages/accounted-mcp and
-# packages/gnubok-mcp, to the public npm registry.
+# packages/gnubok-mcp, and the command-line client, packages/accounted-cli
+# (npm name `accounted`), to the public npm registry.
 #
 # The trigger is a version bump, not a git tag: a push to main that touches a
 # packages/*/package.json runs one job per package, and each job publishes only
 # if the version in its package.json is not already on the registry. A package
-# whose version did not change is skipped, so a merge that bumps one bridge
-# never republishes the other, and re-running a finished workflow is a no-op.
+# whose version did not change is skipped, so a merge that bumps one package
+# never republishes another, and re-running a finished workflow is a no-op.
 #
 # Auth is the repository secret NPM_TOKEN, an npm granular access token with
-# publish rights on both packages. A run without the secret fails at its first
+# publish rights on every package. A run without the secret fails at its first
 # step with a message naming it, rather than inside `npm publish` with an opaque
 # ENEEDAUTH. A token rather than OIDC trusted publishing because accounted-mcp
 # has never been published, and npm cannot bind a trusted publisher to a package
@@ -19,10 +20,10 @@ name: Publish MCP bridges to npm
 # --provenance attaches a Sigstore attestation that ties the tarball to this
 # workflow run and commit; id-token: write exists for that. The registry rejects
 # the attestation unless package.json `repository.url` matches this repository,
-# which is why both package.jsons point at erp-mafia/accounted.
+# which is why every package.json points at erp-mafia/accounted.
 #
 # workflow_dispatch runs the same job on demand, optionally for one package (the
-# other package's job is skipped by the Select step), and with dry_run to
+# other packages' jobs are skipped by the Select step), and with dry_run to
 # exercise the version gate and `npm publish --dry-run` without touching the
 # registry. Dispatching from a branch is the way to test this file
 # before merging it.
@@ -37,7 +38,7 @@ on:
       package:
         description: Package to publish
         type: choice
-        options: [all, accounted-mcp, gnubok-mcp]
+        options: [all, accounted-mcp, gnubok-mcp, accounted-cli]
         default: all
       dry_run:
         description: Pack and validate only, do not publish
@@ -63,15 +64,15 @@ jobs:
       # OIDC token for the --provenance attestation.
       id-token: write
     strategy:
-      # The packages are independent: a failure in one must not cancel the other.
+      # The packages are independent: a failure in one must not cancel the others.
       fail-fast: false
       matrix:
-        # Static on purpose: both packages always get a job. On push the
-        # version gate skips the one that did not change; on dispatch the
-        # Select step skips the one that was not requested. A matrix built
+        # Static on purpose: every package always gets a job. On push the
+        # version gate skips the ones that did not change; on dispatch the
+        # Select step skips the ones that were not requested. A matrix built
         # from the dispatch input would put workflow input text into an
         # expression, which is the shape injection scanners flag.
-        package: [accounted-mcp, gnubok-mcp]
+        package: [accounted-mcp, gnubok-mcp, accounted-cli]
     env:
       DRY_RUN: ${{ inputs.dry_run == true }}
       PACKAGE_DIR: packages/${{ matrix.package }}
@@ -105,7 +106,7 @@ jobs:
             exit 0
           fi
           if [ "$NPM_TOKEN_SET" != "true" ]; then
-            echo "::error::Repository secret NPM_TOKEN is not set. Create an npm granular access token with read and write access to accounted-mcp and gnubok-mcp (see the Releasing section in packages/*/README.md) and add it under Settings > Secrets and variables > Actions as NPM_TOKEN."
+            echo "::error::Repository secret NPM_TOKEN is not set. Create an npm granular access token with read and write access to accounted-mcp, gnubok-mcp and accounted (see the Releasing section in packages/*/README.md) and add it under Settings > Secrets and variables > Actions as NPM_TOKEN."
             exit 1
           fi
           echo "NPM_TOKEN is set."

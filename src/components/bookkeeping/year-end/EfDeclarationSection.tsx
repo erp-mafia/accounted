@@ -6,11 +6,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
-import { AlertTriangle, FileDown, Info } from 'lucide-react'
-import { formatCurrency } from '@/lib/utils'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import {
+  DocumentArrowDownIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+} from '@/components/icons'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
+import { isFiscalYear } from '@/lib/invariants/fiscal-year'
 import type { EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
-import type { EfDeclarationItem } from '@/lib/bokslut/enskild-firma/types'
+import type { EfDeclarationItem, EfNeRutor, EfOvrigUppgift } from '@/lib/bokslut/enskild-firma/types'
+import type { EfFondState } from '@/lib/bokslut/enskild-firma/periodiseringsfond-ef'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface EfDeclarationSectionProps {
@@ -25,9 +34,13 @@ interface EfDeclarationSectionProps {
 interface EfOverrideInputs {
   category: EgenavgiftCategory
   kapitalunderlag: string
+  sparatFordelningsbelopp: string
+  expansionsfondKapitalunderlag: string
   priorSchablon: string
   priorActual: string
   pfondDesired: string
+  /** Earlier years' periodiseringsfonder, as typed (year and balance). */
+  pfondFonder: Array<{ year: string; balance: string }>
   expansionsfondBalance: string
   expansionsfondChange: string
 }
@@ -41,6 +54,10 @@ interface EfPreviewResponse {
   }
   bookedSurplus: number
   items: EfDeclarationItem[]
+  pfondFonder?: EfFondState[]
+  rutor?: EfNeRutor
+  ovrigaUppgifter?: EfOvrigUppgift[]
+  warnings?: string[]
   postedEntryCount: number
   inputWarnings: string[]
 }
@@ -48,9 +65,12 @@ interface EfPreviewResponse {
 const DEFAULT_OVERRIDES: EfOverrideInputs = {
   category: 'full',
   kapitalunderlag: '',
+  sparatFordelningsbelopp: '',
+  expansionsfondKapitalunderlag: '',
   priorSchablon: '',
   priorActual: '',
   pfondDesired: '',
+  pfondFonder: [],
   expansionsfondBalance: '',
   expansionsfondChange: '',
 }
@@ -86,7 +106,11 @@ export function EfDeclarationSection({
       const raw = window.localStorage.getItem(storageKey)
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<EfOverrideInputs>
-        setOverrides({ ...DEFAULT_OVERRIDES, ...parsed })
+        setOverrides({
+          ...DEFAULT_OVERRIDES,
+          ...parsed,
+          pfondFonder: Array.isArray(parsed.pfondFonder) ? parsed.pfondFonder : [],
+        })
       }
     } catch {
       // Ignore: start with defaults.
@@ -108,12 +132,20 @@ export function EfDeclarationSection({
     params.set('category', overrides.category)
     const kap = parseFloat(overrides.kapitalunderlag)
     if (Number.isFinite(kap)) params.set('kapitalunderlag', String(kap))
+    const sparat = parseFloat(overrides.sparatFordelningsbelopp)
+    if (Number.isFinite(sparat) && sparat > 0) params.set('sparatFordelningsbelopp', String(sparat))
+    const kapUb = parseFloat(overrides.expansionsfondKapitalunderlag)
+    if (Number.isFinite(kapUb)) params.set('expansionsfondKapitalunderlag', String(kapUb))
     const ps = parseFloat(overrides.priorSchablon)
     if (Number.isFinite(ps)) params.set('priorYearSchablonavdrag', String(ps))
     const pa = parseFloat(overrides.priorActual)
     if (Number.isFinite(pa)) params.set('priorYearActualCharged', String(pa))
     const pf = parseFloat(overrides.pfondDesired)
     if (Number.isFinite(pf)) params.set('pfondDesiredAmount', String(pf))
+    const fonder = enteredFonder(overrides.pfondFonder)
+    if (fonder.length > 0) {
+      params.set('pfondExistingFonder', fonder.map((f) => `${f.year}:${f.balance}`).join(','))
+    }
     const eb = parseFloat(overrides.expansionsfondBalance)
     if (Number.isFinite(eb)) params.set('expansionsfondExistingBalance', String(eb))
     const ec = parseFloat(overrides.expansionsfondChange)
@@ -159,16 +191,32 @@ export function EfDeclarationSection({
     [],
   )
 
+  const updateFond = useCallback((index: number, field: 'year' | 'balance', value: string) => {
+    setOverrides((prev) => ({
+      ...prev,
+      pfondFonder: prev.pfondFonder.map((row, i) => (i === index ? { ...row, [field]: value } : row)),
+    }))
+  }, [])
+  const addFond = useCallback(() => {
+    setOverrides((prev) => ({ ...prev, pfondFonder: [...prev.pfondFonder, { year: '', balance: '' }] }))
+  }, [])
+  const removeFond = useCallback((index: number) => {
+    setOverrides((prev) => ({ ...prev, pfondFonder: prev.pfondFonder.filter((_, i) => i !== index) }))
+  }, [])
+
   const items = preview?.items ?? []
   const inputWarnings = preview?.inputWarnings ?? []
+  const rutor = preview?.rutor
+  const ovrigaUppgifter = preview?.ovrigaUppgifter ?? []
+  const previewWarnings = preview?.warnings ?? []
   const noPostedEntries = preview ? preview.postedEntryCount === 0 : false
 
   return (
     <div className="space-y-6">
       {/* BFL distinction banner: EF values are declaration-only, never booked. */}
-      <Card className="border-border bg-secondary/40">
-        <CardContent className="p-4 flex items-start gap-3">
-          <Info className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+      <Card>
+        <CardContent className="flex items-start gap-3">
+          <InformationCircleIcon className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
           <p className="text-sm text-muted-foreground">
             <span className="font-medium text-foreground">
               Skattemässiga justeringar: NE-bilaga
@@ -184,9 +232,9 @@ export function EfDeclarationSection({
           zero posted vouchers, so the user knows the surplus is 0 because
           nothing's booked yet, not because the calculators failed. */}
       {noPostedEntries && (
-        <Card className="border-border">
-          <CardContent className="p-4 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 mt-0.5 text-attn shrink-0" />
+        <Card>
+          <CardContent className="flex items-start gap-3">
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-attn shrink-0" />
             <p className="text-sm">
               <span className="font-medium">Inga verifikat bokförda i perioden.</span>{' '}
               Värdena nedan baseras enbart på NE-bilagans räkenskapsschema (intäkter och
@@ -213,7 +261,7 @@ export function EfDeclarationSection({
             <div className="space-y-1">
               <Label className="text-xs">Egenavgifter: kategori</Label>
               <select
-                className="border border-border rounded-lg h-9 text-sm px-2 w-full bg-background"
+                className="rounded-lg h-9 text-sm px-2 w-full bg-control shadow-raised"
                 value={overrides.category}
                 onChange={(e) => update('category', e.target.value as EgenavgiftCategory)}
               >
@@ -223,12 +271,26 @@ export function EfDeclarationSection({
               </select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Kapitalunderlag (vid IB)</Label>
+              <Label className="text-xs">
+                Kapitalunderlag för räntefördelning (vid IB, sparat fördelningsbelopp inräknat)
+              </Label>
               <Input
                 type="number"
                 step="1"
                 value={overrides.kapitalunderlag}
                 onChange={(e) => update('kapitalunderlag', e.target.value)}
+                placeholder="0"
+                className="tabular-nums h-9"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Sparat fördelningsbelopp från tidigare år</Label>
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={overrides.sparatFordelningsbelopp}
+                onChange={(e) => update('sparatFordelningsbelopp', e.target.value)}
                 placeholder="0"
                 className="tabular-nums h-9"
               />
@@ -277,7 +339,18 @@ export function EfDeclarationSection({
                 className="tabular-nums h-9"
               />
             </div>
-            <div className="space-y-1 col-span-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Kapitalunderlag för expansionsfond (vid UB)</Label>
+              <Input
+                type="number"
+                step="1"
+                value={overrides.expansionsfondKapitalunderlag}
+                onChange={(e) => update('expansionsfondKapitalunderlag', e.target.value)}
+                placeholder="0"
+                className="tabular-nums h-9"
+              />
+            </div>
+            <div className="space-y-1">
               <Label className="text-xs">
                 Ändring av expansionsfond (+ avsättning, − återföring)
               </Label>
@@ -291,33 +364,67 @@ export function EfDeclarationSection({
               />
             </div>
           </div>
+          <div className="space-y-2">
+            <Label className="text-xs">
+              Tidigare periodiseringsfonder (avsättningsår och belopp, från respektive års NE-bilaga R34)
+            </Label>
+            {overrides.pfondFonder.map((row, index) => (
+              <div key={index} className="grid grid-cols-[6rem_1fr_auto] items-center gap-2">
+                <Input
+                  type="number"
+                  step="1"
+                  value={row.year}
+                  onChange={(e) => updateFond(index, 'year', e.target.value)}
+                  placeholder="År"
+                  aria-label="Avsättningsår"
+                  className="tabular-nums h-9"
+                />
+                <Input
+                  type="number"
+                  step="1"
+                  value={row.balance}
+                  onChange={(e) => updateFond(index, 'balance', e.target.value)}
+                  placeholder="Belopp"
+                  aria-label="Belopp kvar i fonden"
+                  className="tabular-nums h-9"
+                />
+                <Button type="button" variant="ghost" onClick={() => removeFond(index)}>
+                  Ta bort
+                </Button>
+                <FondStatusLine
+                  row={row}
+                  rows={overrides.pfondFonder}
+                  index={index}
+                  states={preview?.pfondFonder ?? []}
+                  fiscalYear={fiscalYear}
+                />
+              </div>
+            ))}
+            <Button type="button" variant="outline" onClick={addFond}>
+              Lägg till fond
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
       {/* Top-level input warnings (e.g. missing kapitalunderlag) */}
       {inputWarnings.map((w, i) => (
-        <Card key={i} className="border-border">
-          <CardContent className="p-4 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 mt-0.5 text-attn shrink-0" />
+        <Card key={i}>
+          <CardContent className="flex items-start gap-3">
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-attn shrink-0" />
             <p className="text-sm">{w}</p>
           </CardContent>
         </Card>
       ))}
 
       {/* Loading / error / items */}
-      {error && (
-        <Card>
-          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
-        </Card>
-      )}
+      {error && <LoadError title={error} onRetry={() => void loadPreview()} />}
 
       {loading && !preview && (
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-20 w-full" />
-          </CardContent>
-        </Card>
+        <LateReveal className="space-y-3">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-20 w-full" />
+        </LateReveal>
       )}
 
       {items.map((item) => (
@@ -344,11 +451,66 @@ export function EfDeclarationSection({
         </Card>
       ))}
 
+      {/* NE-bilaga sida 2: every ruta the preview fills, in the form's order. */}
+      {rutor && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">NE-bilaga sida 2</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Beloppen att fylla i, i blankettens ordning. Summarutorna visas alltid, övriga när de inte är 0.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16">Ruta</TableHead>
+                  <TableHead>Uppgift</TableHead>
+                  <TableHead className="text-right">Belopp</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {NE_RUTA_ROWS.filter((row) => row.sum || rutor[row.ruta] !== 0).map((row) => (
+                  <TableRow key={row.ruta}>
+                    <TableCell className="text-sm tabular-nums">{row.ruta}</TableCell>
+                    <TableCell className={`text-sm ${row.sum ? 'font-medium' : ''}`}>{row.label}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(rutor[row.ruta])}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {ovrigaUppgifter.length > 0 && (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Övriga uppgifter</TableHead>
+                    <TableHead className="text-right">Belopp</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ovrigaUppgifter.map((uppgift) => (
+                    <TableRow key={uppgift.faltkod}>
+                      <TableCell className="text-sm">{uppgift.label}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatRowAmount(uppgift.amount)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+            {previewWarnings.map((w, i) => (
+              <p key={i} className="text-xs text-muted-foreground">
+                {w}
+              </p>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* NE-bilaga download */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Info className="h-4 w-4 text-muted-foreground" />
+            <InformationCircleIcon className="h-4 w-4 text-muted-foreground" />
             NE-bilaga räkenskapsschema (R1-R11)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
@@ -362,7 +524,7 @@ export function EfDeclarationSection({
               href={`/api/reports/ne-bilaga?period_id=${fiscalPeriodId}&format=sru`}
               prefetch={false}
             >
-              <FileDown className="mr-2 h-4 w-4" />
+              <DocumentArrowDownIcon className="mr-2 h-4 w-4" />
               Ladda ner NE-bilaga (SRU)
             </Link>
           </Button>
@@ -370,4 +532,68 @@ export function EfDeclarationSection({
       </Card>
     </div>
   )
+}
+
+/** NE-bilaga sida 2 rutor (SKV 2161), with the form's wording. */
+const NE_RUTA_ROWS: Array<{ ruta: keyof EfNeRutor; label: string; sum?: boolean }> = [
+  { ruta: 'R29', label: 'Överskott/underskott före räntefördelning', sum: true },
+  { ruta: 'R30', label: 'Positiv räntefördelning' },
+  { ruta: 'R31', label: 'Negativ räntefördelning' },
+  { ruta: 'R32', label: 'Återföring av periodiseringsfond' },
+  { ruta: 'R33', label: 'Överskott/underskott före avsättning till periodiseringsfond', sum: true },
+  { ruta: 'R34', label: 'Avsättning till periodiseringsfond' },
+  { ruta: 'R35', label: 'Överskott/underskott före ökning av expansionsfond', sum: true },
+  { ruta: 'R36', label: 'Ökning av expansionsfond' },
+  { ruta: 'R37', label: 'Minskning av expansionsfond' },
+  { ruta: 'R40', label: 'Medgivna avdrag för egenavgifter föregående beskattningsår' },
+  { ruta: 'R41', label: 'Påförda egenavgifter enligt slutskattebesked' },
+  { ruta: 'R42', label: 'Överskott/underskott före årets avdrag för egenavgifter', sum: true },
+  { ruta: 'R43', label: 'Årets beräknade avdrag för egenavgifter' },
+]
+
+/** Rows with a valid year and a positive balance; a repeated year counts once. */
+function enteredFonder(rows: Array<{ year: string; balance: string }>): Array<{ year: string; balance: string }> {
+  const seen = new Set<string>()
+  const out: Array<{ year: string; balance: string }> = []
+  for (const row of rows) {
+    const year = row.year.trim()
+    const balance = parseFloat(row.balance)
+    if (!isFiscalYear(year) || !(balance > 0) || seen.has(year)) continue
+    seen.add(year)
+    out.push({ year, balance: String(roundOre(balance)) })
+  }
+  return out
+}
+
+function FondStatusLine({
+  row,
+  rows,
+  index,
+  states,
+  fiscalYear,
+}: {
+  row: { year: string; balance: string }
+  rows: Array<{ year: string; balance: string }>
+  index: number
+  states: EfFondState[]
+  fiscalYear: number
+}) {
+  const year = row.year.trim()
+  if (!isFiscalYear(year)) return null
+  const repeated = rows.slice(0, index).some((other) => other.year.trim() === year)
+  if (repeated) {
+    return <p className="col-span-3 text-xs text-attn">Året finns redan i listan och räknas en gång.</p>
+  }
+  const state = states.find((s) => s.cohort_year === Number(year))
+  if (!state) return null
+  const text =
+    state.status === 'mandatory'
+      ? `Återförs i år (senast ${state.latest_return_year}).`
+      : state.status === 'overdue'
+        ? `Skulle ha återförts senast ${state.latest_return_year}: återförs nu.`
+        : state.status === 'optional'
+          ? `Kan återföras frivilligt, senast ${state.latest_return_year}.`
+          : `Avsättningsåret måste vara före ${fiscalYear}.`
+  const attention = state.status === 'overdue' || state.status === 'invalid'
+  return <p className={`col-span-3 text-xs ${attention ? 'text-attn' : 'text-muted-foreground'}`}>{text}</p>
 }

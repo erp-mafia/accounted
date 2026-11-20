@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, ShieldAlert } from 'lucide-react'
+import { ShieldExclamationIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,7 +36,7 @@ export function SessionTimeoutModal({
       >
         <DialogHeader>
           <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-attn">
-            <ShieldAlert className="h-5 w-5" aria-hidden="true" />
+            <ShieldExclamationIcon className="h-5 w-5" aria-hidden="true" />
           </div>
           <DialogTitle>{t('warning_title')}</DialogTitle>
           <DialogDescription>
@@ -46,8 +46,7 @@ export function SessionTimeoutModal({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button onClick={onContinue} disabled={isExtending} autoFocus>
-            {isExtending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          <Button onClick={onContinue} loading={isExtending} autoFocus>
             {reason === 'idle' ? t('continue') : t('sign_in_again')}
           </Button>
         </DialogFooter>

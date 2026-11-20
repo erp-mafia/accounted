@@ -27,13 +27,13 @@ describe('planAccountMove', () => {
 
   it('splits an aggregate line so the old account keeps the rest', () => {
     const plan = planAccountMove(
-      [{ id: 'l1', account_number: '6580', debit_amount: 30548, credit_amount: 0, line_description: 'RosholmDell' }],
+      [{ id: 'l1', account_number: '6580', debit_amount: 30548, credit_amount: 0, line_description: 'Nordljus' }],
       '6580', '6550', 43640, 'Juridiskt biträde',
     )
     expect(plan).toEqual({
       strike: ['l1'],
       add: [
-        { account_number: '6580', debit_amount: 0, credit_amount: 13092, line_description: 'RosholmDell' },
+        { account_number: '6580', debit_amount: 0, credit_amount: 13092, line_description: 'Nordljus' },
         { account_number: '6550', debit_amount: 43640, credit_amount: 0, line_description: 'Juridiskt biträde' },
       ],
     })
@@ -81,6 +81,7 @@ describe('PATCH /api/supplier-invoices/[id]/items/[itemId]', () => {
     enqueue({ data: { id: 'item-1', account_number: '6580', line_total: 43640, description: 'Juridiskt biträde' } })
     enqueue({ data: [{ id: 'item-1' }] }) // item update
     enqueue({ data: [{ id: 'l1', account_number: '6580', debit_amount: 43640, credit_amount: 0, line_description: null }] })
+    enqueue({ data: { source_type: 'supplier_invoice_registered', lines: [{ id: 'l1', account_number: '6580', debit_amount: 43640, credit_amount: 0 }] } }) // importmoms read (#94)
     enqueue({ data: { ok: true } }) // rpc
     const { status, body } = await parseJsonResponse<{ data: { changed: boolean; corrected: boolean } }>(await PATCH(req({ account_number: '6550' }), params))
     expect(status).toBe(200)
@@ -99,6 +100,7 @@ describe('PATCH /api/supplier-invoices/[id]/items/[itemId]', () => {
     enqueue({ data: { id: 'item-1', account_number: '6580', line_total: 100, description: 'x' } })
     enqueue({ data: [{ id: 'item-1' }] })
     enqueue({ data: [{ id: 'l1', account_number: '6580', debit_amount: 100, credit_amount: 0, line_description: null }] })
+    enqueue({ data: { source_type: 'supplier_invoice_registered', lines: [{ id: 'l1', account_number: '6580', debit_amount: 100, credit_amount: 0 }] } }) // importmoms read (#94)
     enqueue({ data: null, error: { code: 'P0001', message: 'Perioden är låst' } })
     enqueue({ data: null }) // revert update
     const res = await PATCH(req({ account_number: '6550' }), params)

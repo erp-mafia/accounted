@@ -29,6 +29,20 @@ describe('validateIxbrlWithArelle', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
   })
 
+  it('names the file it validates, the årsredovisning by default', async () => {
+    const names: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        names.push((JSON.parse(String(init.body)) as { filename: string }).filename)
+        return new Response(JSON.stringify({ ok: true, issues: [] }))
+      }),
+    )
+    await validateIxbrlWithArelle('<html />', { url: 'https://validator.example/validate' })
+    await validateIxbrlWithArelle('<html />', { url: 'https://validator.example/validate', filename: 'revisionsberattelse.xhtml' })
+    expect(names).toEqual(['arsredovisning.xhtml', 'revisionsberattelse.xhtml'])
+  })
+
   it('normalizes Arelle errors into a blocking result', async () => {
     vi.stubGlobal(
       'fetch',

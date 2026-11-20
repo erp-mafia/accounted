@@ -5,10 +5,17 @@ import {
   CONNECTOR_UPSTREAM_AUTH_HEADER,
   CONNECTOR_UPSTREAM_CONTENT_TYPE_HEADER,
 } from '@/lib/connect/instance/upstreams'
+import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
+import { requireHttpsUrl } from '@/lib/http/require-https'
+import { isTimeoutError } from '@/lib/http/fetch-with-timeout'
+import { getErrorEntry, type StructuredErrorRemediation } from '@/lib/errors/structured-errors'
 import { baseUrlToService, parseConnectorCode, skatteverketConnectorMode } from './connector-mode'
 import { refreshAccessToken } from './oauth'
-import { getTokens, storeTokens, deleteTokens } from './token-store'
+import { SKV_REFRESH_TOKEN_OBSERVED_LIFETIME_MS } from '@/lib/skatteverket/session-lifetime'
+import { getTokens, storeTokens, deleteTokens, type StoredSkatteverketTokens, type StoredTokenVersion } from './token-store'
 import { getSystemAccessToken, invalidateSystemToken } from './system-auth/token-provider'
+import { getSystemApiGwCredentials } from './system-auth/config'
+import { writeSkatteverketAudit, type SkvAuditOutcome } from './audit'
 import type { SkatteverketTokens } from '../types'
 
 /**
@@ -29,6 +36,153 @@ export type SkvAuth =
   | { mode: 'system' }
 
 const log = createLogger('skatteverket-api-client')
+
+/**
+ * What the transport records about one outbound call in
+ * skatteverket_api_audit_log. Every call names its endpoint label: the
+ * migration- and fiscal-year-reset guards read the labels 'declaration/lock',
+ * 'declaration/submit' and 'agi/submit' with outcome 'ok', so those strings
+ * must never change.
+ */
+export interface SkvCallAudit {
+  endpoint: string
+  /** The 12-digit identity the call is about (redovisare / arbetsgivare), when known. */
+  agRegistreradId?: string | null
+  /** YYYYMM, when the call is about one period. */
+  redovisningsperiod?: string | null
+  /**
+   * Non-2xx statuses that are a normal answer for this endpoint and are
+   * recorded as 'ok' (404 "nothing on file" on the inlamnat/beslutat reads,
+   * 409 INCORRECT_DATA on skapaGranskningsunderlag). Everything else outside
+   * 2xx is 'skv_error'.
+   */
+  okStatuses?: readonly number[]
+  /**
+   * Reads Skatteverket's own status (kontrollsvar, tillstand) from the JSON
+   * body of an 'ok' answer into skv_status. When set, an 'ok' answer whose
+   * body is not JSON is recorded as 'skv_error'.
+   */
+  skvStatusOf?: (body: unknown) => string | null | undefined
+  /** A 2xx answer only counts as 'ok' when its body is JSON. */
+  expectJson?: boolean
+}
+
+/** An audited call: the label plus the company and user it is recorded against. */
+export interface SkvAuditTarget extends SkvCallAudit {
+  companyId: string
+  /** The user who caused the call; null for a call the system made with no user. */
+  userId: string | null
+}
+
+/**
+ * Accounted's own calls as ombud to the Ombudshantering register that belong
+ * to no company (the whole-register grant listing, /roller). The audit table
+ * is per company, so these are not written there; the transport logs one
+ * line per call instead.
+ */
+export interface SkvUnauditedRegisterCall {
+  unaudited: 'ombud_register'
+  operation: string
+}
+
+export type SkvAudit = SkvAuditTarget | SkvUnauditedRegisterCall
+
+/** Facts about the outbound call, filled in by sendSkvRequest as it goes. */
+interface SkvCallTrace {
+  sent: boolean
+  status: number | null
+  correlationId: string | null
+  requestSizeBytes: number | null
+  /**
+   * The stored personal token the call went out with (user mode). Every
+   * verdict about the call names it, so a flag or a delete it leads to acts
+   * on that token only, never on one another process stored meanwhile.
+   */
+  tokenVersion?: StoredTokenVersion
+}
+
+const MAX_AUDIT_ERROR_LEN = 500
+
+async function bodyExcerpt(response: Response): Promise<string | null> {
+  try {
+    const text = await response.clone().text()
+    if (!text) return null
+    return text.length > MAX_AUDIT_ERROR_LEN ? text.slice(0, MAX_AUDIT_ERROR_LEN) + '…' : text
+  } catch {
+    return null
+  }
+}
+
+interface CallRecord {
+  outcome: SkvAuditOutcome
+  responseStatus: number | null
+  skvStatus?: string | null
+  errorMessage?: string | null
+}
+
+/** The outcome of a call that came back with a response (no thrown error). */
+async function outcomeOfResponse(response: Response, audit: SkvAudit): Promise<CallRecord> {
+  const okStatuses = 'unaudited' in audit ? undefined : audit.okStatuses
+  const normal = response.ok || (okStatuses?.includes(response.status) ?? false)
+  if (!normal) {
+    return { outcome: 'skv_error', responseStatus: response.status, errorMessage: await bodyExcerpt(response) }
+  }
+  if ('unaudited' in audit) return { outcome: 'ok', responseStatus: response.status }
+  const mustParse = audit.skvStatusOf !== undefined || (audit.expectJson === true && response.ok)
+  if (!mustParse) return { outcome: 'ok', responseStatus: response.status }
+  let body: unknown
+  try {
+    body = await response.clone().json()
+  } catch {
+    return {
+      outcome: 'skv_error',
+      responseStatus: response.status,
+      errorMessage: 'Svaret från Skatteverket var inte JSON.',
+    }
+  }
+  return { outcome: 'ok', responseStatus: response.status, skvStatus: audit.skvStatusOf?.(body) ?? null }
+}
+
+/** The outcome of a call whose answer the transport turned into an error. */
+function outcomeOfError(err: unknown, trace: SkvCallTrace): CallRecord {
+  return {
+    outcome: err instanceof SkatteverketAuthError ? 'auth_error' : 'internal_error',
+    responseStatus: trace.status,
+    errorMessage: err instanceof Error ? err.message : String(err),
+  }
+}
+
+async function recordCall(
+  audit: SkvAudit,
+  authMode: SkvAuth['mode'],
+  trace: SkvCallTrace,
+  record: CallRecord,
+): Promise<void> {
+  if ('unaudited' in audit) {
+    log.info('ombud register call (no company, not in the audit table)', {
+      operation: audit.operation,
+      outcome: record.outcome,
+      responseStatus: record.responseStatus,
+      correlationId: trace.correlationId,
+    })
+    return
+  }
+  await writeSkatteverketAudit(
+    { companyId: audit.companyId, userId: audit.userId },
+    {
+      endpoint: audit.endpoint,
+      authMode,
+      agRegistreradId: audit.agRegistreradId ?? null,
+      redovisningsperiod: audit.redovisningsperiod ?? null,
+      outcome: record.outcome,
+      responseStatus: record.responseStatus,
+      skvStatus: record.skvStatus ?? null,
+      requestSizeBytes: trace.requestSizeBytes,
+      correlationId: trace.correlationId,
+      errorMessage: record.errorMessage ?? null,
+    },
+  )
+}
 
 // Cap diagnostic-body logging at 200 chars and redact any Bearer token
 // patterns. The audit (V16.1 / A.8.15) flagged that raw 401/403 bodies were
@@ -81,8 +235,9 @@ const DEFAULT_API_BASE_URL = 'https://api.test.skatteverket.se/momsdeklaration/v
 const MAX_REFRESH_COUNT = 10
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000 // Refresh 5 min before expiry
 
-// Simple in-memory token bucket for 4 req/sec rate limit
-let lastRequestTime = 0
+// In-memory send-slot schedule for the 4 req/sec rate limit: the next moment
+// a request may leave this process.
+let nextRequestSlotAt = 0
 const MIN_REQUEST_INTERVAL_MS = 250 // 1000ms / 4 = 250ms
 
 function getApiBaseUrl(): string {
@@ -99,6 +254,16 @@ function getApiGwClientSecret(): string {
   const secret = process.env.SKATTEVERKET_APIGW_CLIENT_SECRET
   if (!secret) throw new Error('SKATTEVERKET_APIGW_CLIENT_SECRET is required')
   return secret
+}
+
+/**
+ * Gateway keys for one call. System-mode calls carry the system application's
+ * own pair when it is configured (see getSystemApiGwCredentials), otherwise
+ * the shared pair, exactly as before the split.
+ */
+function apiGwCredentialsFor(auth: SkvAuth): { clientId: string; clientSecret: string } {
+  const system = auth.mode === 'system' ? getSystemApiGwCredentials() : null
+  return system ?? { clientId: getApiGwClientId(), clientSecret: getApiGwClientSecret() }
 }
 
 /**
@@ -135,14 +300,18 @@ export function getSkatteverketEnvironment(): 'test' | 'prod' {
 
 /**
  * Ensure rate limit compliance (4 req/sec).
- * Delays if the last request was too recent.
+ *
+ * Each caller reserves the first free slot at or after now, 250 ms after the
+ * previous reservation, and waits for it. Spacing from the previous CLAIM
+ * time instead (the old form) let concurrent callers all wake about 250 ms
+ * after the first one: a burst. Sequential callers wait exactly as before.
  */
 async function enforceRateLimit(): Promise<void> {
   const now = Date.now()
-  const elapsed = now - lastRequestTime
-  lastRequestTime = now // Claim the slot immediately to prevent concurrent bypass
-  if (elapsed < MIN_REQUEST_INTERVAL_MS) {
-    await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed))
+  const slot = Math.max(now, nextRequestSlotAt)
+  nextRequestSlotAt = slot + MIN_REQUEST_INTERVAL_MS
+  if (slot > now) {
+    await new Promise(resolve => setTimeout(resolve, slot - now))
   }
 }
 
@@ -152,18 +321,93 @@ async function enforceRateLimit(): Promise<void> {
 // rotates that token on first use, so the second call would fail with 401.
 // Cross-process races (separate Vercel function instances) are mitigated by
 // the re-read inside the critical section: if another process refreshed
-// while we waited on the network, we just use that newer token.
-const refreshInFlight = new Map<string, Promise<string>>()
+// while we waited on the network, we just use that newer token. Two processes
+// that both read the old token before either refreshed are settled after the
+// fact, in the dead-token path of refreshTokenForUser.
+const refreshInFlight = new Map<string, Promise<ValidToken>>()
+
+/** An access token to call with, and the stored token it came from. */
+interface ValidToken {
+  accessToken: string
+  version: StoredTokenVersion
+}
+
+function versionOf(tokens: StoredSkatteverketTokens): StoredTokenVersion {
+  return { rowId: tokens.row_id, refreshCount: tokens.refresh_count }
+}
 
 /**
- * Get a valid access token, refreshing if needed.
- * Throws if no tokens exist or refresh is exhausted.
+ * How long the loser of a cross-process refresh race waits before it reads
+ * the stored token a second time: the winner's storeTokens is a delete and an
+ * insert, in flight for a moment after Skatteverket has rotated the token.
+ */
+const REFRESH_RACE_RECHECK_MS = 1000
+
+/**
+ * The token another process stored while this one was refreshing `used`, or
+ * null. Read at once, and once more after REFRESH_RACE_RECHECK_MS unless
+ * nothing can be in flight: a row still holding `used` that was stored longer
+ * ago than a refresh token has ever been seen working (two hours, not the
+ * documented 65 minutes: session-lifetime.ts) cannot have been refreshed by
+ * anyone, so the wait is skipped. That is the common case, a session left
+ * overnight, and the wait was paid on every such call, interactive and MCP
+ * ones included. A row still holding `used` (or no row) is no answer.
+ */
+async function tokenStoredMeanwhile(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  used: StoredSkatteverketTokens,
+): Promise<StoredSkatteverketTokens | null> {
+  for (const waitMs of [0, REFRESH_RACE_RECHECK_MS]) {
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs))
+    let stored: StoredSkatteverketTokens | null
+    try {
+      stored = await getTokens(supabase, userId, companyId)
+    } catch (err) {
+      // The second look is a courtesy to a race; a read that fails here
+      // leaves the verdict on the token this process used, which stands.
+      log.warn('stored Skatteverket token could not be read again after a dead refresh', {
+        userId,
+        companyId,
+        reason: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
+    if (stored && stored.row_id !== used.row_id && stored.expires_at > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
+      return stored
+    }
+    if (stored && stored.row_id === used.row_id && Date.now() - stored.stored_at >= SKV_REFRESH_TOKEN_OBSERVED_LIFETIME_MS) {
+      return null
+    }
+  }
+  return null
+}
+
+/**
+ * A terminal verdict about the stored token itself, naming the row it was
+ * reached on (see SkatteverketAuthError.tokenRow).
+ */
+function tokenVerdict(
+  message: string,
+  code: 'SESSION_EXPIRED' | 'REFRESH_EXHAUSTED',
+  userId: string,
+  tokens: StoredSkatteverketTokens,
+): SkatteverketAuthError {
+  const err = new SkatteverketAuthError(message, code)
+  err.tokenRow = { userId, version: { rowId: tokens.row_id, refreshCount: tokens.refresh_count } }
+  return err
+}
+
+/**
+ * Get a valid access token, refreshing if needed, with the stored token it
+ * came from. Throws if no tokens exist or refresh is exhausted.
  */
 async function getValidToken(
   supabase: SupabaseClient,
   userId: string,
   companyId: string
-): Promise<string> {
+): Promise<ValidToken> {
   const tokens = await getTokens(supabase, userId, companyId)
   if (!tokens) {
     throw new SkatteverketAuthError(
@@ -174,7 +418,7 @@ async function getValidToken(
 
   // Token still valid (with 5-min margin)
   if (tokens.expires_at > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
-    return tokens.access_token
+    return { accessToken: tokens.access_token, version: versionOf(tokens) }
   }
 
   // Need refresh: coalesce concurrent attempts per (user, company) row.
@@ -192,7 +436,7 @@ async function refreshTokenForUser(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
-): Promise<string> {
+): Promise<ValidToken> {
   // Re-read after entering the critical section. Another process may have
   // refreshed while we were waiting; if so, the row now has a new
   // refresh_token and a future expiry: just hand it back.
@@ -204,19 +448,13 @@ async function refreshTokenForUser(
     )
   }
   if (tokens.expires_at > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
-    return tokens.access_token
+    return { accessToken: tokens.access_token, version: versionOf(tokens) }
   }
   if (!tokens.refresh_token) {
-    throw new SkatteverketAuthError(
-      'Sessionen har gått ut. Logga in med BankID igen.',
-      'SESSION_EXPIRED'
-    )
+    throw tokenVerdict('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED', userId, tokens)
   }
   if (tokens.refresh_count >= MAX_REFRESH_COUNT) {
-    throw new SkatteverketAuthError(
-      'Maximalt antal förnyelser uppnått. Logga in med BankID igen.',
-      'REFRESH_EXHAUSTED'
-    )
+    throw tokenVerdict('Maximalt antal förnyelser uppnått. Logga in med BankID igen.', 'REFRESH_EXHAUSTED', userId, tokens)
   }
 
   let refreshed
@@ -225,7 +463,7 @@ async function refreshTokenForUser(
   } catch (err) {
     // SKV's `per`-flow refresh tokens live 65 minutes. Any daily cron (or a
     // user returning the next day) therefore always finds a dead token and
-    // gets 404 id_not_found back — that's ordinary session expiry, not a
+    // gets 404 id_not_found back - that's ordinary session expiry, not a
     // runtime error. Classify it so the crons' quiet buckets and the UI's
     // reconnect flow catch it instead of a raw Error escaping to the logs.
     // SKV speaks several dialects for the same terminal state: 404 with
@@ -252,10 +490,17 @@ async function refreshTokenForUser(
       /CONNECTOR_SKV_REFRESH_DEAD/.test(message) ||
       (/\b404\b/.test(message) && /CONNECTOR_NOT_OWNED/.test(message))
     if (deadRefreshToken) {
-      throw new SkatteverketAuthError(
-        'Sessionen har gått ut. Logga in med BankID igen.',
-        'SESSION_EXPIRED'
-      )
+      // A dead refresh token is also what the loser of a race sees. The
+      // skattekonto sync and the AGI and VAT kvittens crons run in separate
+      // processes and can pick up the same token in the same minute (the
+      // collisions logged in production on 2026-11-05/06, see the skattekonto
+      // cron's NOT_CONNECTED branch); Skatteverket rotates the refresh token
+      // on first use, so the second process is told its copy is dead while the
+      // connection is alive under the token the first one stored. Use that
+      // token. Only when nobody stored a newer one is the session over.
+      const stored = await tokenStoredMeanwhile(supabase, userId, companyId, tokens)
+      if (stored) return { accessToken: stored.access_token, version: versionOf(stored) }
+      throw tokenVerdict('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED', userId, tokens)
     }
     throw err
   }
@@ -263,8 +508,8 @@ async function refreshTokenForUser(
     ...refreshed,
     scope: tokens.scope,
   }
-  await storeTokens(supabase, userId, updatedTokens, companyId)
-  return updatedTokens.access_token
+  const rowId = await storeTokens(supabase, userId, updatedTokens, companyId)
+  return { accessToken: updatedTokens.access_token, version: { rowId, refreshCount: updatedTokens.refresh_count } }
 }
 
 /**
@@ -420,8 +665,8 @@ function isTokenScopeRejection(body: string): boolean {
 
 /**
  * Make an authenticated request to the Skatteverket API with the user's
- * personal BankID token. Thin wrapper kept for the ~40 existing call sites;
- * new auth-aware code calls skvRequestWithAuth directly.
+ * personal BankID token. The call is audited against that same user and
+ * company; new auth-aware code calls skvRequestWithAuth directly.
  */
 export async function skvRequest(
   supabase: SupabaseClient,
@@ -429,14 +674,66 @@ export async function skvRequest(
   companyId: string,
   method: string,
   path: string,
+  audit: SkvCallAudit,
   body?: unknown,
   options?: { baseUrl?: string; contentType?: string }
 ): Promise<Response> {
-  return skvRequestWithAuth({ mode: 'user', supabase, userId, companyId }, method, path, body, options)
+  return skvRequestWithAuth(
+    { mode: 'user', supabase, userId, companyId },
+    method,
+    path,
+    { ...audit, companyId, userId },
+    body,
+    options
+  )
 }
 
 /**
- * Make an authenticated request to the Skatteverket API.
+ * Make an authenticated request to the Skatteverket API and write exactly one
+ * row to skatteverket_api_audit_log for it (product decision D4: every
+ * outbound call, reads included). The audit is a required argument so no
+ * call site can skip it, and no route writes its own row on top.
+ *
+ * Outcome, recorded once the call has left:
+ *   - a response in 2xx (or in audit.okStatuses)   -> 'ok' (see skvStatusOf / expectJson)
+ *   - any other response                           -> 'skv_error'
+ *   - a 401/403/429 or broker refusal mapped to SkatteverketAuthError -> 'auth_error'
+ *   - a network failure or timeout                 -> 'internal_error'
+ * A call that never left (kill switch, no token, system token unavailable)
+ * writes no row: there was no outbound call to record.
+ */
+export async function skvRequestWithAuth(
+  auth: SkvAuth,
+  method: string,
+  path: string,
+  audit: SkvAudit,
+  body?: unknown,
+  options?: { baseUrl?: string; contentType?: string; accept?: string }
+): Promise<Response> {
+  const trace: SkvCallTrace = { sent: false, status: null, correlationId: null, requestSizeBytes: null }
+  let response: Response
+  try {
+    response = await sendSkvRequest(auth, method, path, body, options, trace)
+  } catch (err) {
+    // A user-mode verdict names the stored token it is about: whose it is (a
+    // company can hold one row per connected member), and which version, so
+    // a caller that flags the connection flags that row only while it is
+    // still that token. A refresh verdict names the token it refreshed; a
+    // verdict on the call (a 401 SESSION_EXPIRED, MISSING_SCOPE, the
+    // connector's NOT_OWNED for a token rotated away) the one it called with.
+    if (auth.mode === 'user' && err instanceof SkatteverketAuthError) {
+      err.tokenRow = { userId: auth.userId, version: err.tokenRow?.version ?? trace.tokenVersion }
+    }
+    const thrown = withFetchFaultNamed(err, audit)
+    if (trace.sent) await recordCall(audit, auth.mode, trace, outcomeOfError(thrown, trace))
+    throw asSkvUnavailable(thrown)
+  }
+  await recordCall(audit, auth.mode, trace, await outcomeOfResponse(response, audit))
+  return response
+}
+
+/**
+ * The outbound call itself.
  *
  * Automatically handles:
  * - Credential resolution per auth mode (user token refresh, or the cached
@@ -450,12 +747,13 @@ export async function skvRequest(
  * credential problem) or OMBUD_GRANT_MISSING (this company has not granted,
  * or has revoked, the behorighet).
  */
-export async function skvRequestWithAuth(
+async function sendSkvRequest(
   auth: SkvAuth,
   method: string,
   path: string,
-  body?: unknown,
-  options?: { baseUrl?: string; contentType?: string; accept?: string }
+  body: unknown,
+  options: { baseUrl?: string; contentType?: string; accept?: string } | undefined,
+  trace: SkvCallTrace
 ): Promise<Response> {
   if (isDisabled()) {
     throw new SkatteverketAuthError(
@@ -466,7 +764,9 @@ export async function skvRequestWithAuth(
 
   let accessToken: string
   if (auth.mode === 'user') {
-    accessToken = await getValidToken(auth.supabase, auth.userId, auth.companyId)
+    const valid = await getValidToken(auth.supabase, auth.userId, auth.companyId)
+    accessToken = valid.accessToken
+    trace.tokenVersion = valid.version
   } else {
     try {
       accessToken = await getSystemAccessToken()
@@ -500,36 +800,52 @@ export async function skvRequestWithAuth(
   const headers: Record<string, string> = {}
   if (connector) {
     url = `${connector.baseUrl}/api/${baseUrlToService(effectiveBase)}${path}`
-    headers['Authorization'] = `Bearer ${connector.key}`
+    // Bearer key and contract version; the user's token rides in its own header.
+    Object.assign(headers, connectorHeaders({ key: connector.key }))
     headers[CONNECTOR_UPSTREAM_AUTH_HEADER] = `Bearer ${accessToken}`
   } else {
-    url = `${effectiveBase}${path}`
+    // Fail closed on a plaintext base URL (accounted#21): the Bearer token,
+    // the gateway Client_Secret and the filing itself ride in this request.
+    // Covers every per-service base (moms, skattekonto, AGI, ombud), since
+    // they all arrive here as effectiveBase.
+    url = `${requireHttpsUrl(effectiveBase, 'Skatteverket API base URL (SKATTEVERKET_*_API_BASE_URL)')}${path}`
     headers['Authorization'] = `Bearer ${accessToken}`
-    headers['Client_Id'] = getApiGwClientId()
-    headers['Client_Secret'] = getApiGwClientSecret()
-    headers['skv_client_correlation_id'] = crypto.randomUUID()
+    const gateway = apiGwCredentialsFor(auth)
+    headers['Client_Id'] = gateway.clientId
+    headers['Client_Secret'] = gateway.clientSecret
+    trace.correlationId = crypto.randomUUID()
+    headers['skv_client_correlation_id'] = trace.correlationId
   }
   // Ombudshantering lists Accept as a required header (406 otherwise); the
   // moms/skattekonto/AGI services never needed it, so it stays opt-in.
   if (options?.accept) headers['Accept'] = options.accept
 
-  // contentType defaults to application/json, which is right for moms +
-  // skattekonto. AGI's POST /underlag takes application/xml: callers pass
-  // the XML as a string body and override contentType.
-  let serializedBody: string | undefined
-  if (body !== undefined) {
-    const contentType = options?.contentType ?? 'application/json'
+  // A body goes with Content-Type application/json unless the caller names
+  // another type (AGI's POST /underlag passes its XML as a string body with
+  // application/xml). A named contentType is sent even without a body:
+  // Ombudshantering answers a GET without it with 400 "Required header
+  // 'Content-Type' not specified", while moms, skattekonto and AGI never
+  // asked for it on a GET, and Skatteverket warns that headers outside a
+  // service's list can block a call. So it stays opt-in, like Accept.
+  const contentType = options?.contentType ?? (body !== undefined ? 'application/json' : undefined)
+  if (contentType) {
     headers['Content-Type'] = contentType
     if (connector) headers[CONNECTOR_UPSTREAM_CONTENT_TYPE_HEADER] = contentType
-    serializedBody = typeof body === 'string' ? body : JSON.stringify(body)
   }
+  const serializedBody = body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
 
+  trace.requestSizeBytes = serializedBody === undefined ? null : Buffer.byteLength(serializedBody, 'utf8')
+  trace.sent = true
   let response = await fetch(url, {
     method,
     headers,
     body: serializedBody,
     signal: AbortSignal.timeout(15_000),
+    // A 307/308 would resend the bearer and the gateway Client_Secret (or the
+    // connector key) to the redirect target.
+    redirect: 'error',
   })
+  trace.status = response.status
 
   // Connector-layer refusals FIRST: a 4xx here can come from the broker
   // itself, not Skatteverket, and the SKV-shaped sniffing below would then
@@ -629,7 +945,7 @@ export async function skvRequestWithAuth(
       invalidateSystemToken()
       throw new SkatteverketAuthError(
         'Skatteverket avvisade systemautentiseringen. Kontrollera certifikatet ' +
-        'och APIGW-prenumerationerna för systemklienten.',
+        'och APIGW-prenumerationerna för systemklienten (SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID).',
         'SYSTEM_AUTH_FAILED',
         clientRefused ? 'APIGW_CLIENT_REFUSED' : undefined
       )
@@ -685,7 +1001,9 @@ export async function skvRequestWithAuth(
     // primary auth error to the user.
     if (lower.includes('revoked') || lower.includes('token has been revoked')) {
       try {
-        await deleteTokens(auth.supabase, auth.userId, auth.companyId)
+        // Only the stored token this call went out with: one another process
+        // stored meanwhile (a refresh) is not the token Skatteverket refused.
+        await deleteTokens(auth.supabase, auth.userId, auth.companyId, trace.tokenVersion?.rowId)
       } catch (cleanupErr) {
         log.error('failed to clear revoked token row', cleanupErr as Error, { userId: auth.userId })
       }
@@ -819,8 +1137,11 @@ export async function skvRequestWithAuth(
         'MISSING_SCOPE'
       )
     }
-    // Behörighet saknas: user is authenticated but not authorized for this company
-    if (text.includes('Behörighet') || text.includes('behörighet')) {
+    // Behörighet saknas: user is authenticated but not authorized for this
+    // company. The skattekonto API says it as felkod 6 "Auktorisation saknas"
+    // (prod, B07): the consenting person lacks Skatteverket's authorization
+    // for this company, which only that person or the company can change.
+    if (text.includes('Behörighet') || text.includes('behörighet') || /auktorisation saknas/i.test(text)) {
       throw new SkatteverketAuthError(
         'Du har inte behörighet att agera för detta företag hos Skatteverket. ' +
         'Kontrollera att du är registrerad som firmatecknare eller deklarationsombud.',
@@ -907,9 +1228,146 @@ export class SkatteverketAuthError extends Error {
     super(message)
     this.name = 'SkatteverketAuthError'
   }
+
+  /**
+   * The stored personal token a verdict is about, set on every error of a
+   * user-mode call: whose it is, and which stored version (the token a
+   * refresh was refused for, or the one the call went out with). A caller
+   * flags that user's row with markNeedsReconsent only while the row is
+   * still that token, so a verdict about a token another process replaced
+   * meanwhile, or that a new BankID consent replaced, cannot flag the live
+   * one. No version only when the call failed before a token was read (no
+   * row at all).
+   */
+  tokenRow?: { userId: string; version?: StoredTokenVersion }
 }
 
 /** True when `err` is Skatteverket's gateway refusing the APIGW client itself. */
 export function isApigwClientRefusal(err: unknown): err is SkatteverketAuthError {
   return err instanceof SkatteverketAuthError && err.detail === 'APIGW_CLIENT_REFUSED'
+}
+
+/**
+ * Causes of a failed fetch that waiting does not cure: a fault on our side or
+ * in configuration (a mistyped base URL, a gateway that redirects, a
+ * certificate the runtime refuses), not an outage. Read from the cause the
+ * runtime attaches to its TypeError('fetch failed'): `cause.code` where it
+ * has one, otherwise the cause's message (a refused redirect has no code).
+ */
+const FETCH_FAULT_CODES = new Set([
+  'ENOTFOUND',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+])
+const FETCH_FAULT_MESSAGES = new Set(['unexpected redirect'])
+
+/**
+ * The cause of a failed fetch when it is one that waiting does not cure
+ * (FETCH_FAULT_CODES, any CERT_* code), as the runtime states it; null for
+ * anything else, including a failed fetch whose cause is unknown or missing.
+ */
+function skvFetchFault(err: unknown): string | null {
+  if (!(err instanceof TypeError && err.message === 'fetch failed')) return null
+  const cause = err.cause as { code?: unknown; message?: unknown } | null | undefined
+  const code = typeof cause?.code === 'string' ? cause.code : null
+  if (code !== null && (FETCH_FAULT_CODES.has(code) || code.startsWith('CERT_'))) return code
+  const message = typeof cause?.message === 'string' ? cause.message : null
+  if (message !== null && FETCH_FAULT_MESSAGES.has(message)) return message
+  return null
+}
+
+/**
+ * The error the transport throws for a failed fetch skvFetchFault names: the
+ * cause in the message (logs, the audit row, the agent's error), the
+ * platform's error as `cause`, and one error-level log line. The platform's
+ * "fetch failed" would otherwise read as a transient failure to every reader
+ * that matches the words. Anything else is returned as it was raised.
+ */
+function withFetchFaultNamed(err: unknown, audit: SkvAudit): unknown {
+  const fault = skvFetchFault(err)
+  if (fault === null) return err
+  const endpoint = 'unaudited' in audit ? audit.operation : audit.endpoint
+  log.error('Skatteverket call failed without an answer, for a cause waiting does not cure', { endpoint, cause: fault })
+  return new Error(
+    `Skatteverket call failed without an answer (${fault}): check the Skatteverket base URL and the network path to it.`,
+    { cause: err },
+  )
+}
+
+/**
+ * The one answer every door gives when Skatteverket did not answer: the
+ * registry entry SKATTEVERKET_UNAVAILABLE (status, retryable, the Swedish
+ * sentence, the English one and the next step). The MCP tools, the v1 read,
+ * the approval of a momsdeklaration or an AGI and the extension's dashboard
+ * routes all read it here.
+ */
+export interface SkvUnavailableAnswer {
+  code: 'SKATTEVERKET_UNAVAILABLE'
+  httpStatus: number
+  retryable: boolean
+  messageSv: string
+  messageEn: string
+  remediation?: StructuredErrorRemediation
+}
+
+const SKV_UNAVAILABLE_CODE = 'SKATTEVERKET_UNAVAILABLE'
+
+export function skvUnavailableAnswer(): SkvUnavailableAnswer {
+  const entry = getErrorEntry(SKV_UNAVAILABLE_CODE)
+  if (!entry) throw new Error(`${SKV_UNAVAILABLE_CODE} is missing from the structured-errors registry`)
+  return {
+    code: SKV_UNAVAILABLE_CODE,
+    httpStatus: entry.httpStatus,
+    retryable: entry.retryable === true,
+    messageSv: entry.message_sv,
+    messageEn: entry.message_en,
+    ...(entry.remediation ? { remediation: entry.remediation } : {}),
+  }
+}
+
+/**
+ * What the transport throws when Skatteverket gave no answer: the call's
+ * timeout ran out, or no connection. The platform's error is its `cause`;
+ * `code` is the registry code, so a door with no branch of its own for it
+ * (getStructuredError) still answers SKATTEVERKET_UNAVAILABLE.
+ */
+export class SkatteverketUnavailableError extends Error {
+  readonly code = SKV_UNAVAILABLE_CODE
+
+  constructor(cause: unknown) {
+    super(skvUnavailableAnswer().messageEn, { cause })
+    this.name = 'SkatteverketUnavailableError'
+  }
+}
+
+/**
+ * The platform's own errors for no answer at all: the timeout's
+ * DOMException, or undici's "fetch failed" for a cause that waiting can cure
+ * (a connection refused or reset, a lookup that did not answer) or one the
+ * runtime does not state. A failed fetch skvFetchFault names is a fault, not
+ * this.
+ */
+function platformGaveNoAnswer(err: unknown): boolean {
+  if (isTimeoutError(err)) return true
+  return err instanceof TypeError && err.message === 'fetch failed' && skvFetchFault(err) === null
+}
+
+/**
+ * The transport's conversion of a failed call: a platform no-answer becomes
+ * SkatteverketUnavailableError; anything else is returned as it was raised.
+ */
+export function asSkvUnavailable(err: unknown): unknown {
+  return platformGaveNoAnswer(err) ? new SkatteverketUnavailableError(err) : err
+}
+
+/**
+ * Whether a failed Skatteverket call got no answer at all, the one test every
+ * door that words a failure asks.
+ */
+export function skvUnreachable(err: unknown): err is SkatteverketUnavailableError {
+  return err instanceof SkatteverketUnavailableError
 }

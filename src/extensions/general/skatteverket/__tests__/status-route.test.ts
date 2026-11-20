@@ -16,7 +16,14 @@ vi.mock('../lib/token-store', async (importOriginal) => {
   }
 })
 
+const mockHasOmbudReadAccess = vi.fn()
+vi.mock('../lib/resolve-auth', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return { ...actual, hasOmbudReadAccess: (...a: unknown[]) => mockHasOmbudReadAccess(...a) }
+})
+
 import { skatteverketExtension } from '../index'
+import { skvStatusNeedsReconnect } from '@/lib/notices/predicates'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 function findRoute() {
@@ -52,6 +59,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(NOW)
   mockGetTokenHealth.mockResolvedValue({ status: 'active', last_error_code: null, last_error_at: null })
+  mockHasOmbudReadAccess.mockResolvedValue(false)
 })
 
 afterEach(() => {
@@ -99,5 +107,74 @@ describe('GET /status canRefresh', () => {
     })
     const body = await (await findRoute().handler(request(), makeContext())).json()
     expect(body).toMatchObject({ connected: true, expired: false, canRefresh: false })
+  })
+})
+
+describe('GET /status ombud', () => {
+  const deadSession = {
+    access_token: 'a',
+    refresh_token: 'r',
+    expires_at: NOW - 3 * 60 * 60 * 1000,
+    refresh_count: 0,
+    scope: 'momsdeklaration',
+  }
+
+  it('a dead BankID session asks for reconnect without an ombud grant', async () => {
+    mockGetTokens.mockResolvedValue(deadSession)
+    const body = await (await findRoute().handler(request(), makeContext())).json()
+    expect(body).toMatchObject({ connected: true, ombud: false })
+    expect(skvStatusNeedsReconnect(body)).toBe(true)
+  })
+
+  it('with reads on the ombud grant the same dead session asks for nothing', async () => {
+    mockGetTokens.mockResolvedValue(deadSession)
+    mockHasOmbudReadAccess.mockResolvedValue(true)
+    const body = await (await findRoute().handler(request(), makeContext())).json()
+    // connected keeps meaning "this user has a BankID connection" (signing needs it).
+    expect(body).toMatchObject({ connected: true, ombud: true, expired: true })
+    expect(skvStatusNeedsReconnect(body)).toBe(false)
+    expect(mockHasOmbudReadAccess).toHaveBeenCalledWith('company-1')
+  })
+
+  it('reports ombud for a company with no BankID connection at all', async () => {
+    mockGetTokens.mockResolvedValue(null)
+    mockHasOmbudReadAccess.mockResolvedValue(true)
+    const body = await (await findRoute().handler(request(), makeContext())).json()
+    expect(body).toMatchObject({ connected: false, ombud: true })
+  })
+
+  it('a failed ombud lookup reads as no ombud, never as an error', async () => {
+    mockGetTokens.mockResolvedValue(null)
+    mockHasOmbudReadAccess.mockRejectedValue(new Error('db down'))
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ connected: false, ombud: false })
+  })
+})
+
+describe('GET /status skattekonto unavailable (B07)', () => {
+  const liveToken = {
+    access_token: 'a',
+    refresh_token: 'r',
+    expires_at: NOW + 30 * 60 * 1000,
+    refresh_count: 1,
+    scope: 'momsdeklaration ska agd',
+  }
+
+  it('reports Skatteverket\'s last "no skattekonto yet" answer for the panel', async () => {
+    mockGetTokens.mockResolvedValue(liveToken)
+    const ctx = makeContext()
+    const state = { reason: 'no_account', since: '2026-08-30T10:00:00.000Z', checkedAt: '2026-09-01T11:00:00.000Z' }
+    ;(ctx.settings.get as ReturnType<typeof vi.fn>).mockImplementation(async (key: string) =>
+      key === 'skattekonto_unavailable' ? state : null,
+    )
+    const body = await (await findRoute().handler(request(), ctx)).json()
+    expect(body).toMatchObject({ connected: true, skattekontoUnavailable: state })
+  })
+
+  it('null when the last sync went through', async () => {
+    mockGetTokens.mockResolvedValue(liveToken)
+    const body = await (await findRoute().handler(request(), makeContext())).json()
+    expect(body.skattekontoUnavailable).toBeNull()
   })
 })

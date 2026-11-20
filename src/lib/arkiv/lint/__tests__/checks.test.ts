@@ -63,7 +63,7 @@ describe('settingsMismatches', () => {
   })
 
   it('says nothing about a setting that is unset, a fact whose wording it cannot read, or a fact it has no rule for', () => {
-    expect(settingsMismatches([fact('vat_period', 'JANUARI 2026'), fact('board', 'Wennberg')], settings)).toEqual([])
+    expect(settingsMismatches([fact('vat_period', 'JANUARI 2026'), fact('board', 'Exempel')], settings)).toEqual([])
     expect(settingsMismatches([fact('vat_period', 'kvartal')], { ...settings, moms_period: null })).toEqual([])
   })
 })
@@ -111,7 +111,7 @@ describe('agreementFindings', () => {
       [
         { id: 'b-2', title: 'Lån 500050956', ...base, kind: 'loan', ends_on: null, amount: 10417, principal: 500000, starts_on: '2026-02-02', counterparty_party_id: 'p-almi' },
         { id: 'b-1', title: 'Lån 500050956', ...base, kind: 'loan', ends_on: null, amount: 10417, principal: 500000, starts_on: '2026-02-02', counterparty_party_id: 'p-almi' },
-        { id: 'b-3', title: 'Lån Propel', ...base, kind: 'loan', ends_on: null, amount: 400000, principal: 400000, starts_on: '2025-10-13', counterparty_party_id: 'p-propel' },
+        { id: 'b-3', title: 'Lån Exempel Kapital', ...base, kind: 'loan', ends_on: null, amount: 400000, principal: 400000, starts_on: '2025-10-13', counterparty_party_id: 'p-lender' },
         {
           id: 'b-4',
           title: 'Gammalt lån',

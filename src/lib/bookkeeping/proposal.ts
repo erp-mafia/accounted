@@ -1,8 +1,20 @@
 import { getTemplateById, type BookingTemplate, type TemplateGroup } from './booking-templates'
+import { PINNED_JURISDICTION, resolveAccountRole } from './account-roles'
+import { isCashLedger } from './bank-leg'
 import { isLibraryTemplateId } from './template-library'
-import { resolveTemplateAccountsForEntity, type ProposalLinesInput } from './proposal-lines'
+import { resolveTemplateAccountsForEntity } from './proposal-lines'
+import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { accountHue, templateGroupHue, type TemplateHue } from './template-group-colors'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from './category-mapping'
+import { groupForAccount } from './template-groups'
+import {
+  DEFAULT_REVERSE_CHARGE_KIND,
+  REVERSE_CHARGE_TREATMENT_KINDS,
+  reverseChargeKindForBasisAccount,
+  reverseChargeKindForSupplierType,
+  reverseChargeKindRuta,
+  type ReverseChargeKind,
+} from './vat-entries'
 import type {
   CategorizationTemplate,
   EntityType,
@@ -25,15 +37,52 @@ import type {
  *
  * Client-safe: pure data and pure functions over the static catalog.
  */
-export type ProposalSource = 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant' | 'manual'
+export type ProposalSource = 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant' | 'manual' | 'clearing'
+
+/**
+ * What a clearing proposal (source 'clearing') rests on: another block's own
+ * record that this money was already booked onto a clearing account, so the
+ * bank row clears that account instead of being booked as revenue again
+ * (lib/transactions/clearing-proposals.ts). Today the till: card and Swish
+ * on the day voucher (lib/pos-sales/payout-match.ts).
+ */
+export interface ClearingEvidence {
+  /** The block whose record it is. */
+  channel: 'pos'
+  /** How the money was paid. */
+  kind: 'swish' | 'card'
+  /**
+   * receipt: one Swish receipt, to the öre; days: the card tender of one to
+   * three business days; balance: the open card balance up to a day.
+   */
+  fit: 'receipt' | 'days' | 'balance'
+  /** The clearing account the row books against. */
+  account: string
+  /** The business days the money was taken on, ascending (fit balance: every day it pays off). */
+  business_dates: string[]
+  /** fit receipt: the receipt number as printed. */
+  receipt_number?: string
+  /** What the record says arrives: the receipt, the days' card tender, the open balance. */
+  expected_amount: number
+}
 
 export type ProposalBooking =
   /** A catalog template: the server books the template's lines (entity-resolved). */
   | { kind: 'template'; template_id: string; category: TransactionCategory }
   /** A learned counterpart rule: the server books the stored template's lines. */
   | { kind: 'counterparty'; counterparty_template_id: string }
-  /** One business account and an explicit VAT treatment against the bank. */
-  | { kind: 'account'; account: string; vat_treatment: VatTreatment; category: TransactionCategory }
+  /**
+   * One business account and an explicit VAT treatment against the bank.
+   * `reverse_charge_kind` names the basis box of a reverse-charge purchase
+   * (ruta 20/21/22); without it the engine books an EU service.
+   */
+  | {
+      kind: 'account'
+      account: string
+      vat_treatment: VatTreatment
+      category: TransactionCategory
+      reverse_charge_kind?: ReverseChargeKind
+    }
 
 export interface BookingProposal {
   /** Stable id: the catalog template id, 'cp:<uuid>' for a counterpart, 'assistant:<txid>', 'account:<n>'. */
@@ -58,12 +107,64 @@ export interface BookingProposal {
   rule_mode?: CategorizationTemplate['mode']
   rule_own?: boolean
   rule_requires_review?: boolean
+  /** A learned counterpart rule a person set to always ask (categorization_templates.always_review). */
+  rule_always_review?: boolean
+  /**
+   * A learned counterpart rule from an imported history (source 'sie_import')
+   * that no booking here has confirmed yet: it asks once
+   * (lib/transactions/direct-booking.ts ruleReviewFlags).
+   */
+  rule_import_unconfirmed?: boolean
+  /**
+   * A booking review rule of the company matches this booking of the row
+   * (lib/booking-review, accounted#130 step 2): it is never booked without
+   * a person's review, on any path. Set by proposeForTransactions.
+   */
+  review_blocked?: boolean
   has_underlag?: boolean
+  /**
+   * A weak learned-counterpart match that the assistant's stored read had on
+   * its slate and booked on another account (lib/transactions/propose.ts).
+   * Still offered in the picker and to an agent, never the row's
+   * recommendation and never booked without a review.
+   */
+  contested?: boolean
+  /**
+   * A learned counterpart matched on money moving against its learned
+   * direction (contradictsLearnedDirection in counterparty-templates.ts):
+   * money in from a counterpart booked as a cost, likely a refund or credit.
+   * The legs are shown mirrored, as the booking mirrors them, and it never
+   * books without a review (crm#1598).
+   */
+  direction_mismatch?: boolean
+  /**
+   * The box the assistant's fresh read reports this reverse-charge purchase
+   * in, set only when it is not a box the proposal books (ruta 22 read,
+   * ruta 21 learned: accounted#37). Which box is right depends on the
+   * company that invoices, which is on the invoice, not in the history or
+   * the bank text. Also set on a purchase the proposal books with Swedish
+   * ingående moms when the read says the seller is abroad (crm#1498): a
+   * seller abroad charges no Swedish moms unless the invoice shows it. Never
+   * booked without a review; the review opens on the read's box with the
+   * proposal's one click away.
+   */
+  read_reverse_charge_kind?: ReverseChargeKind
+  /** Source 'clearing': the record behind it. Never booked without a review. */
+  clearing?: ClearingEvidence
 }
 
 /** The leg that is not the bank: what the chip, the assistant and Claude call "the account". */
 export function businessAccount(p: Pick<BookingProposal, 'debit_account' | 'credit_account'>): string {
   return p.debit_account.startsWith('19') ? p.credit_account : p.debit_account
+}
+
+/**
+ * The account a proposal stands for on the assistant's candidate slate: the
+ * first business line of a learned pattern, otherwise the leg that is not the
+ * bank.
+ */
+export function slateAccount(p: Pick<BookingProposal, 'debit_account' | 'credit_account' | 'line_pattern'>): string {
+  return p.line_pattern?.find((l) => l.type === 'business')?.account ?? businessAccount(p)
 }
 
 export function proposalHue(p: BookingProposal): TemplateHue {
@@ -109,6 +210,7 @@ export function accountProposal(input: {
   label: string
   category: TransactionCategory
   vat_treatment: VatTreatment | null
+  reverse_charge_kind?: ReverseChargeKind | null
   amount: number
   confidence?: number
   description?: string
@@ -118,7 +220,13 @@ export function accountProposal(input: {
   return {
     template_id: input.id,
     source: input.source,
-    booking: { kind: 'account', account: input.account, vat_treatment: vat, category: input.category },
+    booking: {
+      kind: 'account',
+      account: input.account,
+      vat_treatment: vat,
+      category: input.category,
+      ...kindFor(vat, input.reverse_charge_kind),
+    },
     name_sv: input.label,
     name_en: input.label,
     group: 'account',
@@ -133,21 +241,256 @@ export function accountProposal(input: {
   }
 }
 
-/** The same proposal with the account or VAT the person changed in the review. */
-export function withAccount(p: BookingProposal, account: string, vat_treatment: VatTreatment, amount: number): BookingProposal {
-  const category = p.booking.kind === 'counterparty' ? categoryFallback(amount) : p.booking.category
+/** The basis box travels only with the treatment it belongs to. */
+function kindFor(
+  vat: VatTreatment,
+  kind: ReverseChargeKind | null | undefined,
+): { reverse_charge_kind?: ReverseChargeKind } {
+  return vat === 'reverse_charge' && kind ? { reverse_charge_kind: kind } : {}
+}
+
+/**
+ * The basis boxes a bank booking can name (the categorize body's
+ * reverse_charge_kind), in momsdeklaration order: goods from another EU
+ * country (ruta 20, 4515), services from another EU country (ruta 21, 4535),
+ * services from outside the EU (ruta 22, 4531).
+ */
+export const PROPOSAL_REVERSE_CHARGE_KINDS: readonly ReverseChargeKind[] = Object.values(REVERSE_CHARGE_TREATMENT_KINDS)
+
+/**
+ * The basis box a proposal's reverse charge names: an account booking's
+ * reverse_charge_kind, or what a catalog template's supplier type books
+ * (it_saas_non_eu is ruta 22). Undefined when it is no reverse charge or names
+ * none (the server then books an EU service), and for a box a bank booking
+ * cannot name.
+ */
+export function reverseChargeKindOf(p: BookingProposal): ReverseChargeKind | undefined {
+  if (p.booking.kind === 'account') {
+    return p.booking.vat_treatment === 'reverse_charge' ? p.booking.reverse_charge_kind : undefined
+  }
+  const template = templateBehind(p)
+  if (template?.vat_treatment !== 'reverse_charge' || !template.reverse_charge_supplier_type) return undefined
+  const kind = reverseChargeKindForSupplierType(template.reverse_charge_supplier_type)
+  return PROPOSAL_REVERSE_CHARGE_KINDS.includes(kind) ? kind : undefined
+}
+
+/** The offset leg of a learned basis pair: 4598, or a company's own 4599 (patternReplayPlan). */
+const RC_BASIS_OFFSET = /^4[45]9\d$/
+
+/**
+ * The boxes a proposal reports its reverse-charge basis in (ruta 20-24), as
+ * its booking posts them: a learned pattern's basis accounts (4515, 4535,
+ * 4531 and so on). Otherwise the cost account itself when it is a basis
+ * account, else the box the booking names (an account booking's
+ * reverse_charge_kind, a catalog template's supplier type), else EU
+ * services, the engine's default: a counterpart learned as one pair stores
+ * no supplier country, so its box was never learned. Empty when the proposal
+ * books no reverse charge. A cost account whose own momskod is a
+ * reverse-charge purchase settles its box at booking
+ * (reconcileRcBasisWithChart) and is not seen here.
+ */
+export function reverseChargeBoxesOf(p: BookingProposal): ReverseChargeKind[] {
+  if (p.booking.kind === 'counterparty' && p.line_pattern && p.line_pattern.length > 0) {
+    const kinds = p.line_pattern
+      .filter((l) => l.type === 'business')
+      .map((l) => reverseChargeKindForBasisAccount(l.account)?.kind)
+      .filter((k): k is ReverseChargeKind => !!k)
+    return [...new Set(kinds)]
+  }
+  const template = templateBehind(p)
+  const vat = p.booking.kind === 'account' ? p.booking.vat_treatment : (template?.vat_treatment ?? p.vat_treatment)
+  if (vat !== 'reverse_charge') return []
+  const own = reverseChargeKindForBasisAccount(p.booking.kind === 'account' ? p.booking.account : businessAccount(p))
+  if (own) return [own.kind]
+  if (p.booking.kind === 'account') return [p.booking.reverse_charge_kind ?? DEFAULT_REVERSE_CHARGE_KIND]
+  if (template?.reverse_charge_supplier_type) return [reverseChargeKindForSupplierType(template.reverse_charge_supplier_type)]
+  return [DEFAULT_REVERSE_CHARGE_KIND]
+}
+
+/**
+ * What a proposal books on a purchase, as a reverse-charge dispute names it:
+ * one of the reverse-charge boxes, or 'swedish_vat' for ingående moms at a
+ * Swedish rate (2641, ruta 48).
+ */
+export type DisputedVat = ReverseChargeKind | 'swedish_vat'
+
+const SWEDISH_INPUT_VAT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat')
+const SWEDISH_RATES: ReadonlySet<VatTreatment> = new Set<VatTreatment>(['standard_25', 'reduced_12', 'reduced_6'])
+
+/**
+ * True when the proposal books a purchase with Swedish ingående moms: a
+ * learned pattern's debit moms line on 2641, otherwise a Swedish rate as the
+ * booking's treatment. Money in (the bank on the debit leg) is never one.
+ */
+export function booksSwedishInputVat(p: BookingProposal): boolean {
+  if (isCashLedger(p.debit_account)) return false
+  if (p.booking.kind === 'counterparty' && p.line_pattern && p.line_pattern.length > 0) {
+    return p.line_pattern.some((l) => l.type === 'vat' && l.side === 'debit' && l.account === SWEDISH_INPUT_VAT_ACCOUNT)
+  }
+  const template = templateBehind(p)
+  const vat = p.booking.kind === 'account' ? p.booking.vat_treatment : (template?.vat_treatment ?? p.vat_treatment)
+  return !!vat && SWEDISH_RATES.has(vat)
+}
+
+/**
+ * The box a proposal books and the one the assistant's read names, when the
+ * two differ (read_reverse_charge_kind, accounted#37); null otherwise. A
+ * proposal that books Swedish moms where the read names a reverse-charge
+ * box disputes as 'swedish_vat' (crm#1498).
+ */
+export function reverseChargeBoxDispute(
+  p: BookingProposal,
+): { proposal: DisputedVat; read: ReverseChargeKind } | null {
+  const read = p.read_reverse_charge_kind
+  if (!read) return null
+  const boxes = reverseChargeBoxesOf(p)
+  if (boxes.length === 0) return booksSwedishInputVat(p) ? { proposal: 'swedish_vat', read } : null
+  const own = boxes.find((k) => k !== read)
+  return own ? { proposal: own, read } : null
+}
+
+/**
+ * The proposal with its reverse charge in another box, as the review offers
+ * it when the read disagrees on the box (accounted#37): one account against
+ * the bank on the proposal's own cost account. What says where it came from
+ * (source, why, the counterpart's count) stays, so the review still names it
+ * and the row does not take it for the person's own choice. Null when the
+ * booking has several cost lines, which one account cannot carry.
+ */
+export function inReverseChargeBox(
+  p: BookingProposal,
+  kind: ReverseChargeKind,
+  amount: number,
+  entityType?: EntityType,
+): BookingProposal | null {
+  const cost = singleCostLine(p, entityType)
+  if (!cost) return null
+  const category =
+    p.booking.kind === 'counterparty' ? categoryFallback(amount) : carriedCategory(p.booking.category, cost.account, amount)
+  const dims = p.default_dimensions ?? cost.dimensions ?? null
   return {
     ...p,
-    booking: { kind: 'account', account, vat_treatment, category },
+    booking: { kind: 'account', account: cost.account, vat_treatment: 'reverse_charge', category, reverse_charge_kind: kind },
+    debit_account: amount < 0 ? cost.account : '1930',
+    credit_account: amount < 0 ? '1930' : cost.account,
+    line_pattern: null,
+    vat_treatment: 'reverse_charge',
+    default_dimensions: dims && Object.keys(dims).length > 0 ? dims : null,
+    read_reverse_charge_kind: undefined,
+  }
+}
+
+/** The one account a proposal books its cost on, beside any basis pair; null for several. */
+function singleCostLine(
+  p: BookingProposal,
+  entityType?: EntityType,
+): { account: string; dimensions?: Record<string, string> } | null {
+  if (p.booking.kind === 'account') return { account: p.booking.account }
+  if (p.booking.kind === 'template') {
+    const t = templateBehind(p)
+    if (!t) return null
+    const a = resolveTemplateAccountsForEntity(t, entityType)
+    return {
+      account: businessAccount({
+        debit_account: a.debitAccount ?? t.debit_account,
+        credit_account: a.creditAccount ?? t.credit_account,
+      }),
+    }
+  }
+  if (!p.line_pattern || p.line_pattern.length === 0) return { account: businessAccount(p) }
+  const costs = p.line_pattern.filter(
+    (l) => l.type === 'business' && !reverseChargeKindForBasisAccount(l.account) && !RC_BASIS_OFFSET.test(l.account),
+  )
+  return costs.length === 1 ? { account: costs[0].account, dimensions: costs[0].dimensions } : null
+}
+
+/** The box's number as the momsdeklaration prints it: '21' for ruta 21. */
+export function reverseChargeBoxNumber(kind: ReverseChargeKind): string {
+  return reverseChargeKindRuta(kind).replace('ruta', '')
+}
+
+/**
+ * The booking after the person set its account or VAT in the review: one
+ * account against the bank, and theirs from here on (source 'manual': Din
+ * kontering, Vald av dig). What the proposal it replaces said about itself
+ * (its why, its confidence, the rule or read behind it) does not describe
+ * this booking and is left behind: the header kept naming the machine's
+ * pick over an account the person had changed, and nothing could tell the
+ * two apart when the review closed (PostHog 170). `label` names the account
+ * the person picked; a VAT change alone keeps the name.
+ * A reverse charge keeps its basis box: the one the booking has across an
+ * account change, otherwise `lastKind`, the box the review last held, so a
+ * person who leaves reverse charge and picks it again gets the box back
+ * (ruta 22 stays ruta 22) instead of the EU-service default (accounted#35).
+ */
+export function withAccount(
+  p: BookingProposal,
+  account: string,
+  vat_treatment: VatTreatment,
+  amount: number,
+  label?: string,
+  lastKind?: ReverseChargeKind | null,
+): BookingProposal {
+  return personsBooking(p, account, vat_treatment, amount, label, reverseChargeKindOf(p) ?? lastKind)
+}
+
+/**
+ * The person's pick of the box a reverse-charge purchase reports its basis
+ * in (ruta 20, 21 or 22), on the account the booking has: the review's
+ * correction of a box the proposal got wrong (accounted#35).
+ */
+export function withReverseChargeKind(p: BookingProposal, kind: ReverseChargeKind, amount: number): BookingProposal {
+  const account = p.booking.kind === 'account' ? p.booking.account : businessAccount(p)
+  return personsBooking(p, account, 'reverse_charge', amount, undefined, kind)
+}
+
+function personsBooking(
+  p: BookingProposal,
+  account: string,
+  vat_treatment: VatTreatment,
+  amount: number,
+  label: string | undefined,
+  kind: ReverseChargeKind | null | undefined,
+): BookingProposal {
+  const category =
+    p.booking.kind === 'counterparty' ? categoryFallback(amount) : carriedCategory(p.booking.category, account, amount)
+  return {
+    template_id: `account:${account}`,
+    source: 'manual',
+    booking: { kind: 'account', account, vat_treatment, category, ...kindFor(vat_treatment, kind) },
+    name_sv: label ?? p.name_sv,
+    name_en: label ?? p.name_en,
+    group: 'account',
     debit_account: amount < 0 ? account : '1930',
     credit_account: amount < 0 ? '1930' : account,
+    confidence: 1,
+    description_sv: '',
+    risk_level: 'LOW',
+    requires_review: false,
     vat_treatment,
-    line_pattern: null,
+    default_dimensions: p.default_dimensions,
   }
 }
 
 function categoryFallback(amount: number): TransactionCategory {
   return amount < 0 ? 'expense_other' : 'income_other'
+}
+
+/**
+ * The category a booking keeps when someone names another account for it:
+ * the person in the review, or the assistant's pick taken over the proposal
+ * shown. An expense or income category carries over, it only says which way
+ * the row books. 'private' (and 'uncategorized') does not, unless the new
+ * account is a balance-sheet one: the category path books those without a
+ * moms line whatever VAT treatment rides along (getCategoryAccountMapping),
+ * in the preview and on the server alike. A cost account set by hand over
+ * the assistant's "private" pick was therefore booked without the moms its
+ * underlag states, while the review said 25 % (PostHog 170).
+ */
+export function carriedCategory(category: TransactionCategory, account: string, amount: number): TransactionCategory {
+  const booksMoms = category.startsWith('expense_') || category.startsWith('income_')
+  if (booksMoms || account.startsWith('2')) return category
+  return categoryFallback(amount)
 }
 
 /** The body POST /api/transactions/[id]/categorize books this proposal with. */
@@ -161,77 +504,36 @@ export function categorizeBodyFor(
   counterparty_template_id?: string
   account_override?: string
   vat_treatment?: VatTreatment
+  reverse_charge_kind?: ReverseChargeKind
   vat_amount?: number
   dimensions?: Record<string, string>
   inbox_item_id?: string
+  proposal_id?: string
 } {
   const dims = extras.dimensions && Object.keys(extras.dimensions).length > 0 ? { dimensions: extras.dimensions } : {}
   const vatAmount = extras.vatAmount != null ? { vat_amount: extras.vatAmount } : {}
   const inbox = extras.inboxItemId ? { inbox_item_id: extras.inboxItemId } : {}
+  // Which suggestion the booking started from, for suggestion_log. A
+  // proposal the person built themselves names none.
+  const from = p.source === 'manual' ? {} : { proposal_id: p.template_id }
   switch (p.booking.kind) {
     case 'template':
-      return { is_business: true, category: p.booking.category, template_id: p.booking.template_id, ...dims, ...vatAmount, ...inbox }
+      return { is_business: true, category: p.booking.category, template_id: p.booking.template_id, ...dims, ...vatAmount, ...inbox, ...from }
     case 'counterparty':
-      return { is_business: true, counterparty_template_id: p.booking.counterparty_template_id, ...dims, ...inbox }
+      return { is_business: true, counterparty_template_id: p.booking.counterparty_template_id, ...dims, ...inbox, ...from }
     case 'account':
       return {
         is_business: true,
         category: p.booking.category,
         account_override: p.booking.account,
         vat_treatment: p.booking.vat_treatment,
+        ...kindFor(p.booking.vat_treatment, p.booking.reverse_charge_kind),
         ...dims,
         ...vatAmount,
         ...inbox,
+        ...from,
       }
   }
-}
-
-/**
- * The verifikat the proposal books, as the preview input the engine mirror
- * (lib/bookkeeping/proposal-lines.ts) computes lines from. One function for
- * every kind, so the review shows exactly what the booking will post.
- */
-export function previewInputFor(
-  p: BookingProposal,
-  ctx: { amount: number; amountSek: number; entityType?: EntityType },
-): ProposalLinesInput {
-  const base = { amount: ctx.amount, amountSek: ctx.amountSek, entityType: ctx.entityType }
-  if (p.booking.kind === 'counterparty') {
-    if (p.line_pattern && p.line_pattern.length > 0) {
-      // Engine parity for the money leg: the settlement books on the learned
-      // template's legacy pair (raw accounts, no entity resolution).
-      return { ...base, linePattern: p.line_pattern, templateDebitAccount: p.debit_account, templateCreditAccount: p.credit_account }
-    }
-    // Legacy single pair: VAT from the learned treatment on expenses only,
-    // the 2645/2614 pair for reverse charge, no basbelopp pair.
-    return {
-      ...base,
-      templateDebitAccount: p.debit_account,
-      templateCreditAccount: p.credit_account,
-      templateVatTreatment: p.vat_treatment ?? null,
-      counterpartyLegacy: true,
-    }
-  }
-  if (p.booking.kind === 'template') {
-    const t = getTemplateById(p.booking.template_id)
-    if (t) {
-      // Static templates carry AB-specific accounts; the engine substitutes
-      // them at booking, so the preview shows the same substitution.
-      const accounts = resolveTemplateAccountsForEntity(t, ctx.entityType)
-      return {
-        ...base,
-        templateDebitAccount: accounts.debitAccount ?? t.debit_account,
-        templateCreditAccount: accounts.creditAccount ?? t.credit_account,
-        templateVatRate: t.vat_rate,
-        templateVatTreatment: t.vat_treatment,
-        templateSupplierType: t.reverse_charge_supplier_type,
-      }
-    }
-  }
-  const account = p.booking.kind === 'account' ? p.booking.account : businessAccount(p)
-  const category = p.booking.kind === 'account' ? p.booking.category : categoryFallback(ctx.amount)
-  const vat = p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? 'exempt')
-  return { ...base, category, accountOverride: account, vatTreatment: vat }
 }
 
 /** The catalog template behind a proposal, when it has one (rules text, AB accounts). */
@@ -240,12 +542,14 @@ export function templateBehind(p: BookingProposal): BookingTemplate | undefined 
 }
 
 /** The i18n key (tx_quick_review) and values for the one-line why. */
-export function whyKeyFor(p: BookingProposal): { key: string; values?: Record<string, number> } {
+export function whyKeyFor(p: BookingProposal): { key: string; values?: Record<string, string | number> } {
   switch (p.source) {
+    case 'clearing':
+      return clearingWhyKey(p)
     case 'rule':
       return { key: 'rec_why_rule' }
     case 'counterparty':
-      return { key: 'rec_why_counterparty', values: { count: p.seen_count ?? 1 } }
+      return { key: p.direction_mismatch ? 'rec_why_counterparty_refund' : 'rec_why_counterparty', values: { count: p.seen_count ?? 1 } }
     case 'catalog':
       return { key: 'rec_why_catalog' }
     case 'recent':
@@ -264,6 +568,11 @@ export function categoryForAccount(
   preferred?: TransactionCategory | null,
 ): TransactionCategory {
   if (preferred && preferred !== 'uncategorized') return preferred
+  // Every representation account (avdragsgill or not) is the representation
+  // category, not only the category's default: with the default 6072 a 6071
+  // booking read as expense_other, and before it a 6072 one did, which also
+  // let it past the grant refusal of representation (accounted#86).
+  if (groupForAccount(account) === 'representation') return 'expense_representation'
   const candidates: TransactionCategory[] = [
     'expense_equipment', 'expense_software', 'expense_travel', 'expense_office', 'expense_marketing',
     'expense_professional_services', 'expense_representation', 'expense_consumables', 'expense_vehicle',
@@ -288,6 +597,7 @@ export function categoryForAccount(
 export function agentBookingFor(
   p: BookingProposal,
   entityType?: EntityType,
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): { category: TransactionCategory; account_override: string; vat_treatment: VatTreatment } | null {
   if (p.booking.kind === 'account') {
     return { category: p.booking.category, account_override: p.booking.account, vat_treatment: p.booking.vat_treatment }
@@ -295,7 +605,7 @@ export function agentBookingFor(
   if (p.booking.kind === 'template') {
     const t = getTemplateById(p.booking.template_id)
     if (!t) return null
-    const accounts = resolveTemplateAccountsForEntity(t, entityType)
+    const accounts = resolveTemplateAccountsForEntity(t, entityType, skattekontoAccount)
     const resolved = { debit_account: accounts.debitAccount ?? t.debit_account, credit_account: accounts.creditAccount ?? t.credit_account }
     return { category: p.booking.category, account_override: businessAccount(resolved), vat_treatment: t.vat_treatment ?? 'exempt' }
   }
@@ -305,13 +615,96 @@ export function agentBookingFor(
   return { category: categoryForAccount(account, entityType), account_override: account, vat_treatment: p.vat_treatment ?? 'exempt' }
 }
 
+/** categorize_transaction's spelling of a reverse-charge basis box (vat_treatment 'reverse_charge_non_eu_services'). */
+type CategorizeToolVatTreatment = VatTreatment | keyof typeof REVERSE_CHARGE_TREATMENT_KINDS
+
+function toolVatTreatment(p: BookingProposal, vat: VatTreatment): CategorizeToolVatTreatment {
+  // The box the proposal names: an account booking's, or a catalog
+  // template's supplier type (it_saas_non_eu is ruta 22), which otherwise
+  // reached the agent as plain reverse_charge and booked ruta 21.
+  const kind = vat === 'reverse_charge' ? reverseChargeKindOf(p) : undefined
+  const spelled = (Object.keys(REVERSE_CHARGE_TREATMENT_KINDS) as Array<keyof typeof REVERSE_CHARGE_TREATMENT_KINDS>).find(
+    (k) => REVERSE_CHARGE_TREATMENT_KINDS[k] === kind,
+  )
+  return spelled ?? vat
+}
+
+/**
+ * agentBookingFor plus the proposal's stable id: the arguments the MCP
+ * suggestion tool hands an agent, so a booking made from them says which
+ * suggestion it started from (recorded in suggestion_log, never booked).
+ * A reverse charge that names its basis box is spelled the way
+ * categorize_transaction takes it, so the agent's booking lands in the box
+ * the proposal shows.
+ */
+export function categorizeArgsFor(
+  p: BookingProposal,
+  entityType?: EntityType,
+  skattekontoAccount?: SkattekontoLedgerAccount,
+): { category: TransactionCategory; account_override: string; vat_treatment: CategorizeToolVatTreatment; proposal_id: string } | null {
+  const booking = agentBookingFor(p, entityType, skattekontoAccount)
+  return booking
+    ? { ...booking, vat_treatment: toolVatTreatment(p, booking.vat_treatment), proposal_id: p.template_id }
+    : null
+}
+
+function clearingWhyKey(p: BookingProposal): { key: string; values?: Record<string, string | number> } {
+  const e = p.clearing
+  if (!e) return { key: 'rec_why_manual' }
+  const dates = e.business_dates
+  const last = dates[dates.length - 1] ?? ''
+  if (e.fit === 'receipt') {
+    return { key: 'rec_why_clearing_receipt', values: { receipt: e.receipt_number ?? '', date: last, account: e.account } }
+  }
+  if (e.fit === 'days') {
+    return { key: 'rec_why_clearing_days', values: { count: dates.length, first: dates[0] ?? '', last, account: e.account } }
+  }
+  return { key: 'rec_why_clearing_balance', values: { date: last, account: e.account } }
+}
+
+/**
+ * A clearing proposal's reason in Swedish: what the record says and why the
+ * row books against the clearing account. The proposal's description, the
+ * MCP tool's why and the assistant's candidate reason.
+ */
+export function clearingReasonSv(e: ClearingEvidence): string {
+  const dates = e.business_dates
+  const first = dates[0] ?? ''
+  const last = dates[dates.length - 1] ?? ''
+  const what =
+    e.fit === 'receipt'
+      ? `Swish-betalning som stämmer på öret med kvitto ${e.receipt_number ?? ''} i kassan ${last}`
+      : e.fit === 'days'
+        ? `Kortutbetalning som motsvarar kortförsäljningen i kassan ${dates.length > 1 ? `${first} till ${last}` : first}`
+        : `Kortutbetalning som motsvarar kortpengarna från kassan som inte kommit in på banken, till och med ${last}`
+  return `${what}. Försäljningen bokförs i dagskassan, så raden bokförs mot ${e.account} och inte som intäkt igen, annars räknas försäljningen två gånger.`
+}
+
 /** The why in Swedish, for surfaces without the UI's message catalog (the MCP tool). */
 export function whyTextSv(p: BookingProposal): string {
+  const why = sourceWhySv(p)
+  const box = reverseChargeBoxDispute(p)
+  if (!box) return why
+  if (box.proposal === 'swedish_vat') {
+    return `${why}, men assistentens läsning säger att säljaren finns utomlands: omvänd skattskyldighet i ruta ${reverseChargeBoxNumber(box.read)}, inte svensk moms. Svensk moms gäller bara om fakturan visar svensk moms och säljarens svenska momsregistreringsnummer`
+  }
+  return `${why}, men assistentens läsning lägger köpet i ruta ${reverseChargeBoxNumber(box.read)}, inte ruta ${reverseChargeBoxNumber(box.proposal)}: rätt ruta beror på vilket bolag som fakturerar, se fakturan`
+}
+
+function sourceWhySv(p: BookingProposal): string {
   switch (p.source) {
+    case 'clearing':
+      return p.clearing ? clearingReasonSv(p.clearing) : 'Pengar som redan är bokförda på ett avräkningskonto'
     case 'rule':
       return 'Enligt företagets regel'
-    case 'counterparty':
-      return `Bokförd så ${p.seen_count ?? 1} ${(p.seen_count ?? 1) === 1 ? 'gång' : 'gånger'} tidigare`
+    case 'counterparty': {
+      const times = `${p.seen_count ?? 1} ${(p.seen_count ?? 1) === 1 ? 'gång' : 'gånger'}`
+      if (p.direction_mismatch) {
+        return `Motparten är bokförd ${times} tidigare, men pengarna går åt andra hållet: troligen en återbetalning eller kreditering, som bokförs omvänt mot samma konto. Stäm av mot kreditnotan eller ursprungsköpet`
+      }
+      const seen = `Bokförd så ${times} tidigare`
+      return p.contested ? `${seen}, men matchningen är svag och assistentens läsning av raden bokför annorlunda` : seen
+    }
     case 'catalog':
       return 'Känt mönster i bankens text'
     case 'recent':

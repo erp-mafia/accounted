@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/agent/composer/client', () => ({
   getAnthropic: vi.fn(),
-  SONNET_MODEL: 'eu.anthropic.claude-sonnet-5',
 }))
 
 import { getAnthropic } from '@/lib/agent/composer/client'
@@ -57,9 +56,9 @@ describe('interpretChatAnswer', () => {
       },
     })
 
-    // Call contract: Sonnet, capped output, forced tool, NO thinking.
+    // Call contract: the cheap tier (Haiku 5.5), capped output, forced tool, NO thinking.
     const call = createMock.mock.calls[0][0]
-    expect(call.model).toBe('eu.anthropic.claude-sonnet-5')
+    expect(call.model).toMatch(/claude-haiku-5-5$/)
     expect(call.max_tokens).toBe(600)
     expect(call.thinking).toBeUndefined()
     expect(call.tool_choice).toEqual({ type: 'tool', name: 'record_answer' })

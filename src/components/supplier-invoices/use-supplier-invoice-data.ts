@@ -22,8 +22,9 @@ import { deriveSupplierInvoiceDefaults } from './supplier-invoice-defaults'
  * (vatRegistered=true, series, period) and flipping once four fetches land.
  * The settings-driven values are derived (deriveSupplierInvoiceDefaults),
  * never copied into state, so a background revalidation cannot get them out
- * of step; the per-invoice öresavrundning toggle is the one local override
- * and starts off, independently of the company setting.
+ * of step; the per-invoice öresavrundning toggle is the one local override.
+ * It starts unset, independently of the company setting: until the person
+ * flips it, the form follows the invoice total they typed (total-first).
  */
 export function useSupplierInvoiceData() {
   const company = useCompanyOptional()?.company ?? null
@@ -49,7 +50,9 @@ export function useSupplierInvoiceData() {
     accounts,
     entityType: defaults.entityType,
     accountingMethod: defaults.accountingMethod,
-    oreRounding: oreRoundingOverride ?? defaults.oreRounding,
+    bookingMoment: defaults.bookingMoment,
+    /** The person's öresavrundning choice, null until they flip the switch. */
+    oreRoundingChoice: oreRoundingOverride ?? (defaults.oreRounding || null),
     setOreRounding,
     dimensionsEnabled: defaults.dimensionsEnabled,
     vatRegistered: defaults.vatRegistered,

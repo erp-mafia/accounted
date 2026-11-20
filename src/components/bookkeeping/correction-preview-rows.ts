@@ -1,4 +1,5 @@
 import type { JournalEntryLine } from '@/types'
+import { roundOre } from '@/lib/money'
 
 export interface CorrectionLineInput {
   account_number: string
@@ -26,10 +27,6 @@ function toNumber(v: string | number | null | undefined): number {
   if (v == null) return 0
   const n = typeof v === 'string' ? parseFloat(v) : v
   return Number.isFinite(n) ? n : 0
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
 }
 
 /**
@@ -82,10 +79,10 @@ export function buildCorrectionRows(
   }
 
   for (const row of map.values()) {
-    row.original = round2(row.original)
-    row.storno = round2(row.storno)
-    row.correction = round2(row.correction)
-    row.delta = round2(row.storno + row.correction)
+    row.original = roundOre(row.original)
+    row.storno = roundOre(row.storno)
+    row.correction = roundOre(row.correction)
+    row.delta = roundOre(row.storno + row.correction)
   }
 
   return Array.from(map.values()).sort((a, b) =>

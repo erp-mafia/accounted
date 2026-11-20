@@ -1,15 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock the tic-client functions. /lookup now only calls
-// searchCompanyByOrgNumber: the Phase 2 fetchers stay mocked because the
-// /profile handler shares the module, but we don't expect /lookup to invoke
-// them.
+// Mock the tic-client functions. /lookup only calls searchCompanyByOrgNumber:
+// getFiscalYears stays mocked because the /profile handler shares the module,
+// but we don't expect /lookup to invoke it.
 vi.mock('../lib/tic-client', () => ({
   searchCompanyByOrgNumber: vi.fn(),
-  getBankAccounts: vi.fn(),
-  getIndustryCodes: vi.fn(),
-  getEmails: vi.fn(),
-  getPhones: vi.fn(),
   getFiscalYears: vi.fn(),
 }))
 
@@ -26,10 +21,6 @@ vi.mock('@/lib/parties/scb/client', () => ({
 import { ticExtension } from '../index'
 import {
   searchCompanyByOrgNumber,
-  getBankAccounts,
-  getIndustryCodes,
-  getEmails,
-  getPhones,
   getFiscalYears,
 } from '../lib/tic-client'
 import { TICAPIError } from '../lib/tic-types'
@@ -37,22 +28,20 @@ import type { TICCompanyDocument } from '../lib/tic-types'
 import { isScbConfigured } from '@/lib/parties/scb/config'
 import { createScbClient } from '@/lib/parties/scb/client'
 import { factsFromScbCompany } from '@/lib/parties/scb/map'
+import { testRoutes } from '@/tests/helpers'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
-const mockBank = vi.mocked(getBankAccounts)
-const mockIndustries = vi.mocked(getIndustryCodes)
-const mockEmails = vi.mocked(getEmails)
-const mockPhones = vi.mocked(getPhones)
 const mockFiscalYears = vi.mocked(getFiscalYears)
 
 function makeRequest(orgNumber?: string): Request {
-  const url = orgNumber
-    ? `http://localhost/api/extensions/ext/tic/lookup?org_number=${encodeURIComponent(orgNumber)}`
-    : 'http://localhost/api/extensions/ext/tic/lookup'
-  return new Request(url)
+  return new Request('http://localhost/api/extensions/ext/tic/lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(orgNumber === undefined ? {} : { org_number: orgNumber }),
+  })
 }
 
-const lookupHandler = ticExtension.apiRoutes![0].handler
+const lookupHandler = testRoutes(ticExtension)[0].handler
 
 // Search-public document now carries everything /lookup needs at the top
 // level: sniCodes, bankAccounts, emailAddresses, phoneNumbers,
@@ -98,6 +87,24 @@ describe('TIC lookup route', () => {
 
   it('returns 400 when org_number is missing', async () => {
     const res = await lookupHandler(makeRequest())
+    expect(res.status).toBe(400)
+  })
+
+  it('is a POST that reads the body, so the org number stays out of the URL (#95)', async () => {
+    const routes = ticExtension.apiRoutes ?? []
+    expect(routes.filter((r) => r.path === '/lookup').map((r) => r.method)).toEqual(['POST'])
+    // A query parameter is no longer read.
+    const res = await lookupHandler(
+      new Request('http://localhost/api/extensions/ext/tic/lookup?org_number=5560360793', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    expect(mockSearch).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a body that is not JSON', async () => {
+    const res = await lookupHandler(
+      new Request('http://localhost/api/extensions/ext/tic/lookup', { method: 'POST', body: 'org_number=5560360793' }),
+    )
     expect(res.status).toBe(400)
   })
 
@@ -157,10 +164,6 @@ describe('TIC lookup route', () => {
   it('does NOT fan out to Phase 2 endpoints', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     await lookupHandler(makeRequest('556036-0793'))
-    expect(mockBank).not.toHaveBeenCalled()
-    expect(mockIndustries).not.toHaveBeenCalled()
-    expect(mockEmails).not.toHaveBeenCalled()
-    expect(mockPhones).not.toHaveBeenCalled()
     expect(mockFiscalYears).not.toHaveBeenCalled()
   })
 
@@ -257,6 +260,16 @@ describe('TIC lookup route', () => {
     expect(data.isCeased).toBe(true)
   })
 
+  // A sole trader who restarts under a registration struck off years ago:
+  // Lens keeps the stale isCeased next to an active current state.
+  it('treats a firm as active when activityStatus is isActive despite a stale isCeased', async () => {
+    mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isActive' })
+
+    const res = await lookupHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.isCeased).toBe(false)
+  })
+
   it('returns 503 when TIC is not configured', async () => {
     mockSearch.mockRejectedValue(
       new TICAPIError('TIC_API_PROXY_URL is not configured', undefined, 'NOT_CONFIGURED')
@@ -311,7 +324,7 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
 
   // SCB's row for an ideell förening: the columns the register answers with.
   const scbRow = {
-    OrgNr: '8024811658',
+    OrgNr: '8022334455',
     Företagsnamn: 'SEGELSÄLLSKAPET GAMBIT',
     'Juridisk form': 'Ideell förening',
     'Juridisk form, kod': '61',
@@ -332,15 +345,15 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
     mockScbConfigured.mockReturnValue(true)
     lookupByOrgNumber.mockResolvedValue({
       found: true,
-      peOrgNr: '168024811658',
+      peOrgNr: '168022334455',
       row: scbRow,
       facts: factsFromScbCompany(scbRow),
       fetchedAt: '2026-09-18T08:00:00.000Z',
     })
 
-    const res = await lookupHandler(makeRequest('802481-1658'))
+    const res = await lookupHandler(makeRequest('802233-4455'))
     expect(res.status).toBe(404)
-    expect(lookupByOrgNumber).toHaveBeenCalledWith('8024811658')
+    expect(lookupByOrgNumber).toHaveBeenCalledWith('8022334455')
     await expect(res.json()).resolves.toEqual({
       error: 'Company not found',
       registry: {
@@ -355,7 +368,7 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
 
   it('stays a plain miss when SCB is not configured here', async () => {
     mockScbConfigured.mockReturnValue(false)
-    const res = await lookupHandler(makeRequest('802481-1658'))
+    const res = await lookupHandler(makeRequest('802233-4455'))
     expect(res.status).toBe(404)
     await expect(res.json()).resolves.toEqual({ error: 'Company not found' })
     expect(lookupByOrgNumber).not.toHaveBeenCalled()
@@ -370,14 +383,14 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
 
   it('stays a plain miss when SCB has no row or the call fails', async () => {
     mockScbConfigured.mockReturnValue(true)
-    lookupByOrgNumber.mockResolvedValueOnce({ found: false, peOrgNr: '168024811658', row: null, facts: [], fetchedAt: '' })
-    await expect((await lookupHandler(makeRequest('802481-1658'))).json()).resolves.toEqual({
+    lookupByOrgNumber.mockResolvedValueOnce({ found: false, peOrgNr: '168022334455', row: null, facts: [], fetchedAt: '' })
+    await expect((await lookupHandler(makeRequest('802233-4455'))).json()).resolves.toEqual({
       error: 'Company not found',
     })
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     lookupByOrgNumber.mockRejectedValueOnce(new Error('scb down'))
-    await expect((await lookupHandler(makeRequest('802481-1658'))).json()).resolves.toEqual({
+    await expect((await lookupHandler(makeRequest('802233-4455'))).json()).resolves.toEqual({
       error: 'Company not found',
     })
     expect(warn).toHaveBeenCalled()

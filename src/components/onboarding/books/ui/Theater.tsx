@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { createTheater, type TheaterAccount, type TheaterApi, type TheaterGroup, type TheaterParty } from '../engines/theater-engine'
+import { useTranslations } from 'next-intl'
+import { createTheater, type TheaterAccount, type TheaterApi, type TheaterLabels, type TheaterParty } from '../engines/theater-engine'
 import { ImportProgress, type ImportProgressProps } from './ImportProgress'
 
 export interface TheaterLine {
@@ -27,8 +28,6 @@ interface TheaterProps {
   progress?: ImportProgressProps
   onApi: (api: TheaterApi | null) => void
   onCount?: (landed: number) => void
-  groupLabels?: Partial<Record<TheaterGroup, string>>
-  reviewLabel?: string
 }
 
 /**
@@ -36,7 +35,8 @@ interface TheaterProps {
  * The engine is created once the model exists and torn down on unmount;
  * the step drives it through the api (spawn, feed, register stage).
  */
-export function Theater({ model, lines, shown, settled, hold, progress, onApi, onCount, groupLabels, reviewLabel }: TheaterProps) {
+export function Theater({ model, lines, shown, settled, hold, progress, onApi, onCount }: TheaterProps) {
+  const t = useTranslations('books')
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const onApiRef = useRef(onApi)
   const onCountRef = useRef(onCount)
@@ -54,14 +54,27 @@ export function Theater({ model, lines, shown, settled, hold, progress, onApi, o
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !model) return
+    // The canvas draws these words itself, so they are handed in here, once,
+    // for every step that plays the theater (SIE file, provider, resume).
+    const labels: TheaterLabels = {
+      groups: { tillgangar: t('grp_assets'), skulder: t('grp_liabilities'), intakter: t('grp_revenue'), kostnader: t('grp_costs') },
+      others: {
+        tillgangar: t('grp_other_assets'),
+        skulder: t('grp_other_liabilities'),
+        intakter: t('grp_other_revenue'),
+        kostnader: t('grp_other_costs'),
+      },
+      review: t('grp_review'),
+      counterparty: t('grp_counterparty'),
+      vouchers: (count) => t('grp_vouchers', { count }),
+    }
     const api = createTheater({
       canvas,
       company: model.company,
       accounts: model.accounts,
       counterparties: model.counterparties,
       onCount: (n) => onCountRef.current?.(n),
-      groupLabels,
-      reviewLabel,
+      labels,
     })
     onApiRef.current(api)
     return () => {

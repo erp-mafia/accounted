@@ -1,15 +1,22 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S npx tsx --conditions react-server
 /**
  * Administrative undo of an executed year-end closing (bokslut).
  *
  * Restores a company to the state just before "Verkställ bokslut" so the
  * dispositions/preview step can be re-run, WITHOUT violating verifikat
  * immutability: every journal change is a storno posted through the
- * bookkeeping engine (BFL 5 kap 5 §). Nothing is edited or deleted.
+ * bookkeeping engine (BFL 5 kap 5 §), reached through the posting port as
+ * the owner's in-app reopen (lib/core/bookkeeping/fiscal-year-reopen.ts)
+ * reaches it: while POSTING_EVENTS is shadow or strict each storno records
+ * the same ledger.storno event, the year reopened as its subject, the
+ * owner's request (user_created) as its basis. Nothing is edited or deleted.
  *
  * What it does, in order:
- *   1. Preconditions: the period has a closing entry; no årsredovisning
- *      submission or signature request exists for the company; the next
+ *   1. Preconditions: the period has a closing entry; the årsredovisning
+ *      has no legal weight yet (no submission, no signed signature, no
+ *      signed/filed version; see scripts/lib/year-end-undo-gate.ts). A
+ *      version still ready_for_signature is superseded before anything else
+ *      so its pending signature requests cannot be signed; the next
  *      period (if any) is open and has no closing entry of its own. Other
  *      posted entries in the next period are reported but do not block
  *      (their balances are independent of the IB; the re-run's continuity
@@ -45,15 +52,15 @@
  *
  * Usage:
  *   # Dry run (read-only) against the env in .env.local
- *   npx tsx scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid>
+ *   npx tsx --conditions react-server scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid>
  *
  *   # Apply, attributing to a specific user. --confirm-url must restate the
  *   # target Supabase URL so the operator confirms WHICH environment mutates.
- *   npx tsx scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid> \
+ *   npx tsx --conditions react-server scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid> \
  *     --user-id <uuid> --commit --confirm-url https://<project>.supabase.co
  *
  *   # Against another environment (e.g. production)
- *   npx tsx scripts/undo-year-end-closing.ts --env-file .env.prod.local ...
+ *   npx tsx --conditions react-server scripts/undo-year-end-closing.ts --env-file .env.prod.local ...
  *
  * Run against staging first; only run against prod after reviewing the dry-run.
  */
@@ -68,7 +75,14 @@ function arg(name: string): string | undefined {
 config({ path: arg('env-file') ?? '.env.local' })
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { reverseEntry } from '../src/lib/bookkeeping/engine'
+import { reopenStornoBusinessEvent } from '../src/lib/core/bookkeeping/fiscal-year-reopen'
+import { todayIsoStockholm } from '../src/lib/dates/iso'
+import { linkBasisColumns } from '../src/lib/links/stamp'
+import { postingPort } from '../src/lib/posting/port'
+import { evaluateYearEndUndoGate } from './lib/year-end-undo-gate'
+import { registerScriptInitLoader } from './lib/register-init-loader'
+
+registerScriptInitLoader()
 
 const COMPANY_ID = arg('company-id')
 const PERIOD_ID = arg('period-id')
@@ -126,6 +140,23 @@ type EntryRow = {
   status: string
 }
 
+/**
+ * The storno of one verifikat through the posting port: reverseEntry gets the
+ * call it always got, and while POSTING_EVENTS is on the storno's event is
+ * linked before its number, as the in-app reopen records it.
+ */
+function reverseThroughPort(userId: string, entryId: string) {
+  return postingPort.reverseJournalEntry({
+    supabase,
+    companyId: COMPANY_ID!,
+    userId,
+    entryId,
+    event: () =>
+      reopenStornoBusinessEvent({ periodId: PERIOD_ID!, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('user_created') }),
+    role: 'reversal',
+  })
+}
+
 function label(e: EntryRow): string {
   return `${e.voucher_series ?? 'A'}${e.voucher_number} ${e.entry_date} "${e.description}" [${e.source_type}/${e.status}]`
 }
@@ -149,19 +180,47 @@ async function main() {
   }
 
   // ── Preconditions ──────────────────────────────────────────────
-  const { count: submissions } = await supabase
-    .from('arsredovisning_submissions')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', COMPANY_ID)
-    .eq('fiscal_period_id', PERIOD_ID)
-  if ((submissions ?? 0) > 0) fail('an årsredovisning submission exists for this period: refuse to reopen')
-
-  const { count: signatureRequests } = await supabase
-    .from('arsredovisning_signature_requests')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', COMPANY_ID)
-    .eq('fiscal_period_id', PERIOD_ID)
-  if ((signatureRequests ?? 0) > 0) fail('an årsredovisning signature request exists for this period: refuse to reopen')
+  // Årsredovisning gate: only legal acts block (a signature, a signed or
+  // filed version, a Bolagsverket submission). Pending requests and drafts
+  // are paperwork; a ready_for_signature version is superseded below so its
+  // pending slots cannot be signed against the numbers this undo changes.
+  // See scripts/lib/year-end-undo-gate.ts for the rule.
+  const [submissionsRes, signatureRes, versionsRes, narrativeRes] = await Promise.all([
+    supabase
+      .from('arsredovisning_submissions')
+      .select('id, status')
+      .eq('company_id', COMPANY_ID)
+      .eq('fiscal_period_id', PERIOD_ID),
+    supabase
+      .from('arsredovisning_signature_requests')
+      .select('id, status, signed_at, annual_report_version_id')
+      .eq('company_id', COMPANY_ID)
+      .eq('fiscal_period_id', PERIOD_ID),
+    supabase
+      .from('annual_report_versions')
+      .select('id, version_number, status')
+      .eq('company_id', COMPANY_ID)
+      .eq('fiscal_period_id', PERIOD_ID),
+    supabase
+      .from('arsredovisning_narratives')
+      .select('agm_date')
+      .eq('company_id', COMPANY_ID)
+      .eq('fiscal_period_id', PERIOD_ID)
+      .maybeSingle(),
+  ])
+  for (const res of [submissionsRes, signatureRes, versionsRes, narrativeRes]) {
+    if (res.error) fail(`failed to read årsredovisning state: ${res.error.message}`)
+  }
+  const today = todayIsoStockholm()
+  const gate = evaluateYearEndUndoGate({
+    submissions: submissionsRes.data ?? [],
+    signatureRequests: signatureRes.data ?? [],
+    versions: versionsRes.data ?? [],
+    agmDate: narrativeRes.data?.agm_date ?? null,
+    today,
+  })
+  if (gate.blockers.length > 0) fail(gate.blockers.join('\n  '))
+  for (const w of gate.warnings) console.warn(`  note: ${w}`)
 
   const { data: settings } = await supabase
     .from('company_settings')
@@ -284,6 +343,12 @@ async function main() {
 
   if (!COMMIT) {
     console.log('\nDry run only. Planned actions:')
+    for (const v of gate.versionsToSupersede) {
+      console.log(
+        `  0. Supersede årsredovisning version ${v.version_number} (ready_for_signature); ` +
+          `${gate.voidedRequests.length} pending signature request(s) can no longer be signed`
+      )
+    }
     if (appropriationEntry) console.log(`  1. Storno ${label(appropriationEntry)}`)
     if (ibEntry) console.log(`  2. Storno ${label(ibEntry)} (clears IB link + flag on next period)`)
     if (nextPeriod) console.log('  3. Reset next period continuity_verified to NULL')
@@ -297,15 +362,55 @@ async function main() {
   }
 
   // ── Execute ────────────────────────────────────────────────────
+  // Void the stale annual report first, so nobody can sign it while the
+  // year is being reopened. Same transition the product makes when a report
+  // is re-finalized (ready_for_signature -> superseded); the version and its
+  // pending requests stay as history, nothing is deleted. Requests are NOT
+  // marked 'declined': that status records a board member refusing to sign
+  // (ABL 8 kap. evidence), which is not what happened.
+  const supersededVersions: Array<{ id: string; version_number: number }> = []
+  for (const v of gate.versionsToSupersede) {
+    const { data: updated, error: supersedeError } = await supabase
+      .from('annual_report_versions')
+      .update({ status: 'superseded' })
+      .eq('id', v.id)
+      .eq('company_id', COMPANY_ID)
+      .eq('fiscal_period_id', PERIOD_ID)
+      .eq('status', 'ready_for_signature')
+      .select('id, version_number')
+    if (supersedeError) fail(`failed to supersede årsredovisning version ${v.version_number}: ${supersedeError.message}`)
+    if (!updated || updated.length === 0) {
+      fail(`årsredovisning version ${v.version_number} changed status during the undo: re-run to re-evaluate`)
+    }
+    supersededVersions.push(updated[0])
+  }
+  if (supersededVersions.length > 0) {
+    // Close the check-then-act window: a signature recorded between the gate
+    // read and the supersede would make the reopen unlawful.
+    const { data: recheck, error: recheckError } = await supabase
+      .from('arsredovisning_signature_requests')
+      .select('id, status, signed_at')
+      .eq('company_id', COMPANY_ID)
+      .eq('fiscal_period_id', PERIOD_ID)
+    if (recheckError) fail(`failed to re-read signature requests: ${recheckError.message}`)
+    if ((recheck ?? []).some((r) => r.status === 'signed' || r.signed_at !== null)) {
+      fail('a signature was recorded while the undo ran: stop and review before reopening')
+    }
+    console.log(
+      `Superseded årsredovisning version(s) ${supersededVersions.map((v) => v.version_number).join(', ')}; ` +
+        `${gate.voidedRequests.length} pending signature request(s) voided`
+    )
+  }
+
   if (appropriationEntry) {
     console.log('Reversing result appropriation entry…')
-    const storno = await reverseEntry(supabase, COMPANY_ID!, userId!, appropriationEntry.id)
+    const storno = await reverseThroughPort(userId!, appropriationEntry.id)
     console.log(`  posted storno ${storno.voucher_series}${storno.voucher_number}`)
   }
 
   if (ibEntry) {
     console.log('Reversing opening balance entry…')
-    const storno = await reverseEntry(supabase, COMPANY_ID!, userId!, ibEntry.id)
+    const storno = await reverseThroughPort(userId!, ibEntry.id)
     console.log(`  posted storno ${storno.voucher_series}${storno.voucher_number}`)
   }
 
@@ -340,7 +445,7 @@ async function main() {
   let closingStornoLabel = 'already reversed (resume)'
   if (closingEntry.status === 'posted') {
     console.log('Reversing closing entry…')
-    const closingStorno = await reverseEntry(supabase, COMPANY_ID!, userId!, closingEntry.id)
+    const closingStorno = await reverseThroughPort(userId!, closingEntry.id)
     closingStornoLabel = `${closingStorno.voucher_series}${closingStorno.voucher_number}`
     console.log(`  posted storno ${closingStornoLabel}`)
   } else {
@@ -367,14 +472,25 @@ async function main() {
     description:
       `Administrative year-end undo: period reopened (${period.name}, ${period.period_start} to ${period.period_end}); ` +
       `closing entry ${closingEntry.voucher_series ?? 'A'}${closingEntry.voucher_number} reversed by storno ${closingStornoLabel} ` +
-      'and detached; auto-generated new-year entries reversed on user request.',
+      'and detached; auto-generated new-year entries reversed on user request.' +
+      (supersededVersions.length > 0
+        ? ` Årsredovisning version(s) ${supersededVersions.map((v) => v.version_number).join(', ')} ` +
+          `superseded; ${gate.voidedRequests.length} pending signature request(s) voided (unsigned, no legal weight).`
+        : ''),
     old_state: {
       is_closed: period.is_closed,
       closed_at: period.closed_at,
       locked_at: period.locked_at,
       closing_entry_id: period.closing_entry_id,
     },
-    new_state: { is_closed: false, closed_at: null, locked_at: null, closing_entry_id: null },
+    new_state: {
+      is_closed: false,
+      closed_at: null,
+      locked_at: null,
+      closing_entry_id: null,
+      superseded_annual_report_version_ids: supersededVersions.map((v) => v.id),
+      voided_signature_request_ids: gate.voidedRequests.map((r) => r.id),
+    },
   }
   // BFNAR 2013:2 kap. 8: the behandlingshistorik row is part of the undo.
   // The mutations cannot be rolled back from here (each already committed via

@@ -2,8 +2,14 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { CheckCircle2, XCircle, ArrowRight, AlertTriangle } from 'lucide-react'
+import {
+  ArrowRightIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { resolveNotices, type ImportNotice } from '@/lib/import/notices'
 
@@ -52,6 +58,7 @@ export default function RegisterResultStep({
   result,
   onNewImport,
 }: RegisterResultStepProps) {
+  const t = useTranslations('import.register_flow')
   const copy = ENTITY_COPY[entity]
   const totalProcessed = result.created + result.updated + result.skipped + result.failed
   const isPartial = result.failed > 0 && result.created + result.updated > 0
@@ -61,11 +68,11 @@ export default function RegisterResultStep({
       <CardHeader>
         <div className="flex items-center gap-3">
           {result.success ? (
-            <CheckCircle2 className="h-6 w-6 text-success" />
+            <CheckCircleIcon className="h-6 w-6 text-success" />
           ) : isPartial ? (
-            <AlertTriangle className="h-6 w-6 text-warning" />
+            <ExclamationTriangleIcon className="h-6 w-6 text-warning" />
           ) : (
-            <XCircle className="h-6 w-6 text-destructive" />
+            <XCircleIcon className="h-6 w-6 text-destructive" />
           )}
           <CardTitle>
             {result.success
@@ -93,7 +100,7 @@ export default function RegisterResultStep({
         {result.errors.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-sm font-medium">Rader som inte kunde importeras</h4>
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 max-h-60 overflow-y-auto">
+            <div className="bg-destructive/8 rounded-lg max-h-60 overflow-y-auto">
               <ul className="divide-y divide-destructive/20">
                 {result.errors.map((e, i) => (
                   <li key={i} className="px-3 py-2 text-sm">
@@ -103,6 +110,13 @@ export default function RegisterResultStep({
                 ))}
               </ul>
             </div>
+            {/* A batched import keeps the first rows of a long list
+                (MERGED_ERRORS_SHOWN): say so, never let it read as all. */}
+            {result.failed > result.errors.length && (
+              <p className="text-xs text-muted-foreground">
+                {t('errors_shown', { shown: result.errors.length, failed: result.failed })}
+              </p>
+            )}
           </div>
         )}
 
@@ -114,7 +128,7 @@ export default function RegisterResultStep({
           <Button asChild>
             <Link href={copy.listHref}>
               {copy.listLabel}
-              <ArrowRight className="h-4 w-4 ml-2" />
+              <ArrowRightIcon className="h-4 w-4 ml-2" />
             </Link>
           </Button>
           <Button variant="ghost" onClick={onNewImport}>Ny import</Button>
@@ -134,7 +148,7 @@ function Stat({
   accent?: 'success' | 'warning' | 'destructive' | 'muted'
 }) {
   return (
-    <div className="rounded-lg border bg-muted/30 p-4 text-center">
+    <div className="rounded-lg p-4 text-center bg-control shadow-raised">
       <p
         className={
           accent === 'success' ? 'text-2xl font-semibold tabular-nums text-success' :

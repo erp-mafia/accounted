@@ -32,6 +32,8 @@ vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
+  // INK2S 4.9 (lib/bokslut/assets/building-tax-service): no buildings here.
+  loadBuildingTaxAdjustment: vi.fn(async () => ({ net: 0, lines: [], warnings: [] })),
   loadTaxAdjustmentSnapshot: vi.fn(),
 }))
 
@@ -187,6 +189,30 @@ describe('operational surfaces agree with each other', () => {
     // Resultatrapport lists the row and its beräknat resultat reads zero.
     const row8999 = rr.groups.flatMap((g) => g.rows).find((r) => r.account_number === '8999')
     expect(row8999?.current_period).toBe(-omforing)
+    expect(rr.net_result_current).toBe(0)
+    expect(is.net_result - rr.net_result_current).toBe(omforing)
+  })
+
+  it('read an omföring through 8990 exactly like one through 8999 (årets resultat is 8990-8999)', async () => {
+    const omforing = EXPECTED.resultAfterFinancial
+    vi.mocked(generateTrialBalance).mockImplementation(async (_s, _c, _p, opts) => ({
+      rows:
+        opts.closingEntry === 'exclude-all-year-end'
+          ? [
+              ...rowsForMode(opts.closingEntry),
+              tbRow('8990', 'Resultat', omforing),
+              tbRow('2099', 'Årets resultat', -omforing),
+            ]
+          : rowsForMode(opts.closingEntry),
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    }))
+
+    const is = await generateIncomeStatement(makeSupabase(), COMPANY_ID, PERIOD_ID)
+    const rr = await generateResultatrapport(makeSupabase(), COMPANY_ID, PERIOD_ID)
+
+    expect(is.net_result).toBe(EXPECTED.resultAfterFinancial)
     expect(rr.net_result_current).toBe(0)
     expect(is.net_result - rr.net_result_current).toBe(omforing)
   })

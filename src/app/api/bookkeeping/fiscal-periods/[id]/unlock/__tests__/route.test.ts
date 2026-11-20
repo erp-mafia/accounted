@@ -16,6 +16,7 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 
 import { requireAuth } from '@/lib/auth/require-auth'
 import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { codedRefusal } from '@/lib/errors/refusal'
 import { POST } from '../route'
 
 function unlockRequest(): Request {
@@ -46,7 +47,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/unlock', () => {
 
   it('maps a not-locked period to a 409', async () => {
     mockAuth()
-    ;(unlockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Period is not locked'))
+    ;(unlockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(codedRefusal('PERIOD_UNLOCK_NOT_LOCKED', 'Period is not locked'))
     const res = await POST(unlockRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(409)
     const body = await res.json()
@@ -56,7 +57,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/unlock', () => {
   it('maps a closed period to a 409', async () => {
     mockAuth()
     ;(unlockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new Error('Cannot unlock a closed period'),
+      codedRefusal('PERIOD_UNLOCK_CLOSED', 'Cannot unlock a closed period'),
     )
     const res = await POST(unlockRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(409)
@@ -66,7 +67,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/unlock', () => {
 
   it('maps a missing period to a 404', async () => {
     mockAuth()
-    ;(unlockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Fiscal period not found'))
+    ;(unlockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found'))
     const res = await POST(unlockRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(404)
     const body = await res.json()

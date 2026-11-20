@@ -9,8 +9,11 @@ import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { EntityType, Transaction } from '@/types'
-import { readIsFresh, underlagKeyFor, firstSentence, type AssistantRead } from './read-shape'
-import { ASSISTANT_LIKELY } from '@/lib/transactions/direct-booking'
+import { readIsFresh, firstSentence, type AssistantRead } from './read-shape'
+import { underlagKeyFor } from '@/lib/transactions/underlag-key'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('agent/categorize/read')
 
 /**
  * The assistant's read of one transaction, done before anyone opens it.
@@ -24,7 +27,7 @@ import { ASSISTANT_LIKELY } from '@/lib/transactions/direct-booking'
  */
 
 export type { AssistantRead } from './read-shape'
-export { underlagKeyFor, readIsFresh, firstSentence } from './read-shape'
+export { readIsFresh, firstSentence } from './read-shape'
 export { ASSISTANT_SURE, ASSISTANT_LIKELY } from '@/lib/transactions/direct-booking'
 
 export interface ReadOptions {
@@ -52,6 +55,7 @@ export async function readTransaction(
     opts.underlag ?? (await gatherUnderlag(supabase, companyId, tx.id, opts.documentId ?? tx.document_id))
   const candidates = await gatherCandidates(supabase, companyId, tx)
   const selection = await selectAccount({
+    companyId,
     transaction: {
       merchantName: tx.merchant_name,
       description: tx.description,
@@ -73,6 +77,7 @@ export async function readTransaction(
     category: selection.category,
     vat_treatment: selection.vatTreatment,
     reverse_charge: selection.reverseCharge,
+    reverse_charge_kind: selection.reverseChargeKind,
     confidence: selection.confidence,
     model_confidence: selection.modelConfidence,
     agreement: selection.agreement,
@@ -80,31 +85,38 @@ export async function readTransaction(
     reasoning: selection.reasoning,
     candidates,
     model: selection.model,
+    prompt_sha256: selection.promptSha256,
   }
   return { selection, candidates, read }
 }
 
 export async function storeRead(supabase: SupabaseClient, companyId: string, read: AssistantRead): Promise<void> {
-  const { error } = await supabase.from('transaction_assistant_reads').upsert(
-    {
-      company_id: companyId,
-      transaction_id: read.transaction_id,
-      underlag_key: read.underlag_key,
-      has_underlag: read.has_underlag,
-      account: read.account,
-      category: read.category,
-      vat_treatment: read.vat_treatment,
-      reverse_charge: read.reverse_charge,
-      confidence: read.confidence,
-      model_confidence: read.model_confidence,
-      agreement: read.agreement,
-      from_candidate: read.from_candidate,
-      reasoning: read.reasoning,
-      candidates: read.candidates,
-      model: read.model,
-    },
-    { onConflict: 'transaction_id' },
-  )
+  const row = {
+    company_id: companyId,
+    transaction_id: read.transaction_id,
+    underlag_key: read.underlag_key,
+    has_underlag: read.has_underlag,
+    account: read.account,
+    category: read.category,
+    vat_treatment: read.vat_treatment,
+    reverse_charge: read.reverse_charge,
+    confidence: read.confidence,
+    model_confidence: read.model_confidence,
+    agreement: read.agreement,
+    from_candidate: read.from_candidate,
+    reasoning: read.reasoning,
+    candidates: read.candidates,
+    model: read.model,
+    prompt_sha256: read.prompt_sha256 ?? null,
+  }
+  const store = (values: Record<string, unknown>) =>
+    supabase.from('transaction_assistant_reads').upsert(values, { onConflict: 'transaction_id' })
+  let { error } = await store({ ...row, reverse_charge_kind: read.reverse_charge_kind ?? null })
+  // The code can reach production before the reverse_charge_kind column
+  // does (the migration job queues behind other pipelines). PostgREST then
+  // refuses the whole row (PGRST204): the read is kept without its box,
+  // which books as an EU service, rather than lost.
+  if (error?.code === 'PGRST204') ({ error } = await store(row))
   if (error) throw new Error(error.message)
 }
 
@@ -116,11 +128,12 @@ export async function loadReads(
 ): Promise<Map<string, AssistantRead>> {
   const out = new Map<string, AssistantRead>()
   if (transactionIds.length === 0) return out
+  // Every column: naming reverse_charge_kind would fail the whole read, and
+  // empty every row of its suggestion, while the code is live ahead of the
+  // column (see storeRead).
   const { data } = await supabase
     .from('transaction_assistant_reads')
-    .select(
-      'transaction_id, underlag_key, has_underlag, account, category, vat_treatment, reverse_charge, confidence, model_confidence, agreement, from_candidate, reasoning, candidates, model, updated_at',
-    )
+    .select('*')
     .eq('company_id', companyId)
     .in('transaction_id', transactionIds)
   for (const row of (data ?? []) as unknown as AssistantRead[]) {
@@ -149,25 +162,17 @@ export function assistantSuggestionFromRead(
     account,
     label,
     category,
-    vat_treatment: read.vat_treatment,
+    // The read's moms is already resolved (selectAccount takes it from the
+    // candidate, the template or the category): null there means the account
+    // books none. Passed on as null, accountProposal took the category's
+    // default and offered 1630 with 25 % moms (crm#1275).
+    vat_treatment: read.vat_treatment ?? 'exempt',
+    reverse_charge_kind: read.reverse_charge_kind,
     amount: tx.amount,
     confidence: read.confidence,
     description: firstSentence(read.reasoning),
     has_underlag: read.has_underlag,
   })
-}
-
-/**
- * Where the assistant's suggestion sits among the row's others: a rule and
- * a counterpart come first, then the assistant when it is at least likely,
- * then the catalog's keyword matches, then an unsure assistant last.
- */
-export function mergeAssistantSuggestion(list: BookingProposal[], s: BookingProposal): BookingProposal[] {
-  const rest = list.filter((x) => x.source !== 'assistant')
-  if (s.confidence < ASSISTANT_LIKELY) return [...rest, s]
-  const firstCatalog = rest.findIndex((x) => x.source !== 'rule' && x.source !== 'counterparty')
-  if (firstCatalog === -1) return [...rest, s]
-  return [...rest.slice(0, firstCatalog), s, ...rest.slice(firstCatalog)]
 }
 
 export interface PlannedRead {
@@ -198,7 +203,10 @@ const TX_COLUMNS =
 export async function planAssistantReads(supabase: SupabaseClient, opts: PlanOptions): Promise<PlannedRead[]> {
   const now = opts.now ?? new Date()
   const since = new Date(now.getTime() - opts.windowDays * 86_400_000).toISOString().slice(0, 10)
-  const { data: rows } = await supabase
+  // A failed read is a failed run, never an empty plan: this one query spans
+  // every company, so its timeout would otherwise answer "nothing to read"
+  // every ten minutes.
+  const { data: rows, error: rowsError } = await supabase
     .from('transactions')
     .select(TX_COLUMNS)
     .is('is_business', null)
@@ -207,13 +215,15 @@ export async function planAssistantReads(supabase: SupabaseClient, opts: PlanOpt
     .gte('date', since)
     .order('date', { ascending: false })
     .limit(Math.max(opts.perRun * 8, 50))
+  if (rowsError) throw new Error(`assistant read candidates failed: ${rowsError.message}`)
   const txs = ((rows ?? []) as unknown as Transaction[]).filter((t) => t.amount !== 0)
   if (txs.length === 0) return []
 
-  const { data: readRows } = await supabase
+  const { data: readRows, error: readsError } = await supabase
     .from('transaction_assistant_reads')
     .select('transaction_id, underlag_key')
     .in('transaction_id', txs.map((t) => t.id))
+  if (readsError) throw new Error(`assistant read freshness failed: ${readsError.message}`)
   const fresh = new Set<string>()
   for (const r of (readRows ?? []) as Array<{ transaction_id: string; underlag_key: string | null }>) {
     const tx = txs.find((t) => t.id === r.transaction_id)
@@ -234,10 +244,20 @@ export async function planAssistantReads(supabase: SupabaseClient, opts: PlanOpt
     if (planned.length >= opts.perRun) break
     if (await isSandboxCompany(supabase, companyId)) continue
     if (!(await hasCapability(supabase, companyId, CAPABILITY.ai))) continue
-    const [{ data: company }, { data: settings }] = await Promise.all([
+    const [{ data: company, error: companyError }, { data: settings, error: settingsError }] = await Promise.all([
       supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle(),
       supabase.from('company_settings').select('vat_registered').eq('company_id', companyId).maybeSingle(),
     ])
+    // Never guess the legal form or the VAT status: a read made as an
+    // unregistered enskild firma is stored as fresh, and a sure one with a
+    // receipt behind it books with one click. The company waits for the next run.
+    if (companyError || settingsError) {
+      log.error('assistant reads skipped a company: its legal form or VAT status could not be read', {
+        companyId,
+        message: (companyError ?? settingsError)?.message,
+      })
+      continue
+    }
     const entityType = ((company?.entity_type as EntityType | undefined) ?? 'enskild_firma')
     const vatRegistered = settings?.vat_registered ?? false
     for (const tx of list) {

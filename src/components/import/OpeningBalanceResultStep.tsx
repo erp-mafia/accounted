@@ -2,28 +2,33 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { CheckCircle2, XCircle, ArrowRight } from 'lucide-react'
+import { ArrowRightIcon, CheckCircleIcon, XCircleIcon } from '@/components/icons'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import type { OpeningBalanceExecuteResult } from '@/lib/import/opening-balance/types'
 
 interface OpeningBalanceResultStepProps {
   result: OpeningBalanceExecuteResult
   onNewImport: () => void
+  /** The user came from a SIE preview: its vouchers are still to be imported. */
+  onResumeSieImport?: () => void
 }
 
 export default function OpeningBalanceResultStep({
   result,
   onNewImport,
+  onResumeSieImport,
 }: OpeningBalanceResultStepProps) {
+  const t = useTranslations('import')
   const isCorrection = !!result.reversed_entry_id
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center gap-3">
           {result.success ? (
-            <CheckCircle2 className="h-6 w-6 text-success" />
+            <CheckCircleIcon className="h-6 w-6 text-success" />
           ) : (
-            <XCircle className="h-6 w-6 text-destructive" />
+            <XCircleIcon className="h-6 w-6 text-destructive" />
           )}
           <CardTitle>
             {result.success
@@ -39,13 +44,13 @@ export default function OpeningBalanceResultStep({
           <>
             {/* Stats */}
             <div className="grid grid-cols-3 gap-4">
-              <div className="rounded-lg border bg-muted/30 p-4 text-center">
+              <div className="rounded-lg p-4 text-center bg-control shadow-raised">
                 <p className="text-2xl font-semibold tabular-nums">
                   {result.lines_created}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">Kontorader</p>
               </div>
-              <div className="rounded-lg border bg-muted/30 p-4 text-center">
+              <div className="rounded-lg p-4 text-center bg-control shadow-raised">
                 <p className="text-2xl font-semibold tabular-nums">
                   {result.total_debit.toLocaleString('sv-SE', {
                     minimumFractionDigits: 0,
@@ -54,7 +59,7 @@ export default function OpeningBalanceResultStep({
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">Debet (SEK)</p>
               </div>
-              <div className="rounded-lg border bg-muted/30 p-4 text-center">
+              <div className="rounded-lg p-4 text-center bg-control shadow-raised">
                 <p className="text-2xl font-semibold tabular-nums">
                   {result.total_credit.toLocaleString('sv-SE', {
                     minimumFractionDigits: 0,
@@ -65,23 +70,34 @@ export default function OpeningBalanceResultStep({
               </div>
             </div>
 
-            {/* Next steps */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium">Nästa steg</h4>
-              <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
-                <li>Granska verifikationen i bokföringen</li>
-                <li>Kontrollera balansrapporten att beloppen stämmer</li>
-                <li>Börja importera banktransaktioner eller skapa verifikationer</li>
-              </ol>
-            </div>
+            {/* Next steps. Coming from a SIE preview, the one step left is
+                its vouchers: the file was set aside, not imported. */}
+            {onResumeSieImport ? (
+              <p className="text-sm text-muted-foreground">{t('ob_result_resume_sie_hint')}</p>
+            ) : (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium">Nästa steg</h4>
+                <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
+                  <li>Granska verifikationen i bokföringen</li>
+                  <li>Kontrollera balansrapporten att beloppen stämmer</li>
+                  <li>Börja importera banktransaktioner eller skapa verifikationer</li>
+                </ol>
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex flex-wrap gap-3">
+              {onResumeSieImport && (
+                <Button onClick={onResumeSieImport}>
+                  {t('ob_result_resume_sie')}
+                  <ArrowRightIcon className="h-4 w-4" />
+                </Button>
+              )}
               {result.journal_entry_id && (
-                <Button asChild>
+                <Button asChild variant={onResumeSieImport ? 'outline' : 'default'}>
                   <Link href={`/bookkeeping/${result.journal_entry_id}`}>
                     Visa verifikation
-                    <ArrowRight className="h-4 w-4 ml-2" />
+                    <ArrowRightIcon className="h-4 w-4 ml-2" />
                   </Link>
                 </Button>
               )}
@@ -97,7 +113,7 @@ export default function OpeningBalanceResultStep({
           </>
         ) : (
           <>
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+            <div className="bg-destructive/8 rounded-lg px-4 py-3">
               <p className="text-sm text-destructive">
                 {result.error || 'Ett okänt fel uppstod vid importen.'}
               </p>

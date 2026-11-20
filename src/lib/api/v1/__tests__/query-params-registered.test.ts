@@ -10,8 +10,8 @@
  * `searchParams.get('x')` calls plus the shared helpers below) and compares
  * them with what the file's endpoints register.
  *
- * `dry_run` is excluded: the withApiV1 wrapper reads it, and the generator
- * advertises it on every dry-run-capable endpoint.
+ * `dry_run` and `stage` are excluded: the withApiV1 wrapper reads them, and
+ * the generator advertises each on the endpoints that honour it.
  */
 
 import { readFileSync } from 'node:fs'
@@ -32,7 +32,7 @@ const HELPER_PARAMS: Array<[RegExp, string[]]> = [
   [/\bparseDimensionFilterParams\(/, ['dim_no', 'dim_code']],
 ]
 
-const WRAPPER_PARAMS = new Set(['dry_run'])
+const WRAPPER_PARAMS = new Set(['dry_run', 'stage'])
 
 function routeFile(path: string): string {
   const segments = path.replace(/^\//, '').replace(/:([^/]+)/g, '[$1]')
@@ -72,7 +72,17 @@ describe('v1 query parameters are registered', () => {
   it('every parameter a route reads is registered, and every registered parameter is read', () => {
     const problems: string[] = []
     for (const [file, endpoints] of byFile) {
-      const read = paramsReadBy(readFileSync(file, 'utf8'))
+      const source = readFileSync(file, 'utf8')
+      const read = paramsReadBy(source)
+      // An operation's GET door (v1OperationHandler) and a report file door
+      // (v1ReportFileHandler) forward the whole query string into one schema
+      // and register exactly that schema as the query: what they register is
+      // what they read.
+      if (/\bGET\s*=\s*(?:v1OperationHandler|v1ReportFileHandler)\(/.test(source)) {
+        for (const ep of endpoints.filter((e) => e.method === 'GET')) {
+          for (const p of queryParameters(ep)) read.add(p.name)
+        }
+      }
       const registered = new Set(
         endpoints.flatMap((ep) => queryParameters(ep).map((p) => p.name)).filter((n) => !WRAPPER_PARAMS.has(n)),
       )
@@ -90,5 +100,15 @@ describe('v1 query parameters are registered', () => {
       const hasDryRun = queryParameters(ep).some((p) => p.name === 'dry_run')
       expect(hasDryRun, `${ep.method} ${ep.path}`).toBe(ep.dryRunSupported)
     }
+  })
+
+  it('advertises stage exactly on the stage-capable endpoints, all of them writes', () => {
+    const staging = listEndpoints().filter((ep) => ep.stageSupported)
+    expect(staging.length).toBeGreaterThan(0)
+    for (const ep of listEndpoints()) {
+      const hasStage = queryParameters(ep).some((p) => p.name === 'stage')
+      expect(hasStage, `${ep.method} ${ep.path}`).toBe(ep.stageSupported === true)
+    }
+    for (const ep of staging) expect(ep.method, `${ep.method} ${ep.path}`).not.toBe('GET')
   })
 })

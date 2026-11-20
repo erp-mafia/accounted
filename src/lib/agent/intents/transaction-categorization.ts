@@ -390,7 +390,7 @@ export const transactionCategorization = defineAgentIntent<
 
     if (captured.underlag.length === 0) {
       // No underlag yet. The chat sheet no longer accepts file uploads:
-      // documents live in Dokumentinkorgen. Direct the user there. The
+      // documents live in Inkommande (Dokument → Inkommande). Direct the user there. The
       // user must then match the inbox item to this transaction (or to
       // any transaction) before booking can use the underlag.
       lines.push('UNDERLAG: saknas.')
@@ -398,10 +398,10 @@ export const transactionCategorization = defineAgentIntent<
       lines.push('BFL 7 kap kräver ett underlag för varje affärshändelse. Innan du föreslår bokföring:')
       lines.push('1. Säg till användaren att vi behöver underlaget (kvitto eller faktura).')
       lines.push('2. Beskriv KORT hur de får in det:')
-      lines.push('     • **Gå till Dokumentinkorgen** (i sidomenyn) och dra in PDF:en eller bilden där. AI:n läser dokumentet automatiskt.')
-      lines.push('     • Alternativt: vidarebefordra fakturan/kvittot via e-post till företagets inbox-adress: det landar i samma inkorg.')
-      lines.push('     • När underlaget är i inkorgen klickar de "Matcha mot transaktion" och väljer denna transaktion. Då dyker det upp här som UNDERLAG på nästa fråga.')
-      lines.push('3. Om användaren ändå är säker på vad det är (t.ex. en återkommande mjukvaruprenumeration), erbjud att bokföra utan underlag mot en uttrycklig notering, och förklara att underlaget måste bifogas TILL VERIFIKATIONEN i efterhand (öppna verifikationen i Bokföring och ladda upp där). Skicka INTE användaren tillbaka till Dokumentinkorgen efter att en verifikation skapats: inkorgen är för dokument som inte ännu är kopplade till en bokföring.')
+      lines.push('     • **Gå till Inkommande** (menyn: Dokument → Inkommande) och dra in PDF:en eller bilden där. AI:n läser dokumentet automatiskt.')
+      lines.push('     • Alternativt: vidarebefordra fakturan/kvittot via e-post till företagets inkorgsadress: det landar under Underlag.')
+      lines.push('     • När underlaget ligger under Underlag klickar de "Matcha mot transaktion" och väljer denna transaktion. Då dyker det upp här som UNDERLAG på nästa fråga.')
+      lines.push('3. Om användaren ändå är säker på vad det är (t.ex. en återkommande mjukvaruprenumeration), erbjud att bokföra utan underlag mot en uttrycklig notering, och förklara att underlaget måste bifogas TILL VERIFIKATIONEN i efterhand (öppna verifikationen i Bokföring och ladda upp där). Skicka INTE användaren tillbaka till Underlag efter att en verifikation skapats: Underlag är för dokument som inte ännu är kopplade till en bokföring.')
       lines.push('')
       lines.push('Skicka ALDRIG användaren till chatten för att ladda upp filen: den vägen är borttagen.')
     } else {
@@ -412,7 +412,7 @@ export const transactionCategorization = defineAgentIntent<
       lines.push(
         linkedCount > 0
           ? `UNDERLAG: ${linkedCount} st bifogat. Extraherade fält:`
-          : `UNDERLAG: inget är kopplat till transaktionen, men ${candidateCount} st i Dokumentinkorgen liknar den starkt (TROLIGT UNDERLAG, ej bekräftat). Extraherade fält:`,
+          : `UNDERLAG: inget är kopplat till transaktionen, men ${candidateCount} st under Underlag liknar den starkt (TROLIGT UNDERLAG, ej bekräftat). Extraherade fält:`,
       )
       // Set when at least one underlag actually contributed a clarification
       // line, which is what the guidance paragraph below refers to.
@@ -466,7 +466,7 @@ export const transactionCategorization = defineAgentIntent<
         lines.push('Rader märkta "uppgivna av användaren" kommer från en tidigare konversation om samma underlag (t.ex. WhatsApp när kvittot skickades in). Det är MÄNSKLIGT bekräftade uppgifter och väger tyngre än vad du själv läser ut ur bilden. Fråga ALDRIG om något som redan står där; behöver du komplettera, fråga bara om den del som faktiskt saknas. Står det "OBESVARAD FRÅGA": ställ exakt den frågan och ingen annan. När du stagear: ta med deltagare och syfte i notes så de följer med till verifikationen.')
       }
       if (candidateCount > 0) {
-        lines.push('TROLIGT UNDERLAG är INTE kopplat ännu: en människa måste bekräfta kopplingen. Fråga kort om det är rätt underlag (nämn leverantör, datum, belopp) och be användaren koppla det i Dokumentinkorgen via "Matcha mot transaktion". Bokför inte mot ett troligt underlag som användaren inte bekräftat, men använd gärna dess uppgifter för att föreslå kategori under tiden.')
+        lines.push('TROLIGT UNDERLAG är INTE kopplat ännu: en människa måste bekräfta kopplingen. Fråga kort om det är rätt underlag (nämn leverantör, datum, belopp) och be användaren koppla det under Underlag via "Matcha mot transaktion". Bokför inte mot ett troligt underlag som användaren inte bekräftat, men använd gärna dess uppgifter för att föreslå kategori under tiden.')
       }
     }
     lines.push('')
@@ -478,11 +478,11 @@ export const transactionCategorization = defineAgentIntent<
     lines.push('- STÄLL en kort följdfråga (2-3 alternativ) när kategorin beror på syfte som inte syns på kvittot: restaurang/café, Systembolaget, detaljhandel (ICA/Clas Ohlson/Apoteket), resor, drivmedel, gåvor. Hellre en fråga än en felaktig bokning. Spara användarens svar via gnubok_remember_fact så du inte behöver fråga igen nästa gång liknande motpart dyker upp.')
     lines.push('- REPRESENTATION (måltid): fånga ANTAL deltagare, vilka (namn + företag) och syftet innan du bokför: antalet styr momsavdraget (tak per person på underlaget). Använd kvittots FAKTISKA momssats, gissa aldrig. Fråga "Hur många var ni, och vilka?" om det inte framgår. När du har uppgifterna: (1) anropa gnubok_remember_fact med content som beskriver deltagare + syfte; (2) stagea med notes="X deltagare: [namn + företag]. Syfte: [text]." så det landar i verifikationen. Saknas uppgifterna medges inget momsavdrag: säg det.')
     lines.push(`- När du är säker, staga via gnubok_categorize_transaction med transaction_id=${tx.id} (ALDRIG document_id). Välj kategori från enum-listan i verktygets schema.`)
-    lines.push('- Förklara dina val kort på svenska: använd kategori-namn (t.ex. "Mjukvara/IT-tjänster", "Tele & internet"), ALDRIG ett BAS-kontonummer. Verktyget mappar kategori → konto, och godkännandekortet visar det faktiska BAS-kontot.')
+    lines.push('- Förklara dina val kort: använd kategori-namn (t.ex. "Mjukvara/IT-tjänster", "Tele & internet"), ALDRIG ett BAS-kontonummer. Verktyget mappar kategori → konto, och godkännandekortet visar det faktiska BAS-kontot.')
     lines.push('- Berätta INTE för användaren att du "stagear nu", att operationen är "stagead", att de ska "godkänna i appen", eller upprepa siffror som ändå visas i godkännandekortet (kategori, BAS-konto, momsbelopp). Kortet renderas direkt under ditt svar och säger allt det. Avsluta i stället med en mening eller två om VARFÖR du valde som du valde, och stanna där.')
-    lines.push('- Upprepa INTE underlag-uppmaningen efter stagning. Om du redan har bett användaren ladda upp via Dokumentinkorgen (i pre-stage-meddelandet) räcker det: påminn inte igen efter Godkänn-kortet. Och om underlag saknas och bokningen ändå stagas: säg att det ska bifogas till VERIFIKATIONEN (öppna den i Bokföring), inte till Dokumentinkorgen. Inkorgen är för dokument som inte ännu hör till en verifikation.')
+    lines.push('- Upprepa INTE underlag-uppmaningen efter stagning. Om du redan har bett användaren ladda upp via Underlag (i pre-stage-meddelandet) räcker det: påminn inte igen efter Godkänn-kortet. Och om underlag saknas och bokningen ändå stagas: säg att det ska bifogas till VERIFIKATIONEN (öppna den i Bokföring), inte under Underlag. Underlag är för dokument som inte ännu hör till en verifikation.')
     lines.push('')
-    lines.push('Svara på svenska och var direkt: ditt första svar är det första användaren ser.')
+    lines.push('Var direkt: ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

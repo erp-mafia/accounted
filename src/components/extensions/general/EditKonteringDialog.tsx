@@ -38,6 +38,9 @@ export interface ProposedLine {
   debit_amount: number
   credit_amount: number
   description: string
+  /** SIE dimension map the proposal would post on this line, e.g. the
+   *  counterparty template's learned {"6":"P001"}. */
+  dimensions?: Record<string, string>
 }
 
 export default function EditKonteringDialog({
@@ -77,7 +80,7 @@ export default function EditKonteringDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+      <DialogContent size="document">
         <DialogHeader>
           <DialogTitle>Ändra kontering</DialogTitle>
           {matchedTransaction && (
@@ -108,6 +111,9 @@ export default function EditKonteringDialog({
                       debit_amount: l.debit_amount ? String(l.debit_amount) : '',
                       credit_amount: l.credit_amount ? String(l.credit_amount) : '',
                       line_description: l.description,
+                      // The proposal's tags seed the row pickers; dropping them
+                      // here would book the learned kontering untagged.
+                      ...(l.dimensions ? { dimensions: l.dimensions } : {}),
                     }))
                   : undefined
               }
@@ -137,7 +143,7 @@ export default function EditKonteringDialog({
                 className="h-[60vh]"
               />
             ) : (
-              <div className="h-[60vh] grid place-items-center rounded-lg border text-xs text-muted-foreground">
+              <div className="h-[60vh] grid place-items-center rounded-lg text-xs text-muted-foreground bg-control shadow-raised">
                 {t('dialog_no_document')}
               </div>
             )}

@@ -10,6 +10,13 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  */
 const PROBE_CHUNK_SIZE = 100
 
+/** The company row embedded in a membership (PostgREST types a to-one embed as object or array). */
+interface OwnCompanyEmbed {
+  id: string
+  org_number: string | null
+  archived_at: string | null
+}
+
 /**
  * Does any of these companies have at least one journal entry?
  *
@@ -36,7 +43,7 @@ async function hasAnyJournalEntry(
 
 /**
  * Should the Hem page hint that the user may be signed in to the wrong
- * account? (#1231, the "Chillen" support case: BankID resolved to a stale
+ * account? (#1231, a support case: BankID resolved to a stale
  * signup account while all real bookkeeping lived in a second
  * email+password account with the same org number.)
  *
@@ -52,21 +59,44 @@ async function hasAnyJournalEntry(
  * account is revealed beyond "your bookkeeping may live elsewhere".
  * Fails soft to false: this is an advisory line, never worth an error.
  */
-export async function shouldShowOtherAccountHint(supabase: SupabaseClient): Promise<boolean> {
+export async function shouldShowOtherAccountHint(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<boolean> {
   try {
-    // RLS scopes every read here to the caller's memberships. Company lists
-    // are paginated with fetchAllRows (PostgREST caps at 1000 rows; a byrå
-    // user can belong to many companies); it throws on error, which the outer
-    // catch turns into false.
-    const ownCompanies = await fetchAllRows<{ id: string; org_number: string | null }>(
-      ({ from, to }) =>
-        supabase
-          .from('companies')
-          .select('id, org_number')
-          .is('archived_at', null)
-          .order('id')
-          .range(from, to),
+    // The caller's companies, read through their own memberships. A bare
+    // select on companies returns the same rows and is the expensive form:
+    // the RLS qual (id IN user_company_ids()) is a filter on the scan, never
+    // an index condition, so Postgres walked every active company to keep the
+    // caller's (seen 2026-11-12: 3 194 rows for 24, 3 329 buffers, on every
+    // Hem render; 60 270 calls since 2026-09-11), and that grows with the
+    // number of companies. By user_id it is one index probe of
+    // company_members and one companies_pkey lookup per membership.
+    //
+    // The answer is the same. RLS admits a company through user_company_ids()
+    // or invoicer_company_ids(); both are the caller's company_members rows on
+    // companies that are not archived, and company_members' own policies show
+    // the caller exactly those rows. `userId` is the signed-in caller's: RLS
+    // still applies, so another id could only narrow the list.
+    //
+    // Paginated with fetchAllRows (PostgREST caps at 1000 rows; a byrå user
+    // can belong to many companies); it throws on error, which the outer catch
+    // turns into false.
+    const memberships = await fetchAllRows<{
+      company_id: string
+      companies: OwnCompanyEmbed | OwnCompanyEmbed[] | null
+    }>(({ from, to }) =>
+      supabase
+        .from('company_members')
+        .select('company_id, companies:company_id(id, org_number, archived_at)')
+        .eq('user_id', userId)
+        .order('company_id')
+        .range(from, to),
     )
+    const ownCompanies = memberships.flatMap((m) => {
+      const company = Array.isArray(m.companies) ? m.companies[0] : m.companies
+      return company && !company.archived_at ? [{ id: company.id, org_number: company.org_number }] : []
+    })
 
     if (ownCompanies.length === 0) return false
 
@@ -74,11 +104,10 @@ export async function shouldShowOtherAccountHint(supabase: SupabaseClient): Prom
     // it. Leaving company_id out and letting RLS do the scoping reads as the
     // cheaper form and is the opposite: under the `authenticated` role the RLS
     // qual becomes a filter on the scan, so Postgres reads all of
-    // journal_entries (~900 ms measured on prod, 4.2 s worst observed) on the
-    // blocking Hem render instead of using idx_journal_entries_company_id
-    // (~2 ms). Naming the ids cannot change the answer: user_company_ids(),
-    // which journal_entries RLS uses, excludes archived companies, and so does
-    // the list above.
+    // journal_entries on the blocking Hem render, hundreds of times slower
+    // than using idx_journal_entries_company_id. Naming the ids cannot change
+    // the answer: user_company_ids(), which journal_entries RLS uses,
+    // excludes archived companies, and so does the list above.
     const ownIds = ownCompanies.map((c) => c.id)
     if (await hasAnyJournalEntry(supabase, ownIds)) return false
 

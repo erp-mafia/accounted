@@ -5,6 +5,8 @@
  * implementation (Resend). Without the extension, a no-op service
  * is used: email-dependent features degrade gracefully.
  */
+import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
 
 export interface SendEmailOptions {
   to: string | string[]
@@ -34,6 +36,12 @@ export interface SendEmailOptions {
     content: Buffer | string
     contentType?: string
   }>
+  /**
+   * The same key on a second request makes the provider answer the first
+   * one's result instead of sending again (Resend keeps it 24 hours). A
+   * provider without the concept (SMTP) ignores it.
+   */
+  idempotencyKey?: string
 }
 
 export interface SendEmailResult {
@@ -41,6 +49,14 @@ export interface SendEmailResult {
   provider?: string
   messageId?: string
   error?: string
+  /**
+   * On a failure: true when the mail may have gone out anyway (no answer, a
+   * server error after the provider took it, an idempotency conflict);
+   * false when the provider refused it, so nothing went out. Absent: the
+   * service cannot tell, and a caller that must not send twice reads it as
+   * unknown.
+   */
+  outcomeUnknown?: boolean
 }
 
 export interface EmailService {
@@ -57,12 +73,18 @@ class NoopEmailService implements EmailService {
   }
 }
 
-let emailService: EmailService = new NoopEmailService()
+// Process-wide (lib/global-singleton.ts): the email extension registers
+// through the copy of this module lib/init loads, a route reads through its own.
+const holder = globalSingleton('emailService', (): { service: EmailService } => ({
+  service: new NoopEmailService(),
+}))
 
-export function getEmailService(): EmailService {
-  return emailService
+/** The registered service, after the extensions have loaded (lib/initialized.ts). */
+export async function getEmailService(): Promise<EmailService> {
+  await whenInitialized()
+  return holder.service
 }
 
 export function registerEmailService(svc: EmailService): void {
-  emailService = svc
+  holder.service = svc
 }

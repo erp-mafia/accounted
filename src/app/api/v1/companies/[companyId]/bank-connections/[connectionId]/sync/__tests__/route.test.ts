@@ -38,31 +38,10 @@ vi.mock('@/lib/extensions/registry', () => ({
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CONNECTION_ID = '11111111-1111-4111-8111-111111111111'
@@ -111,10 +90,10 @@ describe('v1 bank-connections sync', () => {
       id === 'enable-banking' ? { services: { triggerConnectionSync: triggerSyncMock } } : undefined,
     )
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { role: 'owner' } },
         idempotency_keys: { data: null },
-      }),
+      }).supabase,
     )
   })
 
@@ -145,7 +124,7 @@ describe('v1 bank-connections sync', () => {
 
   it('404 when the key user is not a member of the company', async () => {
     authOk(['transactions:write'])
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ company_members: { data: null } }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ company_members: { data: null } }).supabase)
     const res = await POST(req(), params)
     expect(res.status).toBe(404)
     expect(triggerSyncMock).not.toHaveBeenCalled()
@@ -173,8 +152,11 @@ describe('v1 bank-connections sync', () => {
     authOk(['transactions:write'])
     registryGetMock.mockReturnValue(undefined)
     const res = await POST(req(), params)
-    const body = (await res.json()) as { error: { code: string } }
+    const body = (await res.json()) as { error: { code: string; message: string; details?: Record<string, unknown> } }
     expect(body.error.code).toBe('EXTENSION_DISABLED')
+    // The copy names no feature; details say which one is off.
+    expect(body.error.message).not.toMatch(/skatteverket/i)
+    expect(body.error.details).toMatchObject({ extension: 'enable-banking' })
     expect(triggerSyncMock).not.toHaveBeenCalled()
   })
 
@@ -239,6 +221,24 @@ describe('v1 bank-connections sync', () => {
     }
     expect(body.error.code).toBe('BANK_RATE_LIMITED')
     expect(body.error.details).toMatchObject({ next_allowed_at: '2026-09-20T16:00:00.000Z', status: 'active' })
+  })
+
+  it('429 BANK_THROTTLED (the bank\'s short throttle) with a short Retry-After, connection still active', async () => {
+    authOk(['transactions:write'])
+    triggerSyncMock.mockResolvedValue({
+      ok: false,
+      code: 'BANK_THROTTLED',
+      connection_id: CONNECTION_ID,
+      status: 'active',
+      next_allowed_at: '2026-09-20T10:00:45.000Z',
+      retry_after_seconds: 45,
+    })
+    const res = await POST(req(), params)
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('45')
+    const body = (await res.json()) as { error: { code: string; details: { next_allowed_at: string; status: string } } }
+    expect(body.error.code).toBe('BANK_THROTTLED')
+    expect(body.error.details).toMatchObject({ next_allowed_at: '2026-09-20T10:00:45.000Z', status: 'active' })
   })
 
   it('409 BANK_SESSION_EXPIRED with a recovery hint pointing at the connect link', async () => {

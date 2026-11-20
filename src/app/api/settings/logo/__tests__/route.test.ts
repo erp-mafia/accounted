@@ -14,10 +14,15 @@ vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
-const requireWriteMock = vi.fn()
-vi.mock('@/lib/auth/require-write', () => ({
-  requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
-}))
+const isAdminMock = vi.fn()
+vi.mock('@/lib/auth/require-write', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/require-write')>()
+  return {
+    isCompanyAdmin: (...args: unknown[]) => isAdminMock(...args),
+    getCompanyRole: async () => ({ ok: true, role: 'owner', companyId: 'company-1' }),
+    companyAdminRequiredResponse: actual.companyAdminRequiredResponse,
+  }
+})
 
 const logosBucket = {
   list: vi.fn().mockResolvedValue({ data: [], error: null }),
@@ -33,7 +38,7 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => ({ storage: serviceStorage }),
 }))
 
-import { POST } from '../route'
+import { DELETE, POST } from '../route'
 
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const JPEG_MAGIC = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]
@@ -61,7 +66,7 @@ describe('POST /api/settings/logo', () => {
     vi.clearAllMocks()
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
-    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -77,16 +82,40 @@ describe('POST /api/settings/logo', () => {
     expect(status).toBe(401)
   })
 
-  it('returns 403 for a viewer without write permission', async () => {
-    requireWriteMock.mockResolvedValue({
-      ok: false,
-      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
-    })
+  it('refuses a member with 403 and leaves the logo the company has', async () => {
+    isAdminMock.mockResolvedValue(false)
+    logosBucket.list.mockResolvedValueOnce({ data: [{ name: 'logo-old.png' }], error: null })
+
+    const response = await POST(makeFormRequest(withMagic(PNG_MAGIC)), params)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { required_roles: string[] } } }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.required_roles).toEqual(['owner', 'admin'])
+    expect(logosBucket.upload).not.toHaveBeenCalled()
+    expect(logosBucket.remove).not.toHaveBeenCalled()
+  })
+
+  it('keeps the old logo and takes the upload back when no settings row was written', async () => {
+    logosBucket.list.mockResolvedValueOnce({ data: [{ name: 'logo-old.png' }], error: null })
+    enqueue({ data: null, error: null })
 
     const response = await POST(makeFormRequest(withMagic(PNG_MAGIC)), params)
     const { status } = await parseJsonResponse(response)
 
-    expect(status).toBe(403)
+    expect(status).toBe(404)
+    const [path] = logosBucket.upload.mock.calls[0] as [string]
+    expect(logosBucket.remove.mock.calls).toEqual([[[path]]])
+  })
+
+  it('removes the old logo only after the row points at the new one', async () => {
+    logosBucket.list.mockResolvedValueOnce({ data: [{ name: 'logo-old.png' }], error: null })
+    enqueue({ data: { company_id: 'company-1' }, error: null })
+
+    const response = await POST(makeFormRequest(withMagic(PNG_MAGIC)), params)
+
+    expect(response.status).toBe(200)
+    expect(logosBucket.remove.mock.calls).toEqual([[['company-1/logo-old.png']]])
   })
 
   it('returns 400 when no file is attached', async () => {
@@ -154,7 +183,7 @@ describe('POST /api/settings/logo', () => {
   })
 
   it('accepts a logo larger than the previous 2 MB limit', async () => {
-    enqueue({ error: null }) // company_settings update
+    enqueue({ data: { company_id: 'company-1' }, error: null }) // company_settings update
 
     const response = await POST(makeFormRequest(withMagic(PNG_MAGIC, 2 * 1024 * 1024 + 1)), params)
     const { status } = await parseJsonResponse(response)
@@ -163,7 +192,7 @@ describe('POST /api/settings/logo', () => {
   })
 
   it('uploads a PNG under its sniffed type and returns the public url on the happy path', async () => {
-    enqueue({ error: null }) // company_settings update
+    enqueue({ data: { company_id: 'company-1' }, error: null }) // company_settings update
 
     const response = await POST(makeFormRequest(withMagic(PNG_MAGIC)), params)
     const { status, body } = await parseJsonResponse<{ data: { logo_url: string } }>(response)
@@ -177,7 +206,7 @@ describe('POST /api/settings/logo', () => {
   })
 
   it('stores the type the bytes prove, not the declared one (JPEG declared as PNG)', async () => {
-    enqueue({ error: null })
+    enqueue({ data: { company_id: 'company-1' }, error: null })
 
     const response = await POST(makeFormRequest(withMagic(JPEG_MAGIC), 'image/png', 'logo.png'), params)
     const { status } = await parseJsonResponse(response)
@@ -189,7 +218,7 @@ describe('POST /api/settings/logo', () => {
   })
 
   it('accepts WebP by magic bytes', async () => {
-    enqueue({ error: null })
+    enqueue({ data: { company_id: 'company-1' }, error: null })
 
     const response = await POST(makeFormRequest(withMagic(WEBP_MAGIC), 'image/webp', 'logo.webp'), params)
     const { status } = await parseJsonResponse(response)
@@ -198,5 +227,50 @@ describe('POST /api/settings/logo', () => {
     const [path, , options] = logosBucket.upload.mock.calls[0] as [string, Buffer, { contentType: string }]
     expect(path).toMatch(/\.webp$/)
     expect(options.contentType).toBe('image/webp')
+  })
+})
+
+describe('DELETE /api/settings/logo', () => {
+  const deleteLogo = () => DELETE(new Request('http://localhost/api/settings/logo', { method: 'DELETE' }), params)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    isAdminMock.mockResolvedValue(true)
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    expect((await deleteLogo()).status).toBe(401)
+  })
+
+  it('refuses a member with 403 and removes nothing', async () => {
+    isAdminMock.mockResolvedValue(false)
+    expect((await deleteLogo()).status).toBe(403)
+    expect(logosBucket.list).not.toHaveBeenCalled()
+    expect(logosBucket.remove).not.toHaveBeenCalled()
+  })
+
+  it('keeps the file when no settings row was written, so logo_url never points at nothing', async () => {
+    enqueue({ data: null, error: null })
+    expect((await deleteLogo()).status).toBe(404)
+    expect(logosBucket.remove).not.toHaveBeenCalled()
+  })
+
+  it('clears logo_url, then removes the files', async () => {
+    logosBucket.list.mockResolvedValueOnce({ data: [{ name: 'logo-old.png' }], error: null })
+    enqueue({ data: { company_id: 'company-1' }, error: null })
+
+    const response = await deleteLogo()
+    const { status, body } = await parseJsonResponse<{ data: { logo_url: null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.logo_url).toBeNull()
+    expect(logosBucket.remove.mock.calls).toEqual([[['company-1/logo-old.png']]])
   })
 })

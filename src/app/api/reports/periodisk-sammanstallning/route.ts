@@ -6,7 +6,6 @@ import {
 } from '@/lib/reports/periodisk-sammanstallning'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { MomsPeriod } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -71,16 +70,8 @@ export const GET = withRouteContext(
         supabase, companyId, periodType, year, period,
       )
 
-      // Best-effort reconciliation against momsdeklaration when periods coincide.
-      const { data: settings } = await supabase
-        .from('company_settings')
-        .select('moms_period')
-        .eq('company_id', companyId)
-        .single()
-      const momsPeriod = (settings?.moms_period ?? null) as MomsPeriod | null
-      const reconciled = await reconcilePsAgainstVatDeclaration(
-        supabase, companyId, report, momsPeriod,
-      )
+      // Reconciled against the momsdeklaration rutor for the same dates.
+      const reconciled = await reconcilePsAgainstVatDeclaration(supabase, companyId, report)
 
       return NextResponse.json({ data: reconciled })
     } catch (err) {

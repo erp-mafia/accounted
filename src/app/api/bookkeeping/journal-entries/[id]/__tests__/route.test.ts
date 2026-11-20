@@ -36,6 +36,18 @@ vi.mock('@/lib/bookkeeping/payment-sync', async (importOriginal) => ({
   syncInvoiceStatusFromPaymentEntry: vi.fn().mockResolvedValue(undefined),
 }))
 
+// Every log line the route and its wrapper write, so a test can say at which
+// level an outcome was logged.
+const logRecords = vi.hoisted(() => [] as { level: string; msg: string }[])
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base = {}) =>
+      actual.createTestLogger(module, logRecords as never, base),
+  }
+})
+
 vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
   reanchorOrphanedSupplierInvoiceDocuments: vi.fn().mockResolvedValue(0),
 }))
@@ -48,6 +60,8 @@ import { DELETE } from '../route'
 /**
  * The DELETE handler's `.from()` / `.rpc()` order, one queued result each:
  *   1. journal_entries      (source_type/source_id, read before the teardown)
+ *      a storno only: journal_entries (the original it reverses) and, when
+ *      that one is SIE-imported, sie_imports (the import's state)
  *   2. document_attachments (documents about to be orphaned by the RPC)
  *   3. rpc delete_last_voucher
  */
@@ -57,6 +71,7 @@ describe('DELETE /api/bookkeeping/journal-entries/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    logRecords.length = 0
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   })
 
@@ -196,5 +211,96 @@ describe('DELETE /api/bookkeeping/journal-entries/[id]', () => {
     expect(status).toBeGreaterThanOrEqual(500)
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
     expect(syncInvoiceStatusFromPaymentEntry).not.toHaveBeenCalled()
+  })
+  // PH 212, crm#1438: the database never deletes an SIE-imported verifikat
+  // (retain_sie_batch_entry, 55000) nor the storno of an undone SIE import
+  // (retain_sie_undo_reversal, P0001). The route refuses both up front with a
+  // typed 409 that names the way out, and never as an error log.
+  describe('SIE imports', () => {
+    type Envelope = { error: { code: string; message: string; remediation?: { tool?: string } } }
+
+    it('refuses an SIE-imported verifikat before touching anything', async () => {
+      enqueue({
+        data: { id: 'je-1', source_type: 'import', source_id: null, import_batch_id: 'imp-1', reverses_id: null },
+      })
+
+      const { status, body } = await parseJsonResponse<Envelope>(await run())
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('JOURNAL_ENTRY_DELETE_SIE_BATCH_ENTRY')
+      expect(body.error.message).toMatch(/^Verifikationen kommer från en SIE-import/)
+      expect(body.error.message).toContain('Importhistorik')
+      expect(body.error.remediation?.tool).toBe('gnubok_undo_sie_import')
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+      expect(loadPaymentEntryLinks).not.toHaveBeenCalled()
+      expect(reanchorOrphanedSupplierInvoiceDocuments).not.toHaveBeenCalled()
+      expect(logRecords.filter((r) => r.level === 'error')).toEqual([])
+      expect(logRecords.some((r) => r.level === 'warn' && r.msg === 'JOURNAL_ENTRY_DELETE_SIE_BATCH_ENTRY')).toBe(true)
+    })
+
+    it('refuses the storno of an undone SIE import before touching anything', async () => {
+      enqueue({
+        data: { id: 'je-1', source_type: 'storno', source_id: null, import_batch_id: null, reverses_id: 'orig-1' },
+      })
+      enqueue({ data: { import_batch_id: 'imp-1', status: 'reversed' } })
+      enqueue({ data: { job_state: 'undone', status: 'undone' } })
+
+      const { status, body } = await parseJsonResponse<Envelope>(await run())
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('JOURNAL_ENTRY_DELETE_SIE_UNDO_STORNO')
+      expect(body.error.message).toMatch(/^Verifikationen makulerar en ångrad SIE-import/)
+      expect(body.error.message).toContain('Gör om migrering')
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+      expect(logRecords.filter((r) => r.level === 'error')).toEqual([])
+    })
+
+    it('still deletes the storno of one verifikat of a completed import', async () => {
+      enqueue({
+        data: { id: 'je-1', source_type: 'storno', source_id: null, import_batch_id: null, reverses_id: 'orig-1' },
+      })
+      enqueue({ data: { import_batch_id: 'imp-1', status: 'reversed' } })
+      enqueue({ data: { job_state: 'completed', status: 'completed' } })
+      enqueue({ data: [] })
+      enqueue({ data: { deleted: true, voucher_series: 'A', voucher_number: 120 } })
+
+      const { status } = await parseJsonResponse(await run())
+
+      expect(status).toBe(200)
+      expect(mockSupabase.rpc).toHaveBeenCalledWith('delete_last_voucher', {
+        p_company_id: 'company-1',
+        p_entry_id: 'je-1',
+      })
+    })
+
+    it.each([
+      ['55000', 'SIE batch entries cannot be deleted; use batch storno', 'JOURNAL_ENTRY_DELETE_SIE_BATCH_ENTRY'],
+      ['P0001', 'Voucher of an undone SIE import cannot be restored; its storno must stay', 'JOURNAL_ENTRY_DELETE_SIE_UNDO_STORNO'],
+    ])('answers the trigger refusal %s as the same typed 409, logged as a warning', async (code, message, expected) => {
+      // The import changed between the read and the RPC (an undo started).
+      enqueue({ data: { id: 'je-1', source_type: 'manual', source_id: null, import_batch_id: null, reverses_id: null } })
+      enqueue({ data: [] })
+      enqueue({ error: { code, message, details: null, hint: null } })
+
+      const { status, body } = await parseJsonResponse<Envelope>(await run())
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe(expected)
+      expect(body.error.message).not.toContain(message)
+      expect(reanchorOrphanedSupplierInvoiceDocuments).not.toHaveBeenCalled()
+      expect(logRecords.filter((r) => r.level === 'error')).toEqual([])
+      expect(logRecords.some((r) => r.level === 'warn' && r.msg === expected)).toBe(true)
+    })
+
+    it('keeps logging an unexpected RPC failure as an error', async () => {
+      enqueue({ data: { id: 'je-1', source_type: 'manual', source_id: null } })
+      enqueue({ data: [] })
+      enqueue({ error: { code: 'XX000', message: 'something broke' } })
+
+      const { status } = await parseJsonResponse(await run())
+
+      expect(status).toBe(400)
+      expect(logRecords.some((r) => r.level === 'error' && r.msg === 'delete_last_voucher failed')).toBe(true)
+    })
   })
 })

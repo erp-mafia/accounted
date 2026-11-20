@@ -1,26 +1,30 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSalesOrderSchema } from '@/lib/api/schemas'
-import { loadSalesOrder } from '@/lib/sales-orders/load'
+import { loadSalesOrder, loadSalesOrderSourceDocument } from '@/lib/sales-orders/load'
 import { hasOpenInvoices, updateSalesOrder } from '@/lib/sales-orders/write'
 import { serviceFailureResponse } from '@/lib/sales-orders/respond'
 import { codeFromPgError } from '@/lib/sales-orders/result'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
-ensureInitialized()
-
 type Ctx = { params: Promise<{ id: string }> }
 
-/** GET /api/sales-orders/[id]: one order with lines + derived quantities. */
+/**
+ * GET /api/sales-orders/[id]: one order with lines + derived quantities, and
+ * the proforma or offert it was created from (source_document) for the
+ * page's "Skapad från" row.
+ */
 export const GET = withRouteContext<Ctx>(
   'sales_order.get',
   async (_request, { supabase, companyId, log, requestId }, { params }) => {
     const { id } = await params
     const result = await loadSalesOrder(supabase, companyId, id)
     if (!result.ok) return serviceFailureResponse(result, log, requestId)
-    return NextResponse.json({ data: result.order })
+    // The row is a pointer, not the order: a failed read leaves it out.
+    const source = await loadSalesOrderSourceDocument(supabase, companyId, result.order.source_invoice_id)
+    if (source.error) log.warn('sales order source document read failed', { orderId: id, error: source.error })
+    return NextResponse.json({ data: { ...result.order, source_document: source.document } })
   },
 )
 

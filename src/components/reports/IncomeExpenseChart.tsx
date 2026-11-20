@@ -3,6 +3,7 @@
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils'
+import { CHART_TOOLTIP_PROPS } from '@/components/reports/chart-tooltip'
 
 export interface MonthlyDataPoint {
   label: string
@@ -19,7 +20,7 @@ export function IncomeExpenseChart({ months }: IncomeExpenseChartProps) {
 
   return (
     <Card className="mb-4">
-      <CardHeader className="pb-2">
+      <CardHeader>
         <CardTitle className="text-base">Intäkter vs Kostnader per månad</CardTitle>
       </CardHeader>
       <CardContent>
@@ -34,12 +35,18 @@ export function IncomeExpenseChart({ months }: IncomeExpenseChartProps) {
               tickFormatter={(v) => new Intl.NumberFormat('sv-SE', { notation: 'compact' }).format(v)}
             />
             <Tooltip
+              {...CHART_TOOLTIP_PROPS}
               formatter={(value, name) => [
                 formatCurrency(Number(value)),
                 name === 'income' ? 'Intäkter' : 'Kostnader',
               ]}
             />
             <Legend
+              verticalAlign="top"
+              align="right"
+              iconType="square"
+              iconSize={10}
+              wrapperStyle={{ fontSize: 12, paddingBottom: 8 }}
               formatter={(value) => (value === 'income' ? 'Intäkter' : 'Kostnader')}
             />
             <Bar dataKey="income" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} />

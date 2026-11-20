@@ -12,6 +12,13 @@
  * the envelope shape (lists are lists, flags are booleans), not the fields of
  * each row.
  */
+import { isProfileId, type ProfileId } from '@/lib/modules/profiles'
+
+/** The byrå's profile choice for a client company (lib/company/client-profile.ts). */
+export interface MembersProfileChoice {
+  current: ProfileId | null
+  preselected: ProfileId
+}
 
 export interface CompanyMembersPayload<M, I> {
   members: M[]
@@ -19,6 +26,8 @@ export interface CompanyMembersPayload<M, I> {
   canInvite: boolean
   /** Multi-user seat gate: swap the invite form for the paid-plan upsell. */
   inviteRequiresUpgrade: boolean
+  /** Present for the byrå of a client company: the invite form then requires a profile. */
+  profileChoice: MembersProfileChoice | null
 }
 
 export function parseCompanyMembersPayload<M, I>(body: unknown): CompanyMembersPayload<M, I> | null {
@@ -30,8 +39,10 @@ export function parseCompanyMembersPayload<M, I>(body: unknown): CompanyMembersP
     invitations?: unknown
     canInvite?: unknown
     inviteRequiresUpgrade?: unknown
+    profileChoice?: unknown
   }
   if (!Array.isArray(d.members) || !Array.isArray(d.invitations)) return null
+  const choice = d.profileChoice as { current?: unknown; preselected?: unknown } | null | undefined
   return {
     members: d.members as M[],
     invitations: d.invitations as I[],
@@ -40,6 +51,12 @@ export function parseCompanyMembersPayload<M, I>(body: unknown): CompanyMembersP
     // Only an explicit true swaps the form for the upsell: an older server
     // without the field keeps the form, and the POST's own 403 still guards.
     inviteRequiresUpgrade: d.inviteRequiresUpgrade === true,
+    // Only a well-formed choice adds the profile field: an older server, or
+    // a company that is not a byrå client, keeps the form as it was.
+    profileChoice:
+      choice && typeof choice === 'object' && isProfileId(choice.preselected)
+        ? { current: isProfileId(choice.current) ? choice.current : null, preselected: choice.preselected }
+        : null,
   }
 }
 
@@ -51,6 +68,8 @@ export interface TeamMembersPayload<M, I> {
   teamKind: string | null
   isOwner: boolean
   canInvite: boolean
+  /** The team's client companies, for choosing which ones a member reaches. */
+  companies: { id: string; name: string }[]
 }
 
 export function parseTeamMembersPayload<M, I>(body: unknown): TeamMembersPayload<M, I> | null {
@@ -65,6 +84,7 @@ export function parseTeamMembersPayload<M, I>(body: unknown): TeamMembersPayload
     teamKind?: unknown
     isOwner?: unknown
     canInvite?: unknown
+    companies?: unknown
   }
   if (!Array.isArray(d.members)) return null
   return {
@@ -78,5 +98,16 @@ export function parseTeamMembersPayload<M, I>(body: unknown): TeamMembersPayload
     // Only explicit boolean true unlocks management affordances.
     isOwner: d.isOwner === true,
     canInvite: d.canInvite === true,
+    // Management-only extra like invitations: a missing list hides the
+    // access choice instead of failing the roster.
+    companies: Array.isArray(d.companies)
+      ? (d.companies as unknown[]).filter(
+          (c): c is { id: string; name: string } =>
+            typeof c === 'object' &&
+            c !== null &&
+            typeof (c as { id?: unknown }).id === 'string' &&
+            typeof (c as { name?: unknown }).name === 'string',
+        )
+      : [],
   }
 }

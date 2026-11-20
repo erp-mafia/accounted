@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Button } from '@/components/ui/button'
@@ -22,14 +22,27 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
-import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { CompanyMigrationResetDialog } from '@/components/settings/CompanyMigrationResetDialog'
 import { CompanyMigrationArchiveRow } from '@/components/settings/CompanyMigrationArchiveRow'
+import {
+  afterCompanyDeleteHref,
+  type CompanyDeleteDoor,
+} from '@/components/settings/company-deletion'
 
 const branding = getBranding()
+
+interface CompanyDangerZoneProps {
+  /**
+   * Which door opened the delete dialog, null while it is closed. The section
+   * owns it because the dialog has a second door outside this zone: the locked
+   * org number row (company-deletion.ts).
+   */
+  deleteDoor: CompanyDeleteDoor | null
+  onDeleteDoorChange: (door: CompanyDeleteDoor | null) => void
+}
 
 /**
  * Danger zone for the currently-active company. Only visible to owners.
@@ -38,26 +51,30 @@ const branding = getBranding()
  * POST /api/company/[id]/delete. All bookkeeping data is retained per
  * BFL 7 kap. 2§; the row just disappears from the user's UI.
  *
- * TODO(bankid): once users have a linked BankID identity, wrap the
- * confirm step in a BankID signature gate. Guarded behind a
- * capabilities.bankIdLinked boolean fetched from the user profile.
+ * The confirm step is the typed company name; it has no BankID signature
+ * gate.
  */
-export function CompanyDangerZone() {
+export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDangerZoneProps) {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const tRetention = useTranslations('retention_notice')
   const router = useRouter()
   const { toast } = useToast()
   const { company, role } = useCompany()
 
-  const [showDialog, setShowDialog] = useState(false)
   const [showResetDialog, setShowResetDialog] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
 
   if (!company || role !== 'owner') return null
 
+  function closeDeleteDialog() {
+    onDeleteDoorChange(null)
+    setConfirmText('')
+  }
+
   async function handleDelete() {
-    if (!company) return
+    if (!company || !deleteDoor) return
     if (confirmText.trim() !== company.name.trim()) return
 
     setIsDeleting(true)
@@ -68,17 +85,15 @@ export function CompanyDangerZone() {
         body: JSON.stringify({ confirm_name: confirmText }),
       })
 
+      const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || t('danger_delete_failed_default'))
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('danger_delete_failed_default') }))
       }
 
       toast({ title: t('danger_deleted_title'), description: company.name })
-      // Stay inside settings. If the user had another company, the dashboard
-      // layout will resolve it and /settings/account still renders as
-      // normal. If this was their last company, the layout falls into the
-      // no-company shell rooted at /settings/account.
-      router.push('/settings/account')
+      // The door decides what the delete was for: on to adding the right
+      // company, or settings and the delete-account action (crm#1042).
+      router.push(afterCompanyDeleteHref(deleteDoor, body?.data?.nextCompanyId))
       router.refresh()
     } catch (err) {
       toast({
@@ -94,16 +109,12 @@ export function CompanyDangerZone() {
     <>
       <CompanyMigrationArchiveRow companyId={company.id} />
 
-      <SettingsDangerZone label={t('danger_heading')}>
+      {/* Both destructive actions ask for a typed confirmation first. Said
+          once, behind the zone's "?": a reader who does not dare press the
+          link can find that out without pressing it (issue #2214). */}
+      <SettingsDangerZone label={t('danger_heading')} help={t('danger_confirm_hint')}>
         <SettingsRow label={t('reset_row_label')}>
-          {/* Both destructive rows say up front that a typed confirmation
-              follows. A reader who does not dare press the link cannot find
-              that out any other way, and on a phone the link sits where a
-              stray tap while scrolling lands (issue #2214). */}
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <SettingsRowNote>{t('reset_row_note')}</SettingsRowNote>
-            <SettingsRowNote>{t('danger_confirm_hint')}</SettingsRowNote>
-          </div>
+          <SettingsRowNote className="min-w-0">{t('reset_row_note')}</SettingsRowNote>
           <SettingsRowEnd>
             <button
               type="button"
@@ -115,34 +126,31 @@ export function CompanyDangerZone() {
           </SettingsRowEnd>
         </SettingsRow>
         <SettingsRow
-          label={t('danger_button')}
+          // The label says what deleting does; the action says "Radera".
+          label={t('danger_delete_row_label')}
           borderless
           // The full BFL retention copy (incl. the backup link) lives behind
           // the "?": the visible row stays one quiet line.
           help={<RetentionNotice variant="company" className="border-0 bg-transparent p-0" />}
         >
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <SettingsRowNote>{tRetention('company_title')}</SettingsRowNote>
-            <SettingsRowNote>{t('danger_confirm_hint')}</SettingsRowNote>
-          </div>
+          <SettingsRowNote className="min-w-0">{tRetention('company_title')}</SettingsRowNote>
           <SettingsRowEnd>
             <button
               type="button"
-              onClick={() => setShowDialog(true)}
+              onClick={() => onDeleteDoorChange('danger_zone')}
               className="text-sm font-medium text-destructive underline underline-offset-2 transition-colors duration-150 hover:text-destructive/80"
             >
-              {t('danger_button')}
+              {t('danger_delete_row_action')}
             </button>
           </SettingsRowEnd>
         </SettingsRow>
       </SettingsDangerZone>
 
       <Dialog
-        open={showDialog}
+        open={deleteDoor !== null}
         onOpenChange={(open) => {
-          if (isDeleting) return
-          setShowDialog(open)
-          if (!open) setConfirmText('')
+          if (isDeleting || open) return
+          closeDeleteDialog()
         }}
       >
         <DialogContent>
@@ -153,6 +161,24 @@ export function CompanyDangerZone() {
               {t('danger_dialog_description', { appName: branding.appName.toLowerCase() })}
             </DialogDescription>
           </DialogHeader>
+          {/* Wrong-company door: say what comes after the delete, and the one
+              thing to do before it. The delete leaves a bank connection
+              active, and a hidden company's connection is out of the owner's
+              reach: the consent can only be withdrawn beforehand. */}
+          {deleteDoor === 'wrong_company' && (
+            <p className="text-sm text-muted-foreground">{t('danger_dialog_wrong_company_note')}</p>
+          )}
+          {/* The same one thing to do first, from the Radera företag row too
+              (a byrå clearing out test companies comes this way, crm#1237). */}
+          {deleteDoor === 'danger_zone' && (
+            <p className="text-sm text-muted-foreground">{t('danger_dialog_bank_note')}</p>
+          )}
+          {/* The delete ends the company's subscription (crm#1373), from
+              either door: a hidden company is never charged again. */}
+          <p className="text-sm text-muted-foreground">{t('danger_dialog_subscription_note')}</p>
+          {/* Terms 9.3: the archive stays downloadable from Säkerhet for 18
+              months (DeletedCompaniesExport), from either door. */}
+          <p className="text-sm text-muted-foreground">{t('danger_dialog_export_note')}</p>
           <div className="space-y-2">
             {/* data-ph-mask: the label interpolates the company name */}
             <Label data-ph-mask="" htmlFor="company-delete-confirm">
@@ -173,29 +199,16 @@ export function CompanyDangerZone() {
             />
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowDialog(false)
-                setConfirmText('')
-              }}
-              disabled={isDeleting}
-            >
+            <Button variant="outline" onClick={closeDeleteDialog} disabled={isDeleting}>
               {t('danger_cancel')}
             </Button>
             <Button
               variant="destructive"
               onClick={handleDelete}
-              disabled={confirmText.trim() !== company.name.trim() || isDeleting}
+              disabled={confirmText.trim() !== company.name.trim()}
+              loading={isDeleting}
             >
-              {isDeleting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('danger_deleting')}
-                </>
-              ) : (
-                t('danger_button')
-              )}
+              {isDeleting ? t('danger_deleting') : t('danger_button')}
             </Button>
           </DialogFooter>
         </DialogContent>

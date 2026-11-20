@@ -42,6 +42,7 @@ vi.mock('@/lib/vat/vies-client', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { GET as listCustomers, POST as createCustomer } from '../route'
+import { CUSTOMER_RECORD_COLUMNS } from '@/lib/customers/customer-record'
 import {
   GET as getCustomer,
   PATCH as updateCustomer,
@@ -58,7 +59,8 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
     insert: unknown[]
     update: unknown[]
     selects: Record<string, string[]>
-  } = { insert: [], update: [], selects: {} }
+    filters: Record<string, unknown[][]>
+  } = { insert: [], update: [], selects: {}, filters: {} }
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -72,6 +74,7 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
           if (prop === 'select' && typeof args[0] === 'string') {
             ;(captured.selects[table] ??= []).push(args[0])
           }
+          ;(captured.filters[table] ??= []).push([prop, ...args])
           return buildChain(table)
         }
       },
@@ -230,6 +233,32 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
     expect(legalEntityRow.org_number).toBe('TEST-0000-0001')
   })
 
+  // #95: rows filed as a foreign business before the write paths refused a
+  // personnummer there still hold one; the list masks it whatever the type.
+  it('masks a personnummer-shaped org_number on a legacy foreign-business row', async () => {
+    const legacy = {
+      ...SAMPLE_CUSTOMER,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      customer_type: 'non_eu_business',
+      org_number: '195512319876', // synthetic personnummer-shaped value
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: [legacy], error: null },
+      }),
+    )
+
+    const res = await listCustomers(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0].org_number).toBeNull()
+  })
+
   it('accepts include_archived=true', async () => {
     const archived = { ...SAMPLE_CUSTOMER, archived_at: '2026-01-01T00:00:00Z' }
     mockServiceClient.mockReturnValue(
@@ -293,12 +322,11 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
 
 describe('GET /api/v1/companies/:companyId/customers/:id', () => {
   it('returns the customer record', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        customers: { data: SAMPLE_CUSTOMER, error: null },
-      }),
-    )
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: SAMPLE_CUSTOMER, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
 
     const res = await getCustomer(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
@@ -311,6 +339,11 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.data.name).toBe('Acme AB')
     // Default response MUST NOT include the invoices expansion.
     expect(body.data.invoices).toBeUndefined()
+    // The projection is the shared record, the one MCP's
+    // gnubok_get_customer reads (crm#1061): language and notes included.
+    expect(supabaseMock.captured.selects.customers).toEqual([CUSTOMER_RECORD_COLUMNS])
+    expect(CUSTOMER_RECORD_COLUMNS).toContain('language')
+    expect(CUSTOMER_RECORD_COLUMNS).toContain('notes')
   })
 
   it('soft-degrades and signals partial_expansions when the invoices subquery fails', async () => {
@@ -388,6 +421,146 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.data.invoices[0].id).toBe('inv-open-1')
     // Successful expansion MUST NOT set the partial flag.
     expect(body.meta.partial_expansions).toBeUndefined()
+  })
+
+  // A sent credit note carries status 'sent' and nothing remaining: it read as
+  // an open invoice here, where the other readers of what is owed left it out.
+  it('reads the open invoices through the one owed filter', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: SAMPLE_CUSTOMER, error: null },
+      invoices: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(supabase.captured.filters.invoices).toEqual(
+      expect.arrayContaining([
+        ['in', 'status', ['sent', 'overdue', 'partially_paid']],
+        ['eq', 'document_type', 'invoice'],
+        ['is', 'credited_invoice_id', null],
+        ['gte', 'total', 0],
+        ['gt', 'remaining_amount', 0],
+      ]),
+    )
+  })
+
+  // crm#1568: the open invoices carried the exact total only, so an
+  // integration read 3116,25 kr where the invoice asks for 3116 kr.
+  it('embeds what each open invoice asks for, as the invoice endpoints report it', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: SAMPLE_CUSTOMER, error: null },
+      company_settings: { data: { ore_rounding: true }, error: null },
+      invoices: {
+        data: [
+          { id: 'inv-up', invoice_number: 'F-1001', invoice_date: '2026-10-31', due_date: '2026-11-30', status: 'sent', currency: 'SEK', total: 4312.5, remaining_amount: 4312.5, ore_rounding: true, deduction_total: 0, credited_invoice_id: null },
+          { id: 'inv-null', invoice_number: 'F-0900', invoice_date: '2026-03-31', due_date: '2026-04-30', status: 'sent', currency: 'SEK', total: 3116.25, remaining_amount: 3116.25, ore_rounding: null, deduction_total: 0, credited_invoice_id: null },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(supabase.captured.selects.invoices?.[0]).toContain('ore_rounding')
+    expect(body.data.invoices[0]).toMatchObject({ total: 4312.5, amount_to_pay: 4313, ore_rounding_amount: 0.5, remaining_amount: 4312.5 })
+    // A row without its own choice follows the company setting.
+    expect(body.data.invoices[1]).toMatchObject({ total: 3116.25, amount_to_pay: 3116, ore_rounding_amount: -0.25 })
+    // The columns the figures are derived from are not part of the shape.
+    expect(body.data.invoices[0]).not.toHaveProperty('ore_rounding')
+    expect(body.data.invoices[0]).not.toHaveProperty('deduction_total')
+    expect(body.meta.partial_expansions).toBeUndefined()
+  })
+
+  // Overdue is derived, never stored (lib/invoices/overdue.ts): the expansion
+  // returned the stored status, so an invoice v1 /invoices reported as overdue
+  // read sent here.
+  it('reports each open invoice with the status the invoice endpoints report', async () => {
+    const open = { invoice_date: '2020-01-01', currency: 'SEK', total: 1000, remaining_amount: 1000, ore_rounding: false, deduction_total: 0, credited_invoice_id: null }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SAMPLE_CUSTOMER, error: null },
+        invoices: {
+          data: [
+            { ...open, id: 'inv-past-due', invoice_number: 'F-1', due_date: '2020-01-31', status: 'sent' },
+            { ...open, id: 'inv-not-due', invoice_number: 'F-2', due_date: '2999-12-31', status: 'sent' },
+            { ...open, id: 'inv-moved', invoice_number: 'F-3', due_date: '2999-12-31', status: 'overdue' },
+            { ...open, id: 'inv-partly', invoice_number: 'F-4', due_date: '2020-01-31', status: 'partially_paid', remaining_amount: 400 },
+          ],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const statusOf = Object.fromEntries(
+      (body.data.invoices as Array<{ id: string; status: string }>).map((invoice) => [invoice.id, invoice.status]),
+    )
+    expect(statusOf).toEqual({
+      // Stored as sent, past due with money left: overdue, as v1 /invoices says.
+      'inv-past-due': 'overdue',
+      'inv-not-due': 'sent',
+      // A stored overdue whose due date moved is no longer overdue.
+      'inv-moved': 'sent',
+      // Partly paid stays partly paid, overdue or not.
+      'inv-partly': 'partially_paid',
+    })
+    // The response shape is unchanged.
+    expect(Object.keys(body.data.invoices[0]).sort()).toEqual(
+      ['amount_to_pay', 'currency', 'due_date', 'id', 'invoice_date', 'invoice_number', 'ore_rounding_amount', 'remaining_amount', 'status', 'total'],
+    )
+    expect(body.meta.partial_expansions).toBeUndefined()
+  })
+
+  it('degrades the expansion, never a guessed figure, when the company setting cannot be read', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SAMPLE_CUSTOMER, error: null },
+        company_settings: { data: null, error: { message: 'permission denied' } },
+        invoices: {
+          data: [{ id: 'inv-null', invoice_number: 'F-0900', invoice_date: '2026-03-31', due_date: '2026-04-30', status: 'sent', currency: 'SEK', total: 3116.25, remaining_amount: 3116.25, ore_rounding: null, deduction_total: 0, credited_invoice_id: null }],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.invoices).toEqual([])
+    expect(body.meta.partial_expansions).toEqual(['invoices'])
   })
 
   it('returns 404 when the customer does not exist for the company', async () => {
@@ -662,8 +835,7 @@ describe('POST /api/v1/companies/:companyId/customers', () => {
     // The insert payload carries the field (not silently dropped) …
     const insertPayload = supabaseMock.captured.insert[0] as { customer_number?: string | null }
     expect(insertPayload.customer_number).toBe('1001')
-    // … and the response projection selects it back.
-    expect(supabaseMock.captured.selects['customers']?.[0]).toContain('customer_number')
+    // … and the response (the customer record) carries it back.
   })
 
   it('normalizes an empty customer_number to null on create', async () => {
@@ -840,7 +1012,6 @@ describe('PATCH /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.data.customer_number).toBe('K-42')
     const updatePayload = supabaseMock.captured.update[0] as { customer_number?: string | null }
     expect(updatePayload.customer_number).toBe('K-42')
-    expect(supabaseMock.captured.selects['customers']?.[0]).toContain('customer_number')
   })
 
   it('clears customer_number when an empty string is sent', async () => {
@@ -980,6 +1151,132 @@ describe('DELETE /api/v1/companies/:companyId/customers/:id', () => {
     )
 
     expect(res.status).toBe(400)
+  })
+})
+
+// The archive pre-flight counts what the customer still owes, not every row
+// in an owed status (PH 226): an issued credit note stays 'sent' and the
+// original it fully credits turns 'credited'. The invoices table here holds
+// rows and applies the route's filters to them, so the count is the one the
+// query would return.
+describe('DELETE /api/v1/companies/:companyId/customers/:id: what blocks archiving', () => {
+  type InvoiceRow = {
+    id?: string
+    company_id: string
+    customer_id: string
+    document_type: string
+    status: string
+    credited_invoice_id: string | null
+    total: number
+    remaining_amount: number
+  }
+  const ORIGINAL_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const row = (over: Partial<InvoiceRow>): InvoiceRow => ({
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    document_type: 'invoice',
+    status: 'sent',
+    credited_invoice_id: null,
+    total: 1000,
+    remaining_amount: 1000,
+    ...over,
+  })
+
+  function makeInvoiceRowsSupabase(rows: InvoiceRow[]) {
+    const base = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { id: CUSTOMER_ID }, error: null },
+    })
+    type Pred = (r: Record<string, unknown>, col: string, val: unknown) => boolean
+    const ops: Record<string, Pred> = {
+      eq: (r, c, v) => r[c] === v,
+      in: (r, c, v) => (v as unknown[]).includes(r[c]),
+      is: (r, c, v) => r[c] === v,
+      gte: (r, c, v) => Number(r[c]) >= Number(v),
+      gt: (r, c, v) => Number(r[c]) > Number(v),
+    }
+    const invoices = (filters: Array<(r: Record<string, unknown>) => boolean>): unknown =>
+      new Proxy({}, {
+        get(_target, prop) {
+          if (typeof prop === 'symbol') return undefined
+          if (prop === 'then') {
+            const count = rows.filter((r) => filters.every((f) => f(r))).length
+            return (resolve: (v: unknown) => void) => resolve({ data: null, error: null, count })
+          }
+          return (...args: unknown[]) => {
+            if (prop === 'select') return invoices(filters)
+            const op = ops[prop]
+            if (!op) throw new Error(`invoice rows mock: unsupported filter ${prop}`)
+            const [col, val] = args as [string, unknown]
+            return invoices([...filters, (r) => op(r, col, val)])
+          }
+        },
+      })
+    return {
+      from: vi.fn((table: string) => (table === 'invoices' ? invoices([]) : base.from(table))),
+      captured: base.captured,
+    }
+  }
+
+  async function archive(rows: InvoiceRow[]) {
+    withWriteScope()
+    const supabaseMock = makeInvoiceRowsSupabase(rows)
+    mockServiceClient.mockReturnValue(supabaseMock)
+    const res = await deleteCustomer(
+      makeDeleteRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+    return { res, updates: supabaseMock.captured.update }
+  }
+
+  it('archives a customer whose only invoice is fully credited (regression, PH 226)', async () => {
+    const { res, updates } = await archive([
+      row({ id: ORIGINAL_ID, status: 'credited' }),
+      row({ status: 'sent', credited_invoice_id: ORIGINAL_ID, total: -1000, remaining_amount: 0 }),
+    ])
+
+    expect(res.status).toBe(204)
+    expect(updates).toEqual([{ archived_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) }])
+  })
+
+  it('does not count an imported credit note without a link, nor a sent quote', async () => {
+    const { res } = await archive([
+      row({ status: 'overdue', total: -500, remaining_amount: 0 }),
+      row({ document_type: 'quote', status: 'sent' }),
+    ])
+
+    expect(res.status).toBe(204)
+  })
+
+  it('still refuses a customer with a genuinely open invoice', async () => {
+    const { res, updates } = await archive([row({ status: 'sent' })])
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_HAS_INVOICES')
+    expect(body.error.details.open_invoice_count).toBe(1)
+    expect(updates).toEqual([])
+  })
+
+  it('still refuses a partially credited invoice with an amount remaining, counting only the original', async () => {
+    const { res, updates } = await archive([
+      row({ id: ORIGINAL_ID, status: 'sent', total: 1000, remaining_amount: 400 }),
+      row({ status: 'sent', credited_invoice_id: ORIGINAL_ID, total: -600, remaining_amount: 0 }),
+    ])
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_HAS_INVOICES')
+    expect(body.error.details.open_invoice_count).toBe(1)
+    expect(updates).toEqual([])
+  })
+
+  it("does not count another customer's open invoice", async () => {
+    const { res } = await archive([
+      row({ customer_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', status: 'overdue' }),
+    ])
+
+    expect(res.status).toBe(204)
   })
 })
 

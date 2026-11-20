@@ -16,7 +16,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 const bulkRpcMock = vi.fn()
 const bulkClient = { rpc: bulkRpcMock } as unknown as SupabaseClient
-vi.mock('@/lib/import/sie-import', () => ({
+vi.mock('@/lib/supabase/bulk-delete-client', () => ({
   rpcClientForBulkDelete: vi.fn(async () => bulkClient),
 }))
 

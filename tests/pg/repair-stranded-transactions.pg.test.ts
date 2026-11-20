@@ -115,7 +115,7 @@ describe('repair_stranded_transactions (issue #2057)', () => {
     await getPool().query(
       `INSERT INTO public.transaction_voucher_links
          (user_id, company_id, transaction_id, journal_entry_id, allocated_amount, role)
-       VALUES ($1, $2, $3, $4, -100, 'other')`,
+       VALUES ($1, $2, $3, $4, -100, 'bank_line')`,
       [userId, companyId, viaJunction, entryId],
     )
 

@@ -1,28 +1,33 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
+import { useState, useMemo, useCallback, Suspense } from 'react'
 import { useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
-import { useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/components/ui/dry-table'
+import { AttnLine } from '@/components/ui/attn-line'
+import { ListPageSkeleton } from '@/components/common/ListPageSkeleton'
+import { useUrlSort } from '@/lib/hooks/use-url-sort'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { Plus, Users, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
-import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
-import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { LockClosedIcon, PlusIcon, UsersIcon } from '@/components/icons'
+import { EmptyCustomers, EmptyState, LoadError } from '@/components/ui/empty-state'
+import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { customerListIdentifier } from '@/lib/customers/mask-personal-number'
 import { compareCustomerNumbers } from '@/lib/customers/sort'
+import { dominantPartyType, partyTypeSuffix } from '@/lib/parties/list-type-suffix'
+import { invoiceTermsFor } from '@/lib/invoices/due-date'
 
 const CustomerForm = dynamic(
   () => import('@/components/customers/CustomerForm'),
@@ -44,26 +49,25 @@ const CUSTOMER_TYPE_LABEL_KEYS: Record<CustomerType, string> = {
   non_eu_business: 'type_non_eu_business',
 }
 
+/** Tie order for the list's normal type: business first. */
+const CUSTOMER_TYPE_ORDER: readonly CustomerType[] = ['swedish_business', 'individual', 'eu_business', 'non_eu_business']
+
 type SortColumn =
   | 'customer_number'
   | 'name'
-  | 'customer_type'
   | 'identifier'
   | 'email'
   | 'city'
   | 'created_at'
-type SortDir = 'asc' | 'desc'
 
 const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'customer_number',
   'name',
-  'customer_type',
   'identifier',
   'email',
   'city',
   'created_at',
 ]
-const INITIAL_VISIBLE_ROWS = 100
 
 // Business rows show org_number; individual rows show the masked
 // personnummer the API returns, and a legacy individual row that still
@@ -82,10 +86,14 @@ function CustomersPageInner() {
   // masks the personnummer column server-side (see the note that used to sit
   // on fetchCustomers), the list is shared with every customer picker, and
   // a revisit renders from cache. Skeleton only on the very first load.
-  const { customers, isLoading: customersLoading, error: customersError } = useCustomers()
+  const { customers, isLoading: customersLoading, error: customersError, refresh: refreshCustomers } = useCustomers()
   const isLoading = customersLoading && customers.length === 0
+  // A failed first load says so in place of the rows; a failed refresh keeps
+  // the rows on screen and says so in one line above them.
+  const loadFailed = Boolean(customersError) && customers.length === 0
+  const refreshFailed = Boolean(customersError) && customers.length > 0
   const [searchTerm, setSearchTerm] = useState('')
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   // Company default payment terms (Inställningar → Fakturering). Prefilled
@@ -94,49 +102,21 @@ function CustomersPageInner() {
   // Default payment terms from the session-cached settings row; the dialog
   // falls back to 30 until (or unless) the company set one.
   const { settings: companySettings } = useCompanySettings()
-  const companyDefaultTerms =
-    typeof companySettings?.invoice_default_days === 'number' && companySettings.invoice_default_days > 0
-      ? companySettings.invoice_default_days
-      : null
+  const companyDefaultTerms = companySettings ? invoiceTermsFor(undefined, companySettings.invoice_default_days) : null
   const { toast } = useToast()
   const t = useTranslations('customers')
   const tCommon = useTranslations('common')
+  const tEmpty = useTranslations('empty')
   const errorLocale = useLocale() as ErrorLocale
 
   const router = useRouter()
-  const pathname = usePathname()
-  const searchParams = useSearchParams()
 
-  const sortParam = searchParams.get('sort')
-  const dirParam = searchParams.get('dir')
-  const sortColumn: SortColumn = (SORTABLE_COLUMNS as ReadonlyArray<string>).includes(sortParam ?? '')
-    ? (sortParam as SortColumn)
-    : 'name'
-  const sortDir: SortDir = dirParam === 'desc' ? 'desc' : 'asc'
-
-  const updateSort = useCallback(
-    (column: SortColumn) => {
-      setVisibleCount(INITIAL_VISIBLE_ROWS)
-      const params = new URLSearchParams(searchParams.toString())
-      let nextDir: SortDir = 'asc'
-      if (column === sortColumn) {
-        nextDir = sortDir === 'asc' ? 'desc' : 'asc'
-      }
-      params.set('sort', column)
-      params.set('dir', nextDir)
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false })
-    },
-    [searchParams, sortColumn, sortDir, router, pathname]
+  const resetVisible = useCallback(() => setVisibleCount(SHOW_MORE_STEP), [])
+  const { column: sortColumn, direction: sortDir, toggle: updateSort } = useUrlSort(
+    SORTABLE_COLUMNS,
+    'name',
+    resetVisible,
   )
-
-  useEffect(() => {
-    if (!customersError) return
-    toast({
-      title: t('load_failed_title'),
-      description: t('load_failed_description'),
-      variant: 'destructive',
-    })
-  }, [customersError, toast, t])
 
   async function handleCreateCustomer(data: CreateCustomerInput) {
     setIsCreating(true)
@@ -215,10 +195,6 @@ function CustomersPageInner() {
           av = a.name || ''
           bv = b.name || ''
           break
-        case 'customer_type':
-          av = a.customer_type || ''
-          bv = b.customer_type || ''
-          break
         case 'identifier':
           av = getIdentifier(a)
           bv = getIdentifier(b)
@@ -242,134 +218,136 @@ function CustomersPageInner() {
     return arr
   }, [filteredCustomers, sortColumn, sortDir])
   const visibleCustomers = sortedCustomers.slice(0, visibleCount)
-
-  // Sortable dry-table head: the button inherits the uppercase hairline
-  // styling from TH_CLASS on the th.
-  function SortableHeader({
-    column,
-    label,
-    className,
-  }: {
-    column: SortColumn
-    label: string
-    className?: string
-  }) {
-    const isActive = sortColumn === column
-    const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
-    return (
-      <th className={cn(TH_CLASS, className)}>
-        <button
-          type="button"
-          onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 uppercase transition-colors duration-150 hover:text-foreground"
-        >
-          {label}
-          <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
-        </button>
-      </th>
-    )
-  }
+  // The Typ column said "Svenskt företag eller organisation" on nearly every
+  // row: the whole register's most common type goes unsaid, and a row of
+  // another type carries it after the name.
+  const dominantType = useMemo(
+    () => dominantPartyType(customers.map((c) => c.customer_type), CUSTOMER_TYPE_ORDER),
+    [customers],
+  )
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 25): title + export + Ny kund */}
+      {/* Page header (concept scene 25): title + import/export menu + Ny kund */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <div className="flex items-center gap-2">
-          <ReportExportMenu
-            size="default"
-            items={[
-              { format: 'xlsx', href: '/api/export/customers' },
-              { format: 'csv', href: '/api/export/customers?format=csv' },
-            ]}
-          />
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? (
-                  <Plus className="mr-2 h-4 w-4" />
-                ) : (
-                  <Lock className="mr-2 h-4 w-4" />
-                )}
-                {t('new_customer')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t('add_customer')}</DialogTitle>
-              </DialogHeader>
-              <CustomerForm
-                onSubmit={handleCreateCustomer}
-                isLoading={isCreating}
-                initialData={
-                  companyDefaultTerms !== null
-                    ? { default_payment_terms: companyDefaultTerms }
-                    : undefined
-                }
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
+        <h1 className="page-header-title">{t('title')}</h1>
+        <PageHeaderActions className="flex flex-wrap items-center justify-end gap-2">
+          <RegisterActionsMenu entity="customers" />
+          <Button
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setIsDialogOpen(true)}
+          >
+            {canWrite ? (
+              <PlusIcon className="h-4 w-4" />
+            ) : (
+              <LockClosedIcon className="h-4 w-4" />
+            )}
+            {t('new_customer')}
+          </Button>
+          {/* A small record is created in a drawer over its list (V7 creation
+              forms): the list stays in place behind it. */}
+          <CreateDrawer
+            open={isDialogOpen}
+            onOpenChange={setIsDialogOpen}
+            title={t('new_customer')}
+            formId="create-customer-form"
+            submitLabel={t('create_submit')}
+            submitting={isCreating}
+          >
+            <CustomerForm
+              onSubmit={handleCreateCustomer}
+              isLoading={isCreating}
+              initialData={
+                companyDefaultTerms !== null
+                  ? { default_payment_terms: companyDefaultTerms }
+                  : undefined
+              }
+              formId="create-customer-form"
+            />
+          </CreateDrawer>
+        </PageHeaderActions>
       </div>
 
-      {/* Toolbar: search (concept) */}
+      {/* Toolbar: search at the right end (V7 list toolbars) */}
       <div className="flex flex-wrap items-center gap-2">
         <ToolbarSearch
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
           placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
+            setVisibleCount(SHOW_MORE_STEP)
           }}
         />
       </div>
 
+      {refreshFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshCustomers() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto hidden h-3.5 w-28 lg:block" />
+              <Skeleton className="hidden h-3.5 w-40 md:block" />
+              <Skeleton className="hidden h-3.5 w-20 sm:block" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void refreshCustomers()} />
       ) : sortedCustomers.length === 0 ? (
         searchTerm ? (
-          <EmptyState
-            icon={Users}
-            title={t('no_search_results_title')}
-            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
-          />
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>
+            <Button variant="link" onClick={() => setSearchTerm('')}>
+              {tCommon('clear_search')}
+            </Button>
+          </div>
         ) : (
-          <EmptyCustomers onAction={() => setIsDialogOpen(true)} />
+          canWrite ? (
+            <EmptyCustomers onAction={() => setIsDialogOpen(true)} />
+          ) : (
+            // A read-only member gets the same empty state without the create action.
+            <EmptyState icon={UsersIcon} title={tEmpty('preset_customers_title')} description={tEmpty('preset_customers_description')} />
+          )
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
                   {hasCustomerNumbers && (
-                    <SortableHeader
-                      column="customer_number"
+                    <SortableTh
+                      direction={sortColumn === 'customer_number' ? sortDir : null}
+                      onSort={() => updateSort('customer_number')}
                       label={t('col_customer_number')}
                       className="hidden sm:table-cell"
                     />
                   )}
-                  <SortableHeader column="name" label={t('col_name')} className="w-full" />
-                  <SortableHeader column="customer_type" label={t('col_type')} />
-                  <SortableHeader
-                    column="identifier"
+                  <SortableTh direction={sortColumn === 'name' ? sortDir : null} onSort={() => updateSort('name')} label={t('col_name')} className="w-full" />
+                  <SortableTh
+                    direction={sortColumn === 'identifier' ? sortDir : null}
+                    onSort={() => updateSort('identifier')}
                     label={t('col_identifier')}
                     className="hidden lg:table-cell"
                   />
-                  <SortableHeader
-                    column="email"
+                  <SortableTh
+                    direction={sortColumn === 'email' ? sortDir : null}
+                    onSort={() => updateSort('email')}
                     label={t('col_email')}
                     className="hidden md:table-cell"
                   />
-                  <SortableHeader
-                    column="city"
+                  <SortableTh
+                    direction={sortColumn === 'city' ? sortDir : null}
+                    onSort={() => updateSort('city')}
                     label={t('col_city')}
                     className="hidden sm:table-cell"
                   />
@@ -378,6 +356,7 @@ function CustomersPageInner() {
               <tbody className="stagger-enter">
                 {visibleCustomers.map((customer) => {
                   const identifier = getIdentifier(customer)
+                  const typeSuffix = partyTypeSuffix(customer.customer_type, dominantType)
                   return (
                     <tr
                       key={customer.id}
@@ -389,35 +368,34 @@ function CustomersPageInner() {
                           {customer.customer_number || ''}
                         </td>
                       )}
-                      {/* overflow-hidden: see #2003, the shrink-0 verified
-                          badge cannot truncate. */}
-                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
-                        <span className="flex min-w-0 items-center gap-2">
+                      {/* The VIES "Verifierad" mark lives on the customer
+                          page: a success chip on most rows marks the normal
+                          state, not an exception (convention 5). */}
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                        <span className="flex min-w-0 items-baseline gap-2">
                           <Link
                             href={`/customers/${customer.id}`}
-                            className="truncate hover:underline"
+                            className="min-w-0 truncate hover:underline"
+                            title={customer.name}
                             onClick={(e) => e.stopPropagation()}
                           >
                             {customer.name}
                           </Link>
-                          {customer.org_number && customer.vat_number_validated && (
-                            <Badge variant="success" className="shrink-0 font-normal">
-                              {t('verified')}
-                            </Badge>
+                          {typeSuffix && CUSTOMER_TYPE_LABEL_KEYS[typeSuffix] && (
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {t(CUSTOMER_TYPE_LABEL_KEYS[typeSuffix])}
+                            </span>
                           )}
                         </span>
-                      </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
-                        {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
                         {identifier || ''}
                       </td>
                       {/* See the suppliers list: the cap must sit on an inner
                           block because Firefox ignores max-width on a td, and
-                          188 = 220 minus the cell's px-4. */}
-                      <td className={cn(TD_CLASS, 'hidden text-muted-foreground md:table-cell')}>
-                        <div className="max-w-[188px] truncate">{customer.email || ''}</div>
+                          204 = 220 minus the cell's px-2. */}
+                      <td className={cn(TD_CLASS, 'hidden text-muted-foreground md:table-cell')} title={customer.email || undefined}>
+                        <div className="max-w-[204px] truncate">{customer.email || ''}</div>
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground sm:table-cell')}>
                         {customer.city || ''}
@@ -434,17 +412,11 @@ function CustomersPageInner() {
             {t('count_summary', { count: customers.length })}
           </p>
 
-          {visibleCount < sortedCustomers.length && (
-            <div className="flex justify-center">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
-              >
-                {tCommon('load_more')}
-              </Button>
-            </div>
-          )}
+          <ShowMoreFooter
+            shown={visibleCount}
+            total={sortedCustomers.length}
+            onMore={() => setVisibleCount((count) => count + SHOW_MORE_STEP)}
+          />
         </>
       )}
     </div>
@@ -453,21 +425,7 @@ function CustomersPageInner() {
 
 export default function CustomersPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="space-y-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <Skeleton className="h-9 w-40" />
-            <Skeleton className="h-10 w-32" />
-          </div>
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
-          </div>
-        </div>
-      }
-    >
+    <Suspense fallback={<ListPageSkeleton />}>
       <CustomersPageInner />
     </Suspense>
   )

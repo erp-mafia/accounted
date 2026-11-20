@@ -3,7 +3,23 @@ import {
   normalizeVatNumber,
   isValidSwedishVatNumber,
   deriveSwedishVatNumber,
+  vatRegisteredWithoutOrgNumber,
 } from '@/lib/vat/vat-number'
+
+describe('vatRegisteredWithoutOrgNumber', () => {
+  it('is true only for a VAT-registered company with no number', () => {
+    expect(vatRegisteredWithoutOrgNumber(true, undefined)).toBe(true)
+    expect(vatRegisteredWithoutOrgNumber(true, null)).toBe(true)
+    expect(vatRegisteredWithoutOrgNumber(true, '  ')).toBe(true)
+    expect(vatRegisteredWithoutOrgNumber(true, '556677-8899')).toBe(false)
+  })
+
+  it('leaves the number optional without VAT registration', () => {
+    expect(vatRegisteredWithoutOrgNumber(false, undefined)).toBe(false)
+    expect(vatRegisteredWithoutOrgNumber(undefined, undefined)).toBe(false)
+    expect(vatRegisteredWithoutOrgNumber(null, null)).toBe(false)
+  })
+})
 
 describe('normalizeVatNumber', () => {
   it('uppercases and strips spaces and hyphens', () => {

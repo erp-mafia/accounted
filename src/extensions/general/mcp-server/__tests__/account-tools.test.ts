@@ -1,9 +1,13 @@
 /**
  * Unit tests for the staged kontoplan tools: gnubok_create_account and
- * gnubok_update_account. Covers registration/scope/risk-tier wiring, the
- * BAS 2026 prefill (resolve-don't-guess), the duplicate/inactive pre-flight
- * gates, and dry-run staging behaviour. Executor-side coverage
- * (commitCreateAccount / commitUpdateAccount) lives in
+ * gnubok_update_account, now generated from the operations accounts.create /
+ * accounts.update (src/lib/operations/accounts.ts). Covers registration/
+ * scope/risk-tier wiring, the BAS 2026 prefill (resolve-don't-guess), the
+ * duplicate/inactive pre-flight gates, and dry-run staging behaviour. The
+ * refusals now carry the structured codes every door shares, so the
+ * assertions pin the code plus the Swedish sentence instead of the old
+ * hand-written English strings. Commit-side coverage (the same run() through
+ * commitPendingOperation) lives in
  * lib/pending-operations/__tests__/account-and-note-executors.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -67,10 +71,10 @@ describe('gnubok_create_account: validation gates', () => {
   it('rejects a non-4-digit account number before any DB call', async () => {
     await expect(
       createAccount.execute({ account_number: '193' }, 'company-1', 'user-1', noopSupabase),
-    ).rejects.toThrow(/4 digits/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/4 siffror/) })
     await expect(
       createAccount.execute({ account_number: '19300' }, 'company-1', 'user-1', noopSupabase),
-    ).rejects.toThrow(/4 digits/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/4 siffror/) })
   })
 
   it('rejects when the account already exists and is active', async () => {
@@ -78,15 +82,16 @@ describe('gnubok_create_account: validation gates', () => {
     enqueue({ data: { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true } })
     await expect(
       createAccount.execute({ account_number: '5410' }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/finns redan/)
+    ).rejects.toMatchObject({ code: 'ACCOUNT_EXISTS', message: expect.stringMatching(/finns redan/) })
   })
 
-  it('points to gnubok_update_account when the account exists but is inactive', async () => {
+  it('answers ACCOUNT_EXISTS_INACTIVE when the account exists but is inactive', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: false } })
+    // The code's remediation names gnubok_update_account (is_active=true).
     await expect(
       createAccount.execute({ account_number: '5410' }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/inaktivt.*is_active=true/s)
+    ).rejects.toMatchObject({ code: 'ACCOUNT_EXISTS_INACTIVE', message: expect.stringMatching(/inaktiverat/) })
   })
 
   it('rejects a non-BAS number without name/type/balance', async () => {
@@ -94,7 +99,7 @@ describe('gnubok_create_account: validation gates', () => {
     enqueue({ data: null }) // no existing row
     await expect(
       createAccount.execute({ account_number: NON_BAS_NUMBER }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/not in the BAS 2026 catalog/)
+    ).rejects.toMatchObject({ code: 'ACCOUNT_DETAILS_REQUIRED', message: expect.stringMatching(/BAS 2026/) })
   })
 
   it('rejects a percent-style default_vat_rate (must be a fraction)', async () => {
@@ -105,7 +110,7 @@ describe('gnubok_create_account: validation gates', () => {
         { account_number: '5410', default_vat_rate: 25 },
         'company-1', 'user-1', supabase as never,
       ),
-    ).rejects.toThrow(/fraction, not percent/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/^Invalid arguments: default_vat_rate: /) })
   })
 
   it('rejects an account_type inconsistent with the BAS class digit', async () => {
@@ -116,7 +121,10 @@ describe('gnubok_create_account: validation gates', () => {
         { account_number: '2999', account_name: 'Fel', account_type: 'expense', normal_balance: 'debit' },
         'company-1', 'user-1', supabase as never,
       ),
-    ).rejects.toThrow(/BAS class 2/)
+    ).rejects.toMatchObject({
+      code: 'ACCOUNT_TYPE_CLASS_CONFLICT',
+      details: { reason: expect.stringMatching(/BAS class 2/) },
+    })
   })
 
   it('exposes untaxed_reserves in the input schema enum (21xx round-trip)', () => {
@@ -179,6 +187,30 @@ describe('gnubok_create_account: staging behaviour (dry_run)', () => {
       normal_balance: 'debit',
       plan_type: 'k1',
       source: 'custom',
+    })
+  })
+})
+
+describe('gnubok_create_account / gnubok_update_account: staged rows', () => {
+  it('stages the reused create_account pending type with the input as params', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: null }) // not in the chart yet (preview)
+    enqueue({ data: { id: 'op-1', operation_type: 'create_account', status: 'pending' } }) // staging insert
+    await createAccount.execute({ account_number: '5410' }, 'company-1', 'user-1', supabase as never)
+    const insert = findCall('pending_operations', 'insert')?.[0] as Record<string, unknown>
+    expect(insert).toMatchObject({ operation_type: 'create_account', params: { account_number: '5410' } })
+    expect(String(insert.title)).toContain('5410')
+    expect(String(insert.title)).toContain(getBASReference('5410')!.account_name)
+  })
+
+  it('stages the reused update_account pending type', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true } })
+    enqueue({ data: { id: 'op-1', operation_type: 'update_account', status: 'pending' } })
+    await updateAccount.execute({ account_number: '5410', is_active: false }, 'company-1', 'user-1', supabase as never)
+    expect(findCall('pending_operations', 'insert')?.[0]).toMatchObject({
+      operation_type: 'update_account',
+      params: { account_number: '5410', is_active: false },
     })
   })
 })
@@ -354,11 +386,11 @@ describe('list tools: PostgREST 1000-row cap (fetchAllRows paging)', () => {
 describe('gnubok_update_account', () => {
   it('rejects a non-4-digit account number before any DB call', async () => {
     await expect(
-      updateAccount.execute({ account_number: 'abcd' }, 'company-1', 'user-1', noopSupabase),
-    ).rejects.toThrow(/4 digits/)
+      updateAccount.execute({ account_number: 'abcd', account_name: 'X' }, 'company-1', 'user-1', noopSupabase),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/siffror/) })
   })
 
-  it('points to gnubok_create_account when the account does not exist', async () => {
+  it('answers ACCOUNT_NOT_FOUND when the account does not exist', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null })
     await expect(
@@ -366,15 +398,13 @@ describe('gnubok_update_account', () => {
         { account_number: '5410', account_name: 'Nytt namn' },
         'company-1', 'user-1', supabase as never,
       ),
-    ).rejects.toThrow(/finns inte.*gnubok_create_account/s)
+    ).rejects.toMatchObject({ code: 'ACCOUNT_NOT_FOUND', message: expect.stringMatching(/hittades inte/) })
   })
 
-  it('rejects a call with no fields to change', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true } })
+  it('rejects a call with no fields to change, before any DB call', async () => {
     await expect(
-      updateAccount.execute({ account_number: '5410' }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/Nothing to update/)
+      updateAccount.execute({ account_number: '5410' }, 'company-1', 'user-1', noopSupabase),
+    ).rejects.toMatchObject({ code: 'ACCOUNT_NOTHING_TO_UPDATE' })
   })
 
   it('stages a momsruta override (vat_box) on a 26xx account', async () => {
@@ -423,7 +453,7 @@ describe('gnubok_update_account', () => {
         { account_number: '2617', vat_box: '49' },
         'company-1', 'user-1', bad.supabase as never,
       ),
-    ).rejects.toThrow(/vat_box must be one of/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/^Invalid arguments: vat_box: /) })
 
     const wrongAccount = createQueuedMockSupabase()
     wrongAccount.enqueue(current('4545'))
@@ -432,7 +462,7 @@ describe('gnubok_update_account', () => {
         { account_number: '4545', vat_box: '60' },
         'company-1', 'user-1', wrongAccount.supabase as never,
       ),
-    ).rejects.toThrow(/26xx/)
+    ).rejects.toMatchObject({ code: 'ACCOUNT_VAT_BOX_NOT_VAT_ACCOUNT', message: expect.stringMatching(/26xx/) })
   })
 
   it('dry-run preview carries current values and the requested changes', async () => {
@@ -491,10 +521,66 @@ describe('gnubok_update_account', () => {
 
     expect(result.preview.changes).toEqual({ default_vat_treatment: null })
   })
+
+  // Agent feedback seq 1088767: the REVENUE_ACCOUNT_WITHOUT_RUTA hint says to
+  // set default_vat_rate 0 on a non-sales class 3 account, and the client sent
+  // the untyped enum value as the string "0", refused as VALIDATION_ERROR.
+  it('publishes default_vat_rate as a typed enum', () => {
+    const properties = updateAccount.inputSchema.properties as Record<string, Record<string, unknown>>
+    expect(properties.default_vat_rate).toEqual({ type: ['number', 'null'], enum: [0, 0.06, 0.12, 0.25, null] })
+  })
+
+  it.each([0, '0', '0.0'])('stages default_vat_rate 0 sent as %j', async (rate) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '3990', account_name: 'Övriga ersättningar och intäkter', default_vat_rate: null,
+        default_vat_treatment: null, is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '3990', default_vat_rate: rate, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({ default_vat_rate: 0 })
+  })
+
+  it('reads "0.25" and "null" back as the rate and the clearing null', async () => {
+    const current = {
+      data: {
+        account_number: '3041', account_name: 'Försäljning', default_vat_rate: 0.12,
+        default_vat_treatment: null, is_active: true,
+      },
+    }
+    const set = createQueuedMockSupabase()
+    set.enqueue(current)
+    const setResult = (await updateAccount.execute(
+      { account_number: '3041', default_vat_rate: '0.25', dry_run: true },
+      'company-1', 'user-1', set.supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+    expect(setResult.preview.changes).toEqual({ default_vat_rate: 0.25 })
+
+    const clear = createQueuedMockSupabase()
+    clear.enqueue(current)
+    const clearResult = (await updateAccount.execute(
+      { account_number: '3041', default_vat_rate: 'null', dry_run: true },
+      'company-1', 'user-1', clear.supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+    expect(clearResult.preview.changes).toEqual({ default_vat_rate: null })
+  })
+
+  it('still refuses a rate outside the set, as a number or a string', async () => {
+    for (const rate of [25, '25', 'zero']) {
+      await expect(
+        updateAccount.execute({ account_number: '3990', default_vat_rate: rate }, 'company-1', 'user-1', noopSupabase),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/^Invalid arguments: default_vat_rate: /) })
+    }
+  })
 })
 
 describe('gnubok_list_accounts: compact detail and paging', () => {
-  // Easy Online Stores brief 2026-09-16, F6: 379 accounts came back as 88 kB
+  // An agent evaluation brief 2026-09-16, F6: 379 accounts came back as 88 kB
   // in one answer. Both options are opt-in so every existing caller keeps the
   // rows it had; `total` rides along on every answer.
   const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!
@@ -555,5 +641,38 @@ describe('gnubok_list_accounts: compact detail and paging', () => {
       listAccounts.execute({ offset: -1 }, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/offset must be a non-negative integer/)
     expect(calls).toHaveLength(0)
+  })
+
+  // 2026-10 session autopsy: search (27 calls) and query (24, now an alias)
+  // were refused, with no parameter to map them to.
+  const search = async (args: Record<string, unknown>) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    return (await listAccounts.execute(args, 'company-1', 'user-1', supabase as never)) as Page
+  }
+
+  it('search matches the start of an account number', async () => {
+    expect((await search({ search: '19' })).accounts.map((a) => a.account_number)).toEqual(['1930'])
+    expect((await search({ search: '4545' })).accounts.map((a) => a.account_number)).toEqual(['4545'])
+  })
+
+  it('search matches any part of the name, whatever its case, and totals the matches', async () => {
+    expect(await search({ search: 'IMPORT', detail: 'compact' })).toEqual({ accounts: [compactRows[2]], count: 1, total: 1 })
+    expect((await search({ search: 'företags' })).accounts.map((a) => a.account_number)).toEqual(['1930'])
+  })
+
+  it('reads a search sent as a number as the digits of an account number', async () => {
+    expect((await search({ search: 2617 })).accounts.map((a) => a.account_number)).toEqual(['2617'])
+  })
+
+  it('refuses an empty search or one that is not text before any query', async () => {
+    for (const value of ['  ', { text: 'bank' }, 19.5]) {
+      const { supabase, calls } = createQueuedMockSupabase()
+      await expect(
+        listAccounts.execute({ search: value }, 'company-1', 'user-1', supabase as never),
+        JSON.stringify(value),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/^search must be text/) })
+      expect(calls).toHaveLength(0)
+    }
   })
 })

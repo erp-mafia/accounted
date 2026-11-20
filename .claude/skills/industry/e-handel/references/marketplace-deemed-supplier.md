@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Marketplace deemed supplier: 5 kap. 5-6 §§ ML 2023:200
 
 ## När triggas reglerna
@@ -38,7 +42,7 @@
 - *Settlement Report*: payout-detaljer för bokföring (brutto, refunds, fees).
 
 **BAS-mappning säljarens bokföring**:
-- 1580-AMZ-DE, 1580-AMZ-FR etc. per marketplace.
+- 1686-AMZ-DE, 1686-AMZ-FR etc. per marketplace.
 - 6050: Amazon Referral Fee, FBA Fulfilment Fee (RC: Amazon EU S.à r.l., LU → 4535 + 2614/2645).
 - 3990: Övrig försäljning (deemed supplier-fall där säljarens leverans är undantagen) eller normal 3001/3106 om säljaren bär momsen själv.
 
@@ -70,7 +74,7 @@
 
 Vid scenarier där 5 kap. 5 eller 6 § triggas och säljarens leverans till plattformen är undantagen:
 
-1. Bruttoförsäljning enligt plattformens settlement report bokas på fordringskonto (1580-AMZ etc.) mot **3990 Övrig försäljning** eller separat konto (t.ex. 3091 "Försäljning via marketplace, deemed supplier") för att skilja från egen omsättning som faller under momslagen.
+1. Bruttoförsäljning enligt plattformens settlement report bokas på fordringskonto (1686-AMZ etc.) mot **3990 Övrig försäljning** eller separat konto (t.ex. 3091 "Försäljning via marketplace, deemed supplier") för att skilja från egen omsättning som faller under momslagen.
 2. Provisioner och fees bokas separat på 6050 (RC tillämpas om plattformens entitet är utanför SE).
 3. Refunds bokas som negativ försäljning, ej som kostnad.
 4. **Ingen utgående moms** redovisas av säljaren för dessa transaktioner i svensk momsdeklaration.

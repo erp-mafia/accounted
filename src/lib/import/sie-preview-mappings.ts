@@ -1,11 +1,131 @@
 import { isAccountNumber } from '@/lib/invariants/account-number'
-import { isSystemAccount, isValidBASRange } from './account-mapper'
-import type { AccountMapping, ParsedSIEFile, SIEAccount } from './types'
+// The client-safe number list (this module reaches the import wizards), not
+// the full BAS reference: the same answer without 315 KB in the bundle.
+import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
+import { isGroupHeaderRedirect, isSystemAccount, isValidBASRange, suggestMappings, type MappableAccount } from './account-mapper'
+import { rcBasisPairsByAccount } from './rc-basis-pairs'
+import type { AccountMapping, ParsedSIEFile, SIEAccount, SIEAccountMappingRecord } from './types'
 
 /** BAS 2999 OBS-konto: where a source system's class 9 observation postings land. */
 const OBS_ACCOUNT = '2999'
 const OBS_ACCOUNT_NAME = 'OBS-konto'
 const isClass9Account = (account: string) => /^9\d{3}$/.test(account)
+
+/**
+ * The one mapping decision every SIE entry runs: the file upload
+ * (/api/import/sie/parse), the provider fetch (arcim-migration /sie-data),
+ * execute without supplied mappings, the v1 API and the MCP preflight.
+ *
+ * Stored mappings and the target list only suggest. The file's own usage then
+ * decides, so a class 9 account carrying amounts lands on 2999 even when a
+ * previous import stored a 9xxx target for it or the company's chart already
+ * holds that 9xxx row. Only the upload ran this second half before (#3312):
+ * every provider fetch rebuilt the 9xxx target the job's class check refuses.
+ *
+ * `accounts` narrows which source accounts get a mapping (a caller that
+ * filters out system accounts); usage is always read from the whole parse.
+ */
+export function suggestSIEMappings(parsed: ParsedSIEFile, targets: MappableAccount[],
+  stored?: SIEAccountMappingRecord[], accounts: SIEAccount[] = parsed.accounts) {
+  return prepareSIEPreviewMappings(parsed, suggestMappings(accounts, targets, stored))
+}
+
+/**
+ * The class 9 source accounts the rule below sent to 2999 OBS-konto. A flow
+ * with a mapping page shows them there for review; a flow without one names
+ * them. A 2999 target chosen by hand (matchType 'manual') is not listed.
+ */
+export function obsAccountsOf(
+  mappings: ReadonlyArray<Pick<AccountMapping, 'sourceAccount' | 'targetAccount'> & { matchType: string }>,
+): string[] {
+  const accounts = new Set<string>()
+  for (const mapping of mappings) {
+    if (mapping.targetAccount === OBS_ACCOUNT && mapping.matchType === 'class' && isClass9Account(mapping.sourceAccount)) {
+      accounts.add(mapping.sourceAccount)
+    }
+  }
+  return [...accounts].sort()
+}
+
+/**
+ * The accounts the file uses that the import books on ANOTHER number than the
+ * file's (crm#1684): a mapping remembered from an earlier import, one chosen
+ * by hand, or one an agent passed to gnubok_import_sie. The mapper itself
+ * never merges a valid account into a different one (#2212), so every entry
+ * here is a choice somebody made, and a ledger migration that moves a #TRANS
+ * row to another account changes the reports. The unattended doors list them
+ * before the import runs instead of applying them silently. The BAS group
+ * header redirect (2640 to 2641) is not listed: 2640 is not a posting account.
+ */
+export function remappedSIEAccounts(
+  parsed: Parameters<typeof sieUsedAccounts>[0],
+  mappings: ReadonlyArray<Pick<AccountMapping, 'sourceAccount' | 'targetAccount'>>,
+): Array<{ source: string; target: string }> {
+  const used = sieUsedAccounts(parsed)
+  const remapped = new Map<string, string>()
+  for (const { sourceAccount, targetAccount } of mappings) {
+    if (!targetAccount || targetAccount === sourceAccount || !used.has(sourceAccount)) continue
+    if (isGroupHeaderRedirect(sourceAccount, targetAccount)) continue
+    remapped.set(sourceAccount, targetAccount)
+  }
+  return [...remapped].sort(([a], [b]) => a.localeCompare(b)).map(([source, target]) => ({ source, target }))
+}
+
+/** Swedish sentence naming the remapped accounts, for warnings and notices. */
+export function remappedSIEAccountsText(remapped: ReadonlyArray<{ source: string; target: string }>, limit = 20): string {
+  const shown = remapped.slice(0, limit).map(({ source, target }) => `${source} → ${target}`).join(', ')
+  const more = remapped.length > limit ? ` samt ytterligare ${remapped.length - limit}` : ''
+  return `${remapped.length} av filens konton bokförs på ett annat kontonummer än i filen (${shown}${more}). ` +
+    'Kontrollera att det är avsiktligt; annars ska kontot behålla sitt eget nummer.'
+}
+
+/**
+ * The source accounts an SIE file uses (#63): every account on a voucher
+ * line whatever its amount, struck and added rättelse lines included (a line
+ * on an unmapped account would skip its whole voucher); every #IB, #UB, #RES,
+ * #OIB and #OUB row with an amount; every account a parse issue names. A zero
+ * balance books nothing: the IB voucher and the migration adjustment skip it.
+ * A provider's full chart (Fortnox, Bokio) declares hundreds of #KONTO rows
+ * that none of these touch.
+ */
+export function sieUsedAccounts(parsed: Pick<ParsedSIEFile, 'vouchers' | 'openingBalances' | 'closingBalances' |
+  'resultBalances' | 'objectOpeningBalances' | 'objectClosingBalances' | 'issues'>): Set<string> {
+  const used = new Set<string>()
+  for (const voucher of parsed.vouchers) {
+    for (const line of voucher.lines) used.add(line.account)
+    for (const line of voucher.corrections?.struck ?? []) used.add(line.account)
+    for (const line of voucher.corrections?.added ?? []) used.add(line.account)
+  }
+  for (const balance of [...parsed.openingBalances, ...parsed.closingBalances, ...parsed.resultBalances,
+    ...parsed.objectOpeningBalances ?? [], ...parsed.objectClosingBalances ?? []]) {
+    if (balance.amount !== 0) used.add(balance.account)
+  }
+  for (const issue of parsed.issues) if (issue.account) used.add(issue.account)
+  return used
+}
+
+/**
+ * Whether the import's "only the accounts the file uses" option (#63) leaves
+ * a definition out: a BAS 2026 account the file does not use. The person can
+ * add it from the BAS catalog whenever it is needed. An unused account
+ * outside BAS is the company's own deviation from the standard chart (BFNAR
+ * 2013:2 p. 9.2) that no catalog can restore, so it is still created.
+ */
+function leftOutWhenOnlyUsed(sourceAccount: string, used: ReadonlySet<string>): boolean {
+  return !used.has(sourceAccount) && isStandardBASAccountNumber(sourceAccount)
+}
+
+/**
+ * The import's "only the accounts the file uses" option (#63): the mappings
+ * left once every unused BAS definition is dropped, so the job neither
+ * creates nor renames those accounts. The archived original keeps the whole
+ * source chart. Applied by submitSIEJob, the one gate every door passes.
+ */
+export function onlyUsedSIEMappings<T extends Pick<AccountMapping, 'sourceAccount'>>(
+  parsed: Parameters<typeof sieUsedAccounts>[0], mappings: T[]): T[] {
+  const used = sieUsedAccounts(parsed)
+  return mappings.filter(mapping => !leftOutWhenOnlyUsed(mapping.sourceAccount, used))
+}
 
 /** Preview evidence only. Execution revalidates the original file independently. */
 export function prepareSIEPreviewMappings(parsed: ParsedSIEFile, suggested: AccountMapping[]) {
@@ -33,6 +153,7 @@ export function prepareSIEPreviewMappings(parsed: ParsedSIEFile, suggested: Acco
     else if (isSystemAccount(account.number)) excludedSystemAccounts.push(account)
   }
   const excluded = new Set([...archivedOnlyAccounts, ...excludedSystemAccounts].map(a => a.number))
+  const rcBasisPairs = rcBasisPairsByAccount(parsed.vouchers)
   const mappings = suggested.filter(m => !excluded.has(m.sourceAccount)).map(mapping => {
     const used = financial.has(mapping.sourceAccount)
     if (isAccountNumber(mapping.targetAccount) && (!used || isValidBASRange(mapping.targetAccount))) return mapping
@@ -52,6 +173,24 @@ export function prepareSIEPreviewMappings(parsed: ParsedSIEFile, suggested: Acco
       return { ...mapping, targetAccount: OBS_ACCOUNT, targetName: OBS_ACCOUNT_NAME, confidence: 0.5, matchType: 'class' as const, isOverride: false }
     }
     return { ...mapping, targetAccount: '', targetName: '', confidence: 0, matchType: 'manual' as const }
+  }).map(mapping => {
+    // How the file reports the reverse-charge basis beside the account, which
+    // decides whether a reverse-charge momskod may be prefilled (crm#1096).
+    const rcBasisPair = rcBasisPairs.get(mapping.sourceAccount)
+    return rcBasisPair ? { ...mapping, rcBasisPair } : mapping
   })
-  return { mappings, archivedOnlyAccounts, excludedSystemAccounts }
+  // What the "only the accounts the file uses" option (#63) leaves out of the
+  // chart (unused BAS definitions) and what it keeps although unused (the
+  // company's own accounts): the wizard counts both beside the switch and
+  // drops the first from the mapping step while it is on.
+  const used = sieUsedAccounts(parsed)
+  const unusedAccounts: SIEAccount[] = []
+  const unusedOwnAccounts: SIEAccount[] = []
+  for (const mapping of mappings) {
+    if (used.has(mapping.sourceAccount)) continue
+    const account = { number: mapping.sourceAccount, name: mapping.sourceName }
+    if (leftOutWhenOnlyUsed(mapping.sourceAccount, used)) unusedAccounts.push(account)
+    else unusedOwnAccounts.push(account)
+  }
+  return { mappings, archivedOnlyAccounts, excludedSystemAccounts, unusedAccounts, unusedOwnAccounts }
 }

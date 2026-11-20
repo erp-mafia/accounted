@@ -1,17 +1,27 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useLocale, useTranslations } from 'next-intl'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { FileDropzone } from '@/components/ui/file-dropzone'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
-import { Upload, AlertCircle, CheckCircle, Loader2, XCircle, RefreshCw } from 'lucide-react'
-import { hasSIEFileExtension, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
+import {
+  ArrowPathIcon,
+  ArrowUpTrayIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  SpinnerIcon,
+  XCircleIcon,
+} from '@/components/icons'
+import { hasSIEFileExtension, SIE_FILE_EXTENSIONS_EN, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 
 const LOADING_PHASES = [
-  { message: 'Läser fil...', progress: 10 },
-  { message: 'Identifierar teckenkodning...', progress: 30 },
-  { message: 'Tolkar SIE-data...', progress: 55 },
-  { message: 'Matchar konton mot BAS-kontoplanen...', progress: 85 },
+  { message: 'phase_reading', progress: 10 },
+  { message: 'phase_encoding', progress: 30 },
+  { message: 'phase_parsing', progress: 55 },
+  { message: 'phase_matching', progress: 85 },
 ] as const
 
 interface SIEUploadStepProps {
@@ -27,10 +37,11 @@ interface SIEUploadStepProps {
 }
 
 export default function SIEUploadStep({ onFileSelect, isLoading, error, errorType, validationErrors, validationWarnings, duplicateImportId, onReplace, isReplacing }: SIEUploadStepProps) {
-  const [isDragging, setIsDragging] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [loadingPhase, setLoadingPhase] = useState(0)
   const [fileTypeError, setFileTypeError] = useState<string | null>(null)
+  const t = useTranslations('import.sie_upload')
+  const extensions = useLocale() === 'en' ? SIE_FILE_EXTENSIONS_EN : SIE_FILE_EXTENSIONS_SV
 
   // Cycle through loading phases on timers
   useEffect(() => {
@@ -48,16 +59,6 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
     return () => timers.forEach(clearTimeout)
   }, [isLoading])
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(true)
-  }, [])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-  }, [])
-
   // No `accept` attribute on the input and no silent rejection here: Safari
   // maps accept extensions to system file types, and unregistered extensions
   // like .sie/.se/.si grey out perfectly valid files in the picker. All
@@ -71,30 +72,11 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
       return
     }
     if (file.name.toLowerCase().endsWith('.zip')) {
-      setFileTypeError(`Filen "${file.name}" är en zip-fil. Packa upp den först och välj SIE-filen inuti (slutar på ${SIE_FILE_EXTENSIONS_SV}).`)
+      setFileTypeError(t('zip_file', { name: file.name, extensions }))
     } else {
-      setFileTypeError(`Filen "${file.name}" stöds inte. Välj en SIE-fil som slutar på ${SIE_FILE_EXTENSIONS_SV}.`)
+      setFileTypeError(t('unsupported_file', { name: file.name, extensions }))
     }
-  }, [onFileSelect])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-
-    const files = e.dataTransfer.files
-    if (files.length > 0) {
-      trySelectFile(files[0])
-    }
-  }, [trySelectFile])
-
-  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (files && files.length > 0) {
-      trySelectFile(files[0])
-    }
-    // Allow re-picking the same file after a rejection
-    e.target.value = ''
-  }, [trySelectFile])
+  }, [onFileSelect, t, extensions])
 
   const phase = LOADING_PHASES[loadingPhase]
 
@@ -103,18 +85,18 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
     return (
       <div className="space-y-6">
         <Card>
-          <CardContent className="pt-8 pb-8">
+          <CardContent>
             <div className="flex flex-col items-center text-center space-y-6">
-              <Loader2 className="h-10 w-10 text-primary animate-spin" />
+              <SpinnerIcon className="h-10 w-10 text-primary animate-spin" />
               <div className="space-y-1">
-                <p className="font-medium text-lg">{phase.message}</p>
+                <p className="font-medium text-lg">{t(phase.message)}</p>
                 <p className="text-sm text-muted-foreground">
                   {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
                 </p>
               </div>
-              <Progress value={phase.progress} className="w-64 mx-auto transition-all duration-1000" />
+              <Progress value={phase.progress} className="w-64 mx-auto" />
               <p className="text-xs text-muted-foreground">
-                Lämna inte sidan förrän analysen är klar
+                {t('stay_on_page')}
               </p>
             </div>
           </CardContent>
@@ -128,38 +110,43 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Upload className="h-5 w-5" />
-            Ladda upp SIE-fil
+            <ArrowUpTrayIcon className="h-5 w-5" />
+            {t('title')}
+            {/* Format primer and per-system export paths live behind the "?"
+                (convention 7), not as three info cards under the drop zone. */}
+            <HelpPopover className="shrink-0">
+              <div className="space-y-3">
+                <p>{t('help_export')}</p>
+                <p>{t('help_format')}</p>
+                <ul className="space-y-1">
+                  <li>{t.rich('help_sie4', { strong: (chunks) => <strong>{chunks}</strong> })}</li>
+                  <li>{t.rich('help_sie1', { strong: (chunks) => <strong>{chunks}</strong> })}</li>
+                </ul>
+                <div className="space-y-1">
+                  <p className="font-medium">{t('help_how_to')}</p>
+                  {/* The menu names are the source systems' own, Swedish in both locales. */}
+                  <p>{t('help_fortnox')}</p>
+                  <p>{t('help_visma')}</p>
+                  <p>{t('help_bokio')}</p>
+                </div>
+              </div>
+            </HelpPopover>
           </CardTitle>
-          <CardDescription>
-            Exportera en SIE4-fil från ditt nuvarande bokföringssystem (Fortnox, Visma, etc.)
-            och ladda upp den här för att importera din bokföring.
-          </CardDescription>
         </CardHeader>
         <CardContent>
           {/* Drop zone */}
-          <div
-            className={`
-              relative border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer hover:border-primary/50
-              ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
-              ${error || fileTypeError ? 'border-destructive bg-destructive/5' : ''}
-            `}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => document.getElementById('file-input')?.click()}
+          {/* No accept attribute: see trySelectFile. */}
+          <FileDropzone
+            onFile={trySelectFile}
+            disabled={isLoading}
+            invalid={!!(error || fileTypeError)}
+            label={t('choose_file')}
+            className="relative p-8 text-center"
           >
-            <input
-              id="file-input"
-              type="file"
-              className="hidden"
-              onChange={handleFileInput}
-              disabled={isLoading}
-            />
 
             {selectedFile ? (
               <div className="space-y-4">
-                <CheckCircle className="mx-auto h-12 w-12 text-success" />
+                <CheckCircleIcon className="mx-auto h-12 w-12 text-success" />
                 <div>
                   <p className="font-medium">{selectedFile.name}</p>
                   <p className="text-sm text-muted-foreground">
@@ -169,23 +156,23 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
               </div>
             ) : (
               <div className="space-y-4">
-                <Upload className="mx-auto h-12 w-12 text-muted-foreground" />
+                <ArrowUpTrayIcon className="mx-auto h-12 w-12 text-muted-foreground" />
                 <div>
-                  <p className="font-medium hidden sm:block">Dra och släpp SIE-fil här</p>
-                  <p className="font-medium sm:hidden">Tryck för att välja SIE-fil</p>
-                  <p className="text-sm text-muted-foreground hidden sm:block">eller klicka för att välja fil</p>
-                  <p className="text-sm text-muted-foreground sm:hidden">{SIE_FILE_EXTENSIONS_SV}-filer</p>
+                  <p className="font-medium hidden sm:block">{t('drop_here')}</p>
+                  <p className="font-medium sm:hidden">{t('tap_to_choose')}</p>
+                  <p className="text-sm text-muted-foreground hidden sm:block">{t('or_click')}</p>
+                  <p className="text-sm text-muted-foreground sm:hidden">{t('extensions_files', { extensions })}</p>
                 </div>
               </div>
             )}
-          </div>
+          </FileDropzone>
 
           {/* Rejected file type (client-side, before upload) */}
           {fileTypeError && (
-            <div className="mt-4 p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
-              <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
+            <div className="bg-destructive/8 mt-4 p-4 rounded-lg flex gap-3">
+              <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
               <div className="space-y-1.5 min-w-0">
-                <p className="font-medium text-destructive">Filen kan inte användas</p>
+                <p className="font-medium text-destructive">{t('file_unusable')}</p>
                 <p className="text-sm text-muted-foreground">{fileTypeError}</p>
               </div>
             </div>
@@ -197,9 +184,9 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
               <div className={`p-4 rounded-lg flex gap-3 ${
                 errorType === 'duplicate' || errorType === 'duplicate_period'
                   ? 'bg-muted/30 border border-border'
-                  : 'bg-destructive/10 border border-destructive/20'
+                  : 'bg-destructive/8'
               }`}>
-                <AlertCircle className={`h-5 w-5 flex-shrink-0 mt-0.5 ${
+                <ExclamationCircleIcon className={`h-5 w-5 flex-shrink-0 mt-0.5 ${
                   errorType === 'duplicate' || errorType === 'duplicate_period'
                     ? 'text-warning'
                     : 'text-destructive'
@@ -210,48 +197,42 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                       ? 'text-warning'
                       : 'text-destructive'
                   }`}>
-                    {errorType === 'duplicate' && 'Filen har redan importerats'}
-                    {errorType === 'duplicate_period' && 'Överlappande räkenskapsår'}
-                    {errorType === 'validation' && 'Filen innehåller valideringsfel'}
-                    {errorType === 'parse' && 'Kunde inte tolka filen'}
-                    {errorType === 'network' && 'Uppladdningen misslyckades'}
-                    {!errorType && 'Ett fel uppstod'}
+                    {t(errorType ? `error_${errorType}` : 'error_generic')}
                   </p>
                   <p className="text-sm text-muted-foreground">{error}</p>
 
                   {/* Actionable guidance */}
-                  <div className="text-sm text-muted-foreground pt-1 border-t border-border/50 mt-2">
+                  <div className="text-sm text-muted-foreground pt-1 border-t-hairline mt-2">
                     {(errorType === 'duplicate' || errorType === 'duplicate_period') && (
                       <div className="space-y-2">
-                        <p>Den befintliga importens verifikationer kommer att makuleras (status ändras till &quot;makulerad&quot;). De finns kvar som spårbar historik.</p>
+                        <p>{t('duplicate_help')}</p>
                         {duplicateImportId && onReplace && (
                           <Button
                             variant="outline"
-                            size="sm"
-                            className="border-border text-warning hover:bg-muted/30"
-                            disabled={isReplacing}
+                            className="border-border text-warning hover:bg-secondary/60"
+                            loading={isReplacing}
                             onClick={(e) => {
                               e.stopPropagation()
                               onReplace(duplicateImportId)
                             }}
                           >
                             {isReplacing ? (
-                              <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Ersätter...</>
+                              t('replacing')
                             ) : (
-                              <><RefreshCw className="h-4 w-4 mr-2" />Ersätt befintlig import</>
+                              <><ArrowPathIcon className="h-4 w-4" />{t('replace')}</>
                             )}
                           </Button>
                         )}
                       </div>
                     )}
                     {errorType === 'validation' && (
-                      <p>Prova att exportera filen igen från ditt bokföringsprogram. Om felet kvarstår, kontrollera att alla verifikationer är korrekt bokförda i källsystemet.</p>
+                      <p>{t('validation_help')}</p>
                     )}
                     {errorType === 'parse' && (
-                      <p>Kontrollera att filen är en SIE4-fil exporterad från ett bokföringsprogram (Fortnox, Visma, Bokio etc). Filen kan vara skadad om den redigerats manuellt.</p>
+                      <p>{t('parse_help')}</p>
                     )}
                     {errorType === 'network' && (
-                      <p>Kontrollera din internetanslutning och försök igen. Om problemet kvarstår, prova att ladda upp filen från en dator eller hör av dig till support.</p>
+                      <p>{t('network_help')}</p>
                     )}
                   </div>
                 </div>
@@ -259,12 +240,12 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
 
               {/* Validation errors list */}
               {validationErrors && validationErrors.length > 0 && (
-                <div className="p-4 bg-destructive/5 border border-destructive/15 rounded-lg space-y-2">
-                  <p className="text-sm font-medium text-destructive">Fel som blockerar import ({validationErrors.length})</p>
+                <div className="bg-destructive/8 p-4 rounded-lg space-y-2">
+                  <p className="text-sm font-medium text-destructive">{t('blocking_errors', { count: validationErrors.length })}</p>
                   <div className="space-y-1.5 max-h-48 overflow-y-auto">
                     {validationErrors.map((err, i) => (
                       <div key={i} className="text-sm flex gap-2">
-                        <XCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                        <XCircleIcon className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
                         <span className="text-muted-foreground">{err}</span>
                       </div>
                     ))}
@@ -274,12 +255,12 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
 
               {/* Validation warnings list */}
               {validationWarnings && validationWarnings.length > 0 && (
-                <div className="p-4 bg-muted/30 border border-border rounded-lg space-y-2">
-                  <p className="text-sm font-medium text-warning">Varningar ({validationWarnings.length})</p>
+                <div className="p-4 rounded-lg space-y-2 bg-control shadow-raised">
+                  <p className="text-sm font-medium text-warning">{t('warnings', { count: validationWarnings.length })}</p>
                   <div className="space-y-1.5 max-h-32 overflow-y-auto">
                     {validationWarnings.map((warn, i) => (
                       <div key={i} className="text-sm flex gap-2">
-                        <AlertCircle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
+                        <ExclamationCircleIcon className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
                         <span className="text-muted-foreground">{warn}</span>
                       </div>
                     ))}
@@ -288,54 +269,6 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
               )}
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Info cards */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Vad är SIE?</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            <p>
-              SIE (Standard Import Export) är det svenska standardformatet för att överföra
-              bokföringsdata mellan system. Det används av alla större bokföringsprogram i Sverige.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Vilken SIE-typ?</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            <ul className="space-y-1">
-              <li><strong>SIE4</strong> - Full historik med alla verifikationer (rekommenderas)</li>
-              <li><strong>SIE1</strong> - Endast årssaldon (enklare import)</li>
-            </ul>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Export instructions */}
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="text-base">Så exporterar du från...</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm space-y-3">
-          <div>
-            <p className="font-medium">Fortnox</p>
-            <p className="text-muted-foreground">Inställningar → Import/Export → Exportera SIE</p>
-          </div>
-          <div>
-            <p className="font-medium">Visma</p>
-            <p className="text-muted-foreground">Rapporter → Övrigt → Exportera till SIE</p>
-          </div>
-          <div>
-            <p className="font-medium">Bokio</p>
-            <p className="text-muted-foreground">Inställningar → Bokföring → Exportera SIE-fil</p>
-          </div>
         </CardContent>
       </Card>
     </div>

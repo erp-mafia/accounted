@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
+import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 
 export interface KommunRate {
   kommun: string
@@ -42,7 +44,6 @@ export default function MunicipalityCombobox({
   const t = useTranslations('salary_employee')
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(0)
   const [kommuner, setKommuner] = useState<KommunRate[]>([])
   const [loadFailed, setLoadFailed] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -78,30 +79,6 @@ export default function MunicipalityCombobox({
     return kommuner.filter((k) => k.kommun.toLowerCase().includes(trimmed)).slice(0, MAX_RESULTS)
   }, [kommuner, search])
 
-  useEffect(() => {
-    setHighlightedIndex(0)
-  }, [filtered])
-
-  useEffect(() => {
-    if (!isOpen || !listRef.current) return
-    const el = listRef.current.querySelector('[data-highlighted="true"]')
-    if (el) el.scrollIntoView({ block: 'nearest' })
-  }, [highlightedIndex, isOpen])
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent | TouchEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
-    }
-  }, [])
-
   const select = useCallback(
     (k: KommunRate) => {
       setSearch(k.kommun)
@@ -111,35 +88,25 @@ export default function MunicipalityCombobox({
     [onSelect]
   )
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        setIsOpen(true)
-        e.preventDefault()
-      }
-      return
-    }
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        setHighlightedIndex((p) => Math.min(p + 1, filtered.length - 1))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        setHighlightedIndex((p) => Math.max(p - 1, 0))
-        break
-      case 'Enter':
-        if (filtered[highlightedIndex]) {
-          e.preventDefault()
-          select(filtered[highlightedIndex])
-        }
-        break
-      case 'Escape':
-        e.preventDefault()
-        setIsOpen(false)
-        break
-    }
-  }
+  const close = useCallback(() => setIsOpen(false), [])
+  const insideRefs = useMemo(() => [containerRef], [])
+  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+    count: filtered.length,
+    isOpen,
+    open: () => setIsOpen(true),
+    close,
+    activate: (index) => {
+      // No match: the Enter belongs to the form.
+      if (!filtered[index]) return false
+      select(filtered[index])
+    },
+    listRef,
+    insideRefs,
+  })
+
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [filtered, setHighlightedIndex])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const next = e.target.value
@@ -165,7 +132,7 @@ export default function MunicipalityCombobox({
       {isOpen && filtered.length > 0 && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 w-full max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
+          className={`absolute z-50 top-full left-0 mt-1 w-full max-h-[300px] overflow-y-auto ${POPOVER_SURFACE_CLASS} ${POPOVER_ENTER_CLASS}`}
         >
           {filtered.map((k, i) => {
             const isHighlighted = i === highlightedIndex
@@ -175,7 +142,7 @@ export default function MunicipalityCombobox({
                 type="button"
                 data-highlighted={isHighlighted}
                 className={`w-full text-left px-3 py-1.5 text-sm cursor-pointer flex items-baseline justify-between gap-2 ${
-                  isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+                  isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60'
                 }`}
                 onMouseDown={(e) => {
                   e.preventDefault()

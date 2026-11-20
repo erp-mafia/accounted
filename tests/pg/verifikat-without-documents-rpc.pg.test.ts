@@ -10,11 +10,10 @@ import {
 } from './fixtures'
 
 /**
- * Invariants for the verifikat_without_documents RPC (mcp_optimization_plan
- * P0-2). The predecessor applied min_amount in memory after the DB page:
+ * Invariants for the verifikat_without_documents RPC. The predecessor applied min_amount in memory after the DB page:
  * total_count ignored the filter and consecutive pages overlapped. These
  * tests pin the SQL-side behavior: filter-respecting total, disjoint and
- * complete pages, since filter, doc/draft exclusion, tenant guard.
+ * complete pages, since and until filters, doc/draft exclusion, tenant guard.
  */
 
 type RpcRow = {
@@ -35,15 +34,17 @@ async function callRpc(params: {
   minAmount?: number
   limit?: number
   offset?: number
+  until?: string | null
 }): Promise<RpcResult> {
   const { rows } = await getPool().query<{ result: RpcResult }>(
-    `SELECT public.verifikat_without_documents($1, $2, $3, $4, $5) AS result`,
+    `SELECT public.verifikat_without_documents($1, $2, $3, $4, $5, $6) AS result`,
     [
       params.companyId,
       params.since ?? null,
       params.minAmount ?? 0,
       params.limit ?? 20,
       params.offset ?? 0,
+      params.until ?? null,
     ],
   )
   return rows[0].result
@@ -172,6 +173,39 @@ describe('verifikat_without_documents RPC', () => {
     expect((res.verifikat ?? []).map((r) => r.voucher_number)).toEqual([6, 5, 4])
   })
 
+  // gnubok_list_verifikat_without_documents `until` (20261028103000): an
+  // inclusive upper bound, alone or as the end of a since..until window.
+  it('respects the until filter, inclusive', async () => {
+    const res = await callRpc({ companyId, until: '2026-06-03' })
+    expect(res.ok).toBe(true)
+    expect(res.total_count).toBe(3)
+    expect((res.verifikat ?? []).map((r) => r.voucher_number)).toEqual([3, 2, 1])
+  })
+
+  it('bounds a since..until window on both ends', async () => {
+    const res = await callRpc({ companyId, since: '2026-06-02', until: '2026-06-04' })
+    expect(res.ok).toBe(true)
+    expect(res.total_count).toBe(3)
+    expect((res.verifikat ?? []).map((r) => r.voucher_number)).toEqual([4, 3, 2])
+  })
+
+  it('pages an until-bounded, min_amount-filtered set with a truthful total', async () => {
+    // amounts 300, 400 and 500 are dated on or before 2026-06-05 and reach 250
+    const first = await callRpc({ companyId, until: '2026-06-05', minAmount: 250, limit: 2 })
+    const second = await callRpc({ companyId, until: '2026-06-05', minAmount: 250, limit: 2, offset: 2 })
+    expect(first.total_count).toBe(3)
+    expect(second.total_count).toBe(3)
+    expect([...(first.verifikat ?? []), ...(second.verifikat ?? [])].map((r) => r.voucher_number)).toEqual([5, 4, 3])
+  })
+
+  it('answers the five-argument call as before: until defaults to none', async () => {
+    const { rows } = await getPool().query<{ result: RpcResult }>(
+      `SELECT public.verifikat_without_documents($1, NULL, 0, 20, 0) AS result`,
+      [companyId],
+    )
+    expect(rows[0].result.total_count).toBe(6)
+  })
+
   it('offset past the end returns an empty page with a truthful total', async () => {
     const res = await callRpc({ companyId, minAmount: 250, limit: 2, offset: 10 })
     expect(res.ok).toBe(true)
@@ -213,5 +247,112 @@ describe('verifikat_without_documents RPC', () => {
     })
     expect(res.ok).toBe(true)
     expect(res.total_count).toBe(6)
+  })
+})
+
+/**
+ * gross_amount is the amount of the affärshändelse as its underlag and bank
+ * row show it (crm#1062). Self-assessed reverse-charge and import moms
+ * (2614/2624/2634, 2615/2625/2635) is owed by the buyer to Skatteverket and
+ * is on neither, so it must not inflate the figure an agent matches against
+ * the bank, the receipt hunt ranks on, or min_amount filters on.
+ */
+describe('verifikat_without_documents gross_amount under reverse charge and import', () => {
+  let companyId: string
+  const ids: Record<string, string> = {}
+
+  beforeAll(async () => {
+    const s = await seedCompany()
+    companyId = s.companyId
+    const post = async (key: string, voucherNumber: number, lines: { accountNumber: string; debitAmount: number; creditAmount: number }[]) => {
+      ids[key] = await insertPostedJournalEntry({
+        userId: s.userId,
+        companyId,
+        fiscalPeriodId: s.fiscalPeriodId,
+        voucherNumber,
+        entryDate: `2026-06-${String(voucherNumber).padStart(2, '0')}`,
+        description: key,
+        lines,
+      })
+    }
+
+    // EU service under omvänd betalningsskyldighet, paid from the bank.
+    await post('rc_purchase', 1, [
+      { accountNumber: '4535', debitAmount: 1000, creditAmount: 0 },
+      { accountNumber: '2645', debitAmount: 250, creditAmount: 0 },
+      { accountNumber: '2614', debitAmount: 0, creditAmount: 250 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 1000 },
+    ])
+    // No deduction right: the self-assessed moms lands on the cost account.
+    await post('rc_not_deductible', 2, [
+      { accountNumber: '6540', debitAmount: 1250, creditAmount: 0 },
+      { accountNumber: '2614', debitAmount: 0, creditAmount: 250 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 1000 },
+    ])
+    // Credit note on a reverse-charge purchase: the legs flip sides.
+    await post('rc_credit_note', 3, [
+      { accountNumber: '1930', debitAmount: 400, creditAmount: 0 },
+      { accountNumber: '2614', debitAmount: 100, creditAmount: 0 },
+      { accountNumber: '4535', debitAmount: 0, creditAmount: 400 },
+      { accountNumber: '2645', debitAmount: 0, creditAmount: 100 },
+    ])
+    // Import of goods at 12 %, self-assessed import moms.
+    await post('import_goods', 4, [
+      { accountNumber: '4000', debitAmount: 2000, creditAmount: 0 },
+      { accountNumber: '2645', debitAmount: 240, creditAmount: 0 },
+      { accountNumber: '2625', debitAmount: 0, creditAmount: 240 },
+      { accountNumber: '2440', debitAmount: 0, creditAmount: 2000 },
+    ])
+    // Only the self-assessment pair: no money changed hands.
+    await post('rc_pair_only', 5, [
+      { accountNumber: '2645', debitAmount: 250, creditAmount: 0 },
+      { accountNumber: '2614', debitAmount: 0, creditAmount: 250 },
+    ])
+    // Domestic purchase: debited moms is on the invoice and the bank row.
+    await post('domestic', 6, [
+      { accountNumber: '6110', debitAmount: 800, creditAmount: 0 },
+      { accountNumber: '2641', debitAmount: 200, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 1000 },
+    ])
+    // Reverse charge below 4 000 kr whose debit total reaches it.
+    await post('rc_below_floor', 7, [
+      { accountNumber: '4535', debitAmount: 3500, creditAmount: 0 },
+      { accountNumber: '2645', debitAmount: 875, creditAmount: 0 },
+      { accountNumber: '2614', debitAmount: 0, creditAmount: 875 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 3500 },
+    ])
+  })
+
+  const amounts = async (minAmount = 0) => {
+    const res = await callRpc({ companyId, minAmount, limit: 100 })
+    expect(res.ok).toBe(true)
+    const byId = new Map((res.verifikat ?? []).map((r) => [r.journal_entry_id, r.gross_amount]))
+    return { res, byId }
+  }
+
+  it('reports the amount that left the bank for a reverse-charge purchase', async () => {
+    const { byId } = await amounts()
+    expect(byId.get(ids.rc_purchase)).toBe(1000)
+  })
+
+  it('leaves out the self-assessed moms whichever side and account it is on', async () => {
+    const { byId } = await amounts()
+    expect(byId.get(ids.rc_not_deductible)).toBe(1000)
+    expect(byId.get(ids.rc_credit_note)).toBe(400)
+    expect(byId.get(ids.import_goods)).toBe(2000)
+    expect(byId.get(ids.rc_pair_only)).toBe(0)
+    expect(byId.get(ids.domestic)).toBe(1000)
+  })
+
+  it('min_amount and total_count use the same amount', async () => {
+    const { res, byId } = await amounts(1000)
+    // 1000, 1000, 2000 and 3500 pass; the credit note (400) and the pair (0) do not.
+    expect(res.total_count).toBe(5)
+    expect(byId.has(ids.rc_credit_note)).toBe(false)
+    expect(byId.has(ids.rc_pair_only)).toBe(false)
+
+    const floor = await callRpc({ companyId, minAmount: 4000 })
+    expect(floor.total_count).toBe(0)
+    expect(floor.verifikat).toEqual([])
   })
 })

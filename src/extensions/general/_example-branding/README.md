@@ -3,15 +3,15 @@
 Copy this folder to start a whitelabel fork:
 
 ```bash
-cp -r extensions/general/_example-branding extensions/general/your-brand
+cp -r src/extensions/general/_example-branding src/extensions/general/your-brand
 ```
 
 Then:
 
-1. Edit `your-brand/manifest.json`: set `id`, `exportName`, `entryPoint`, name, description.
+1. Edit `your-brand/manifest.json`: set `id`, `exportName`, `entryPoint`, name, description. Keep `"branding": true`: it lists the extension in the generated `src/lib/extensions/_generated/branding-list.ts`, which `src/lib/server-baseline.ts` (the root layout and the route wrappers) and the web manifest import, so your values apply on every page and API route without loading every extension.
 2. Edit `your-brand/index.ts`: uncomment and set the branding values you want to override.
 3. Drop your assets in `your-brand/assets/` (logo.svg, favicon.ico, og.png, etc.). Wire up an extension API route to serve them, or set the asset paths in `index.ts` to external CDN URLs.
-4. Enable the extension: add `"your-brand"` to the `extensions` array in `extensions.config.json`, keeping the ids already listed. Also add it to the enum in `extensions.schema.json`, which only drives editor validation.
+4. Enable the extension: add `"your-brand"` to the `extensions` array in `extensions.config.json`, keeping the ids already listed. Also add it to the enum in `src/extensions/extensions.schema.json`, which only drives editor validation.
 5. Run `npm run setup:extensions && npm run dev`.
 
 See `docs/WHITELABEL.md` for the full fork checklist (env vars, sync workflow, what NOT to change).

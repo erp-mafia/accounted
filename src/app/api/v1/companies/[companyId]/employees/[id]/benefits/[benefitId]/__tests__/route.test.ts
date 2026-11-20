@@ -34,6 +34,7 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { PATCH as patchBenefit, DELETE as deleteBenefit } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -42,36 +43,6 @@ interface TableResp {
   data?: unknown
   error?: unknown
   count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const tableCalls: string[] = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null, count: null })
-            resolve({ count: null, ...next })
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    tableCalls,
-    from: vi.fn((table: string) => {
-      tableCalls.push(table)
-      return buildChain(table)
-    }),
-  }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -121,7 +92,7 @@ function del(url = BASE_URL): Request {
 const params = { params: Promise.resolve({ companyId: COMPANY_ID, id: EMPLOYEE_ID, benefitId: BENEFIT_ID }) }
 
 function ownerMock(extra: Record<string, TableResp | TableResp[]> = {}) {
-  return makeFlexibleSupabase({
+  return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     ...extra,
   })
@@ -147,7 +118,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
           { data: STORED, error: null }, // existence + merge fetch
           { data: { ...STORED, valid_to: '2026-06-30' }, error: null }, // update
         ],
-      }),
+      }).supabase,
     )
 
     const res = await patchBenefit(patch({ valid_to: '2026-06-30' }), params)
@@ -160,7 +131,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
   })
 
   it('returns 404 NOT_FOUND when the benefit is not on the employee', async () => {
-    mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: null, error: null } }))
+    mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: null, error: null } }).supabase)
     const res = await patchBenefit(patch({ monthly_value: 100 }), params)
     expect(res.status).toBe(404)
     const body = await res.json()
@@ -169,7 +140,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
 
   it('rejects a valid_to-only patch that predates the stored valid_from (merged check)', async () => {
     const supabaseMock = ownerMock({ employee_benefits: { data: STORED, error: null } })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await patchBenefit(patch({ valid_to: '2026-05-31' }), params)
 
@@ -178,11 +149,11 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details.issues[0].field).toBe('valid_to')
     // Fetched once, never written.
-    expect(supabaseMock.tableCalls.filter((t) => t === 'employee_benefits')).toHaveLength(1)
+    expect(supabaseMock.tables().filter((t) => t === 'employee_benefits')).toHaveLength(1)
   })
 
   it('rejects annual_market_value on a non-bike benefit', async () => {
-    mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: STORED, error: null } }))
+    mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: STORED, error: null } }).supabase)
     const res = await patchBenefit(patch({ annual_market_value: 12000 }), params)
     expect(res.status).toBe(400)
     const body = await res.json()
@@ -190,7 +161,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
   })
 
   it('rejects an empty body', async () => {
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await patchBenefit(patch({}), params)
     expect(res.status).toBe(400)
     const body = await res.json()
@@ -199,7 +170,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
 
   it('dry-run returns the merged preview without writing', async () => {
     const supabaseMock = ownerMock({ employee_benefits: { data: STORED, error: null } })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await patchBenefit(patch({ is_active: false }, `${BASE_URL}?dry_run=true`), params)
 
@@ -208,11 +179,11 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
     const body = await res.json()
     expect(body.data.preview.employee_benefit_id).toBe(BENEFIT_ID)
     expect(body.data.preview.is_active).toBe(false)
-    expect(supabaseMock.tableCalls.filter((t) => t === 'employee_benefits')).toHaveLength(1)
+    expect(supabaseMock.tables().filter((t) => t === 'employee_benefits')).toHaveLength(1)
   })
 
   it('requires an Idempotency-Key', async () => {
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await patchBenefit(
       new Request(BASE_URL, {
         method: 'PATCH',
@@ -227,7 +198,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
   })
 
   it('rejects a non-UUID benefit id with 400', async () => {
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await patchBenefit(patch({ monthly_value: 100 }), {
       params: Promise.resolve({ companyId: COMPANY_ID, id: EMPLOYEE_ID, benefitId: 'ben-1' }),
     })
@@ -243,7 +214,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
       scopes: ['payroll:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await patchBenefit(patch({ monthly_value: 100 }), params)
     expect(res.status).toBe(403)
   })
@@ -255,14 +226,14 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId'
       salary_line_items: { data: null, count: 0, error: null },
       employee_benefits: { data: [{ id: BENEFIT_ID }], error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await deleteBenefit(del(), params)
 
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toEqual({ employee_benefit_id: BENEFIT_ID, deleted: true, deactivated: false })
-    expect(supabaseMock.tableCalls).toContain('employee_benefits')
+    expect(supabaseMock.tables()).toContain('employee_benefits')
   })
 
   it('keeps and deactivates a benefit that a payslip line already derives from', async () => {
@@ -270,7 +241,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId'
       salary_line_items: { data: null, count: 1, error: null },
       employee_benefits: { data: [{ id: BENEFIT_ID }], error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await deleteBenefit(del(), params)
 
@@ -293,7 +264,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId'
         { data: [{ id: BENEFIT_ID }], error: null },
       ],
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await deleteBenefit(del(), params)
 
@@ -303,7 +274,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId'
   })
 
   it('returns 404 NOT_FOUND when no row matched', async () => {
-    mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: [], error: null } }))
+    mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: [], error: null } }).supabase)
     const res = await deleteBenefit(del(), params)
     expect(res.status).toBe(404)
     const body = await res.json()
@@ -311,7 +282,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId'
   })
 
   it('dry-run previews the row that would go without deleting', async () => {
-    mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: STORED, error: null } }))
+    mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: STORED, error: null } }).supabase)
 
     const res = await deleteBenefit(del(`${BASE_URL}?dry_run=true`), params)
 
@@ -323,7 +294,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId'
   })
 
   it('requires an Idempotency-Key', async () => {
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await deleteBenefit(
       new Request(BASE_URL, { method: 'DELETE', headers: { Authorization: 'Bearer test-fixture-not-a-real-key' } }),
       params,
@@ -340,14 +311,14 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId'
       scopes: ['payroll:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await deleteBenefit(del(), params)
     expect(res.status).toBe(403)
   })
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await deleteBenefit(new Request(BASE_URL, { method: 'DELETE' }), params)
     expect(res.status).toBe(401)
   })

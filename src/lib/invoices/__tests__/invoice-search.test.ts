@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchesInvoiceSearch, parseAmountTerm } from '../invoice-search'
+import { matchesInvoiceSearch } from '../invoice-search'
 
 const invoice = {
   invoice_number: '2627',
@@ -8,23 +8,6 @@ const invoice = {
   subtotal: 14000,
   total: 17500,
 }
-
-describe('parseAmountTerm', () => {
-  it('parses plain, spaced, and decimal amounts', () => {
-    expect(parseAmountTerm('14000')).toBe(14000)
-    expect(parseAmountTerm('14 000')).toBe(14000)
-    expect(parseAmountTerm('17 500')).toBe(17500) // NBSP thousand separator
-    expect(parseAmountTerm('17 500,50')).toBe(17500.5)
-    expect(parseAmountTerm('17500.50')).toBe(17500.5)
-  })
-
-  it('rejects non-amounts', () => {
-    expect(parseAmountTerm('Testbrand')).toBeNull()
-    expect(parseAmountTerm('26-27')).toBeNull()
-    expect(parseAmountTerm('14000,123')).toBeNull()
-    expect(parseAmountTerm('')).toBeNull()
-  })
-})
 
 describe('matchesInvoiceSearch', () => {
   it('matches invoice number, external number, and customer name (case-insensitive)', () => {

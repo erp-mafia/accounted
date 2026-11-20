@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -11,11 +11,24 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Input } from '@/components/ui/input'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { useToast } from '@/components/ui/use-toast'
+import type { ArkivDocumentRow } from '@/app/api/arkiv/documents/route'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { FileText, ImageIcon, Loader2, Search, Inbox, Eye } from 'lucide-react'
+import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
+import { documentPreviewKind } from '@/lib/documents/preview-kind'
+import {
+  DocumentTextIcon,
+  InboxIcon,
+  MagnifyingGlassIcon,
+  PhotoIcon,
+  SpinnerIcon,
+} from '@/components/icons'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 // InboxDocumentPicker
 //
@@ -32,10 +45,17 @@ import { FileText, ImageIcon, Loader2, Search, Inbox, Eye } from 'lucide-react'
 //   journal entry does not exist yet, so `onSelect` is provided instead and the
 //   pick is reported to the parent, which links after the entry is created.
 //
-// Each row carries a preview button (eye) that opens a quick dialog rendering
-// the document inline, so the user can confirm the right file before attaching.
-// Attaching is the row's primary click (fast path) and is also offered from
-// inside the preview dialog (preview → confirm).
+// Each row carries a "Förhandsgranska" button that opens a quick dialog
+// rendering the document inline, so the user can confirm the right file before
+// attaching. It is a word, not the eye icon it used to be: an eye reads as a
+// show/hide toggle (crm#1003). Attaching is the row's primary click (fast
+// path) and is also offered from inside the preview dialog (preview → confirm).
+//
+// Link mode also offers "Andra verifikationer": underlag another verifikat
+// already holds, read from the Arkiv list (crm#1171 item 9: one bank
+// statement backing two fees). A document row holds one verifikat for good,
+// so picking one opens a confirm and links a byte-identical copy (POST link
+// with copy: true); the original stays where it is.
 
 export interface AvailableInboxDoc {
   inbox_item_id: string
@@ -62,23 +82,34 @@ interface Props {
   onSelect?: (doc: AvailableInboxDoc) => void
 }
 
-function isImageType(type: string | null): boolean {
-  return type?.startsWith('image/') ?? false
+/** The picker previews files only; a mail body opens from the inbox itself. */
+function pickerPreviewKind(mime: string | null, fileName: string) {
+  const kind = documentPreviewKind(mime, fileName)
+  return kind === 'html' ? null : kind
 }
 
-function isPdfType(type: string | null): boolean {
-  return type === 'application/pdf'
+type PickerSource = 'inbox' | 'linked'
+
+/** A document another verifikat already holds, as the Arkiv list gives it. */
+interface LinkedElsewhereDoc {
+  document_id: string
+  file_name: string
+  title: string
+  document_date: string | null
+  voucher: string | null
 }
 
-function DocIcon({ mime }: { mime: string | null }) {
-  if (isImageType(mime)) {
-    return <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+function DocIcon({ mime, fileName }: { mime: string | null; fileName: string }) {
+  if (documentPreviewKind(mime, fileName) === 'image') {
+    return <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
   }
-  return <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+  return <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
 }
 
 export default function InboxDocumentPicker({ open, onClose, journalEntryId, onLinked, onSelect }: Props) {
   const t = useTranslations('journal_attachments')
+  const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
 
   const [loading, setLoading] = useState(true)
@@ -86,6 +117,12 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
   const [search, setSearch] = useState('')
   const [linkingId, setLinkingId] = useState<string | null>(null)
   const [previewItem, setPreviewItem] = useState<AvailableInboxDoc | null>(null)
+  // Link mode only: underlag already on another verifikat, linked as a copy.
+  const [source, setSource] = useState<PickerSource>('inbox')
+  const [linkedItems, setLinkedItems] = useState<LinkedElsewhereDoc[]>([])
+  const [linkedLoading, setLinkedLoading] = useState(false)
+  const [copyItem, setCopyItem] = useState<LinkedElsewhereDoc | null>(null)
+  const linkMode = Boolean(journalEntryId) && !onSelect
 
   // Reset + fetch each time the dialog opens.
   useEffect(() => {
@@ -93,6 +130,8 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
     setSearch('')
     setItems([])
     setPreviewItem(null)
+    setSource('inbox')
+    setCopyItem(null)
     setLoading(true)
     let cancelled = false
     ;(async () => {
@@ -111,6 +150,71 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       cancelled = true
     }
   }, [open])
+
+  // Underlag on other verifikat: the Arkiv list, searched on the server (page
+  // text and file names) once two characters are typed, newest first.
+  const serverQuery = search.trim().length >= 2 ? search.trim() : ''
+  useEffect(() => {
+    if (!open || source !== 'linked' || !journalEntryId) return
+    let cancelled = false
+    setLinkedLoading(true)
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const params = new URLSearchParams({ limit: '100' })
+          if (serverQuery) params.set('q', serverQuery)
+          const res = await fetch(`/api/arkiv/documents?${params.toString()}`)
+          const json = (await res.json().catch(() => ({}))) as { data?: ArkivDocumentRow[] }
+          if (cancelled) return
+          setLinkedItems(
+            (json.data ?? [])
+              .filter((row) => row.linked.journal_entry_id && row.linked.journal_entry_id !== journalEntryId)
+              .map((row) => ({
+                document_id: row.document_id,
+                file_name: row.file_name,
+                title: row.title,
+                document_date: row.document_date,
+                voucher: row.linked.voucher,
+              })),
+          )
+        } catch {
+          if (!cancelled) setLinkedItems([])
+        } finally {
+          if (!cancelled) setLinkedLoading(false)
+        }
+      })()
+    }, serverQuery ? 300 : 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [open, source, journalEntryId, serverQuery])
+
+  async function handleCopy(doc: LinkedElsewhereDoc) {
+    if (!journalEntryId) return
+    setLinkingId(doc.document_id)
+    try {
+      const res = await fetch(`/api/documents/${doc.document_id}/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ journal_entry_id: journalEntryId, copy: true }),
+      })
+      if (!res.ok) {
+        const json = (await res.json().catch(() => ({}))) as { error?: string | { message?: string } }
+        const description = json.error ? getErrorMessage(json, { locale: errorLocale }) : undefined
+        toast({ title: t('picker_link_failed'), description, variant: 'destructive' })
+        return
+      }
+      toast({ title: t('picker_copy_linked') })
+      setCopyItem(null)
+      onLinked?.()
+      onClose()
+    } catch {
+      toast({ title: t('picker_link_failed'), variant: 'destructive' })
+    } finally {
+      setLinkingId(null)
+    }
+  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -147,8 +251,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
         const json = (await res.json().catch(() => ({}))) as {
           error?: string | { message?: string }
         }
-        const description =
-          typeof json.error === 'string' ? json.error : json.error?.message
+          const description = json.error ? getErrorMessage(json, { locale: errorLocale }) : undefined
         toast({ title: t('picker_link_failed'), description, variant: 'destructive' })
         return
       }
@@ -163,47 +266,112 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
     }
   }
 
+  const linkedFiltered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return linkedItems
+    // The server already matched page text; a short query narrows by name here.
+    if (serverQuery) return linkedItems
+    return linkedItems.filter((it) => `${it.title} ${it.file_name}`.toLowerCase().includes(q))
+  }, [linkedItems, search, serverQuery])
+
   const hasSearch = search.trim().length > 0
   const previewSrc = previewItem ? `/api/documents/${previewItem.document_id}/inline` : null
+  const copySrc = copyItem ? `/api/documents/${copyItem.document_id}/inline` : null
+  const showingLinked = linkMode && source === 'linked'
+  const listLoading = showingLinked ? linkedLoading : loading
+  const listCount = showingLinked ? linkedFiltered.length : filtered.length
 
   return (
     <>
       <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="wide">
           <DialogHeader>
-            <DialogTitle>{t('picker_title')}</DialogTitle>
+            <DialogTitle>{showingLinked ? t('picker_linked_title') : t('picker_title')}</DialogTitle>
           </DialogHeader>
 
+          {linkMode && (
+            <SegmentedControl<PickerSource>
+              value={source}
+              onChange={setSource}
+              aria-label={t('picker_source_label')}
+              options={[
+                { value: 'inbox', label: t('picker_source_inbox') },
+                { value: 'linked', label: t('picker_source_linked') },
+              ]}
+            />
+          )}
+
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('picker_search_placeholder')}
+              placeholder={showingLinked ? t('picker_linked_search_placeholder') : t('picker_search_placeholder')}
               className="pl-9"
             />
           </div>
 
-          {!loading && filtered.length > 0 && (
-            <div className="flex justify-end px-1 text-[11px] text-muted-foreground tabular-nums">
-              {t('picker_results', { count: filtered.length })}
+          {!listLoading && listCount > 0 && (
+            <div className="flex justify-end px-1 text-xs text-muted-foreground tabular-nums">
+              {t('picker_results', { count: listCount })}
             </div>
           )}
 
           <div className="max-h-[55vh] overflow-y-auto -mx-6 px-6 divide-y">
-            {loading ? (
-              <div className="space-y-3 py-3">
+            {listLoading ? (
+              <LateReveal className="space-y-3 py-3">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <Skeleton key={i} className="h-12 w-full" />
                 ))}
-              </div>
+              </LateReveal>
+            ) : showingLinked ? (
+              linkedFiltered.length === 0 ? (
+                hasSearch ? (
+                  <p className="py-3 text-[13px] text-muted-foreground">
+                    <span data-ph-mask="">{t('picker_empty_search', { query: search.trim() })}</span>{' '}
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSearch('')}>
+                      {tCommon('clear_search')}
+                    </button>
+                  </p>
+                ) : (
+                  <EmptyState icon={DocumentTextIcon} title={t('picker_linked_empty')} />
+                )
+              ) : (
+                linkedFiltered.map((it) => (
+                  <button
+                    key={it.document_id}
+                    type="button"
+                    onClick={() => setCopyItem(it)}
+                    disabled={!!linkingId}
+                    className="w-full text-left flex items-center gap-3 py-3 px-2 -ml-2 rounded-sm transition-colors hover:bg-secondary/60"
+                  >
+                    <DocIcon mime={null} fileName={it.file_name} />
+                    <div className="flex-1 min-w-0">
+                      <span data-ph-mask="" className="block text-sm font-medium truncate">{it.title}</span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
+                        {it.document_date && <span>{formatDate(it.document_date)}</span>}
+                        <span data-ph-mask="" className="truncate font-normal">{it.file_name}</span>
+                      </div>
+                    </div>
+                    {it.voucher && (
+                      <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+                        {t('picker_on_voucher', { voucher: it.voucher })}
+                      </span>
+                    )}
+                  </button>
+                ))
+              )
             ) : filtered.length === 0 ? (
-              <div className="py-10 flex flex-col items-center gap-2 text-center">
-                <Inbox className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">
-                  {hasSearch ? t('picker_empty_search', { query: search.trim() }) : t('picker_empty')}
+              hasSearch ? (
+                <p className="py-3 text-[13px] text-muted-foreground">
+                  <span data-ph-mask="">{t('picker_empty_search', { query: search.trim() })}</span>{' '}
+                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSearch('')}>
+                    {tCommon('clear_search')}
+                  </button>
                 </p>
-              </div>
+              ) : (
+                <EmptyState icon={InboxIcon} title={t('picker_empty')} />
+              )
             ) : (
               filtered.map((it) => {
                 const isLinking = linkingId === it.document_id
@@ -220,7 +388,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                         linkingId && !isLinking && 'opacity-50',
                       )}
                     >
-                      <DocIcon mime={it.mime_type} />
+                      <DocIcon mime={it.mime_type} fileName={it.file_name} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-sm font-medium truncate">
@@ -241,21 +409,18 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                         </span>
                       )}
                       {isLinking && (
-                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+                        <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
                       )}
                     </button>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="h-10 w-10 shrink-0"
-                      aria-label={t('picker_preview')}
-                      title={t('picker_preview')}
+                      className="shrink-0 text-muted-foreground"
                       onClick={(e) => {
                         e.stopPropagation()
                         setPreviewItem(it)
                       }}
                     >
-                      <Eye className="h-4 w-4" />
+                      {t('picker_preview')}
                     </Button>
                   </div>
                 )
@@ -266,7 +431,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       </Dialog>
 
       <Dialog open={previewItem !== null} onOpenChange={(o) => !o && setPreviewItem(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent size="wide">
           <DialogHeader>
             {/* data-ph-mask: the file name and supplier details are user data */}
             <DialogTitle data-ph-mask="" className="truncate pr-6">{previewItem?.file_name}</DialogTitle>
@@ -283,41 +448,23 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
 
           {previewItem && previewSrc && (
             <div className="py-1">
-              {isImageType(previewItem.mime_type) ? (
-                <img
-                  src={previewSrc}
-                  alt={previewItem.file_name}
-                  className="max-h-[70vh] w-full rounded-lg border object-contain"
-                />
-              ) : isPdfType(previewItem.mime_type) ? (
-                // <object> + type="application/pdf" invokes Chrome's PDF plugin
-                // directly; <iframe> intermittently shows a blocked-content
-                // notice even with a permissive CSP. Mirrors JournalEntryAttachments.
-                <object
-                  data={previewSrc}
-                  type="application/pdf"
-                  aria-label={previewItem.file_name}
-                  className="w-full h-[70vh] rounded-lg border"
-                >
+              <DocumentPreview
+                src={previewSrc}
+                kind={pickerPreviewKind(previewItem.mime_type, previewItem.file_name)}
+                label={previewItem.file_name}
+                className="h-[70vh] w-full rounded-lg bg-control shadow-raised"
+                imageClassName="max-h-[70vh] w-full object-contain"
+                fallback={
                   <a
                     href={previewSrc}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block px-4 py-2 text-sm text-muted-foreground underline"
+                    className="block px-4 py-6 text-center text-sm text-muted-foreground underline"
                   >
                     {t('picker_preview_unavailable')}
                   </a>
-                </object>
-              ) : (
-                <a
-                  href={previewSrc}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block px-4 py-6 text-sm text-muted-foreground underline text-center"
-                >
-                  {t('picker_preview_unavailable')}
-                </a>
-              )}
+                }
+              />
             </div>
           )}
 
@@ -330,15 +477,60 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                 if (previewItem) void handlePick(previewItem)
               }}
               disabled={!!linkingId}
+              loading={!!previewItem && linkingId === previewItem.document_id}
             >
-              {previewItem && linkingId === previewItem.document_id ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('picker_attach')}
-                </>
-              ) : (
-                t('picker_attach')
-              )}
+              {t('picker_attach')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={copyItem !== null} onOpenChange={(o) => !o && setCopyItem(null)}>
+        <DialogContent size="wide">
+          <DialogHeader>
+            {/* data-ph-mask: the file name is user data */}
+            <DialogTitle data-ph-mask="" className="truncate pr-6">{copyItem?.title}</DialogTitle>
+            <DialogDescription>
+              {copyItem?.voucher
+                ? t('picker_copy_confirm', { voucher: copyItem.voucher })
+                : t('picker_copy_confirm_unnumbered')}
+            </DialogDescription>
+          </DialogHeader>
+
+          {copyItem && copySrc && (
+            <div className="py-1">
+              <DocumentPreview
+                src={copySrc}
+                kind={pickerPreviewKind(null, copyItem.file_name)}
+                label={copyItem.file_name}
+                className="h-[60vh] w-full rounded-lg bg-control shadow-raised"
+                imageClassName="max-h-[60vh] w-full object-contain"
+                fallback={
+                  <a
+                    href={copySrc}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block px-4 py-6 text-center text-sm text-muted-foreground underline"
+                  >
+                    {t('picker_preview_unavailable')}
+                  </a>
+                }
+              />
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCopyItem(null)}>
+              {t('picker_close')}
+            </Button>
+            <Button
+              onClick={() => {
+                if (copyItem) void handleCopy(copyItem)
+              }}
+              disabled={!!linkingId}
+              loading={!!copyItem && linkingId === copyItem.document_id}
+            >
+              {t('picker_copy_attach')}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -2,8 +2,14 @@
 
 import { waitForSIEJob } from '@/lib/import/sie-job-client'
 import type { SIEJob } from '@/lib/import/sie-job-contract'
-import { useEffect, useRef } from 'react'
+import type { RefObject } from 'react'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import type { ProviderPreviewCounts } from '@/lib/providers/preview-counts'
+import type { TheaterModel } from '@/lib/import/theater-model'
+import type { SIEAccount } from '@/lib/import/types'
+import type { ProviderFileStatus } from '@/lib/onboarding-books/provider-years'
+import { migrationRefusals, type MigrationResource, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 
 /**
  * The provider migration routes as the books act calls them. Same
@@ -33,9 +39,12 @@ export interface ProviderPreview {
   consent: { id: string; provider: string; status: number; companyName?: string }
   companyInfo: { company_name: string | null; org_number: string | null } | null
   sieAvailable: boolean
-  sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] } | null
+  /** Counts over the default years the preview read; shown via previewCountsForSelection. */
+  sieStats: ProviderPreviewCounts | null
   sourceYears?: SourceFiscalYear[]
   maxSelectedYears?: number
+  /** Start years the company's completed SIE imports hold (crm#1686). */
+  importedFiscalYears?: number[]
   hasSieData: boolean
 }
 
@@ -50,11 +59,16 @@ export interface ProviderMapping {
 }
 
 export interface ProviderSieData {
-  parsed: { accounts: { number: string; name: string }[]; header?: { companyName?: string | null } }
+  /** Every account across the selected years. */
+  accounts: SIEAccount[]
+  /** Built on the server over every selected year. */
+  theater: TheaterModel
   mappings: ProviderMapping[]
   mappingStats: { total: number; mapped: number; unmapped: number }
-  rawContent: string[]
-  fileStatuses?: { fiscalYear: number }[]
+  /** One per fetched file, oldest first: where /sie-data archived it. previousImport: a completed import already holds that year. */
+  fileStatuses: ProviderFileStatus[]
+  /** Selected years the provider did not hand over. */
+  failedYears?: { year: number; error: string }[]
   allImported: boolean
 }
 
@@ -71,13 +85,17 @@ export interface MigrateResults {
   supplierInvoices?: MigrateStep
   reconciliation?: { autoLinked?: number; unmatched?: number }
   stepErrors?: { step: string; code: string; message: string }[]
+  /** Registers the provider refused, grouped by remedy (migrationRefusals). */
+  refused?: { messageKey: string; resources: MigrationResource[] }[]
 }
 
+/**
+ * What /migrate still imports. Customers, suppliers and invoices are not
+ * options here: /migrate refuses them (PROVIDER_REGISTERS_VIA_JOB) and
+ * providerImportRegisters runs them as the background job, so a caller
+ * cannot ask the wrong door for them.
+ */
 export interface MigrateOptions {
-  importCustomers: boolean
-  importSuppliers: boolean
-  importSalesInvoices: boolean
-  importSupplierInvoices: boolean
   importAssets: boolean
 }
 
@@ -124,12 +142,14 @@ export interface SieImportOutcome {
   warnings: string[]
 }
 
-export async function providerImportSie(rawContent: string, mappings: ProviderMapping[], voucherSeries: string | null, onProgress?: (job: SIEJob) => void): Promise<SieImportOutcome> {
+/** The file goes by the path /sie-data archived it under, never as content. */
+export async function providerImportSie(file: Pick<ProviderFileStatus, 'storagePath' | 'filename'>, mappings: ProviderMapping[], voucherSeries: string | null, onProgress?: (job: SIEJob) => void): Promise<SieImportOutcome> {
   const res = await fetch(`${ARCIM}/import-sie`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      rawContent,
+      storagePath: file.storagePath,
+      filename: file.filename,
       mappings,
       options: { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true, voucherSeries: voucherSeries ?? undefined, updateAccountNames: true },
     }),
@@ -152,7 +172,78 @@ export async function providerImportSie(rawContent: string, mappings: ProviderMa
   return json as SieImportOutcome
 }
 
-/** POST /migrate as an NDJSON stream; progress arrives per orchestrator event. */
+/** Every resource's imported and total records, summed. */
+function registerCounts(status: ProviderMigrationStatus): { imported: number; total: number } {
+  return status.counts.reduce((sum, row) => ({ imported: sum.imported + row.imported, total: sum.total + row.total }),
+    { imported: 0, total: 0 })
+}
+
+/**
+ * The job's counts, and the registers the provider refused. A refused
+ * register has no counts at all, so without its refusal the books act read
+ * as "0 customers" with no reason, where the Import page names the register
+ * and the remedy (a Fortnox licence, the connecting user's rights, a Bokio
+ * token's read permission).
+ */
+function registerResults(status: ProviderMigrationStatus): MigrateResults {
+  const results: MigrateResults = {}
+  for (const row of status.counts) results[row.resource] = { imported: row.imported, total: row.total, skipped: row.skipped }
+  const refused = migrationRefusals(status.job)
+  if (refused.length > 0) results.refused = refused
+  return results
+}
+
+/**
+ * The customer, supplier and invoice registers through the background import
+ * job, as the Import page runs them. They went through /migrate, which read
+ * each Fortnox customer's and supplier's own record for at most 90 seconds
+ * and saved everyone it did not reach from the short list: no type, no
+ * active flag, no VAT number, country or terms, so a privatperson became a
+ * company (crm#1436). The job reads every record in full however large the
+ * register. Waits for the job's outcome so the step keeps its one-call
+ * contract, as providerImportSie waits for the SIE job.
+ */
+export async function providerImportRegisters(
+  consentId: string,
+  resources: MigrationResource[],
+  onProgress: (imported: number, total: number) => void,
+): Promise<MigrateResults> {
+  const jobs = `${ARCIM}/migration-jobs`
+  const res = await fetch(jobs, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ consentId, resources }) })
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) throw fail(json, `HTTP ${res.status}`)
+  const jobId = (json as { data: { jobId: string } }).data.jobId
+  let lastNudge = Date.now()
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    const statusRes = await fetch(`${jobs}?jobId=${encodeURIComponent(jobId)}`, { cache: 'no-store' })
+    // A missed poll is no outcome: the job runs on regardless.
+    if (!statusRes.ok) continue
+    const status = ((await statusRes.json()) as { data: ProviderMigrationStatus }).data
+    const { imported, total } = registerCounts(status)
+    onProgress(imported, total)
+    if (status.job.state === 'completed') return registerResults(status)
+    if (status.job.state === 'needs_attention') {
+      // Every record has an outcome: the import is done, and the few that
+      // need a look stay listed on the Import page.
+      if (status.review.acceptable) return registerResults(status)
+      const code = status.job.error_code ?? 'PROVIDER_MIGRATE_FAILED'
+      throw fail({ error: { code } }, code)
+    }
+    // The cron runs the job; a nudge makes it start sooner, as the Import page does.
+    if (Date.now() - lastNudge > 30_000) {
+      lastNudge = Date.now()
+      void fetch(`${jobs}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId }) })
+        .catch(() => { /* A nudge only hurries the cron: a failed one leaves the job to it. */ })
+    }
+  }
+}
+
+/**
+ * POST /migrate as an NDJSON stream; progress arrives per orchestrator event.
+ * The asset register only: the registers run as a background job
+ * (providerImportRegisters).
+ */
 export async function providerMigrate(
   consentId: string,
   opts: MigrateOptions,
@@ -221,24 +312,19 @@ export function pointWindow(popup: Window | null, url: string) {
   else window.location.href = url
 }
 
-/** Listen for the provider popup's message. */
-export function useProviderMessage(onSuccess: (consentId: string) => void, onError: (reason: string) => void) {
-  const okRef = useRef(onSuccess)
-  const errRef = useRef(onError)
-  useEffect(() => {
-    okRef.current = onSuccess
-    errRef.current = onError
+/**
+ * Listen for the provider popup's message. Put the window openProviderWindow
+ * returned in the returned ref: only that window's messages are heard.
+ * `cancelled`: the customer pressed cancel at the provider (access_denied).
+ */
+export function useProviderMessage(
+  onSuccess: (consentId: string) => void,
+  onError: (reason: string, cancelled: boolean) => void,
+): RefObject<Window | null> {
+  return useOAuthPopup<{ type?: string; consentId?: string; reason?: string; cancelled?: unknown }>((data) => {
+    if (data?.type === 'arcim-oauth-success' && data.consentId) onSuccess(data.consentId)
+    else if (data?.type === 'arcim-oauth-error') onError(typeof data.reason === 'string' && data.reason ? data.reason : 'OAuth', data.cancelled === true)
   })
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return
-      const data = event.data as { type?: string; consentId?: string; reason?: string } | null
-      if (data?.type === 'arcim-oauth-success' && data.consentId) okRef.current(data.consentId)
-      else if (data?.type === 'arcim-oauth-error') errRef.current(typeof data.reason === 'string' && data.reason ? data.reason : 'OAuth')
-    }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [])
 }
 
 /** The consentId a full-page provider return carried in the URL, stripped once read. */
@@ -249,6 +335,7 @@ export function takeReturnedConsentId(): string | null {
   const consentId = url.searchParams.get('consentId')
   if (!consentId) return null
   for (const k of ['migration', 'consentId', 'handoff', 'reason', 'station', 'provider']) url.searchParams.delete(k)
-  window.history.replaceState({}, '', url.pathname + (url.search ? url.search : ''))
+  // Keep the entry's state: it carries the act's place for Tillbaka.
+  window.history.replaceState(window.history.state, '', url.pathname + (url.search ? url.search : ''))
   return status === 'error' ? null : consentId
 }

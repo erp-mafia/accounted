@@ -5,6 +5,7 @@ import {
   insertDraftJournalEntry,
   seedCompany,
 } from '@/tests/pg/fixtures'
+import { lineBalance, storedLineAmount } from '../line-balance'
 
 describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
   it('rejects a directly inserted posted journal entry with no lines', async () => {
@@ -148,7 +149,7 @@ describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
     ).rejects.toThrow(/Cannot modify a posted journal entry/i)
   })
 
-  it('allows a status-only cancel of a posted entry (today\'s intended behaviour)', async () => {
+  it('rejects a status-only cancel of a posted entry outside cancel_orphaned_entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
     const entryId = await insertDraftJournalEntry({
@@ -159,14 +160,18 @@ describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
       voucherNumber: 1,
     })
 
-    await getPool().query(`UPDATE public.journal_entries SET status = 'cancelled' WHERE id = $1`, [
-      entryId,
-    ])
+    // Migration 20260929220100: posted -> cancelled needs the GUC that only
+    // the cancel_orphaned_entry RPC sets (tests/pg/journal-posted-cancel-gate).
+    await expect(
+      getPool().query(`UPDATE public.journal_entries SET status = 'cancelled' WHERE id = $1`, [
+        entryId,
+      ]),
+    ).rejects.toThrow(/Cannot cancel a posted journal entry/)
     const persisted = await getPool().query<{ status: string }>(
       `SELECT status FROM public.journal_entries WHERE id = $1`,
       [entryId],
     )
-    expect(persisted.rows[0]!.status).toBe('cancelled')
+    expect(persisted.rows[0]!.status).toBe('posted')
   })
 
   it('rejects changing another field while cancelling a posted entry (field-lock bypass)', async () => {
@@ -354,5 +359,53 @@ describe('engine.pg: journal_entry_lines_amounts_non_negative', () => {
       [entryId],
     )
     expect(rows.rows[0]!.n).toBe('2')
+  })
+})
+
+describe('the balance trigger and lineBalance give one answer', () => {
+  const cases: Array<{ name: string; debits: number[]; credits: number[] }> = [
+    { name: 'even lines', debits: [100], credits: [60, 40] },
+    { name: 'one öre apart', debits: [100], credits: [100.01] },
+    { name: 'raw sums that balance, stored amounts that do not', debits: [100.004, 100.004], credits: [200.01] },
+    { name: 'raw sums a fifth of an öre apart, stored amounts that balance', debits: [100.004, 100.004], credits: [200] },
+    { name: 'a half öre, stored up', debits: [1.005], credits: [1.01] },
+    { name: 'nothing but sub-öre amounts', debits: [0.004], credits: [0.004] },
+  ]
+
+  it.each(cases)('$name', async ({ debits, credits }) => {
+    const lines = [
+      ...debits.map((debit_amount) => ({ debit_amount, credit_amount: 0 })),
+      ...credits.map((credit_amount) => ({ debit_amount: 0, credit_amount })),
+    ]
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const client = await getPool().connect()
+
+    try {
+      await client.query('BEGIN')
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO public.journal_entries
+           (user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+            entry_date, description, source_type, status)
+         VALUES ($1, $2, $3, 1, 'A', '2026-06-01', 'Direct posted insert', 'manual', 'posted')
+         RETURNING id`,
+        [userId, companyId, fiscalPeriodId],
+      )
+      for (const line of lines) {
+        await client.query(
+          `INSERT INTO public.journal_entry_lines
+             (journal_entry_id, account_number, debit_amount, credit_amount)
+           VALUES ($1, '1930', $2, $3)`,
+          [inserted.rows[0]!.id, storedLineAmount(line.debit_amount), storedLineAmount(line.credit_amount)],
+        )
+      }
+      const accepted = await client
+        .query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+        .then(() => true, () => false)
+
+      expect(accepted).toBe(lineBalance(lines).balanced)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
   })
 })

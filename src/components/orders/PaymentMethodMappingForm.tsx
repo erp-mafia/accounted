@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import {
   SettingsGroup,
   SettingsRow,
@@ -12,8 +13,13 @@ import {
   SettingsInput,
 } from '@/components/settings/SettingsRows'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
-import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
-import type { WebshopPaymentMethodPolicy, WebshopPlatform, WebshopStoreSettings } from '@/types'
+import { DEFAULT_PAYMENT_ACCOUNT, paymentMethodsSeen } from '@/lib/webshop-orders/booking-lines'
+import type {
+  WebshopOrder,
+  WebshopPaymentMethodPolicy,
+  WebshopPlatform,
+  WebshopStoreSettings,
+} from '@/types'
 
 interface PaymentMethodMappingFormProps {
   platform: WebshopPlatform
@@ -39,6 +45,7 @@ export function PaymentMethodMappingForm({
   methods,
 }: PaymentMethodMappingFormProps) {
   const t = useTranslations('webshop_orders')
+  const { canWrite, lockedTitle } = useViewerLock()
   const { toast } = useToast()
   const [saved, setSaved] = useState<Record<string, WebshopPaymentMethodPolicy>>({})
   const [draft, setDraft] = useState<Record<string, DraftPolicy>>({})
@@ -55,22 +62,10 @@ export function PaymentMethodMappingForm({
       `/api/webshop-orders?platform=${platform}&store_scope=${encodeURIComponent(storeScope)}&limit=200`,
     )
       .then((r) => (r.ok ? r.json() : { data: [] }))
-      .then(
-        (json: {
-          data: Array<{ payment_method: string | null; payment_method_title: string | null }>
-        }) => {
-          if (cancelled) return
-          const seen = new Map<string, string | null>()
-          for (const row of json.data ?? []) {
-            if (row.payment_method && !seen.has(row.payment_method)) {
-              seen.set(row.payment_method, row.payment_method_title)
-            }
-          }
-          setDerivedMethods(
-            Array.from(seen.entries()).map(([method, title]) => ({ method, title })),
-          )
-        },
-      )
+      .then((json: { data: WebshopOrder[] }) => {
+        if (cancelled) return
+        setDerivedMethods(paymentMethodsSeen(json.data ?? []))
+      })
       .catch(() => undefined)
     return () => {
       cancelled = true
@@ -185,7 +180,7 @@ export function PaymentMethodMappingForm({
                     setMode(method, e.target.value as 'book' | 'invoice')
                   }
                 }}
-                className="rounded-full border border-border bg-transparent px-3 py-[5px] text-[13px]"
+                className="rounded-md border border-border bg-transparent px-3 py-[5px] text-[13px]"
                 aria-label={t('mapping_mode_aria', { method: title || method })}
               >
                 <option value="unmapped">{t('mapping_mode_unmapped')}</option>
@@ -209,7 +204,7 @@ export function PaymentMethodMappingForm({
       <div className="flex items-center justify-between px-1 pt-3">
         <SettingsRowNote>{t('mapping_note')}</SettingsRowNote>
         {dirty && (
-          <Button size="sm" onClick={save} disabled={saving || invalid}>
+          <Button onClick={save} disabled={!canWrite || saving || invalid} title={lockedTitle}>
             {saving ? t('mapping_saving') : t('mapping_save')}
           </Button>
         )}

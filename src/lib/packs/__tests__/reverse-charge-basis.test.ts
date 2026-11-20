@@ -12,7 +12,7 @@ import { loadPacks } from '@/lib/packs/load'
  * basis series. A reverse-charge pack that books its cost elsewhere (the
  * pre-fix 4010/6540) produces a declaration with VAT but no inköpsvärde,
  * which Skatteverket rejects (felkod FK004; ML 13 kap requires both sides).
- * User report: Anders, 2026-08-25.
+ * User report, 2026-08-25.
  */
 
 const ROOT = path.resolve(__dirname, '../../../..')

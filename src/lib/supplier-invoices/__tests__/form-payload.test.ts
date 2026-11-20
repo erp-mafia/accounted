@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { roundOre } from '@/lib/money'
+import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import {
   buildSupplierInvoicePayload,
   supplierInvoiceCreateUrl,
   inferVatTreatment,
   vatRateFromAi,
   rateToPctString,
+  statedVatFromInvoiceField,
+  reverseChargeKindMissing,
   type SupplierInvoiceFormData,
   type SupplierInvoiceLineItem,
   type BuildSupplierInvoicePayloadOptions,
@@ -32,6 +35,7 @@ function makeFormData(overrides: Partial<SupplierInvoiceFormData> = {}): Supplie
     currency: 'SEK',
     exchange_rate: '',
     reverse_charge: false,
+    reverse_charge_kind: 'eu_services',
     payment_reference: '',
     notes: '',
     payer: 'unpaid',
@@ -51,6 +55,7 @@ function makeOpts(
     oreRounding: true,
     defaultDims: {},
     canUseAccrual: true,
+    euSupplier: false,
     ...overrides,
   }
 }
@@ -126,6 +131,7 @@ describe('buildSupplierInvoicePayload', () => {
       notes: undefined,
       paid_with_private_funds: false,
       ore_rounding: true,
+      default_dimensions: {},
       items: [
         {
           description: 'Lokalhyra augusti',
@@ -138,7 +144,6 @@ describe('buildSupplierInvoicePayload', () => {
     })
     // Conditional keys must be absent, not undefined-valued.
     expect(payload).not.toHaveProperty('document_id')
-    expect(payload).not.toHaveProperty('default_dimensions')
     expect(payload.items[0]).not.toHaveProperty('accrual_period_start')
     expect(payload.items[0]).not.toHaveProperty('dimensions')
     expect(payload.items[0]).not.toHaveProperty('apply_slp')
@@ -245,6 +250,31 @@ describe('buildSupplierInvoicePayload', () => {
     expect(payload.items[1].reverse_charge_rate).toBe(0.25)
   })
 
+  it('sends goods or services only for an EU supplier under reverse charge (crm#1323)', () => {
+    const goods = makeFormData({ reverse_charge: true, reverse_charge_kind: 'eu_goods' })
+    expect(buildSupplierInvoicePayload(goods, makeOpts({ euSupplier: true })).reverse_charge_kind).toBe('eu_goods')
+    expect(
+      buildSupplierInvoicePayload({ ...goods, reverse_charge_kind: 'eu_services' }, makeOpts({ euSupplier: true })).reverse_charge_kind,
+    ).toBe('eu_services')
+    // A Swedish or non-EU supplier, or no reverse charge: the API refuses the field there.
+    expect(buildSupplierInvoicePayload(goods, makeOpts({ euSupplier: false }))).not.toHaveProperty('reverse_charge_kind')
+    expect(
+      buildSupplierInvoicePayload({ ...goods, reverse_charge: false }, makeOpts({ euSupplier: true })),
+    ).not.toHaveProperty('reverse_charge_kind')
+    // Unanswered is never sent as an answer.
+    expect(
+      buildSupplierInvoicePayload({ ...goods, reverse_charge_kind: '' }, makeOpts({ euSupplier: true })),
+    ).not.toHaveProperty('reverse_charge_kind')
+  })
+
+  it('an EU supplier under reverse charge waits for goods or services; nothing else does (crm#1323)', () => {
+    expect(reverseChargeKindMissing({ reverse_charge: true, reverse_charge_kind: '' }, true)).toBe(true)
+    expect(reverseChargeKindMissing({ reverse_charge: true, reverse_charge_kind: 'eu_goods' }, true)).toBe(false)
+    expect(reverseChargeKindMissing({ reverse_charge: true, reverse_charge_kind: 'eu_services' }, true)).toBe(false)
+    expect(reverseChargeKindMissing({ reverse_charge: true, reverse_charge_kind: '' }, false)).toBe(false)
+    expect(reverseChargeKindMissing({ reverse_charge: false, reverse_charge_kind: '' }, true)).toBe(false)
+  })
+
   it('non-RC: reverse_charge_rate is stripped to undefined', () => {
     const payload = buildSupplierInvoicePayload(makeFormData(), makeOpts())
     expect(payload.items[0].reverse_charge_rate).toBeUndefined()
@@ -299,12 +329,15 @@ describe('buildSupplierInvoicePayload', () => {
     expect(payload.items[0].accrual_balance_account).toBeUndefined()
   })
 
-  it('default_dimensions only when non-empty; item bags only when carrying values', () => {
+  it('default_dimensions always as shown, {} included; item bags only when carrying values', () => {
     const bare = buildSupplierInvoicePayload(
       makeFormData({ items: [makeItem({ dimensions: {} })] }),
       makeOpts(),
     )
-    expect(bare).not.toHaveProperty('default_dimensions')
+    // The editor starts from the supplier's default (accounted#144): {} is
+    // the user clearing it, so it must reach the server, which would
+    // otherwise fill the supplier's default back in.
+    expect(bare).toHaveProperty('default_dimensions', {})
     // Open-but-empty per-row panel means inherit: the bag is dropped.
     expect(bare.items[0]).not.toHaveProperty('dimensions')
 
@@ -430,5 +463,44 @@ describe('supplierInvoiceCreateUrl', () => {
     expect(supplierInvoiceCreateUrl('owner', 'item-1')).toBe('/api/supplier-invoices')
     expect(supplierInvoiceCreateUrl('employee', 'item-1')).toBe('/api/supplier-invoices')
     expect(supplierInvoiceCreateUrl('unpaid', null)).toBe('/api/supplier-invoices')
+  })
+})
+
+// crm#1367: the Moms field is the invoice's own VAT. On a single-rate invoice
+// it travels as vat_breakdown when the lines take it, so the registration
+// books the moms the invoice states.
+describe('the invoice moms as vat_breakdown', () => {
+  const lines = [makeItem({ amount: 17564.15 }), makeItem({ amount: -2107.7 })]
+
+  it('statedVatFromInvoiceField names the one rate the charging lines carry', () => {
+    expect(statedVatFromInvoiceField(lines, 3864.11, false)).toEqual([{ rate: 0.25, vatAmount: 3864.11 }])
+    expect(statedVatFromInvoiceField([makeItem(), makeItem({ vat_rate: 0.12 })], 137, false)).toBeNull()
+    expect(statedVatFromInvoiceField([makeItem(), makeItem({ vat_rate: 0, amount: 50 })], 250, false))
+      .toEqual([{ rate: 0.25, vatAmount: 250 }])
+    expect(statedVatFromInvoiceField(lines, null, false)).toBeNull()
+    expect(statedVatFromInvoiceField(lines, 3864.11, true)).toBeNull()
+  })
+
+  it('sends vat_breakdown when the lines take the stated moms', () => {
+    const statedVat = statedVatFromInvoiceField(lines, 3864.12, false)
+    const payload = buildSupplierInvoicePayload(
+      makeFormData({ supplier_id: '550e8400-e29b-41d4-a716-446655440000', items: lines }),
+      makeOpts({ oreRounding: false, statedVat }),
+    )
+    expect(payload.vat_breakdown).toEqual([{ vat_rate: 0.25, vat_amount: 3864.12 }])
+    expect(CreateSupplierInvoiceSchema.safeParse(payload).success).toBe(true)
+  })
+
+  it('leaves vat_breakdown out when the stated moms does not fit, so the server books the summed base', () => {
+    const statedVat = statedVatFromInvoiceField(lines, 3900, false)
+    const payload = buildSupplierInvoicePayload(makeFormData({ items: lines }), makeOpts({ oreRounding: false, statedVat }))
+    expect(payload.vat_breakdown).toBeUndefined()
+  })
+
+  it('rounds the payable to whole kronor from the moms the invoice states', () => {
+    const statedVat = statedVatFromInvoiceField(lines, 3864.12, false)
+    const payload = buildSupplierInvoicePayload(makeFormData({ items: lines }), makeOpts({ oreRounding: true, statedVat }))
+    // 15 456,45 + 3 864,12 = 19 320,57, billed as 19 321: the rounding line takes +0,43.
+    expect(payload.items.at(-1)).toMatchObject({ account_number: '3740', amount: 0.43 })
   })
 })

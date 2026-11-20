@@ -43,19 +43,19 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 const mockPostDueInstallments = vi.fn()
+const mockCancelAbandonedDrafts = vi.fn()
 vi.mock('@/lib/bookkeeping/accruals/service', () => ({
   postDueInstallments: (...args: unknown[]) => mockPostDueInstallments(...args),
+  cancelAbandonedAccrualDrafts: (...args: unknown[]) => mockCancelAbandonedDrafts(...args),
 }))
 
 import { GET } from '../route'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/bookkeeping/accruals/post-due/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 beforeEach(() => {
   vi.clearAllMocks()
   installmentsResult = { data: [], error: null }
+  mockCancelAbandonedDrafts.mockResolvedValue({ cancelled: 0, failed: 0, locked: 0 })
 })
 
 describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
@@ -72,7 +72,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
       .mockResolvedValueOnce({ posted: 2, failed: 0, skipped: 0, errors: [] })
       .mockResolvedValueOnce({ posted: 1, failed: 0, skipped: 0, errors: [] })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
     const json = await response.json()
 
     expect(mockPostDueInstallments).toHaveBeenCalledTimes(2)
@@ -83,6 +83,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
     expect(json.success).toBe(true)
     expect(json.total).toBe(2)
     expect(json.succeeded).toBe(2)
+    expect(json.not_reached).toBe(0)
     expect(json.results).toEqual([
       { companyId: 'company-1', posted: 2, failed: 0, skipped: 0 },
       { companyId: 'company-2', posted: 1, failed: 0, skipped: 0 },
@@ -101,7 +102,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
     }
     mockPostDueInstallments.mockResolvedValue({ posted: 1, failed: 0, skipped: 0, errors: [] })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
     const json = await response.json()
 
     expect(json.success).toBe(true)
@@ -121,7 +122,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
       .mockRejectedValueOnce(new Error('database exploded'))
       .mockResolvedValueOnce({ posted: 1, failed: 0, skipped: 0, errors: [] })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
     const json = await response.json()
 
     expect(json.success).toBe(true)
@@ -131,10 +132,78 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
     expect(mockPostDueInstallments).toHaveBeenCalledTimes(2)
   })
 
+  it('hands each company the run deadline, 240 s after the run began', async () => {
+    installmentsResult = { data: [{ company_id: 'company-1' }], error: null }
+    mockPostDueInstallments.mockResolvedValue({ posted: 1, failed: 0, skipped: 0, errors: [] })
+    const before = Date.now()
+
+    await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
+
+    const options = mockPostDueInstallments.mock.calls[0]![2] as { deadline: number }
+    expect(options.deadline).toBeGreaterThanOrEqual(before + 240_000)
+    expect(options.deadline).toBeLessThanOrEqual(Date.now() + 240_000)
+  })
+
+  it('stops starting companies at the deadline and reports what is left', async () => {
+    installmentsResult = {
+      data: [{ company_id: 'company-1' }, { company_id: 'company-2' }, { company_id: 'company-3' }],
+      error: null,
+    }
+    // The first company uses up the budget and leaves two of its own months.
+    const now = vi.spyOn(Date, 'now')
+    mockPostDueInstallments.mockImplementationOnce(async (_supabase, _companyId, options: { deadline: number }) => {
+      now.mockReturnValue(options.deadline + 1)
+      return { posted: 3, failed: 0, skipped: 0, errors: [], deferred: 2 }
+    })
+
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
+    const json = await response.json()
+    now.mockRestore()
+
+    // Not started, so not posted and not marked as anything: still pending for the next run.
+    expect(mockPostDueInstallments).toHaveBeenCalledTimes(1)
+    expect(json).toMatchObject({ total: 3, succeeded: 1, failed: 0, not_reached: 2, months_deferred: 2 })
+    expect(json.results).toEqual([{ companyId: 'company-1', posted: 3, failed: 0, skipped: 0 }])
+  })
+
+  it('first cancels the drafts killed runs left, in every company, before posting', async () => {
+    installmentsResult = { data: [{ company_id: 'company-1' }], error: null }
+    const order: string[] = []
+    mockCancelAbandonedDrafts.mockImplementation(async () => {
+      order.push('sweep')
+      return { cancelled: 2, failed: 0, locked: 0 }
+    })
+    mockPostDueInstallments.mockImplementation(async () => {
+      order.push('post')
+      return { posted: 1, failed: 0, skipped: 0, errors: [] }
+    })
+
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
+    const json = await response.json()
+
+    expect(order).toEqual(['sweep', 'post'])
+    // Called once for the run, not per company: it covers companies with no month due today.
+    expect(mockCancelAbandonedDrafts).toHaveBeenCalledTimes(1)
+    expect(json.abandoned_drafts_cancelled).toBe(2)
+  })
+
+  it('posts the months when the look for abandoned drafts fails', async () => {
+    installmentsResult = { data: [{ company_id: 'company-1' }], error: null }
+    mockCancelAbandonedDrafts.mockRejectedValue(new Error('statement timeout'))
+    mockPostDueInstallments.mockResolvedValue({ posted: 1, failed: 0, skipped: 0, errors: [] })
+
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
+    const json = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(mockPostDueInstallments).toHaveBeenCalledTimes(1)
+    expect(json).toMatchObject({ success: true, abandoned_drafts_cancelled: 0 })
+  })
+
   it('returns 500 when the due query fails', async () => {
     installmentsResult = { data: null, error: { message: 'boom' } }
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
 
     expect(response.status).toBe(500)
     expect(mockPostDueInstallments).not.toHaveBeenCalled()
@@ -147,7 +216,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
 
     expect(response.status).toBe(401)
     expect(mockPostDueInstallments).not.toHaveBeenCalled()

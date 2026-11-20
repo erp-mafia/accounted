@@ -22,12 +22,18 @@ const GATED: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/declaration/submit' },
   { method: 'PUT', path: '/declaration/lock' },
   { method: 'POST', path: '/agi/submit' },
-  { method: 'POST', path: '/agi/spara' },
-  { method: 'POST', path: '/agi/las' },
-  { method: 'POST', path: '/agi/kontrollera/hu' },
-  { method: 'POST', path: '/agi/kontrollera/iu' },
+  { method: 'POST', path: '/agi/send-for-signing' },
   { method: 'POST', path: '/skattekonto/sync' },
 ]
+
+/** The write-role gate reads company_members; this caller is a member. */
+function memberSupabase() {
+  const membership = {
+    eq: () => membership,
+    maybeSingle: async () => ({ data: { role: 'member' }, error: null }),
+  }
+  return { from: () => ({ select: () => membership }) }
+}
 
 function makeContext(): ExtensionContext {
   return {
@@ -36,7 +42,7 @@ function makeContext(): ExtensionContext {
     extensionId: 'skatteverket',
     requestId: 'req_test',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    supabase: { from: vi.fn() } as any,
+    supabase: memberSupabase() as any,
     emit: vi.fn().mockResolvedValue(undefined),
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() },
     settings: {

@@ -1,7 +1,8 @@
 /**
  * Custom date-range args on the report tools:
- * gnubok_get_income_statement (from_date/to_date) and
- * gnubok_get_balance_sheet (as_of_date). The generators are mocked; under
+ * gnubok_get_income_statement and gnubok_get_general_ledger
+ * (from_date/to_date) and gnubok_get_balance_sheet (as_of_date). The
+ * generators are mocked; under
  * test is the MCP layer: validation (format, inside-period, ordering), the
  * options handoff, the effective-period echo, and the unknown-arg rejection
  * that replaces the old silent ignoring.
@@ -11,16 +12,20 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
+import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { tools } from '../server'
 
 vi.mock('@/lib/reports/income-statement', () => ({ generateIncomeStatement: vi.fn() }))
 vi.mock('@/lib/reports/balance-sheet', () => ({ generateBalanceSheet: vi.fn() }))
+vi.mock('@/lib/reports/general-ledger', () => ({ generateGeneralLedger: vi.fn() }))
 
 const incomeStatement = tools.find((t) => t.name === 'gnubok_get_income_statement')!
 const balanceSheet = tools.find((t) => t.name === 'gnubok_get_balance_sheet')!
+const generalLedger = tools.find((t) => t.name === 'gnubok_get_general_ledger')!
 
 const mockIncomeStatement = vi.mocked(generateIncomeStatement)
 const mockBalanceSheet = vi.mocked(generateBalanceSheet)
+const mockGeneralLedger = vi.mocked(generateGeneralLedger)
 
 const PERIOD_ROW = {
   id: 'fp-1',
@@ -298,5 +303,77 @@ describe('gnubok_get_balance_sheet: as_of_date', () => {
       ),
     ).rejects.toThrow(/Unknown parameter\(s\): to_date/)
     expect(mockBalanceSheet).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-10 session autopsy: date_from/date_to (11 calls) and from_date/to_date
+// (8) were refused on the general ledger, which took a period alone. The
+// generator already took the range (kontoanalys); the tool passes it on.
+describe('gnubok_get_general_ledger: from_date/to_date', () => {
+  it('passes the range to the generator and echoes nothing else for it to read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD_ROW, error: null }) // period info
+    mockGeneralLedger.mockResolvedValueOnce({ accounts: [], period: { start: '2026-03-01', end: '2026-03-31' } } as never)
+
+    const result = (await generalLedger.execute(
+      { period_id: 'fp-1', from_date: '2026-03-01', to_date: '2026-03-31' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { period: { start: string; end: string } }
+
+    expect(mockGeneralLedger).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', undefined, undefined, {
+      fromDate: '2026-03-01',
+      toDate: '2026-03-31',
+    })
+    expect(result.period).toEqual({ start: '2026-03-01', end: '2026-03-31' })
+  })
+
+  it('runs a date of an earlier year against that year when period_id is absent', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'fp-2023', name: '2023', period_start: '2023-01-01', period_end: '2023-12-31' }, error: null })
+    mockGeneralLedger.mockResolvedValueOnce({ accounts: [] } as never)
+
+    await generalLedger.execute({ to_date: '2023-06-30' }, 'company-1', 'user-1', supabase as never)
+
+    expect(mockGeneralLedger).toHaveBeenCalledWith(supabase, 'company-1', 'fp-2023', undefined, undefined, {
+      fromDate: undefined,
+      toDate: '2023-06-30',
+    })
+    expect(findCalls('fiscal_periods', 'lte')).toContainEqual(['period_start', '2023-06-30'])
+  })
+
+  it('refuses a range outside the fiscal period instead of reading another year', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD_ROW, error: null })
+
+    await expect(
+      generalLedger.execute(
+        { period_id: 'fp-1', from_date: '2025-12-01', to_date: '2026-01-31' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/from_date must be within the fiscal period/) })
+    expect(mockGeneralLedger).not.toHaveBeenCalled()
+  })
+
+  it('refuses a period_id this company does not have, instead of an empty ledger', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      generalLedger.execute({ period_id: 'fp-other' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'PERIOD_NOT_FOUND' })
+    expect(mockGeneralLedger).not.toHaveBeenCalled()
+  })
+
+  it('leaves a call without dates as it was: the whole period, no options', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD_ROW, error: null })
+    mockGeneralLedger.mockResolvedValueOnce({ accounts: [] } as never)
+
+    await generalLedger.execute({ period_id: 'fp-1', account_from: '1930', account_to: '1930' }, 'company-1', 'user-1', supabase as never)
+
+    expect(mockGeneralLedger).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', '1930', '1930', undefined)
   })
 })

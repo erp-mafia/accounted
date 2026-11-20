@@ -31,6 +31,13 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { DELETE, GET, PATCH } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 // ── Test data ────────────────────────────────────────────────
 
@@ -67,7 +74,7 @@ describe('DELETE /api/salary/runs/[id]', () => {
     })
 
     enqueueMany([
-      { data: null, error: { message: 'Not found' } }, // salary_runs lookup
+      { data: null }, // salary_runs lookup: no row
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
@@ -98,6 +105,34 @@ describe('DELETE /api/salary/runs/[id]', () => {
     expect(body.error).toContain('utkast')
   })
 
+  it('refuses when the run left draft between the check and the delete (status lock)', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: supabase as never,
+      error: null,
+    })
+
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup sees a draft
+      { data: null, count: 0 },                    // the locked delete matches no row
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('utkast')
+    // The write itself is locked to a draft with no posted verifikat.
+    expect(findCalls('salary_runs', 'eq')).toContainEqual(['status', 'draft'])
+    expect(findCalls('salary_runs', 'is')).toEqual([
+      ['salary_entry_id', null],
+      ['avgifter_entry_id', null],
+      ['vacation_entry_id', null],
+    ])
+  })
+
   it('deletes a draft run and returns success', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     vi.mocked(requireAuth).mockResolvedValue({
@@ -108,7 +143,7 @@ describe('DELETE /api/salary/runs/[id]', () => {
 
     enqueueMany([
       { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
-      { data: null },                              // salary_runs delete (cascade handles children)
+      { data: null, count: 1 },                    // salary_runs delete (cascade handles children)
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
@@ -156,20 +191,55 @@ describe('PATCH /api/salary/runs/[id]', () => {
       body: { payment_date: '2026-07-23' },
     })
     const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toContain('utkast')
+    // The code the v1 PATCH and the MCP update tool answer for the same run
+    // (lib/salary/update-run.ts).
+    expect(body.error.code).toBe('SALARY_RUN_PATCH_NOT_DRAFT')
+    expect(body.error.message).toContain('utkast')
+  })
+
+  it('answers 404 SALARY_RUN_NOT_FOUND for a run outside the company', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authorize(supabase)
+    enqueueMany([{ data: null }])
+
+    const request = createMockRequest('/api/salary/runs/run-1', {
+      method: 'PATCH',
+      body: { notes: 'x' },
+    })
+    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('SALARY_RUN_NOT_FOUND')
+  })
+
+  it('answers a body naming none of the three fields with the run unchanged, writing nothing', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authorize(supabase)
+    enqueueMany([{ data: DRAFT_RUN }])
+
+    const request = createMockRequest('/api/salary/runs/run-1', {
+      method: 'PATCH',
+      body: { status: 'booked' },
+    })
+    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { status: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('draft')
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
   })
 
   it('updates payment_date on a draft and clears roster calculation_breakdown', async () => {
-    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
     authorize(supabase)
 
     enqueueMany([
       { data: DRAFT_RUN }, // lookup
       { data: { ...DRAFT_RUN, payment_date: '2026-07-23' } }, // update
-      { data: null }, // roster calculation_breakdown clear
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
@@ -184,9 +254,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
     // The new date invalidates any existing calculation: skatteavdrag and the
     // AGI redovisningsperiod follow the payment month, and the book preflights
     // refuse roster rows without a breakdown until a recalculation runs.
-    expect(findCall('salary_run_employees', 'update')).toEqual([
-      { calculation_breakdown: null },
-    ])
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, expect.anything(), { salaryRunId: 'run-1' })
   })
 
   it('does not clear calculations when only notes change', async () => {
@@ -218,7 +286,6 @@ describe('PATCH /api/salary/runs/[id]', () => {
     enqueueMany([
       { data: DRAFT_RUN }, // lookup: period 2026-07, paid 2026-07-25
       { data: { ...DRAFT_RUN, payment_date: '2026-08-25' } }, // update
-      { data: null }, // roster calculation_breakdown clear
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
@@ -241,7 +308,6 @@ describe('PATCH /api/salary/runs/[id]', () => {
     enqueueMany([
       { data: { ...DRAFT_RUN, payment_date: '2026-08-05' } }, // period 2026-07, paid in August
       { data: { ...DRAFT_RUN, payment_date: '2026-08-07' } }, // update
-      { data: null }, // roster calculation_breakdown clear
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
@@ -252,7 +318,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
-    expect(findCall('salary_run_employees', 'update')).toEqual([{ calculation_breakdown: null }])
+    expect(findCall('salary_runs', 'update')).toEqual([expect.objectContaining({ payment_date: '2026-08-07' })])
   })
 
   it('rejects an invalid voucher_series value', async () => {
@@ -268,9 +334,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       body: { voucher_series: 'AB' },
     })
     const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
-    const { status } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.message).toBe('Verifikationsserie måste vara en bokstav A-Z')
     expect(findCall('salary_runs', 'update')).toBeUndefined()
   })
 
@@ -288,10 +356,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       body: { payment_date: '2026-07-23' },
     })
     const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toContain('utkast')
+    expect(body.error.code).toBe('SALARY_RUN_PATCH_NOT_DRAFT')
+    expect(body.error.message).toContain('utkast')
     // The clear must not run when the locked update matched nothing.
     expect(findCall('salary_run_employees', 'update')).toBeUndefined()
   })
@@ -303,7 +372,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
 // fire together in a Promise.all, so their from() calls resolve in this order:
 //   1 run, 2 employees, 3 settings (arbetsgivare), 4 previous-run lookup,
 //   [corrected_by lookup when status is 'corrected'], deliveries,
-//   [previous-run employees when found — nested after the lookup's await, so
+//   [previous-run employees when found - nested after the lookup's await, so
 //   it lands last].
 
 const GET_RUN = {
@@ -335,11 +404,11 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     enqueueMany([
       { data: GET_RUN },
       { data: [] }, // employees in this run
-      { data: { org_number: null, entity_type: null } },
+      { data: { org_number: '5566778899', entity_type: 'aktiebolag' } },
       { data: { id: 'run-1', period_year: 2026, period_month: 6 } }, // previous-run lookup
       { data: [] }, // deliveries
       {
-        // previous-run employees — nested after the lookup's await, resolves last
+        // previous-run employees - nested after the lookup's await, resolves last
         data: [
           {
             employee_id: 'emp-1',
@@ -399,6 +468,51 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
 
     expect(status).toBe(200)
     expect(body.data.previous_run).toBeNull()
+  })
+
+  it('names the employer in its 12-digit form for AGI', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: GET_RUN },
+      { data: [] },
+      { data: { org_number: '556677-8899', entity_type: 'aktiebolag' } },
+      { data: null }, // no previous booked run
+      { data: [] }, // deliveries
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-2'),
+      createMockRouteParams({ id: 'run-2' }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { arbetsgivare: string | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.arbetsgivare).toBe('165566778899')
+  })
+
+  it('a number that does not convert leaves the page without an employer, not a 500', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: GET_RUN },
+      { data: [] },
+      { data: { org_number: '12345', entity_type: 'aktiebolag' } },
+      { data: null }, // no previous booked run
+      { data: [] }, // deliveries
+      { data: { org_number: '12345', entity_type: 'aktiebolag' } }, // companies, read after settings
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-2'),
+      createMockRouteParams({ id: 'run-2' }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { arbetsgivare: string | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.arbetsgivare).toBeNull()
   })
 
   it('masks embedded employees: no ciphertext, no personnummer_last4', async () => {

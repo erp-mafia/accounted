@@ -76,6 +76,10 @@ const state = vi.hoisted(() => ({
   // Row returned for user_preferences reads (the auto_logout mint lookup).
   userPreferences: null as null | { auto_logout: boolean },
   userPreferencesError: null as unknown,
+  // Row returned for the bankid_enrichment read in the no-company branch.
+  bankidEnrichment: null as null | { user_id: string },
+  // resolve_active_company calls made through the proxy's client.
+  rpcCalls: 0,
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -130,7 +134,10 @@ vi.mock('@supabase/ssr', () => ({
         listFactors: () => state.listFactors(),
       },
     },
-    rpc: vi.fn(async () => state.company),
+    rpc: vi.fn(async () => {
+      state.rpcCalls += 1
+      return state.company
+    }),
     from: vi.fn((table: string) => {
       const chain: Record<string, unknown> = {}
       const self = new Proxy(chain, {
@@ -153,6 +160,9 @@ vi.mock('@supabase/ssr', () => ({
             return undefined
           }
           if (prop === 'maybeSingle' || prop === 'single') {
+            if (table === 'bankid_enrichment') {
+              return async () => ({ data: state.bankidEnrichment, error: null })
+            }
             return async () => ({
               data:
                 table === 'user_preferences' && !state.userPreferencesError
@@ -204,6 +214,14 @@ import {
   verifySessionTimeoutState,
 } from '@/lib/auth/session-timeout'
 import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
+import { MFA_ASSURANCE_HEADER, verifyNoVerifiedFactor } from '@/lib/auth/mfa-assurance'
+import {
+  ACTIVE_COMPANY_HEADER,
+  signActiveCompany,
+  verifyActiveCompany,
+} from '@/lib/auth/active-company-verdict'
+import { createServerClient } from '@supabase/ssr'
+import { ACCOUNT_DELETION_PATH } from '@/lib/company/no-company-routes'
 
 const ORIGIN = 'http://localhost:3000'
 const SIGNED_IN = { id: 'user-1', app_metadata: {} }
@@ -255,6 +273,8 @@ describe('updateSession redirect destinations', () => {
     state.allowlisted = false
     state.userPreferences = null
     state.userPreferencesError = null
+    state.bankidEnrichment = null
+    state.rpcCalls = 0
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
     process.env.SESSION_TIMEOUT_SECRET = 'middleware-test-secret'
@@ -507,6 +527,43 @@ describe('updateSession redirect destinations', () => {
     })
   })
 
+  describe('anonymous access to the legal documents', () => {
+    it.each(['/terms', '/privacy', '/dpa', '/subprocessors'])(
+      'serves %s without a login bounce',
+      async (path) => {
+        const response = await run(path)
+        expect(response.status).not.toBe(307)
+        expect(locationOf(response)).toBeNull()
+      },
+    )
+
+    it('keeps an unlisted path under a legal prefix protected', async () => {
+      const response = await run('/privacy-settings')
+      expect(response.status).toBe(307)
+      expect(new URL(locationOf(response)!).pathname).toBe('/login')
+    })
+  })
+
+  describe("anonymous access to a reminder's answer link", () => {
+    it('serves /invoice-action/<token> without a login bounce', async () => {
+      const response = await run('/invoice-action/0f3a9c')
+      expect(response.status).not.toBe(307)
+      expect(locationOf(response)).toBeNull()
+    })
+
+    it('serves it to a signed-in user without redirecting away', async () => {
+      state.user = SIGNED_IN
+      const response = await run('/invoice-action/0f3a9c')
+      expect(response.status).not.toBe(307)
+    })
+
+    it('keeps the bare prefix protected', async () => {
+      const response = await run('/invoice-actions')
+      expect(response.status).toBe(307)
+      expect(new URL(locationOf(response)!).pathname).toBe('/login')
+    })
+  })
+
   // ── Site 1: protected-route bounce ────────────────────────────────────
 
   describe('protected route bounce to /login', () => {
@@ -545,6 +602,54 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(response)).toBe(`${ORIGIN}/login`)
     })
 
+    describe('a session the browser brought that has ended', () => {
+      // The session cookie is named after the project (sb-<ref>-auth-token):
+      // these cases run against a project whose ref is `test`.
+      let previousUrl: string | undefined
+      beforeEach(() => {
+        previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+        process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+      })
+      afterEach(() => {
+        if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl
+      })
+
+      it('is named on /login, and the way back is still remembered', async () => {
+        state.authError = { name: 'AuthApiError', code: 'refresh_token_not_found' }
+        state.cookieWrites = [
+          { name: 'sb-test-auth-token', value: '', options: { path: '/', maxAge: 0 } },
+        ]
+
+        const response = await run('/settings/tax?tab=moms', {
+          headers: { cookie: 'sb-test-auth-token=dead' },
+        })
+
+        expect(locationOf(response)).toBe(`${ORIGIN}/login?next=%2Fsettings%2Ftax%3Ftab%3Dmoms&reason=ended`)
+      })
+
+      it('is named for a chunked session cookie and on the root page too', async () => {
+        state.authError = { name: 'AuthApiError', code: 'session_not_found' }
+
+        const response = await run('/', { headers: { cookie: 'sb-test-auth-token.0=part; sb-test-auth-token.1=rest' } })
+
+        expect(locationOf(response)).toBe(`${ORIGIN}/login?reason=ended`)
+      })
+
+      it('is not claimed for a browser that brought no session', async () => {
+        state.authError = { name: 'AuthSessionMissingError' }
+
+        const plain = await run('/settings/tax')
+        // Another cookie of the project's, and another project's session cookie.
+        const otherCookies = await run('/settings/tax', {
+          headers: { cookie: 'gnubok-locale=sv; sb-test-auth-token-code-verifier=pkce; sb-other-auth-token=x' },
+        })
+
+        expect(locationOf(plain)).toBe(`${ORIGIN}/login?next=%2Fsettings%2Ftax`)
+        expect(locationOf(otherCookies)).toBe(`${ORIGIN}/login?next=%2Fsettings%2Ftax`)
+      })
+    })
+
     it('carries the cookies that clear a dead session', async () => {
       // auth-js removes the session inside getUser() and queues the deletion
       // on the response. Dropping it on the bounce made the browser replay
@@ -567,6 +672,39 @@ describe('updateSession redirect destinations', () => {
       expect(cleared?.value).toBe('')
       expect(cleared?.maxAge).toBe(0)
       expect(response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value).toBe('')
+    })
+
+    it('treats a dead refresh token on an API call as signed out: cookies cleared, the route sees no session', async () => {
+      state.authError = { name: 'AuthApiError', code: 'refresh_token_not_found' }
+      state.cookieWrites = [
+        { name: 'sb-test-auth-token', value: '', options: { path: '/', maxAge: 0 } },
+      ]
+
+      const response = await run('/api/invoices', {
+        headers: { cookie: 'sb-test-auth-token=dead' },
+      })
+
+      // Passed through: the route's own guard answers 401 for the missing session.
+      expect(response.status).toBe(200)
+      expect(response.cookies.get('sb-test-auth-token')?.value).toBe('')
+      expect(response.headers.get('x-middleware-request-cookie') ?? '').not.toContain('dead')
+      expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' })
+    })
+
+    it('logs the refused refresh auth-js reports as one quiet line, not a console error with a stack', () => {
+      const refused = Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), {
+        __isAuthError: true,
+        status: 400,
+        code: 'refresh_token_not_found',
+      })
+
+      // The proxy module routes this one console.error shape to its logger.
+      console.error(refused)
+
+      expect(logState.info).toHaveBeenCalledWith(
+        'refresh token not found; session treated as signed out',
+        { code: 'refresh_token_not_found' },
+      )
     })
 
     it('drops a request path that normalises to a protocol-relative URL', async () => {
@@ -640,6 +778,19 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(response)).toBeNull()
     })
 
+    // The callback holds a hook-built link's token and sends the browser to
+    // /auth/confirm, whose button posts back to the callback with the same
+    // query: both legs must pass for a signed-in user too.
+    it('lets an authenticated email-change link reach the confirm page and post its click', async () => {
+      for (const response of [
+        await run('/auth/confirm?flow=email_change&type=email_change'),
+        await run('/auth/callback?flow=email_change&type=email_change', { method: 'POST' }),
+      ]) {
+        expect(response.status).not.toBe(307)
+        expect(locationOf(response)).toBeNull()
+      }
+    })
+
     // Stock GoTrue links (no Send Email hook) come back through redirect_to
     // with only the flow=email_change marker: ?message= after the first of
     // the two confirmations, ?code= after the completing one, ?error= for a
@@ -667,6 +818,7 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(await run('/auth/callback?token_hash=abc&type=signup'))).toBe(
         `${ORIGIN}/`,
       )
+      expect(locationOf(await run('/auth/confirm?type=signup'))).toBe(`${ORIGIN}/`)
     })
   })
 
@@ -905,12 +1057,22 @@ describe('updateSession redirect destinations', () => {
       expect((await run('/api/invoices', { headers })).status).toBe(403)
     })
 
-    it('does not gate BankID-linked users, nor anyone when MFA is off', async () => {
+    it('does not gate BankID-linked users', async () => {
       state.user = { ...MFA_USER, app_metadata: { bankid_linked: true } }
       expect((await run('/api/invoices')).status).toBe(200)
+    })
 
+    it('still gates an enrolled user when MFA is not required, and lets a factor-less one through', async () => {
+      // The step-up protects whoever enrolled a factor; the flag only forces
+      // enrolment. Production carried the flag as "true\n", which reads as off.
+      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true\n'
       state.user = MFA_USER
+      expect((await run('/api/invoices')).status).toBe(403)
+
       delete process.env.NEXT_PUBLIC_REQUIRE_MFA
+      expect((await run('/api/invoices')).status).toBe(403)
+
+      state.user = SIGNED_IN
       expect((await run('/api/invoices')).status).toBe(200)
     })
 
@@ -923,6 +1085,177 @@ describe('updateSession redirect destinations', () => {
 
       expect(response.status).toBe(403)
       expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
+    })
+
+    // The route's requireAuth takes this verdict instead of a listFactors()
+    // round trip of its own (lib/auth/mfa-assurance.ts).
+    describe('the no-verified-factor verdict for the route', () => {
+      const forwarded = (response: Response) => response.headers.get(`x-middleware-request-${MFA_ASSURANCE_HEADER}`)
+
+      it('signs it for this user and session when the user has no verified factor', async () => {
+        state.user = SIGNED_IN
+        state.cookieWrites = [{ name: 'sb-test-auth-token', value: 'rotated', options: { path: '/' } }]
+
+        const response = await run('/api/invoices')
+
+        expect(response.status).toBe(200)
+        const verdict = forwarded(response)
+        await expect(verifyNoVerifiedFactor(verdict, { userId: 'user-1', sessionId: 'session-1' })).resolves.toBe(true)
+        await expect(verifyNoVerifiedFactor(verdict, { userId: 'user-1', sessionId: 'session-2' })).resolves.toBe(false)
+        // The forwarded request is rebuilt, the rotated cookie with it.
+        expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
+      })
+
+      it('signs none for a user with a verified factor, an escape hatch or a page', async () => {
+        state.jwtAal = 'aal2'
+        expect(forwarded(await run('/api/invoices'))).toBeNull()
+
+        state.user = SIGNED_IN
+        expect(forwarded(await run('/api/account/delete'))).toBeNull()
+        expect(forwarded(await run('/api/v1/companies/c1/invoices', { headers: { authorization: 'Bearer key' } }))).toBeNull()
+        expect(forwarded(await run('/'))).toBeNull()
+      })
+
+      it('signs none without a session id to bind it to', async () => {
+        state.user = SIGNED_IN
+        state.sessionId = null
+        expect(forwarded(await run('/api/invoices'))).toBeNull()
+      })
+
+      it('never forwards a client-sent verdict', async () => {
+        const headers = { [MFA_ASSURANCE_HEADER]: 'forged.verdict' }
+        state.jwtAal = 'aal2'
+        for (const path of ['/api/invoices', '/api/account/delete', '/']) {
+          const response = await run(path, { headers })
+          expect(forwarded(response), path).toBeNull()
+          expect(response.headers.get('x-middleware-override-headers') ?? '', path).not.toContain(MFA_ASSURANCE_HEADER)
+        }
+      })
+    })
+  })
+
+  // ── The active company, resolved once per request (O02) ────────────────
+  // The dashboard render takes this verdict instead of a second
+  // resolve_active_company round trip (lib/auth/active-company-verdict.ts).
+
+  describe('the active-company verdict for the page render', () => {
+    const COMPANY = '0b7c6f6e-2f4a-4c1e-9d55-3a1f0c2b9e10'
+    const OTHER_COMPANY = '5d2e8a41-7c3b-4f0a-8e6d-1b9c4a7f2e33'
+    const forwarded = (response: Response) =>
+      response.headers.get(`x-middleware-request-${ACTIVE_COMPANY_HEADER}`)
+
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      state.company = {
+        data: [{ company_id: COMPANY, locale: 'sv', used_fallback: false }],
+        error: null,
+      }
+    })
+
+    it('vouches for exactly the company it resolved, for this user and session, resolving once', async () => {
+      state.cookieWrites = [{ name: 'sb-test-auth-token', value: 'rotated', options: { path: '/' } }]
+
+      const response = await run('/transactions')
+
+      expect(response.status).toBe(200)
+      expect(state.rpcCalls).toBe(1)
+      const verdict = forwarded(response)
+      await expect(verifyActiveCompany(verdict, { userId: 'user-1', sessionId: 'session-1' })).resolves.toBe(COMPANY)
+      await expect(verifyActiveCompany(verdict, { userId: 'user-1', sessionId: 'session-2' })).resolves.toBeNull()
+      await expect(verifyActiveCompany(verdict, { userId: 'user-2', sessionId: 'session-1' })).resolves.toBeNull()
+      // The forwarded request is rebuilt: the rotated cookie, the pathname
+      // the layout branches on and the company hint all travel as before.
+      expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
+      expect(response.headers.get('x-pathname')).toBe('/transactions')
+      expect(response.cookies.get('gnubok-company-id')?.value).toBe(COMPANY)
+    })
+
+    it('vouches for the fallback company it wrote back, the same one the render would resolve', async () => {
+      state.company = {
+        data: [{ company_id: OTHER_COMPANY, locale: 'sv', used_fallback: true }],
+        error: null,
+      }
+
+      const verdict = forwarded(await run('/'))
+
+      await expect(verifyActiveCompany(verdict, { userId: 'user-1', sessionId: 'session-1' })).resolves.toBe(OTHER_COMPANY)
+    })
+
+    it('vouches for nothing on a Server Action POST, which may switch the company before it renders', async () => {
+      const response = await run('/settings/company', { method: 'POST', headers: { 'next-action': 'abc123' } })
+
+      expect(forwarded(response)).toBeNull()
+    })
+
+    it('vouches for nothing when the resolution failed, found no company, or has no session id to bind to', async () => {
+      state.company = { data: [], error: { code: 'XX000', message: 'boom' } }
+      expect(forwarded(await run('/transactions'))).toBeNull()
+
+      state.company = { data: [{ company_id: null, locale: 'sv', used_fallback: true }], error: null }
+      expect(forwarded(await run('/settings/account'))).toBeNull()
+
+      state.company = { data: [{ company_id: COMPANY, locale: 'sv', used_fallback: false }], error: null }
+      state.sessionId = null
+      expect(forwarded(await run('/transactions'))).toBeNull()
+    })
+
+    it('leaves API routes to resolve the company themselves, as before', async () => {
+      const response = await run('/api/invoices')
+
+      expect(state.rpcCalls).toBe(0)
+      expect(forwarded(response)).toBeNull()
+    })
+
+    it('never forwards a client-sent verdict, even a validly signed one', async () => {
+      // A verdict this deployment really signed, replayed by the client.
+      const replayed = await signActiveCompany({ userId: 'user-1', sessionId: 'session-1', companyId: OTHER_COMPANY })
+      const headers = { [ACTIVE_COMPANY_HEADER]: replayed! }
+      for (const [path, init] of [
+        ['/settings/company', { method: 'POST', headers }],
+        ['/api/invoices', { headers }],
+        ['/invite/abc', { headers }],
+      ] as const) {
+        const response = await run(path, init)
+        expect(forwarded(response), path).toBeNull()
+        expect(response.headers.get('x-middleware-override-headers') ?? '', path).not.toContain(ACTIVE_COMPANY_HEADER)
+      }
+      // On a page GET the proxy's own verdict replaces it.
+      const page = await run('/transactions', { headers })
+      await expect(verifyActiveCompany(forwarded(page), { userId: 'user-1', sessionId: 'session-1' })).resolves.toBe(COMPANY)
+    })
+  })
+
+  describe('public API endpoints that never read the session', () => {
+    it('get no Supabase client, no auth round trip and no cookie writes', async () => {
+      state.user = SIGNED_IN
+      state.cookieWrites = [{ name: 'sb-test-auth-token', value: 'rotated', options: { path: '/' } }]
+
+      for (const path of ['/api/version', '/api/health', '/api/log']) {
+        vi.mocked(createServerClient).mockClear()
+        const response = await run(path, {
+          headers: {
+            cookie: 'sb-test-auth-token=current',
+            [MFA_ASSURANCE_HEADER]: 'forged.verdict',
+            [ACTIVE_COMPANY_HEADER]: 'forged.verdict.x',
+          },
+        })
+
+        expect(response.status, path).toBe(200)
+        expect(createServerClient, path).not.toHaveBeenCalled()
+        expect(response.cookies.getAll(), path).toEqual([])
+        expect(response.headers.get(`x-middleware-request-${MFA_ASSURANCE_HEADER}`), path).toBeNull()
+        expect(response.headers.get(`x-middleware-request-${ACTIVE_COMPANY_HEADER}`), path).toBeNull()
+      }
+    })
+
+    it('keeps the full session handling on every other API path, look-alikes included', async () => {
+      state.user = SIGNED_IN
+
+      for (const path of ['/api/versions', '/api/version/history', '/api/health-report', '/api/auth/heartbeat']) {
+        vi.mocked(createServerClient).mockClear()
+        await run(path)
+        expect(createServerClient, path).toHaveBeenCalledTimes(1)
+      }
     })
   })
 
@@ -969,6 +1302,63 @@ describe('updateSession redirect destinations', () => {
       const response = await run('/')
 
       expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
+    })
+  })
+
+  // ── No-company branch: the way out to account deletion (crm#1042) ─────
+
+  describe('a user who deleted their last company', () => {
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      state.company = {
+        data: [{ company_id: null, locale: 'sv', used_fallback: true }],
+        error: null,
+      }
+    })
+
+    it('reaches the delete-account page and Profil instead of onboarding', async () => {
+      // Deleting the account requires owning no companies, so this user is
+      // company-less by construction. The action lives on Säkerhet since
+      // #3010; an allowlist naming only Profil bounced them to onboarding.
+      for (const path of [ACCOUNT_DELETION_PATH, '/settings/account']) {
+        const response = await run(path)
+        expect(response.status).toBe(200)
+        expect(locationOf(response)).toBeNull()
+      }
+    })
+
+    it('still sends company pages to onboarding', async () => {
+      const response = await run('/settings/company')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
+    })
+  })
+
+  // ── BankID landing (crm#1034): '/' decides, the picker is for no company ─
+
+  describe('landing after a BankID login', () => {
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      // The login stored CompanyRoles for this user.
+      state.bankidEnrichment = { user_id: 'user-1' }
+    })
+
+    it('sends a user without a company on to the BankID picker', async () => {
+      state.company = {
+        data: [{ company_id: null, locale: 'sv', used_fallback: false }],
+        error: null,
+      }
+
+      const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/select-company')
+    })
+
+    it('opens the active company for a user who has one, whatever the BankID roles say', async () => {
+      const response = await run('/')
+
+      expect(response.status).toBe(200)
+      expect(locationOf(response)).toBeNull()
     })
   })
 
@@ -1226,6 +1616,8 @@ describe('updateSession redirect destinations', () => {
   describe('per-request timing header and log line', () => {
     const TIMING_RE =
       /^mw-auth;dur=\d+, mw-session;dur=\d+, mw-company;dur=\d+, mw-mfa;dur=\d+, mw-total;dur=\d+$/
+    // The proxy only logs an /api call that carries a session cookie.
+    const SESSION_COOKIE = 'sb-test-auth-token=x'
 
     function lastLog() {
       expect(logState.info).toHaveBeenCalledTimes(1)
@@ -1260,10 +1652,19 @@ describe('updateSession redirect destinations', () => {
 
     it('/api responses use X-Proxy-Timing and leave Server-Timing to the route wrapper', async () => {
       state.user = SIGNED_IN
-      const res = await run('/api/settings')
+      const res = await run('/api/settings', { headers: { cookie: SESSION_COOKIE } })
       expect(res.headers.get('x-proxy-timing')).toMatch(TIMING_RE)
       expect(res.headers.get('server-timing')).toBeNull()
       expect(lastLog().kind).toBe('api')
+    })
+
+    it('writes no line for a sessionless /api call (a Bearer MCP call), still sends the header', async () => {
+      const res = await run('/api/extensions/ext/mcp-server/mcp', {
+        method: 'POST',
+        headers: { authorization: 'Bearer gnubok_sk_test' },
+      })
+      expect(res.headers.get('x-proxy-timing')).toMatch(TIMING_RE)
+      expect(logState.info.mock.calls.filter(([msg]) => msg === 'proxy completed')).toHaveLength(0)
     })
 
     it('redirect responses also carry the header and log their status', async () => {
@@ -1271,6 +1672,57 @@ describe('updateSession redirect destinations', () => {
       expect(res.status).toBe(307)
       expect(res.headers.get('server-timing')).toMatch(TIMING_RE)
       expect(lastLog().status).toBe(307)
+    })
+
+    it('Vercel production keeps the numbers in the log line but sends no timing header', async () => {
+      try {
+        vi.stubEnv('VERCEL_ENV', 'production')
+        vi.stubEnv('EXPOSE_TIMING_HEADERS', undefined)
+        state.user = SIGNED_IN
+        const page = await run('/invoices')
+        expect(page.status).toBe(200)
+        expect(page.headers.get('server-timing')).toBeNull()
+        expect(page.headers.get('x-proxy-timing')).toBeNull()
+        const ctx = lastLog()
+        expect(ctx.kind).toBe('page')
+        expect(typeof ctx.totalMs).toBe('number')
+        expect(typeof ctx.authMs).toBe('number')
+        expect(typeof ctx.companyMs).toBe('number')
+        logState.info.mockClear()
+
+        const api = await run('/api/settings', { headers: { cookie: SESSION_COOKIE } })
+        expect(api.headers.get('x-proxy-timing')).toBeNull()
+        expect(api.headers.get('server-timing')).toBeNull()
+        expect(lastLog().kind).toBe('api')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('a self-hosted production server (NODE_ENV only) sends no timing header either', async () => {
+      try {
+        vi.stubEnv('VERCEL_ENV', undefined)
+        vi.stubEnv('EXPOSE_TIMING_HEADERS', undefined)
+        vi.stubEnv('NODE_ENV', 'production')
+        const res = await run('/invoices')
+        expect(res.status).toBe(307)
+        expect(res.headers.get('server-timing')).toBeNull()
+        expect(lastLog().status).toBe(307)
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('EXPOSE_TIMING_HEADERS=true brings the header back in production', async () => {
+      try {
+        vi.stubEnv('VERCEL_ENV', 'production')
+        vi.stubEnv('EXPOSE_TIMING_HEADERS', 'true')
+        state.user = SIGNED_IN
+        const res = await run('/invoices')
+        expect(res.headers.get('server-timing')).toMatch(TIMING_RE)
+      } finally {
+        vi.unstubAllEnvs()
+      }
     })
 
     it('never logs a token-carrying path or a raw entity id', async () => {
@@ -1284,9 +1736,28 @@ describe('updateSession redirect destinations', () => {
     })
   })
 
-  describe('MFA-disabled and self-hosted paths are unchanged', () => {
-    it('does not redirect when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
+  describe('MFA-disabled and self-hosted paths', () => {
+    it('steps up an enrolled user even when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
       state.user = MFA_USER
+      state.jwtAal = 'aal1'
+
+      const response = await run('/settings/tax')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/mfa/verify')
+    })
+
+    it('does not force enrolment when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
+      state.user = SIGNED_IN
+      state.jwtAal = 'aal1'
+
+      const response = await run('/settings/tax')
+
+      expect(response.status).toBe(200)
+    })
+
+    it('does not force enrolment under the unreadable production value "true\\n"', async () => {
+      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true\n'
+      state.user = SIGNED_IN
       state.jwtAal = 'aal1'
 
       const response = await run('/settings/tax')
@@ -1313,6 +1784,103 @@ describe('updateSession redirect destinations', () => {
       const response = await run('/settings/tax')
 
       expect(response.status).toBe(200)
+    })
+  })
+
+  describe('server-held session cookie attributes (CASA 2.3.1/2.3.2)', () => {
+    function sessionCookieValue(expiresAt: number): string {
+      const json = JSON.stringify({ access_token: 'a.b.c', refresh_token: 'r', expires_at: expiresAt })
+      return `base64-${btoa(json).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')}`
+    }
+
+    it('hands @supabase/ssr HttpOnly, SameSite=Lax session cookie options', async () => {
+      const { createServerClient } = await import('@supabase/ssr')
+      state.user = SIGNED_IN
+
+      await run('/settings/tax')
+
+      const options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as {
+        cookieOptions?: Record<string, unknown>
+      }
+      expect(options.cookieOptions).toMatchObject({ httpOnly: true, sameSite: 'lax', path: '/' })
+    })
+
+    it('marks the session cookie Secure when the request arrived over https', async () => {
+      const { createServerClient } = await import('@supabase/ssr')
+      state.user = SIGNED_IN
+
+      await runAt('https://app.accounted.se', '/settings/tax')
+
+      const options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as {
+        cookieOptions?: Record<string, unknown>
+      }
+      expect(options.cookieOptions).toMatchObject({ httpOnly: true, secure: true })
+    })
+
+    it('rewrites a pre-HttpOnly session cookie once, keeping the session', async () => {
+      const previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+      process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
+      try {
+        state.user = SIGNED_IN
+        const value = sessionCookieValue(Math.floor(Date.now() / 1000) + 3600)
+
+        const response = await run('/settings/tax', {
+          headers: { cookie: `sb-project-auth-token=${value}` },
+        })
+
+        expect(response.status).toBe(200)
+        const rewritten = response.cookies.get('sb-project-auth-token')
+        expect(rewritten?.value).toBe(value)
+        expect(rewritten?.httpOnly).toBe(true)
+        expect(response.cookies.get('gnubok-session-cookie')?.value).toBeTruthy()
+      } finally {
+        if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl
+      }
+    })
+
+    it('always hands the client the budgeted fetch, and forwards the IP to GoTrue only when a secret key is configured', async () => {
+      const { createServerClient } = await import('@supabase/ssr')
+      const previous = { key: process.env.SUPABASE_SECRET_KEY, url: process.env.NEXT_PUBLIC_SUPABASE_URL }
+      const sent = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response('{}'))
+      vi.stubGlobal('fetch', sent)
+      // What the client's fetch puts on a GoTrue call, read off the request that leaves.
+      const forwardedFor = async () => {
+        const options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as { global?: { fetch?: typeof fetch } }
+        expect(typeof options.global?.fetch).toBe('function')
+        await options.global!.fetch!('https://project.supabase.co/auth/v1/settings', { method: 'GET' })
+        return new Headers(sent.mock.calls.at(-1)?.[1]?.headers).get('sb-forwarded-for')
+      }
+      try {
+        process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
+        delete process.env.SUPABASE_SECRET_KEY
+        await run('/api/auth/heartbeat', { headers: { 'x-forwarded-for': '203.0.113.7' } })
+        expect(await forwardedFor()).toBeNull()
+
+        process.env.SUPABASE_SECRET_KEY = 'sb_secret_test-key'
+        await run('/api/auth/heartbeat', { headers: { 'x-forwarded-for': '203.0.113.7' } })
+        expect(await forwardedFor()).toBe('203.0.113.7')
+      } finally {
+        vi.unstubAllGlobals()
+        if (previous.key === undefined) delete process.env.SUPABASE_SECRET_KEY
+        else process.env.SUPABASE_SECRET_KEY = previous.key
+        if (previous.url === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previous.url
+      }
+    })
+
+    it('writes every other proxy cookie HttpOnly (company hint, locale)', async () => {
+      state.user = SIGNED_IN
+
+      const response = await run('/settings/tax', {
+        headers: { cookie: 'gnubok-locale=en' },
+      })
+
+      expect(response.cookies.get('gnubok-company-id')?.httpOnly).toBe(true)
+      expect(response.cookies.get('gnubok-locale')?.httpOnly).toBe(true)
+      for (const header of response.headers.getSetCookie()) {
+        expect(header).toMatch(/HttpOnly/i)
+      }
     })
   })
 })

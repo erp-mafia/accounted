@@ -1,7 +1,8 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { useTranslations } from 'next-intl'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import { AccountNumber } from '@/components/ui/account-number'
 
 export interface DeclarationAccountLine {
@@ -46,6 +47,7 @@ export function DeclarationRutaRow({
   hideWhenZero?: boolean
   formatAmount?: (n: number) => string
 }) {
+  const t = useTranslations('reports')
   const [expanded, setExpanded] = useState(false)
   const panelId = useId()
 
@@ -56,7 +58,7 @@ export function DeclarationRutaRow({
   return (
     <>
       <tr
-        className={`border-b ${hasAccounts ? 'cursor-pointer hover:bg-muted/50 transition-colors' : ''}`}
+        className={`border-b ${hasAccounts ? 'cursor-pointer hover:bg-secondary/35 transition-colors' : ''}`}
         onClick={() => hasAccounts && setExpanded((v) => !v)}
       >
         <td className="py-2">
@@ -65,17 +67,17 @@ export function DeclarationRutaRow({
               type="button"
               aria-expanded={expanded}
               aria-controls={panelId}
-              aria-label={expanded ? `Dölj konton för ${code}` : `Visa konton för ${code}`}
-              className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded-sm align-middle hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={expanded ? t('ruta_hide_accounts', { code }) : t('ruta_show_accounts', { code })}
+              className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded-sm align-middle hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={(e) => {
                 e.stopPropagation()
                 setExpanded((v) => !v)
               }}
             >
               {expanded ? (
-                <ChevronDown className="h-4 w-4" />
+                <ChevronDownIcon className="h-4 w-4" />
               ) : (
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRightIcon className="h-4 w-4" />
               )}
             </button>
           )}
@@ -83,7 +85,7 @@ export function DeclarationRutaRow({
           {label}
           {hasAccounts && (
             <span className="text-xs text-muted-foreground ml-2">
-              ({accounts.length} konton)
+              {t('ruta_account_count', { count: accounts.length })}
             </span>
           )}
         </td>

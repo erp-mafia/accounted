@@ -28,6 +28,7 @@ import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFi
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
+import { parseSwedishAmount } from '@/lib/money'
 
 const LUNAR_DELIMITERS = [',', ';', '\t']
 
@@ -83,16 +84,6 @@ function isLunarHeader(cells: string[]): boolean {
   )
 }
 
-function parseLunarAmount(value: string): number {
-  // Lunar format: "12 345,00" (2026, space thousands) or "1.234,56" (legacy,
-  // period thousands). Strip all whitespace (including NBSP U+00A0 and narrow
-  // NBSP U+202F) and periods, then convert the comma decimal to a period.
-  const cleaned = value.replace(/[\s\u00A0\u202F.]/g, '').replace(',', '.')
-  if (cleaned === '') return NaN
-  // Number() rejects trailing garbage that parseFloat would silently accept
-  const parsed = Number(cleaned)
-  return Number.isFinite(parsed) ? parsed : NaN
-}
 
 export const lunarFormat: BankFileFormat = {
   id: 'lunar',
@@ -165,7 +156,7 @@ export const lunarFormat: BankFileFormat = {
         continue
       }
 
-      const amount = parseLunarAmount(amountStr)
+      const amount = parseSwedishAmount(amountStr) ?? NaN
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
         skippedRows++
@@ -179,7 +170,7 @@ export const lunarFormat: BankFileFormat = {
         continue
       }
 
-      const balance = balanceStr ? parseLunarAmount(balanceStr) : null
+      const balance = balanceStr ? (parseSwedishAmount(balanceStr) ?? NaN) : null
 
       transactions.push({
         date: normalizedDate,

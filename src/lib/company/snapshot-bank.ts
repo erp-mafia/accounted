@@ -1,4 +1,5 @@
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { sameOrgNumber } from '@/lib/invariants/org-number'
 
 /**
  * Extract the company's bankgiro number from the cached TIC company snapshot
@@ -24,7 +25,7 @@ export function bankgiroFromTicSnapshot(
   if (!snapshot || typeof snapshot !== 'object') return null
 
   const snapshotOrg = (snapshot as { orgNumber?: unknown }).orgNumber
-  if (typeof snapshotOrg !== 'string' || !orgNumbersMatch(snapshotOrg, companyOrgNumber)) {
+  if (typeof snapshotOrg !== 'string' || !sameOrgNumber(snapshotOrg, companyOrgNumber)) {
     return null
   }
 
@@ -40,18 +41,3 @@ export function bankgiroFromTicSnapshot(
   return null
 }
 
-/**
- * Digits-only identity compare. Org numbers appear both with and without the
- * hyphen, and enskild firma personnummer both as 10 and century-prefixed 12
- * digits; a 12-vs-10 pair matches on the trailing 10 digits.
- */
-function orgNumbersMatch(a: string, b: string | null | undefined): boolean {
-  if (!b) return false
-  const da = a.replace(/\D/g, '')
-  const db = b.replace(/\D/g, '')
-  if (!da || !db) return false
-  if (da === db) return true
-  if (da.length === 12 && db.length === 10) return da.slice(2) === db
-  if (da.length === 10 && db.length === 12) return da === db.slice(2)
-  return false
-}

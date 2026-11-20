@@ -1,17 +1,56 @@
+---
+audience: developer
+---
+
 # SIE4 Record Type Reference
 
-Complete specification of all SIE4 record types, fields, and rules.
+Complete specification of all SIE4 record types, fields, and rules, per SIE filformat utgåva 4C (2025-08-06).
 
-## Table of contents
-1. [Flag item](#flag-item)
-2. [Identification items](#identification-items)
-3. [Chart of accounts items](#chart-of-accounts-items)
-4. [Dimension and object items](#dimension-and-object-items)
-5. [Balance items](#balance-items)
-6. [Verification and transaction items](#verification-and-transaction-items)
-7. [Control total](#control-total)
-8. [Record ordering](#record-ordering)
-9. [Type availability matrix](#type-availability-matrix)
+
+<!-- toc -->
+**Contents**
+
+- [Spec, file types and subtypes](#spec-file-types-and-subtypes)
+- [Field format rules](#field-format-rules)
+- [Flag item](#flag-item)
+- [Identification items](#identification-items)
+- [Chart of accounts items](#chart-of-accounts-items)
+- [Dimension and object items](#dimension-and-object-items)
+- [Balance items](#balance-items)
+- [Multi-year handling](#multi-year-handling)
+- [Verification and transaction items](#verification-and-transaction-items)
+- [Verification structure example](#verification-structure-example)
+- [Verification series conventions](#verification-series-conventions)
+- [Control total](#control-total)
+- [Record ordering](#record-ordering)
+- [Type availability matrix](#type-availability-matrix)
+
+<!-- /toc -->
+
+## Spec, file types and subtypes
+
+**Current spec**: SIE filformat utgåva 4C (2025-08-06). 4C does not change the file format from 4B (2008); its format clarifications are that a line added and later removed is written as #BTRANS, and that an empty field before a field with a value is written as `""`. CP437 (`#FORMAT PC8`) is still the only allowed character set. SIE-Gruppen's online validator is at https://sietest.sie.se/. SIE 5 is a separate XML format (English labels; can also carry reskontror, asset registers and attached documents). This skill covers SIE 4.
+
+**File extensions**: `.SE` = export, `.SI` = import.
+
+**Five subtypes**:
+- **Type 1**: Closing balances + chart of accounts + SRU codes (tax returns)
+- **Type 2**: Type 1 + monthly period balances (#PSALDO, #PBUDGET)
+- **Type 3**: Type 2 + object-level balances, dimensions
+- **Type 4E**: Export file: Type 1 records + verifications (#VER/#TRANS); period and object balances optional. Used for full transaction exports (audit trail)
+- **Type 4I**: Import file: header (incl. #FNAMN) + verifications; #RAR, #KONTO, #DIM/#OBJEKT optional; no balance records = subsystem import (payroll, POS)
+
+---
+
+## Field format rules
+
+- **Quoting**: Double quotes around fields with spaces. Escape internal quotes as `\"`
+- **Empty fields**: Fields are positional. An empty field before a field with a value is written as `""` (`#VER "" "" 20251216 "Porto"`); trailing empty fields may be left out
+- **Dates**: YYYYMMDD. Periods: YYYYMM
+- **Amounts**: Dot decimal separator, max 2 decimals, no plus sign
+- **Block delimiters**: `{` and `}` each on own line around #TRANS entries in #VER
+- **Object lists**: `{dimension_no "object_no"}` within balance/transaction items
+- **Forward compat**: Readers must ignore unknown labels and unknown trailing fields
 
 ---
 
@@ -58,7 +97,7 @@ Complete specification of all SIE4 record types, fields, and rules.
 - **Additional fields**: acquisition number, activity number (rarely used)
 
 ### #RAR year_no start end
-- **Compulsory**: Types 1-3 and 4E
+- **Compulsory**: Types 1-3 and 4E; optional in 4I
 - **Fields**: year_no (0 = current, -1 = previous, -2 = two years ago), start/end = YYYYMMDD
 - **Both current (0) and previous (-1) year should be present**
 - **Supports broken fiscal years**: `#RAR 0 20240701 20250630`
@@ -110,8 +149,8 @@ Complete specification of all SIE4 record types, fields, and rules.
 ## Chart of accounts items
 
 ### #KONTO account_no name
-- **Compulsory**: Types 1-3, 4E
-- **Rule**: Account numbers must be numeric. All accounts used in the file must be declared.
+- **Compulsory**: Types 1-3, 4E; optional in 4I
+- **Rule**: Account numbers must be numeric. On export, all accounts used in the file must be declared. A 4I file may leave accounts undeclared if they already exist in the receiving program; a declared account missing there is created on import.
 - **Example**: `#KONTO 1510 "Kundfordringar"`
 
 ### #KTYP account_no type
@@ -125,7 +164,7 @@ Complete specification of all SIE4 record types, fields, and rules.
 - **Example**: `#ENHET 4010 "st"`
 
 ### #SRU account sru_code
-- **Compulsory**: Types 1-2
+- **Compulsory**: Types 1-2; optional in 3, 4E and 4I
 - **Rule**: Multiple #SRU entries per account are permitted (one account can map to multiple SRU codes)
 - **Example**: `#SRU 1510 7214`
 
@@ -194,15 +233,25 @@ Complete specification of all SIE4 record types, fields, and rules.
 - **Example**: `#PSALDO 0 202401 3010 {} -42000.00`
 
 ### #PBUDGET year_no period account {obj_list} balance [quantity]
-- **Optional**
+- **Compulsory**: Types 2-3 whenever budget values exist (no budget registered = no records); optional in 4E; not allowed in type 1 or 4I
 - **Structure**: Same as #PSALDO but for budgeted values
+
+---
+
+## Multi-year handling
+
+- `#RAR 0 20240101 20241231` = current fiscal year
+- `#RAR -1 20230101 20231231` = previous year
+- Only one chart of accounts per file (current year's)
+- Broken fiscal years supported: `#RAR 0 20240701 20250630`
+- #PSALDO/#PBUDGET store monthly change (not cumulative), period = YYYYMM
 
 ---
 
 ## Verification and transaction items
 
 ### #VER series verno verdate [vertext] [regdate] [sign]
-- **Type**: 4 only
+- **Type**: 4 only (optional record in both 4E and 4I)
 - **Fields**:
   - series = letter (A, B...), number, or alphanumeric string
   - verno = sequential number within series
@@ -215,7 +264,7 @@ Complete specification of all SIE4 record types, fields, and rules.
   - Then one or more #TRANS lines
   - Then `}` on its own line
   - All verifications within a series must be in ascending verno order
-  - For 4I files, series and verno may be empty (receiver assigns)
+  - For 4I files, series and verno may be empty (receiver assigns). Empty fields before a later value are written as `""`: `#VER "" "" 20251216 "Porto"`
 - **Example**: `#VER A 1 20240115 "Kundfaktura 2024-001" 20240115 "JD"`
 
 ### #TRANS account_no {object_list} amount [transdate] [transtext] [quantity] [sign]
@@ -232,14 +281,49 @@ Complete specification of all SIE4 record types, fields, and rules.
 - **Example**: `#TRANS 1510 {} 12500.00 20240115 "Faktura 2024-001"`
 
 ### #RTRANS (same fields as #TRANS)
-- **Purpose**: Supplementary/corrected transaction
+- **Purpose**: Added transaction line (tillagd transaktionspost), i.e. a line added to the verification after it was first registered
 - **Rule**: Must be immediately followed by an identical #TRANS for backward compatibility
 - **Programs understanding RTRANS**: use RTRANS, ignore following TRANS
 - **Programs not understanding RTRANS**: ignore RTRANS, use TRANS
+- **Balance**: Count the line once. Summing both #RTRANS and its #TRANS breaks the verification balance.
 
 ### #BTRANS (same fields as #TRANS)
-- **Purpose**: Removed/cancelled transaction
+- **Purpose**: Removed transaction line (borttagen transaktionspost)
+- **Rule (clarified in 4C)**: A line that was first added and later removed is written only as #BTRANS
 - **Programs not understanding BTRANS**: simply ignore it
+- **Balance**: #BTRANS lines are not part of the verification balance
+
+---
+
+## Verification structure example
+
+```
+#VER A 1 20240115 "Kundfaktura 2024-001"
+{
+    #TRANS 1510 {} 12500.00
+    #TRANS 2611 {} -2500.00
+    #TRANS 3010 {1 "100" 6 "P01"} -10000.00
+}
+```
+
+Sum: 12500 + (-2500) + (-10000) = 0. Valid.
+
+---
+
+## Verification series conventions
+
+Swedish practice:
+
+- **A** = Huvudserie (main/general)
+- **B** = Automatkonteringar (auto-postings)
+- **F** = Kundfakturor (customer invoices)
+- **I** = Inbetalningar (customer payments)
+- **J** = Bokslutsverifikationer (year-end closing)
+- **L** = Leverantörsfakturor (supplier invoices)
+- **N** = Löner (payroll)
+- **U** = Utbetalningar (supplier payments)
+
+Series and numbering often restart each fiscal year, but some programs run a series across years. Every verification series must be unbroken (BFNAR 2013:2 p. 5.9). 4I import files may have empty series/verno.
 
 ---
 
@@ -251,7 +335,8 @@ Complete specification of all SIE4 record types, fields, and rules.
   1. Near file start: `#KSUMMA` (empty, signals active checksumming)
   2. At file end: `#KSUMMA 1234567890` (the actual CRC-32 value)
 - **Algorithm**: CRC-32 with polynomial EDB88320H, pre-conditioning FFFFFFFF, post-conditioning bit-invert
-- **Excluded from calculation**: whitespace, quote characters, brace characters
+- **Included**: labels and field contents, from the record after the opening #KSUMMA up to (not including) the closing #KSUMMA
+- **Excluded from calculation**: spaces/tabs between fields, the quotes enclosing a field, braces around object lists and #TRANS blocks. For an escaped quote `\"` inside a field, only the quote character counts.
 - **Truncation detection**: If opening KSUMMA exists but closing is missing, file is truncated. Reject.
 - **Encoding caveat**: CRC is calculated on CP437 byte values per spec. If file is actually UTF-8, checksum will not match. Skip validation for non-CP437 files.
 
@@ -259,17 +344,14 @@ Complete specification of all SIE4 record types, fields, and rules.
 
 ## Record ordering
 
-The SIE spec defines a strict ordering:
+The SIE spec (section 5.12) requires four groups in this order; order within a group is free unless a record's description says otherwise:
 
-1. `#FLAGGA` (always first)
+1. `#FLAGGA` (always first; an opening `#KSUMMA` follows directly if checksumming is used)
 2. Identification items (#PROGRAM, #FORMAT, #GEN, #SIETYP, #FNAMN, #ORGNR, #RAR, etc.)
-3. Chart of accounts (#KONTO, #KTYP, #ENHET, #SRU)
-4. Dimensions and objects (#DIM, #UNDERDIM, #OBJEKT)
-5. Balances (#IB, #UB, #OIB, #OUB, #RES, #PSALDO, #PBUDGET)
-6. Verifications (#VER with nested #TRANS)
-7. `#KSUMMA` (closing, if active)
+3. Chart of accounts items (#KONTO, #KTYP, #ENHET, #SRU, #DIM, #UNDERDIM, #OBJEKT)
+4. Balance and verification items (#IB, #UB, #OIB, #OUB, #RES, #PSALDO, #PBUDGET, #VER with nested #TRANS)
 
-Readers should be tolerant of minor ordering deviations but may reject severely out-of-order files.
+The closing `#KSUMMA` comes last. Writers should put balances before verifications by convention. Readers should be tolerant of minor ordering deviations but may reject severely out-of-order files.
 
 ---
 
@@ -282,15 +364,18 @@ Readers should be tolerant of minor ordering deviations but may reject severely 
 | #FORMAT | Required | Required | Required | Required | Required |
 | #GEN | Required | Required | Required | Required | Required |
 | #SIETYP | Implied | Required | Required | Required | Required |
-| #FNAMN | Required | Required | Required | Required | Optional |
-| #RAR | Required | Required | Required | Required | N/A |
-| #KONTO | Required | Required | Required | Required | N/A |
-| #SRU | Required | Required | Optional | Optional | N/A |
+| #FNAMN | Required | Required | Required | Required | Required |
+| #RAR | Required | Required | Required | Required | Optional |
+| #KONTO | Required | Required | Required | Required | Optional |
+| #SRU | Required | Required | Optional | Optional | Optional |
 | #DIM/#OBJEKT | N/A | N/A | Required | Optional | Optional |
 | #IB/#UB | Required | Required | Required | Required | N/A |
 | #RES | Required | Required | Required | Required | N/A |
 | #OIB/#OUB | N/A | N/A | Required | Optional | N/A |
 | #PSALDO | N/A | Required | Required | Optional | N/A |
-| #PBUDGET | N/A | Optional | Optional | Optional | N/A |
-| #VER/#TRANS | N/A | N/A | N/A | Required | Required |
+| #PBUDGET | N/A | Required | Required | Optional | N/A |
+| #VER/#TRANS | N/A | N/A | N/A | Optional | Optional |
+| #RTRANS/#BTRANS | N/A | N/A | N/A | Optional | Optional |
 | #KSUMMA | Optional | Optional | Optional | Optional | Optional |
+
+N/A = the record may not appear in that file type. #ORGNR, #KPTYP, #TAXAR, #VALUTA, #FTYP, #ADRESS and #PROSA are optional in all types. Required balance records (#IB, #UB, #RES, #OIB, #OUB, #PSALDO, #PBUDGET) must be written whenever values exist; zero balances may be omitted (spec 5.17-5.18). Source: SIE filformat 4C, section 6.

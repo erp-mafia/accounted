@@ -1,20 +1,71 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { ensureInitialized } from '@/lib/init'
+import type { Logger } from '@/lib/logger'
 import {
   reprocessInboundPeppolDocuments,
   syncInboundPeppolDocuments,
 } from '@/lib/invoices/peppol-inbound'
 import { deliverPeppolDocumentToInbox } from '@/lib/invoices/peppol-inbox-delivery'
 import {
+  registerGrantedPeppolReceivers,
+  withdrawRevokedPeppolRegistrations,
+} from '@/lib/invoices/peppol-registration'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import {
   getPeppolTransport,
   getPeppolTransportAvailability,
 } from '@/lib/invoices/peppol-transport'
 
-ensureInitialized()
-
 export const maxDuration = 300
+
+/**
+ * The run's budget inside maxDuration, from ctx.startedAt. The listing sync
+ * starts no listing and no document after 150 s. A listing that marks its
+ * page read (Qvalia) is not given up on a fixed clock: it may take until 90 s
+ * before maxDuration, because a page given up early is handed over and never
+ * received. Those 90 s are the read re-listing that finds such a page (60 s,
+ * asked for even past the 150 s deadline) and the archive of what it answers
+ * (30 s); while the access point answers normally the sync has ended long
+ * before. The reprocessing pass then has until 240 s, and its slowest unit
+ * (an XML fetch, 20 s, and one delivery) ends inside 300 s. The second
+ * deadline is what keeps a long listing from starving the rows the archive
+ * already holds; after a listing that ran into its limit the pass starts
+ * nothing, and the next run takes the rows.
+ */
+const SYNC_BUDGET_MS = 150_000
+const REPROCESS_BUDGET_MS = 240_000
+
+/**
+ * The cron cannot receive in this environment. Whether that loses anything
+ * depends on the companies that have receiving switched on (the rows
+ * registerGrantedPeppolReceivers publishes): count them, and report an error
+ * when there are any (accounted#115).
+ */
+async function reportSkipped(log: Logger, reason: string): Promise<void> {
+  try {
+    const { count, error } = await createServiceClientNoCookies()
+      .from('peppol_access')
+      .select('company_id', { count: 'exact', head: true })
+      .eq('status', 'enabled')
+      .eq('receive_enabled', true)
+    if (error) throw new Error(error.message)
+    if (count) {
+      log.error('peppol inbound skipped while companies have receiving on; their e-invoices are not fetched', {
+        alert: true,
+        reason,
+        receivers: count,
+      })
+    } else {
+      log.info('peppol inbound skipped; no company has receiving on', { reason })
+    }
+  } catch (err) {
+    log.error('peppol inbound skipped, and the companies with receiving on could not be counted', err as Error, {
+      alert: true,
+      reason,
+    })
+  }
+}
 
 /**
  * GET /api/peppol/inbound/cron: every 10 minutes.
@@ -31,27 +82,90 @@ export const maxDuration = 300
  * person: documents that became terminal in this run (never retried again,
  * and a received e-invoice under seven-year retention) and real processing
  * failures. Transport hiccups, XML misses under budget and held documents
- * are logged at warn and retried after the backoff.
+ * are logged at warn and retried after the backoff; a document held for hours
+ * reaches the team through the Peppol health digest (peppol-health.ts).
  *
- * Truthful no-op when no access point is switched on in this environment.
+ * Both passes stop at a deadline inside maxDuration and count what they left
+ * (`deferred`); the next run picks it up.
+ *
+ * First, the identifier of every company whose access no longer allows
+ * receiving is withdrawn from the SMP (revoking access only changes our row),
+ * and the identifier of every company newly allowed to receive is published,
+ * a few per run (granting access only changes our row too). Each in its own
+ * try/catch: neither may ever stop the inbound sync.
+ *
+ * Truthful no-op when no access point is switched on in this environment,
+ * and it says so: an error when companies have receiving switched on (their
+ * e-invoices are not being fetched), an info line when none has.
  */
 export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) => {
-  const availability = getPeppolTransportAvailability()
-  const transport = availability.available ? getPeppolTransport(availability.provider) : null
+  const availability = await getPeppolTransportAvailability()
+  const transport = availability.available ? await getPeppolTransport(availability.provider) : null
   if (!transport) {
-    return NextResponse.json({ data: { skipped: true, reason: availability.available ? 'provider_adapter_unavailable' : availability.reason } })
+    const reason = availability.available ? 'provider_adapter_unavailable' : availability.reason
+    await reportSkipped(ctx.log, reason)
+    return NextResponse.json({ data: { skipped: true, reason } })
   }
   if (!transport.listInboundDocuments) {
+    await reportSkipped(ctx.log, 'receiving_unsupported')
     return NextResponse.json({ data: { skipped: true, reason: 'receiving_unsupported' } })
   }
 
   const service = createServiceClientNoCookies()
-  const deliver = (delivery: Parameters<typeof deliverPeppolDocumentToInbox>[1]) =>
-    deliverPeppolDocumentToInbox(service, delivery)
-  const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
+  let withdrawal: Awaited<ReturnType<typeof withdrawRevokedPeppolRegistrations>> | { failed: true }
+  try {
+    withdrawal = await withdrawRevokedPeppolRegistrations({ service, transport })
+    if (withdrawal.withdrawn.length > 0) {
+      ctx.log.info('peppol receiving withdrawn for revoked access', { companyIds: withdrawal.withdrawn })
+    }
+    if (withdrawal.failed.length > 0) {
+      ctx.log.error('peppol receiving withdrawal failed, the identifiers stay published', {
+        alert: true,
+        failed: withdrawal.failed,
+      })
+    }
+  } catch (err) {
+    ctx.log.error('peppol receiving withdrawal failed', err as Error, { alert: true })
+    withdrawal = { failed: true }
+  }
+
+  let registration: Awaited<ReturnType<typeof registerGrantedPeppolReceivers>> | { failed: true }
+  try {
+    registration = await registerGrantedPeppolReceivers({ service, transport })
+    if (registration.registered.length > 0) {
+      ctx.log.info('peppol receiving registered for granted access', { companyIds: registration.registered })
+    }
+    if (registration.failed.length > 0) {
+      ctx.log.error('peppol receiving registration failed for granted access', {
+        alert: true,
+        failed: registration.failed,
+      })
+    }
+  } catch (err) {
+    ctx.log.error('peppol receiving registration failed', err as Error, { alert: true })
+    registration = { failed: true }
+  }
+
+  // Each delivered e-invoice is checked against the bank at once (match on
+  // arrival): a payment already in the bank becomes a proposal on the item.
+  const deliver = async (delivery: Parameters<typeof deliverPeppolDocumentToInbox>[1]) => {
+    const delivered = await deliverPeppolDocumentToInbox(service, delivery)
+    if (delivered.inboxItemId) await proposeBankMatchForInboxItem(service, delivery.companyId, delivered.inboxItemId, ctx.log)
+    return delivered
+  }
+  const summary = await syncInboundPeppolDocuments({
+    service,
+    transport,
+    deliver,
+    log: ctx.log,
+    deadline: ctx.startedAt + SYNC_BUDGET_MS,
+    functionEndsAt: ctx.startedAt + maxDuration * 1000,
+  })
   ctx.log.info('peppol inbound sync complete', { ...summary, errors: summary.errors.length })
 
-  const reprocess = await reprocessInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
+  const reprocess = await reprocessInboundPeppolDocuments({
+    service, transport, deliver, log: ctx.log, deadline: ctx.startedAt + REPROCESS_BUDGET_MS,
+  })
   ctx.log.info('peppol inbound reprocess complete', {
     ...reprocess,
     terminalDocuments: reprocess.terminalDocuments.length,
@@ -83,7 +197,7 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
       terminalReasons: terminalDocuments.map((d) => `${d.providerDocumentId}: ${d.reason}`),
     })
   }
-  return NextResponse.json({ data: { ...summary, reprocess } })
+  return NextResponse.json({ data: { ...summary, reprocess, withdrawal, registration } })
 })
 
 export const POST = GET

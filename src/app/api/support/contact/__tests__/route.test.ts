@@ -119,7 +119,8 @@ describe('POST /api/support/contact', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { sent: true } })
+    // The reply address goes back to the dialog, which shows it (accounted#55).
+    expect(await response.json()).toEqual({ data: { sent: true, reply_to: 'user@example.test' } })
 
     const sent = sendEmailMock.mock.calls[0][0]
     expect(sent.subject).toBe('[accounted support] Trasig vy')

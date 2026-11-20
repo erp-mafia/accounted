@@ -58,7 +58,8 @@ describe('requireWritePermission', () => {
     if (!result.ok) {
       expect(result.response.status).toBe(403)
       const body = await result.response.json()
-      expect(body.error).toContain('läsbehörighet')
+      expect(body.error).toMatchObject({ code: 'FORBIDDEN', details: { code: 'ROLE_READ_ONLY' } })
+      expect(body.error.message).toContain('läsbehörighet')
     }
   })
 
@@ -189,6 +190,24 @@ describe('getCompanyRole', () => {
     if (!result.ok) {
       expect(result.response.status).toBe(403)
     }
+  })
+
+  it('uses a known company and role without any query (withRouteContext already resolved both)', async () => {
+    const { supabase } = createMockSupabase()
+
+    const result = await getCompanyRole(asClient(supabase), 'user-1', { companyId: 'company-1', role: 'viewer' })
+    expect(result).toEqual({ ok: true, role: 'viewer', companyId: 'company-1' })
+    expect(getActiveCompanyId).not.toHaveBeenCalled()
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('reads the role itself when the known role is undefined (not known is not "none")', async () => {
+    const { supabase, mockResult } = createMockSupabase()
+    mockResult({ data: { role: 'member' } })
+
+    const result = await getCompanyRole(asClient(supabase), 'user-1', { companyId: 'company-1', role: undefined })
+    expect(result).toEqual({ ok: true, role: 'member', companyId: 'company-1' })
+    expect(supabase.from).toHaveBeenCalledWith('company_members')
   })
 
   it('returns 403 when there is no active company', async () => {

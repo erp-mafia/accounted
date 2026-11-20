@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Dialog,
@@ -16,62 +17,80 @@ import {
 } from '@/components/ui/dialog'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Loader2 } from 'lucide-react'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import {
+  RECURRING_LINE_ITEM_TYPES,
+  RECURRING_LINE_LABELS,
+  type RecurringLineItemType,
+} from '@/lib/salary/recurring-lines'
+import { TEXT_ROW_MAX_LENGTH, isTextRow, normalizeTextRow } from '@/lib/salary/text-rows'
+import { isAllowedOverrideAccount, lineAccountOverride } from '@/lib/salary/line-account-override'
+import { LineAccountField } from '@/components/salary/LineAccountField'
+import { BENEFIT_PAYMENT_ITEM_TYPE, PAYMENT_BENEFIT_TYPES } from '@/lib/salary/benefit-payments'
 
-type RecurringLineType =
-  | 'gross_deduction_pension'
-  | 'gross_deduction_other'
-  | 'net_deduction_union'
-  | 'net_deduction_benefit_payment'
-  | 'net_deduction_other'
+/** The benefit picker's "not named" choice: the payslip's only benefit type. */
+const NO_BENEFIT = 'none'
 
 interface EmployeeRecurringLine {
   id: string
-  item_type: RecurringLineType
+  item_type: RecurringLineItemType
   description: string
   amount: number
   account_number: string | null
+  /** On a benefit payment: the benefit it pays for (crm#1492). */
+  benefit_type?: string | null
   valid_from: string
   valid_to: string | null
   metadata: Record<string, unknown>
   is_active: boolean
 }
 
-// Swedish defaults written to the DB when the description is left empty:
-// stored data stays Swedish regardless of the viewer's UI locale.
-const LINE_LABELS: Record<RecurringLineType, string> = {
-  gross_deduction_pension: 'Bruttolöneavdrag pension (löneväxling)',
-  gross_deduction_other: 'Bruttolöneavdrag',
-  net_deduction_union: 'Fackavgift',
-  net_deduction_benefit_payment: 'Nettolöneavdrag förmån',
-  net_deduction_other: 'Nettolöneavdrag',
-}
-
 // In-row text action: same idiom as EmployeeBenefitsPanel.
 const ROW_ACTION_CLASS =
-  'text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground disabled:opacity-50'
+  'text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground disabled:opacity-50'
 
-export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employeeId: string; canWrite: boolean }) {
+export function EmployeeRecurringLinesPanel({
+  employeeId,
+  canWrite,
+  employmentType,
+  personnelCategory,
+}: {
+  employeeId: string
+  canWrite: boolean
+  /** The employee's employment type and personnel category: they decide the default account shown. */
+  employmentType: string
+  personnelCategory: string | null | undefined
+}) {
   const t = useTranslations('salary_employee')
   const { toast } = useToast()
   const [lines, setLines] = useState<EmployeeRecurringLine[]>([])
   const [loading, setLoading] = useState(true)
+  // The list could not be read: say so with "Försök igen" rather than
+  // "no recurring lines", which would be a claim about the employee.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [adding, setAdding] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   // Monotonic request id: a reload issued after a create/delete must not be
   // overwritten by an earlier, slower in-flight load resolving late.
   const loadSeq = useRef(0)
 
-  const [type, setType] = useState<RecurringLineType>('gross_deduction_other')
+  const [type, setType] = useState<RecurringLineItemType>('gross_deduction_other')
   const [description, setDescription] = useState('')
   const [amount, setAmount] = useState('')
-  const [validFrom, setValidFrom] = useState(() => new Date().toISOString().slice(0, 10))
+  const [validFrom, setValidFrom] = useState(() => todayIsoStockholm())
   const [validTo, setValidTo] = useState('')
-
+  // Set when Spara is pressed on a Textrad without text.
+  const [textMissing, setTextMissing] = useState(false)
+  // A Textrad is words only: no amount, and no Swedish default text.
+  const isText = isTextRow({ item_type: type })
+  const [account, setAccount] = useState('')
+  const [benefitType, setBenefitType] = useState<string>(NO_BENEFIT)
+  const [accountInvalid, setAccountInvalid] = useState(false)
 
   async function load() {
     const seq = ++loadSeq.current
@@ -82,9 +101,11 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
         const { data } = await res.json()
         if (seq === loadSeq.current) setLines(data || [])
       }
+      if (seq === loadSeq.current) setLoadFailed(!res.ok)
     } catch {
-      // Network failure: keep whatever is shown; the empty/stale list plus
-      // the still-enabled actions let the user retry.
+      // Network failure: keep whatever is shown; with nothing shown the
+      // section says it could not load, with "Försök igen".
+      if (seq === loadSeq.current) setLoadFailed(true)
     } finally {
       if (seq === loadSeq.current) setLoading(false)
     }
@@ -99,25 +120,45 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
     setType('gross_deduction_other')
     setDescription('')
     setAmount('')
-    setValidFrom(new Date().toISOString().slice(0, 10))
+    setValidFrom(todayIsoStockholm())
     setValidTo('')
+    setTextMissing(false)
+    setAccount('')
+    setAccountInvalid(false)
+    setBenefitType(NO_BENEFIT)
     setAdding(false)
   }
 
   async function handleAdd() {
+    const text = normalizeTextRow(description)
+    if (isText && text === '') {
+      setTextMissing(true)
+      return
+    }
+    // An override only: empty leaves account_number out, so every run books
+    // the line on the default resolved at booking.
+    const accountNumber = lineAccountOverride(type) === 'none' ? '' : account.trim()
+    if (accountNumber && !isAllowedOverrideAccount(type, accountNumber)) {
+      setAccountInvalid(true)
+      return
+    }
     setSubmitting(true)
     try {
-      // The field takes a positive number; every recurring line is a
-      // deduction and is stored negative so the payslip math reads the sign
-      // from the row.
-      const magnitude = Math.abs(parseFloat(amount) || 0)
-      const body: Record<string, unknown> = {
-        item_type: type,
-        description: description || LINE_LABELS[type],
-        amount: -magnitude,
-        valid_from: validFrom,
+      const body: Record<string, unknown> = { item_type: type, valid_from: validFrom }
+      if (type === 'text') {
+        // A text row carries its words and no amount.
+        body.description = text
+      } else {
+        // The field takes a positive number; every other recurring line is
+        // a deduction and is stored negative so the payslip math reads the
+        // sign from the row.
+        const magnitude = Math.abs(parseFloat(amount) || 0)
+        body.description = description || RECURRING_LINE_LABELS[type]
+        body.amount = -magnitude
       }
       if (validTo) body.valid_to = validTo
+      if (accountNumber) body.account_number = accountNumber
+      if (type === BENEFIT_PAYMENT_ITEM_TYPE && benefitType !== NO_BENEFIT) body.benefit_type = benefitType
 
       const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines`, {
         method: 'POST',
@@ -164,17 +205,19 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
       help={<HelpPopover>{t('recurring_help')}</HelpPopover>}
       aside={
         canWrite ? (
-          <Button type="button" size="sm" variant="outline" className="-my-1" onClick={() => setAdding(true)}>
+          <Button type="button" variant="outline" className="-my-1" onClick={() => setAdding(true)}>
             {t('recurring_add')}
           </Button>
         ) : undefined
       }
     >
       {loading ? (
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-2/3" />
-        </div>
+        </LateReveal>
+      ) : loadFailed && lines.length === 0 ? (
+        <LoadError onRetry={() => void load()} />
       ) : lines.filter((l) => l.is_active).length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('recurring_empty')}</p>
       ) : (
@@ -184,29 +227,40 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
               would read as the delete having failed. */}
           {lines.filter((l) => l.is_active).map((l) => {
             const typeLabel = t(`recurring_type_${l.item_type}`)
+            const text = l.item_type === 'text'
             // The description defaults to the Swedish type label when left
             // empty on creation; repeating it next to the type says nothing.
+            // A text row's description is its words, always shown.
             const showDescription =
               !!l.description &&
-              l.description !== typeLabel &&
-              l.description !== LINE_LABELS[l.item_type]
+              (l.item_type === 'text' ||
+                (l.description !== typeLabel && l.description !== RECURRING_LINE_LABELS[l.item_type]))
             return (
               <li key={l.id} className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 py-2">
                 <span className="min-w-0 truncate">
                   {typeLabel}
+                  {l.benefit_type && <>{' · '}{t(`benefits_type_${l.benefit_type}`)}</>}
                   {showDescription && (
                     <span className="text-muted-foreground">{' · '}{l.description}</span>
                   )}
                 </span>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {formatDate(l.valid_from)} → {l.valid_to ? formatDate(l.valid_to) : t('recurring_ongoing')}
+                  {l.account_number && <>{' · '}{t('line_account_short', { account: l.account_number })}</>}
                 </span>
-                <span className="ml-auto tabular-nums">
-                  {formatCurrency(l.amount)}
-                  <span className="text-muted-foreground">{t('recurring_per_month')}</span>
-                </span>
+                {/* A text row has no amount: never "0,00 kr". */}
+                {!text && (
+                  <span className="ml-auto tabular-nums">
+                    {formatCurrency(l.amount)}
+                    <span className="text-muted-foreground">{t('recurring_per_month')}</span>
+                  </span>
+                )}
                 {canWrite && (
-                  <button type="button" onClick={() => handleDelete(l.id)} className={ROW_ACTION_CLASS}>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(l.id)}
+                    className={cn(ROW_ACTION_CLASS, text && 'ml-auto')}
+                  >
                     {t('recurring_remove')}
                   </button>
                 )}
@@ -225,7 +279,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
           if (!open && !submitting) reset()
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('recurring_add')}</DialogTitle>
             <DialogDescription>{t('recurring_help')}</DialogDescription>
@@ -235,42 +289,98 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="recurring_type">{t('recurring_type')}</Label>
-                <Select value={type} onValueChange={(v) => setType(v as RecurringLineType)}>
+                <Select
+                  value={type}
+                  onValueChange={(v) => {
+                    setType(v as RecurringLineItemType)
+                    setTextMissing(false)
+                    // An override picked for the old type need not fit the new one.
+                    setAccount('')
+                    setAccountInvalid(false)
+                    setBenefitType(NO_BENEFIT)
+                  }}
+                >
                   <SelectTrigger id="recurring_type">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {(Object.keys(LINE_LABELS) as RecurringLineType[]).map(k => (
+                    {RECURRING_LINE_ITEM_TYPES.map(k => (
                       <SelectItem key={k} value={k}>{t(`recurring_type_${k}`)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="recurring_description">{t('recurring_description')}</Label>
-                <Input
-                  id="recurring_description"
-                  value={description}
-                  onChange={e => setDescription(e.target.value)}
-                  placeholder={t(`recurring_type_${type}`)}
-                />
-              </div>
+              {!isText && (
+                <div className="space-y-2">
+                  <Label htmlFor="recurring_description">{t('recurring_description')}</Label>
+                  <Input
+                    id="recurring_description"
+                    value={description}
+                    onChange={e => setDescription(e.target.value)}
+                    placeholder={t(`recurring_type_${type}`)}
+                  />
+                </div>
+              )}
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="recurring_amount">{t('recurring_amount_deduction')}</Label>
-              <Input
-                id="recurring_amount"
-                type="number"
-                step="0.01"
-                min="0"
-                value={amount}
-                onChange={e => setAmount(e.target.value)}
-                placeholder={t('recurring_amount_placeholder')}
-                className="max-w-xs"
-              />
-              <p className="text-xs text-muted-foreground">{t('recurring_deduction_hint')}</p>
-            </div>
+            {isText ? (
+              <div className="space-y-2">
+                <Label htmlFor="recurring_text">{t('recurring_text')}</Label>
+                <Textarea
+                  id="recurring_text"
+                  value={description}
+                  onChange={e => {
+                    setDescription(e.target.value)
+                    setTextMissing(false)
+                  }}
+                  placeholder={t('recurring_text_placeholder')}
+                  maxLength={TEXT_ROW_MAX_LENGTH}
+                  required
+                  aria-invalid={textMissing || undefined}
+                />
+                <p
+                  className={textMissing ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}
+                  aria-live="polite"
+                >
+                  {textMissing
+                    ? t('recurring_text_required', { max: TEXT_ROW_MAX_LENGTH })
+                    : t('recurring_text_hint')}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="recurring_amount">{t('recurring_amount_deduction')}</Label>
+                <Input
+                  id="recurring_amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={amount}
+                  onChange={e => setAmount(e.target.value)}
+                  placeholder={t('recurring_amount_placeholder')}
+                  className="max-w-xs"
+                />
+                <p className="text-xs text-muted-foreground">{t('recurring_deduction_hint')}</p>
+              </div>
+            )}
+
+            {type === BENEFIT_PAYMENT_ITEM_TYPE && (
+              <div className="space-y-2">
+                <Label htmlFor="recurring_benefit">{t('recurring_benefit')}</Label>
+                <Select value={benefitType} onValueChange={setBenefitType}>
+                  <SelectTrigger id="recurring_benefit" className="max-w-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_BENEFIT}>{t('recurring_benefit_unnamed')}</SelectItem>
+                    {PAYMENT_BENEFIT_TYPES.map((k) => (
+                      <SelectItem key={k} value={k}>{t(`benefits_type_${k}`)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{t('recurring_benefit_hint')}</p>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -283,12 +393,21 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
               </div>
             </div>
             <p className="text-xs text-muted-foreground">{t('recurring_window_hint')}</p>
+
+            <LineAccountField
+              id="recurring_account"
+              itemType={type}
+              employmentType={employmentType}
+              personnelCategory={personnelCategory}
+              value={account}
+              onChange={(next) => { setAccount(next); setAccountInvalid(false) }}
+              invalid={accountInvalid}
+            />
           </div>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={reset} disabled={submitting}>{t('form_cancel')}</Button>
-            <Button type="button" onClick={handleAdd} disabled={submitting}>
-              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button type="button" onClick={handleAdd} loading={submitting}>
               {t('form_save')}
             </Button>
           </DialogFooter>

@@ -14,12 +14,15 @@
  */
 
 import { unstable_serialize } from 'swr'
-import type { CashAccount, CompanySettings, FiscalPeriod } from '@/types'
+import type { CompanySettings, FiscalPeriod } from '@/types'
+import type { CashAccountWithBank } from '@/lib/cash-accounts/labels'
 import { refKeys } from './keys'
 
 export interface ReferenceSeed {
-  fiscalPeriods: FiscalPeriod[]
-  cashAccounts: CashAccount[]
+  /** `undefined` = the read failed (do not seed); `[]` = the company has none. */
+  fiscalPeriods?: FiscalPeriod[]
+  /** `undefined` = the read failed (do not seed); `[]` = the company has none. */
+  cashAccounts?: CashAccountWithBank[]
   /** `undefined` = not fetched (do not seed); `null` = no settings row yet. */
   settings?: CompanySettings | null
 }
@@ -29,9 +32,14 @@ export function buildReferenceFallback(
   seed: ReferenceSeed,
 ): Record<string, unknown> {
   if (!companyId) return {}
-  const fallback: Record<string, unknown> = {
-    [unstable_serialize(refKeys.fiscalPeriods(companyId))]: seed.fiscalPeriods,
-    [unstable_serialize(refKeys.cashAccounts(companyId))]: seed.cashAccounts,
+  // A seeded key is an answer: the hooks report it as loaded
+  // (lib/reference-data/first-load.ts). So only what was read is seeded.
+  const fallback: Record<string, unknown> = {}
+  if (seed.fiscalPeriods !== undefined) {
+    fallback[unstable_serialize(refKeys.fiscalPeriods(companyId))] = seed.fiscalPeriods
+  }
+  if (seed.cashAccounts !== undefined) {
+    fallback[unstable_serialize(refKeys.cashAccounts(companyId))] = seed.cashAccounts
   }
   if (seed.settings !== undefined) {
     fallback[unstable_serialize(refKeys.companySettings(companyId))] = seed.settings

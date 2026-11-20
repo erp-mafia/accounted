@@ -6,7 +6,6 @@ import {
   defaultCountryForParty,
   getCountryName,
   getCountryOptions,
-  isCountryCode,
   isEuTradeVatPrefix,
   normalizeCountryCode,
   vatNumberCountryPrefix,
@@ -58,14 +57,7 @@ describe('normalizeCountryCode', () => {
   })
 })
 
-describe('isCountryCode / getCountryName / getCountryOptions', () => {
-  it('recognises only an uppercase alpha-2 as already normalised', () => {
-    expect(isCountryCode('SE')).toBe(true)
-    expect(isCountryCode('se')).toBe(false)
-    expect(isCountryCode('Sweden')).toBe(false)
-    expect(isCountryCode(null)).toBe(false)
-  })
-
+describe('getCountryName / getCountryOptions', () => {
   it('renders a code in the requested language and falls back to the value', () => {
     expect(getCountryName('DE', 'sv')).toBe('Tyskland')
     expect(getCountryName('DE', 'en')).toBe('Germany')

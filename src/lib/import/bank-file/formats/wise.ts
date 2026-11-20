@@ -30,24 +30,8 @@ import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFi
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
+import { parseSwedishAmount, roundOre } from '@/lib/money'
 
-/** Money rule: round to two decimals without toFixed. */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
-/**
- * Parse a Wise amount ("2500.0", "520.00", "-2.20"). Wise amounts are plain
- * decimals: optional sign, digits, optional `.` fraction, no thousands
- * separator. Reject anything else: bare parseFloat would silently turn "12abc"
- * into 12 and "1,234" into 1, corrupting the imported amount. NaN = reject.
- */
-function parseWiseAmount(value: string | undefined): number {
-  if (!value) return NaN
-  const cleaned = value.trim()
-  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return NaN
-  return parseFloat(cleaned)
-}
 
 /** Wise datetimes are "YYYY-MM-DD HH:MM:SS"; keep the date part only. */
 function wiseDate(value: string | undefined): string | null {
@@ -180,7 +164,7 @@ export const wiseFormat: BankFileFormat = {
         skippedRows++
         continue
       }
-      const rawAmount = parseWiseAmount(isOut ? at(idx.sourceAmount) : at(idx.targetAmount))
+      const rawAmount = parseSwedishAmount(isOut ? at(idx.sourceAmount) : at(idx.targetAmount)) ?? NaN
 
       const date = wiseDate(at(idx.finishedOn)) || wiseDate(at(idx.createdOn))
       if (!date) {
@@ -202,7 +186,7 @@ export const wiseFormat: BankFileFormat = {
         [counterparty, note].filter(Boolean).join(' - ') || reference || category || 'Wise-transaktion'
 
       // Signed movement: OUT leaves the balance (negative), IN enters it.
-      const amount = round2(isOut ? -Math.abs(rawAmount) : Math.abs(rawAmount))
+      const amount = roundOre(isOut ? -Math.abs(rawAmount) : Math.abs(rawAmount))
 
       transactions.push({
         date,
@@ -225,7 +209,7 @@ export const wiseFormat: BankFileFormat = {
       for (const spec of feeSpecs) {
         const feeRaw = at(spec.amountCol).trim()
         if (!feeRaw) continue // No fee column value: normal, most rows.
-        const fee = parseWiseAmount(feeRaw)
+        const fee = parseSwedishAmount(feeRaw) ?? NaN
         if (fee === 0) continue // Explicit 0.00 fee: nothing to book, no warning.
         if (!Number.isFinite(fee) || fee < 0) {
           issues.push({ row: i + 1, message: `Invalid fee amount "${feeRaw}" on ${wiseId || 'row'}`, severity: 'warning' })
@@ -241,7 +225,7 @@ export const wiseFormat: BankFileFormat = {
         transactions.push({
           date,
           description: `Wise avgift${counterparty ? ` (${counterparty})` : ''}`,
-          amount: round2(-Math.abs(fee)),
+          amount: roundOre(-Math.abs(fee)),
           currency: feeCurrency,
           balance: null,
           reference: reference || null,
@@ -264,8 +248,8 @@ export const wiseFormat: BankFileFormat = {
         total_rows: lines.length - 1,
         parsed_rows: transactions.length,
         skipped_rows: skippedRows,
-        total_income: round2(transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
-        total_expenses: round2(transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0)),
+        total_income: roundOre(transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
+        total_expenses: roundOre(transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0)),
       },
     }
   },

@@ -1,20 +1,34 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { useAccounts } from '@/lib/reference-data/hooks'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { Label } from '@/components/ui/label'
+import { StatusGlyph } from '@/components/ui/status-glyph'
+import {
+  Dialog,
+  DialogConsequence,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { PaymentPreviewLinesCard, usePaymentPreviewEditor } from '@/components/bookkeeping/PaymentPreviewLinesCard'
+import { RegistrationFirstCard, type RegistrationEntryPreview } from '@/components/supplier-invoices/RegistrationFirstCard'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { isInvoiceBookingRateMissing, previewedFxGainSek } from './invoice-match-fx'
 import {
   getInvoiceMatchTargetState,
   getSupplierInvoiceMatchTargetState,
-} from '@/lib/invoices/matchable-statuses'
-import { CheckCircle2, AlertTriangle, Trash2, Plus, Pencil } from 'lucide-react'
+} from '@/lib/bookkeeping/matchable-statuses'
+import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
+import type { PaymentLinePayload, PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'
+import { ORE_ROUNDING_ACCOUNT, parseDecimalInput } from '@/lib/money'
+import { PAYMENT_FEE_ACCOUNT } from '@/lib/bookkeeping/payment-fee'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface DuplicateCandidate {
@@ -32,13 +46,6 @@ interface DuplicateCandidate {
   /** False when the amounts were never compared (mirrors
    *  lib/transactions/booking-duplicate-detection.ts). */
   amount_verified: boolean
-}
-
-interface PreviewLine {
-  account_number: string
-  debit_amount: number
-  credit_amount: number
-  description: string
 }
 
 // Cross-currency conversion info returned by the preview route. When
@@ -59,38 +66,71 @@ type FxConversion =
 
 interface MatchPreview {
   entry_type: 'clearing' | 'cash'
-  lines: PreviewLine[]
+  lines: PaymentPreviewLine[]
   invoice_already_booked: boolean
   accounting_method: 'accrual' | 'cash'
   is_fully_paid: boolean
   fx_conversion?: FxConversion
-}
-
-// String-typed working copy of a line. The amount is a single value plus a
-// side (debit / credit): modeling a verifikationsrad as one positive number
-// with a direction matches how Swedish accountants think and tightens the
-// failure modes (you can't accidentally fill both sides). Conversion back
-// to the server's { debit_amount, credit_amount } shape happens at submit.
-interface EditableLine {
-  account_number: string
-  side: 'debit' | 'credit'
-  amount: string
-  description: string
+  /** Supplier match only: SEK of a bank fee drawn on top of the invoice, booked on 6570. */
+  bank_fee_sek?: number
+  /** Supplier match only: the settled invoice's bag, given to a row the user adds. */
+  document_dimensions?: LineDimensions
+  /**
+   * Supplier match only: an unbooked invoice of a company that books in a
+   * separate step, the registration verifikat the match books first.
+   */
+  registration_entry?: RegistrationEntryPreview | null
+  /**
+   * Customer match only: a SEK payment a krona or more above what the invoice
+   * still owes. `accounts` may take the excess; `account` is the one the
+   * preview was asked for, null until the user picks one (then `lines` is
+   * empty, since the route books the match only with an account named).
+   */
+  overpayment?: { excess: number; accounts: string[]; account: string | null } | null
+  /**
+   * Customer match only: a SEK payment a krona or more short of what the
+   * invoice still owes, by less than a tenth: possibly a payment provider's
+   * fee taken from its payout (crm#1364). `account` is the fee account the
+   * preview was asked for, null until the user names it. `required`: the
+   * payment cannot be booked as a partial instead (kontantmetoden, never
+   * booked), so without the fee there are no rows.
+   */
+  payment_fee?: { fee: number; account: string | null; required: boolean } | null
 }
 
 export interface ConfirmOpts {
   force?: boolean
   expected_journal_entry_id?: string
-  lines?: Array<{
-    account_number: string
-    debit_amount: number
-    credit_amount: number
-    line_description?: string
-  }>
+  lines?: PaymentLinePayload[]
   // Manual SEK-per-invoice-currency override used when Riksbanken's rate
   // for the payment date isn't available; the dialog asks the user to type
   // the rate from their bank statement. Same field flows to the route.
   manual_exchange_rate?: number
+  // Where a customer's excess goes and the excess the preview showed: the
+  // route books exactly that or refuses (MATCH_OVERPAYMENT_CHANGED).
+  overpayment_account?: string
+  overpayment_amount?: number
+  // The payment provider's fee the preview booked on 6570: the route books
+  // exactly that or refuses (MATCH_PAYMENT_FEE_CHANGED).
+  fee_account?: string
+  fee_amount?: number
+  // Supplier match only: reverse the row's own categorization (storno) and
+  // book the payment instead. Sent only from the already-booked soft block.
+  storno_existing?: boolean
+}
+
+/**
+ * The match was refused because the bank row is already booked
+ * (MATCH_SI_TX_ALREADY_BOOKED, MATCH_INVOICE_TX_ALREADY_BOOKED): the verifikat
+ * that books it, whether a supplier match may reverse the row's own
+ * categorization, and the refusal's own sentence in the UI's language, which
+ * says how the row opens again.
+ */
+export interface MatchAlreadyBooked {
+  journalEntryId: string | null
+  voucher: string | null
+  stornoAllowed: boolean
+  message: string
 }
 
 interface InvoiceMatchDialogProps {
@@ -100,25 +140,53 @@ interface InvoiceMatchDialogProps {
   isConfirming: boolean
   onConfirm: (opts?: ConfirmOpts) => void
   onLinkToExisting?: (journalEntryId: string) => void
+  /**
+   * The row pays a krona or more above what the invoice owes: offer to carry
+   * the invoice into the batch allocation, for a payment of several invoices
+   * (PH 192), instead of only the fee or overpayment this match books.
+   */
+  onSplitAcrossInvoices?: () => void
+  /** Set after the match was refused for a booked row: a soft block in place of the confirm. */
+  alreadyBooked?: MatchAlreadyBooked | null
 }
 
-function previewToEditable(line: PreviewLine): EditableLine {
-  const isDebit = line.debit_amount > 0
-  return {
-    account_number: line.account_number,
-    side: isDebit ? 'debit' : 'credit',
-    amount: String(isDebit ? line.debit_amount : line.credit_amount),
-    description: line.description,
-  }
+/** An exchange rate keeps its decimals: it must not be rounded to the öre. */
+function parseRate(s: string): number {
+  return parseDecimalInput(s) ?? 0
 }
 
-function parseAmount(s: string): number {
-  const n = Number(s.replace(',', '.'))
-  return Number.isFinite(n) ? n : 0
+/**
+ * A choice of 2-5 options (Stil v3): a 28px chip on a hairline, the picked
+ * one on the wash. Used as a radio (role="radio" + aria-checked).
+ */
+function choiceChipClass(selected: boolean): string {
+  return cn(
+    'inline-flex h-7 items-center rounded-md px-2.5 text-[13px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
+    selected
+      ? 'bg-secondary text-strong'
+      : 'text-muted-foreground shadow-[inset_0_0_0_0.5px_hsl(var(--line))] hover:bg-secondary/60 hover:text-foreground',
+  )
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
+/** A one-sentence state in the dialog body: the glyph, a title in the strong ink, then the details. */
+function StateLine({
+  tone,
+  title,
+  children,
+}: {
+  tone: 'warning' | 'info' | 'ok' | 'error'
+  title?: ReactNode
+  children?: ReactNode
+}) {
+  return (
+    <div className="flex items-start gap-2 text-[13px] leading-5">
+      <StatusGlyph tone={tone} size={16} className="mt-0.5" />
+      <div className="min-w-0 flex-1 space-y-1">
+        {title && <div className="font-medium text-strong">{title}</div>}
+        {children && <div className="text-muted-foreground">{children}</div>}
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -131,6 +199,8 @@ function round2(n: number): number {
 interface PreviewFailure {
   code: string | null
   message: string | null
+  /** The refusal came from booking the supplier invoice first. */
+  registrationFirst?: boolean
 }
 
 export default function InvoiceMatchDialog({
@@ -140,6 +210,8 @@ export default function InvoiceMatchDialog({
   isConfirming,
   onConfirm,
   onLinkToExisting,
+  onSplitAcrossInvoices,
+  alreadyBooked = null,
 }: InvoiceMatchDialogProps) {
   const t = useTranslations('tx_invoice_match')
   const uiLocale = useLocale() === 'en' ? ('en' as const) : ('sv' as const)
@@ -171,29 +243,45 @@ export default function InvoiceMatchDialog({
   const supplierInvoiceId = transaction?.potential_supplier_invoice?.id ?? null
   const [preview, setPreview] = useState<MatchPreview | null>(null)
   const [previewFailure, setPreviewFailure] = useState<PreviewFailure | null>(null)
-  const [isEditing, setIsEditing] = useState(false)
-  const [editLines, setEditLines] = useState<EditableLine[]>([])
+  // The "Bokföring" rows: read-only, or the user's edited grid (which then books).
+  const editor = usePaymentPreviewEditor(preview?.lines, preview?.document_dimensions)
+  const { stopEditing } = editor
   // Manual SEK-per-invoice-currency rate the user types when Riksbanken has
   // no rate for the payment date. Empty string = no override; on submit it
   // flows through ConfirmOpts.manual_exchange_rate to the route, which
   // re-runs the preview math with the supplied rate.
   const [manualRate, setManualRate] = useState<string>('')
-  // BAS accounts power the AccountCombobox suggestions in edit mode. Loaded
-  // once on dialog open; same endpoint that PaymentBookingDialog uses.
-  const { accounts } = useAccounts()
+  // The account the user picked for a customer's excess of a krona or more.
+  // Never preselected: nothing over the öre band is booked without the user
+  // naming the account (DECISIONS 2026-10-03).
+  const [overpaymentAccount, setOverpaymentAccount] = useState<string | null>(null)
+  // A pick belongs to one transaction and invoice: never carry it to another,
+  // where it would book that match's excess without the user choosing.
+  // The fee account the user named for a payout short of the invoice: never
+  // preselected either, since it settles the invoice in full.
+  const [feeAccount, setFeeAccount] = useState<string | null>(null)
+  // The user's edited rows belong to one match as well.
+  useEffect(() => {
+    setOverpaymentAccount(null)
+    setFeeAccount(null)
+    stopEditing()
+  }, [transactionId, invoiceId, stopEditing])
 
   useEffect(() => {
     if (!open || !transactionId || targetBlocked) {
       setPreview(null)
       setPreviewFailure(null)
-      setIsEditing(false)
-      setEditLines([])
+      stopEditing()
       setManualRate('')
+      setOverpaymentAccount(null)
+      setFeeAccount(null)
       return
     }
     let cancelled = false
     const previewUrl = isCustomerInvoice && invoiceId
-      ? `/api/transactions/${transactionId}/match-invoice/preview?invoice_id=${invoiceId}`
+      ? `/api/transactions/${transactionId}/match-invoice/preview?invoice_id=${invoiceId}` +
+        (overpaymentAccount ? `&overpayment_account=${overpaymentAccount}` : '') +
+        (feeAccount ? `&fee_account=${feeAccount}` : '')
       : isSupplierInvoice && supplierInvoiceId
         ? `/api/transactions/${transactionId}/match-supplier-invoice/preview?supplier_invoice_id=${supplierInvoiceId}`
         : null
@@ -217,11 +305,14 @@ export default function InvoiceMatchDialog({
           // invites an action the server has already decided to reject.
           let failure: PreviewFailure = { code: null, message: null }
           try {
-            const body = (await res.json()) as { error?: { code?: unknown } }
+            const body = (await res.json()) as {
+              error?: { code?: unknown; details?: { registration_first?: unknown } }
+            }
             if (body?.error && typeof body.error === 'object') {
               failure = {
                 code: typeof body.error.code === 'string' ? body.error.code : null,
                 message: getErrorMessage(body, { locale: uiLocale }),
+                registrationFirst: body.error.details?.registration_first === true,
               }
             }
           } catch {
@@ -231,10 +322,7 @@ export default function InvoiceMatchDialog({
           return
         }
         const data = (await res.json()) as MatchPreview
-        if (!cancelled) {
-          setPreview(data)
-          setEditLines(data.lines.map(previewToEditable))
-        }
+        if (!cancelled) setPreview(data)
       } catch {
         if (!cancelled) setPreviewFailure({ code: null, message: null })
       }
@@ -252,14 +340,18 @@ export default function InvoiceMatchDialog({
     supplierInvoiceId,
     targetBlocked,
     uiLocale,
+    overpaymentAccount,
+    feeAccount,
+    stopEditing,
   ])
 
   useEffect(() => {
+    // The supplier match runs the same guard (accounted#58), so the panel
+    // shows for it too; it books anyway only by the force-bound button.
     if (
       !open ||
       !transactionId ||
-      !isCustomerInvoice ||
-      !onLinkToExisting ||
+      !(isSupplierInvoice || (isCustomerInvoice && onLinkToExisting)) ||
       targetBlocked
     ) {
       setCandidate(null)
@@ -270,7 +362,9 @@ export default function InvoiceMatchDialog({
     async function check() {
       setIsCheckingDuplicate(true)
       try {
-        const res = await fetch(`/api/transactions/${transactionId}/duplicate-payment-check`)
+        // The supplier match refuses in its own reading (accounted#58).
+        const side = isSupplierInvoice ? '?side=supplier' : ''
+        const res = await fetch(`/api/transactions/${transactionId}/duplicate-payment-check${side}`)
         if (!res.ok) return
         const data = (await res.json()) as { candidate: DuplicateCandidate | null }
         if (!cancelled) setCandidate(data.candidate ?? null)
@@ -284,29 +378,7 @@ export default function InvoiceMatchDialog({
     return () => {
       cancelled = true
     }
-  }, [open, transactionId, isCustomerInvoice, onLinkToExisting, targetBlocked])
-
-  // Live balance + validity. The dialog disables Confirm while edit mode is
-  // active and the entry is invalid; an out-of-balance entry can't be sent.
-  const editValidation = useMemo(() => {
-    if (!isEditing) return { isBalanced: true, isValid: true, diff: 0, totalDebit: 0, totalCredit: 0, accountInvalid: false }
-    const totalDebit = round2(
-      editLines.filter((l) => l.side === 'debit').reduce((s, l) => s + parseAmount(l.amount), 0),
-    )
-    const totalCredit = round2(
-      editLines.filter((l) => l.side === 'credit').reduce((s, l) => s + parseAmount(l.amount), 0),
-    )
-    const isBalanced = totalDebit === totalCredit && totalDebit > 0
-    const accountInvalid = editLines.some((l) => !/^\d{4}$/.test(l.account_number.trim()))
-    return {
-      isBalanced,
-      accountInvalid,
-      isValid: isBalanced && !accountInvalid,
-      diff: round2(totalDebit - totalCredit),
-      totalDebit,
-      totalCredit,
-    }
-  }, [isEditing, editLines])
+  }, [open, transactionId, isCustomerInvoice, isSupplierInvoice, onLinkToExisting, targetBlocked])
 
   // Cross-currency settlement whose invoice carries no booked exchange rate.
   // The kursvinst/kursförlust is then UNDEFINED, not zero: the SEK value the
@@ -323,121 +395,295 @@ export default function InvoiceMatchDialog({
     previewErrorCode: previewFailure?.code ?? null,
   })
 
-  const handleConfirm = (opts?: { force?: boolean; expected_journal_entry_id?: string }) => {
-    const linesPayload = isEditing && preview && editValidation.isValid
-      ? editLines.map((l) => {
-          const amount = round2(parseAmount(l.amount))
-          return {
-            account_number: l.account_number.trim(),
-            debit_amount: l.side === 'debit' ? amount : 0,
-            credit_amount: l.side === 'credit' ? amount : 0,
-            line_description: l.description?.trim() || undefined,
-          }
-        })
-      : undefined
+  const handleConfirm = (opts?: Pick<ConfirmOpts, 'force' | 'expected_journal_entry_id' | 'storno_existing'>) => {
+    // What the grid holds is what gets booked, each row's bag included.
+    const linesPayload = preview ? editor.payload : undefined
     // Forward manual rate only when the preview indicated Riksbanken
     // failed AND the user typed a value. Same-currency settlements and
     // the auto-fetched cross-currency case both skip this field.
     const fx = preview?.fx_conversion
     const fxNeedsManualRate = fx?.required === true && 'error' in fx
-    const manualRateNum = fxNeedsManualRate ? parseAmount(manualRate) : 0
+    const manualRateNum = fxNeedsManualRate ? parseRate(manualRate) : 0
     const manualRatePayload =
       fxNeedsManualRate && manualRateNum > 0 ? { manual_exchange_rate: manualRateNum } : {}
+    // The account and the excess the preview booked them with.
+    const placed = isCustomerInvoice ? preview?.overpayment : null
+    const overpaymentPayload = placed?.account
+      ? { overpayment_account: placed.account, overpayment_amount: placed.excess }
+      : {}
+    // The fee account and the fee the preview booked them with.
+    const fee = isCustomerInvoice ? preview?.payment_fee : null
+    const feePayload = fee?.account ? { fee_account: fee.account, fee_amount: fee.fee } : {}
     onConfirm({
       ...(opts ?? {}),
       ...(linesPayload ? { lines: linesPayload } : {}),
       ...manualRatePayload,
+      ...overpaymentPayload,
+      ...feePayload,
     })
   }
 
-  const resetEdits = () => {
-    if (preview) setEditLines(preview.lines.map(previewToEditable))
-  }
-
-  const addEditLine = () => {
-    setEditLines((prev) => [...prev, { account_number: '', side: 'debit', amount: '', description: '' }])
-  }
-
-  const removeEditLine = (i: number) => {
-    setEditLines((prev) => prev.filter((_, idx) => idx !== i))
-  }
-
-  const updateEditLine = (i: number, patch: Partial<EditableLine>) => {
-    setEditLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)))
-  }
+  // A customer overpayment whose account the user has not picked yet: the
+  // preview has no rows and the route would refuse the match.
+  const customerOverpayment = isCustomerInvoice ? (preview?.overpayment ?? null) : null
+  const overpaymentUnplaced = !!customerOverpayment && !customerOverpayment.account
+  // A payout short of the invoice by what could be the payment provider's
+  // fee; unplaced while the match books nothing without it.
+  const customerFee = isCustomerInvoice ? (preview?.payment_fee ?? null) : null
+  const feeUnplaced = !!customerFee && customerFee.required && !customerFee.account
 
   const matchTitle = isSupplierInvoice ? t('title_supplier') : t('title_customer')
-  const matchDescription = targetBlocked
-    ? t('description_blocked')
-    : isSupplierInvoice
-      ? t('description_supplier')
-      : t('description_customer')
+
+  // The amount comparison, against what the counterparty STILL OWES
+  // (remaining_amount), not the original invoice.total: otherwise a 1 250 SEK
+  // invoice with a prior 230 SEK partial would show "Differens: 250 kr" when a
+  // 1 000 SEK top-up arrives, instead of the actual 20 kr shortfall. Both
+  // directions read remaining_amount, so the invoice column can never
+  // contradict the comparison under it.
+  const txAbs = transaction ? Math.abs(transaction.amount) : 0
+  const invRemaining = isSupplierInvoice
+    ? (transaction!.potential_supplier_invoice!.remaining_amount ?? transaction!.potential_supplier_invoice!.total)
+    : isCustomerInvoice
+      ? (transaction!.potential_invoice!.remaining_amount ?? transaction!.potential_invoice!.total)
+      : 0
+  const invCurrency = isSupplierInvoice
+    ? transaction!.potential_supplier_invoice!.currency
+    : isCustomerInvoice
+      ? transaction!.potential_invoice!.currency
+      : null
+  // Cross-currency "match" comparison is meaningless without an FX
+  // conversion: the explicit different-currencies note replaces the numeric
+  // check. The committed verifikat is built by
+  // buildInvoicePaymentClearingLines, which posts the FX diff to 3960/7960 so
+  // the books balance even when the on-screen numbers can't be compared.
+  const sameCurrency = !!transaction && transaction.currency === invCurrency
+  const diff = Math.abs(txAbs - invRemaining)
+  const amountsMatch = sameCurrency && diff < 0.01
+  // A sub-krona SEK difference is öresavrundning: the backend books it to
+  // 3740 and settles the invoice in full instead of leaving it delbetald (see
+  // ORE_ROUNDING_SETTLEMENT_MAX). SEK only: keep the 1 kr band in sync with
+  // the server constant.
+  const isOreRounding = sameCurrency && transaction?.currency === 'SEK' && diff >= 0.01 && diff < 1.0
+  // Supplier row that paid more than the invoice (card or transfer fee on
+  // top): the preview books the excess on 6570 and settles the invoice in
+  // full, so this is not a difference to resolve.
+  const bankFeeSek = isSupplierInvoice ? (preview?.bank_fee_sek ?? 0) : 0
+
+  // The same excess is just as often a second invoice paid in the same
+  // transfer: the batch is offered beside the fee or the overpayment.
+  const showSplitLink =
+    !!onSplitAcrossInvoices &&
+    !targetBlocked &&
+    (customerOverpayment
+      ? true
+      : !customerFee && sameCurrency && txAbs - invRemaining >= 1 && !amountsMatch && !isOreRounding)
+
+  // The cross-currency settlement the preview computed: how much of the
+  // invoice the payment covers in the invoice's own currency.
+  const fxConversion = !targetBlocked ? preview?.fx_conversion : undefined
+  const fxRemainingAfter =
+    fxConversion?.required && !('error' in fxConversion) && transaction?.potential_invoice
+      ? Math.max(
+          0,
+          Math.round(
+            ((transaction.potential_invoice.remaining_amount ?? transaction.potential_invoice.total) -
+              fxConversion.paid_in_invoice_currency) *
+              100,
+          ) / 100,
+        )
+      : null
+
+  // What the match does to the invoice, said in the footer only where the
+  // body already states it: the amounts agree, öresavrundning, the supplier's
+  // bank fee, the customer's chosen excess or fee account, a chosen partial,
+  // the FX preview, a supplier payment short of the invoice. Anything else
+  // (hand-edited rows, a customer short outside the fee band) stays neutral.
+  const settlement: 'paid' | 'partial' | null = (() => {
+    if (!transaction || targetBlocked || alreadyBooked || editor.isEdited) return null
+    // The excess and the fee speak once the preview shows the user's choice.
+    if (customerOverpayment) {
+      return customerOverpayment.account && customerOverpayment.account === overpaymentAccount ? 'paid' : null
+    }
+    if (customerFee) {
+      if ((customerFee.account ?? null) !== feeAccount) return null
+      if (customerFee.account) return 'paid'
+      return customerFee.required ? null : 'partial'
+    }
+    if (fxRemainingAfter !== null) return fxRemainingAfter <= 0 ? 'paid' : 'partial'
+    if (!sameCurrency) return null
+    if (amountsMatch || isOreRounding || bankFeeSek > 0) return 'paid'
+    if (isSupplierInvoice && txAbs < invRemaining) return 'partial'
+    return null
+  })()
+  // A choice still to make says so where the rows would be (the booking
+  // section), so the footer stays quiet until there is an outcome to state.
+  const consequence =
+    targetBlocked || alreadyBooked || overpaymentUnplaced || feeUnplaced
+      ? null
+      : isSupplierInvoice && preview?.registration_entry
+        ? t('consequence_registration_first')
+        : settlement === 'paid'
+          ? t('consequence_paid')
+          : settlement === 'partial'
+            ? t('consequence_partial')
+            : t('consequence_book')
+
+  const confirmDisabled =
+    isConfirming ||
+    isCheckingDuplicate ||
+    // A booked row: the plain match is refused again; the soft block's own
+    // button is the only way on.
+    !!alreadyBooked ||
+    // Blocked target: the route rejects this unconditionally, so the button
+    // has no reachable success path.
+    targetBlocked ||
+    // The user's rows, in the grid or kept after Klart, book only once valid.
+    !editor.validation.isValid ||
+    // Block confirm when cross-currency lookup failed and the user hasn't
+    // typed a manual rate yet. Same-currency and auto-rate paths pass through
+    // unaffected.
+    (preview?.fx_conversion?.required === true &&
+      'error' in preview.fx_conversion &&
+      parseRate(manualRate) <= 0) ||
+    // Cross-currency invoice with no booked exchange rate: the FX result of
+    // the settlement is uncomputable, so there is no honest entry to approve
+    // and the POST would reject it with the same
+    // MATCH_INVOICE_BOOKING_RATE_MISSING the preview already returned. A
+    // hand-written entry is still allowed through: the user has then supplied
+    // the numbers themselves rather than approving a fabricated preview.
+    // (Edit mode requires a successful preview to enter, so today this only
+    // relaxes the guard in the defense-in-depth branch of
+    // isInvoiceBookingRateMissing.)
+    (invoiceRateMissing && !(editor.isEdited && editor.validation.isValid)) ||
+    // A customer overpayment books only on the account the user picked, and
+    // only once the preview shows that account's rows.
+    (!!customerOverpayment &&
+      (!customerOverpayment.account || customerOverpayment.account !== overpaymentAccount)) ||
+    // The fee books only once the preview shows the user's choice, and a
+    // required one only once it is named.
+    (!!customerFee && (feeUnplaced || (customerFee.account ?? null) !== feeAccount))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      {/* wide: the Redigera grid of the booking rows needs the 720px. */}
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{matchTitle}</DialogTitle>
-          <DialogDescription>{matchDescription}</DialogDescription>
+          {/* The object as the context line; data-ph-mask: the bank text is user data. */}
+          <DialogDescription data-ph-mask="">
+            {transaction
+              ? `${transaction.description} · ${formatDate(transaction.date)}`
+              : targetBlocked
+                ? t('description_blocked')
+                : null}
+          </DialogDescription>
         </DialogHeader>
 
         {transaction && (isCustomerInvoice || isSupplierInvoice) && (
-          <div className="space-y-4">
-            {/* Duplicate-payment warning: customer-side only, only when a candidate exists */}
-            {!targetBlocked && candidate && isCustomerInvoice && (
-              <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
-                  <div className="text-sm space-y-1">
-                    <p className="font-medium text-attn">{t('duplicate_title')}</p>
-                    {/* candidate.amount is the voucher leg's SEK debit
-                        (duplicate-payment-detection.ts), so it is formatted as
-                        SEK regardless of the transaction's currency: an
-                        11 500 kr leg must never print as "11 500,00 EUR".
-                        The unverified shape (date_window_only) uses copy that
-                        does NOT claim an amount match: the amounts were never
-                        compared (the bank line has no stored SEK value). */}
-                    <p className="text-muted-foreground">
-                      {candidate.reason === 'date_window_only' || candidate.amount_verified === false
-                        ? t('duplicate_body_unverified', {
+          <div className="space-y-5">
+            {/* The row is already booked (accounted#58): matching it too would
+                book the payment twice. A supplier match can reverse the row's
+                own categorization here, by this explicit click; a customer
+                match reverses nothing, so the verifikat opens from here. */}
+            {!targetBlocked && alreadyBooked && (
+              <div className="space-y-2">
+                <StateLine tone="warning" title={t('already_booked_title')}>
+                  {alreadyBooked.message}
+                </StateLine>
+                {alreadyBooked.voucher && alreadyBooked.stornoAllowed && (
+                  <div className="pl-6">
+                    <Button
+                      variant="outline"
+                      onClick={() => handleConfirm({ storno_existing: true })}
+                      disabled={isConfirming || !editor.validation.isValid}
+                    >
+                      {t('already_booked_storno_and_match', { label: alreadyBooked.voucher })}
+                    </Button>
+                  </div>
+                )}
+                {alreadyBooked.journalEntryId && alreadyBooked.voucher && !alreadyBooked.stornoAllowed && (
+                  <div className="pl-6">
+                    <Button variant="outline" asChild>
+                      <a href={`/bookkeeping/${alreadyBooked.journalEntryId}`} target="_blank" rel="noopener noreferrer">
+                        {t('already_booked_open_voucher', { label: alreadyBooked.voucher })}
+                      </a>
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Duplicate-payment warning, only when a candidate exists */}
+            {!targetBlocked && candidate && (isCustomerInvoice || isSupplierInvoice) && (
+              <div className="space-y-2">
+                {/* candidate.amount is the voucher leg's SEK debit
+                    (duplicate-payment-detection.ts), so it is formatted as
+                    SEK regardless of the transaction's currency: an 11 500 kr
+                    leg must never print as "11 500,00 EUR". The unverified
+                    shape (date_window_only) uses copy that does NOT claim an
+                    amount match: the amounts were never compared (the bank
+                    line has no stored SEK value). */}
+                <StateLine tone="warning" title={t('duplicate_title')}>
+                  <p>
+                    {candidate.reason === 'date_window_only' || candidate.amount_verified === false
+                      ? t('duplicate_body_unverified', {
+                          label: candidate.voucher_label,
+                          amount: formatCurrency(candidate.amount, 'SEK'),
+                          date: formatDate(candidate.entry_date),
+                        })
+                      : candidate.reason === 'exact_amount_same_date'
+                        ? t('duplicate_body_same_date', {
+                            label: candidate.voucher_label,
+                            amount: formatCurrency(candidate.amount, 'SEK'),
+                          })
+                        : t('duplicate_body_window', {
                             label: candidate.voucher_label,
                             amount: formatCurrency(candidate.amount, 'SEK'),
                             date: formatDate(candidate.entry_date),
-                          })
-                        : candidate.reason === 'exact_amount_same_date'
-                          ? t('duplicate_body_same_date', {
-                              label: candidate.voucher_label,
-                              amount: formatCurrency(candidate.amount, 'SEK'),
-                            })
-                          : t('duplicate_body_window', {
-                              label: candidate.voucher_label,
-                              amount: formatCurrency(candidate.amount, 'SEK'),
-                              date: formatDate(candidate.entry_date),
-                            })}
+                          })}
+                  </p>
+                  {candidate.description && (
+                    <p className="truncate text-[12px]" data-ph-mask="">
+                      {candidate.description.length > 80
+                        ? `${candidate.description.slice(0, 80).trimEnd()}…`
+                        : candidate.description}
                     </p>
-                    {candidate.description && (
-                      <p className="text-xs text-muted-foreground truncate">
-                        {candidate.description.length > 80
-                          ? `${candidate.description.slice(0, 80).trimEnd()}…`
-                          : candidate.description}
-                      </p>
-                    )}
-                  </div>
-                </div>
-                {onLinkToExisting && (
-                  <div className="flex flex-col sm:flex-row gap-2">
+                  )}
+                </StateLine>
+                {/* Supplier side: linking the bank row alone would leave the
+                    invoice open, so the way to use the verifikat is the
+                    invoice's own "Koppla till verifikation". */}
+                {isSupplierInvoice && (
+                  <div className="space-y-1 pl-6">
+                    <p className="text-[12px] text-muted-foreground">
+                      {t('duplicate_supplier_hint', { label: candidate.voucher_label })}
+                    </p>
                     <Button
-                      variant="default"
-                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        handleConfirm({
+                          force: true,
+                          expected_journal_entry_id: candidate.journal_entry_id,
+                        })
+                      }
+                      disabled={isConfirming || !editor.validation.isValid}
+                      className="-ml-2.5 text-muted-foreground"
+                    >
+                      {t('create_new_anyway')}
+                    </Button>
+                  </div>
+                )}
+                {isCustomerInvoice && onLinkToExisting && (
+                  <div className="flex flex-wrap gap-2 pl-6">
+                    <Button
+                      variant="outline"
                       onClick={() => onLinkToExisting(candidate.journal_entry_id)}
                       disabled={isConfirming}
-                      className="sm:flex-1"
                     >
                       {t('link_to_existing', { label: candidate.voucher_label })}
                     </Button>
                     <Button
                       variant="ghost"
-                      size="sm"
                       onClick={() =>
                         handleConfirm({
                           force: true,
@@ -445,7 +691,6 @@ export default function InvoiceMatchDialog({
                         })
                       }
                       disabled={isConfirming}
-                      className="text-muted-foreground"
                     >
                       {t('create_new_anyway')}
                     </Button>
@@ -454,173 +699,171 @@ export default function InvoiceMatchDialog({
               </div>
             )}
 
-            {/* Transaction details */}
-            <div className="rounded-lg border p-4 space-y-2">
-              <p className="text-sm font-medium text-muted-foreground">{t('transaction_label')}</p>
-              <p className="font-medium">{transaction.description}</p>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">{formatDate(transaction.date)}</span>
-                <span className={`font-medium ${transaction.amount > 0 ? 'text-success' : ''}`}>
+            {/* The bank row and the invoice it pays, side by side: the
+                payment as the headline number, the invoice as one line. Both
+                columns show what is still owed (remaining_amount), never the
+                original total, so the invoice can never contradict the
+                comparison under it. */}
+            <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]" data-ph-mask="">
+              <div className="min-w-0">
+                <div className="text-[12px] font-medium leading-4 text-muted-foreground">{t('transaction_label')}</div>
+                <div
+                  className={cn(
+                    'mt-1 font-display text-2xl tabular-nums',
+                    transaction.amount > 0 ? 'text-success' : 'text-strong',
+                  )}
+                >
                   {transaction.amount > 0 ? '+' : ''}
                   {formatCurrency(transaction.amount, transaction.currency)}
-                </span>
+                </div>
               </div>
+              {isCustomerInvoice ? (
+                <div className="min-w-0">
+                  <div className="text-[12px] font-medium leading-4 text-muted-foreground">{t('invoice_label')}</div>
+                  <div className="mt-1 truncate text-[15px] font-medium leading-7 text-strong">
+                    {t('invoice_number', { number: transaction.potential_invoice!.invoice_number ?? '' })}
+                    {' · '}
+                    {transaction.potential_invoice!.customer?.name || t('unknown_customer')}
+                  </div>
+                  <div className="mt-0.5 text-[12px] leading-4 text-muted-foreground tabular-nums">
+                    {t('invoice_due_remaining', {
+                      date: formatDate(transaction.potential_invoice!.due_date),
+                      amount: formatCurrency(invRemaining, transaction.potential_invoice!.currency),
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="min-w-0">
+                  <div className="text-[12px] font-medium leading-4 text-muted-foreground">{t('supplier_invoice_label')}</div>
+                  <div className="mt-1 truncate text-[15px] font-medium leading-7 text-strong">
+                    {t('invoice_number', { number: transaction.potential_supplier_invoice!.supplier_invoice_number ?? '' })}
+                  </div>
+                  <div className="mt-0.5 text-[12px] leading-4 text-muted-foreground tabular-nums">
+                    {t('supplier_invoice_meta', {
+                      arrival: transaction.potential_supplier_invoice!.arrival_number ?? '',
+                      date: formatDate(transaction.potential_supplier_invoice!.due_date),
+                      amount: formatCurrency(invRemaining, transaction.potential_supplier_invoice!.currency),
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Invoice details. Both branches show remaining_amount (what is
-                still owed) rather than the original total, so a partially-paid
-                invoice displays the actual figure the user is matching against
-                and the card can never contradict the amount comparison below.
-                The supplier branch used to render .total while the comparison
-                measured against remaining_amount: on a partially-paid invoice
-                that put "1 250 kr" on screen next to "Differens: 1 250 kr". */}
-            {isCustomerInvoice && (
-              <div className="rounded-lg border p-4 space-y-2">
-                <p className="text-sm font-medium text-muted-foreground">{t('invoice_label')}</p>
-                <p className="font-medium">
-                  {t('invoice_number', { number: transaction.potential_invoice!.invoice_number ?? '' })}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {transaction.potential_invoice!.customer?.name || t('unknown_customer')}
-                </p>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">
-                    {t('due_date', { date: formatDate(transaction.potential_invoice!.due_date) })}
-                  </span>
-                  <span className="font-medium">
-                    {formatCurrency(
-                      transaction.potential_invoice!.remaining_amount ?? transaction.potential_invoice!.total,
-                      transaction.potential_invoice!.currency,
-                    )}
-                  </span>
+            {/* The comparison, as one state line. A blocked target makes it
+                meaningless: no outcome it describes is reachable. A customer
+                overpayment or a payout short by a provider's fee asks where
+                the difference goes instead of warning about it. */}
+            {targetBlocked ? (
+              <StateLine
+                tone="warning"
+                title={t(targetMatchState === 'settled' ? 'target_settled_title' : 'target_not_open_title')}
+              >
+                {t(targetMatchState === 'settled' ? 'target_settled_description' : 'target_not_open_description')}
+              </StateLine>
+            ) : customerOverpayment ? (
+              <div className="space-y-2">
+                <StateLine
+                  tone="warning"
+                  title={t('customer_overpayment_title', {
+                    amount: formatCurrency(customerOverpayment.excess, 'SEK'),
+                  })}
+                >
+                  {t('customer_overpayment_description')}
+                </StateLine>
+                <div
+                  role="radiogroup"
+                  aria-label={t('customer_overpayment_choose')}
+                  className="flex flex-wrap gap-2 pl-6"
+                >
+                  {customerOverpayment.accounts.map((account) => {
+                    const isRounding = account === ORE_ROUNDING_ACCOUNT
+                    const selected = overpaymentAccount === account
+                    return (
+                      <button
+                        key={account}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setOverpaymentAccount(account)}
+                        disabled={isConfirming}
+                        className={choiceChipClass(selected)}
+                      >
+                        {isRounding
+                          ? t('customer_overpayment_account_3740')
+                          : t('customer_overpayment_account_2420')}
+                      </button>
+                    )
+                  })}
+                </div>
+                {/* The picked option's meaning under the chips; before a
+                    pick, both are listed so the choice is informed. */}
+                <div className="space-y-0.5 pl-6 text-[12px] leading-4 text-muted-foreground">
+                  {customerOverpayment.accounts
+                    .filter((account) => !overpaymentAccount || account === overpaymentAccount)
+                    .map((account) => (
+                      <p key={account}>
+                        {account === ORE_ROUNDING_ACCOUNT
+                          ? t('customer_overpayment_hint_3740')
+                          : t('customer_overpayment_hint_2420')}
+                      </p>
+                    ))}
                 </div>
               </div>
-            )}
-
-            {isSupplierInvoice && (
-              <div className="rounded-lg border p-4 space-y-2">
-                <p className="text-sm font-medium text-muted-foreground">{t('supplier_invoice_label')}</p>
-                <p className="font-medium">
-                  {t('invoice_number', { number: transaction.potential_supplier_invoice!.supplier_invoice_number ?? '' })}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {t('arrival_number', { number: transaction.potential_supplier_invoice!.arrival_number ?? '' })}
-                </p>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">
-                    {t('due_date', { date: formatDate(transaction.potential_supplier_invoice!.due_date) })}
-                  </span>
-                  <span className="font-medium">
-                    {formatCurrency(
-                      transaction.potential_supplier_invoice!.remaining_amount ??
-                        transaction.potential_supplier_invoice!.total,
-                      transaction.potential_supplier_invoice!.currency,
-                    )}
-                  </span>
+            ) : customerFee ? (
+              <div className="space-y-2">
+                <StateLine
+                  tone="warning"
+                  title={t('payment_fee_title', { amount: formatCurrency(customerFee.fee, 'SEK') })}
+                >
+                  <p>{t('payment_fee_description')}</p>
+                  {customerFee.required && <p>{t('payment_fee_required_note')}</p>}
+                </StateLine>
+                <div role="radiogroup" aria-label={t('payment_fee_choose')} className="flex flex-wrap gap-2 pl-6">
+                  {(customerFee.required ? [PAYMENT_FEE_ACCOUNT] : [null, PAYMENT_FEE_ACCOUNT]).map((account) => {
+                    const selected = feeAccount === account
+                    return (
+                      <button
+                        key={account ?? 'partial'}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setFeeAccount(account)}
+                        disabled={isConfirming}
+                        className={choiceChipClass(selected)}
+                      >
+                        {account ? t('payment_fee_option_fee') : t('payment_fee_option_partial')}
+                      </button>
+                    )
+                  })}
                 </div>
+                {(!customerFee.required || feeAccount) && (
+                  <p className="pl-6 text-[12px] leading-4 text-muted-foreground">
+                    {feeAccount ? t('payment_fee_hint_fee') : t('payment_fee_hint_partial')}
+                  </p>
+                )}
               </div>
+            ) : amountsMatch ? (
+              <StateLine tone="ok" title={t('amounts_match')} />
+            ) : isOreRounding ? (
+              <StateLine tone="info">
+                {t('ore_rounding_note', { amount: formatCurrency(diff, transaction.currency) })}
+              </StateLine>
+            ) : bankFeeSek > 0 ? (
+              <StateLine tone="info">
+                {t('bank_fee_note', { amount: formatCurrency(diff, transaction.currency) })}
+              </StateLine>
+            ) : (
+              <StateLine tone="warning" title={t('amounts_differ')}>
+                {sameCurrency ? (
+                  <>
+                    {t('amount_diff', { amount: formatCurrency(diff, transaction.currency) })}
+                    {isSupplierInvoice && t(txAbs > invRemaining ? 'overpayment_note' : 'partial_payment_note')}
+                  </>
+                ) : (
+                  t('different_currencies')
+                )}
+              </StateLine>
             )}
-
-            {/* Amount comparison. Compares the bank tx against what the
-                customer STILL OWES (remaining_amount), not the original
-                invoice.total: otherwise a 1 250 SEK invoice with a prior
-                230 SEK partial would show "Differens: 250 kr" when a 1 000
-                SEK top-up arrives, instead of the actual 20 kr shortfall.
-                The customer branch previously fell back to .total; both
-                branches now mirror the supplier branch's correct logic. */}
-            {(() => {
-              // A blocked target makes the amount comparison below
-              // meaningless, and no outcome it describes is reachable.
-              if (targetBlocked) {
-                const isSettled = targetMatchState === 'settled'
-                return (
-                  <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                    <div className="text-sm">
-                      <p className="font-medium">
-                        {t(isSettled ? 'target_settled_title' : 'target_not_open_title')}
-                      </p>
-                      <p>
-                        {t(
-                          isSettled
-                            ? 'target_settled_description'
-                            : 'target_not_open_description',
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                )
-              }
-
-              const txAbs = Math.abs(transaction.amount)
-              const invRemaining = isSupplierInvoice
-                ? transaction.potential_supplier_invoice!.remaining_amount ?? transaction.potential_supplier_invoice!.total
-                : transaction.potential_invoice!.remaining_amount ?? transaction.potential_invoice!.total
-              const invCurrency = isSupplierInvoice
-                ? transaction.potential_supplier_invoice!.currency
-                : transaction.potential_invoice!.currency
-              const sameCurrency = transaction.currency === invCurrency
-              // Cross-currency "match" comparison is meaningless without an FX
-              // conversion: show the explicit different-currencies warning
-              // and skip the numeric match check. The committed verifikat is
-              // built by buildInvoicePaymentClearingLines, which posts the
-              // FX diff to 3960/7960 so the books balance correctly even
-              // when the on-screen numbers can't be naively compared.
-              const diff = Math.abs(txAbs - invRemaining)
-              const amountsMatch = sameCurrency && diff < 0.01
-              // A sub-krona SEK difference is öresavrundning: the backend books
-              // it to 3740 and settles the invoice in full instead of leaving it
-              // delbetald (see ORE_ROUNDING_SETTLEMENT_MAX). SEK only: keep the
-              // 1 kr band in sync with the server constant.
-              const isOreRounding =
-                sameCurrency && transaction.currency === 'SEK' && diff >= 0.01 && diff < 1.0
-
-              if (amountsMatch) {
-                return (
-                  <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 text-success">
-                    <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-                    <p className="text-sm font-medium">{t('amounts_match')}</p>
-                  </div>
-                )
-              }
-
-              if (isOreRounding) {
-                return (
-                  <div className="flex items-start gap-2 p-3 rounded-lg bg-success/10 text-success">
-                    <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                    <p className="text-sm font-medium">
-                      {t('ore_rounding_note', {
-                        amount: formatCurrency(diff, transaction.currency),
-                      })}
-                    </p>
-                  </div>
-                )
-              }
-
-              return (
-                <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                  <div className="text-sm">
-                    <p className="font-medium">{t('amounts_differ')}</p>
-                    <p>
-                      {sameCurrency ? (
-                        <>
-                          {t('amount_diff', {
-                            amount: formatCurrency(
-                              Math.abs(txAbs - invRemaining),
-                              transaction.currency,
-                            ),
-                          })}
-                          {isSupplierInvoice && t('partial_payment_note')}
-                        </>
-                      ) : (
-                        t('different_currencies')
-                      )}
-                    </p>
-                  </div>
-                </div>
-              )
-            })()}
 
             {/* Third FX state: the invoice is in a foreign currency and no
                 booking rate was ever stored, so the SEK value of the 1510
@@ -630,71 +873,40 @@ export default function InvoiceMatchDialog({
                 (MATCH_INVOICE_BOOKING_RATE_MISSING) on both the preview GET and
                 the commit POST, so there is nothing to approve: say that up
                 front instead of showing a confident zero. Rendered on its own
-                rather than inside the Valutaomräkning card below, because in
-                this state the preview 400s and that card never renders. */}
+                rather than inside the Valutaomräkning section below, because
+                in this state the preview 400s and that section never renders. */}
             {!targetBlocked && invoiceRateMissing && (
-              <div className="rounded-lg border border-border bg-muted/30 p-4">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 text-attn flex-shrink-0" />
-                  <div className="flex-1 text-sm">
-                    {/* Untinted title, matching the sibling
-                        fx_rate_unavailable panel below: the ochre lives in the
-                        icon and the surface, not in the heading. */}
-                    <p className="font-medium">{t('fx_invoice_rate_missing_title')}</p>
-                    <p className="text-muted-foreground mt-1">
-                      {t('fx_invoice_rate_missing_description', {
-                        invoiceCurrency: invoiceCurrency ?? '',
-                      })}
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <StateLine tone="warning" title={t('fx_invoice_rate_missing_title')}>
+                {t('fx_invoice_rate_missing_description', { invoiceCurrency: invoiceCurrency ?? '' })}
+              </StateLine>
             )}
 
-            {/* Valutaomräkning section: only renders when the preview
-                route flagged a cross-currency settlement (a SEK invoice
-                paid in SEK has no FX effect and renders nothing here).
-                Shows the Riksbanken rate + invoice-currency-equivalent of
-                the bank payment + the projected post-payment invoice state.
-                When the payment-date rate lookup failed, swaps in a
-                manual-rate input so the user can type the rate from their
-                bank statement and retry. */}
-            {!targetBlocked && preview?.fx_conversion?.required && (() => {
-              const fx = preview.fx_conversion
-              if (!fx?.required) return null
-              // fx_conversion is only produced by the customer-invoice preview
-              // route. No invoice row means there is nothing honest to show:
-              // render nothing rather than fall back to zeroed money.
-              const inv = transaction.potential_invoice
-              if (!inv) return null
-              const invRemaining = inv.remaining_amount ?? inv.total
-
+            {/* Valutaomräkning: only when the preview route flagged a
+                cross-currency settlement (a SEK invoice paid in SEK has no FX
+                effect). The Riksbanken rate, the invoice-currency equivalent
+                of the payment and the invoice's state after it. When the
+                payment-date rate lookup failed, a manual-rate field takes its
+                place: the user types the rate from the bank statement. */}
+            {fxConversion?.required && transaction.potential_invoice && (() => {
+              const fx = fxConversion
               if ('error' in fx) {
-                // Riksbanken unavailable: show manual rate input.
+                // Riksbanken unavailable: the manual rate. The typed rate
+                // flows through onConfirm.manual_exchange_rate and the route
+                // recomputes server-side, so the footer's confirm is the
+                // trigger: no separate apply button. Confirm stays disabled
+                // until a positive rate is entered.
                 return (
-                  <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 mt-0.5 text-attn flex-shrink-0" />
-                      <div className="flex-1 text-sm">
-                        <p className="font-medium">{t('fx_rate_unavailable_title')}</p>
-                        <p className="text-muted-foreground mt-1">
-                          {t('fx_rate_unavailable_description', {
-                            date: transaction ? formatDate(transaction.date) : '',
-                            invoiceCurrency: fx.invoice_currency,
-                          })}
-                        </p>
-                      </div>
-                    </div>
-                    {/* The typed rate flows through onConfirm.manual_exchange_rate
-                        and the route recomputes server-side, so the footer
-                        Confirm button is the trigger: no separate apply button.
-                        Confirm stays disabled until a positive rate is entered
-                        (see DialogFooter guard below). */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                        {t('fx_manual_rate_label')}
-                      </label>
+                  <div className="space-y-3">
+                    <StateLine tone="warning" title={t('fx_rate_unavailable_title')}>
+                      {t('fx_rate_unavailable_description', {
+                        date: formatDate(transaction.date),
+                        invoiceCurrency: fx.invoice_currency,
+                      })}
+                    </StateLine>
+                    <div className="max-w-[240px] space-y-1.5 pl-6">
+                      <Label htmlFor="invoice-match-manual-rate">{t('fx_manual_rate_label')}</Label>
                       <Input
+                        id="invoice-match-manual-rate"
                         inputMode="decimal"
                         value={manualRate}
                         onChange={(e) => setManualRate(e.target.value)}
@@ -706,43 +918,41 @@ export default function InvoiceMatchDialog({
                 )
               }
 
-              const paidInInvoice = fx.paid_in_invoice_currency
-              const remainingAfter = Math.max(0, Math.round((invRemaining - paidInInvoice) * 100) / 100)
-              const willBeFullyPaid = remainingAfter <= 0
+              const willBeFullyPaid = (fxRemainingAfter ?? 0) <= 0
               // The kursvinst/kursförlust note is READ OFF the previewed
               // verifikat (3960 credit = vinst, 7960 debit = förlust) instead
               // of recomputed from the invoice here: see previewedFxGainSek.
-              const fxGain = previewedFxGainSek(preview.lines)
+              const fxGain = previewedFxGainSek(preview?.lines ?? [])
 
               return (
-                <div className="rounded-lg border bg-card p-4 space-y-3">
-                  <p className="text-sm font-medium">{t('fx_title')}</p>
-                  <p className="text-sm text-muted-foreground">
+                <div className="space-y-2">
+                  <div className="text-[12px] font-medium leading-4 text-muted-foreground">{t('fx_title')}</div>
+                  <p className="text-[13px] text-muted-foreground">
                     {t('fx_rate_description', {
                       date: fx.rate_date,
                       invoiceCurrency: fx.invoice_currency,
                       rate: fx.rate.toFixed(4).replace('.', ','),
                     })}
                   </p>
-                  <div className="grid grid-cols-2 gap-3 text-sm pt-1">
-                    <div>
-                      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <dl className="grid grid-cols-2 border-t-hairline text-[13px]">
+                    <div className="border-b-hairline py-2 pr-4">
+                      <dt className="text-[12px] leading-4 text-muted-foreground">
                         {t('fx_paid_in_invoice_currency', { amount: '' }).replace(': ', '')}
-                      </p>
-                      <p className="font-medium tabular-nums mt-0.5">
-                        {formatCurrency(paidInInvoice, fx.invoice_currency)}
-                      </p>
+                      </dt>
+                      <dd className="mt-0.5 font-medium tabular-nums text-strong">
+                        {formatCurrency(fx.paid_in_invoice_currency, fx.invoice_currency)}
+                      </dd>
                     </div>
-                    <div className="text-right">
-                      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    <div className="border-b-hairline py-2 text-right">
+                      <dt className="text-[12px] leading-4 text-muted-foreground">
                         {t('fx_remaining_after', { amount: '' }).replace(': ', '')}
-                      </p>
-                      <p className="font-medium tabular-nums mt-0.5">
-                        {formatCurrency(remainingAfter, fx.invoice_currency)}
-                      </p>
+                      </dt>
+                      <dd className="mt-0.5 font-medium tabular-nums text-strong">
+                        {formatCurrency(fxRemainingAfter ?? 0, fx.invoice_currency)}
+                      </dd>
                     </div>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
+                  </dl>
+                  <p className="text-[12px] leading-4 text-muted-foreground">
                     {willBeFullyPaid ? t('fx_status_paid') : t('fx_status_partially_paid')}
                     {!invoiceRateMissing && Math.abs(fxGain) > 0.005 && (
                       <>
@@ -757,231 +967,68 @@ export default function InvoiceMatchDialog({
               )
             })()}
 
-            {/* Bookkeeping preview: editable. Read-only by default; user
+            {/* An unbooked supplier invoice is booked first: its
+                registration verifikat, read-only, above the payment's rows. */}
+            {!targetBlocked && isSupplierInvoice && preview?.registration_entry && (
+              <RegistrationFirstCard entry={preview.registration_entry} />
+            )}
+
+            {/* Bookkeeping preview: editable. Read-only by default; the user
                 clicks "Redigera" to switch the rows to inputs. Suppressed
                 entirely when the invoice's missing booking rate is what
-                blocked the preview: the ochre panel above already owns that
-                story, and an empty "Bokföring" card with a second phrasing of
-                the same refusal reads as two separate problems. */}
+                blocked the preview: the state line above already owns that
+                story, and an empty "Bokföring" section with a second phrasing
+                of the same refusal reads as two separate problems. A choice
+                still to make says so in the footer instead of here. */}
             {!targetBlocked && (preview || (previewFailure && !invoiceRateMissing)) && (
-              <div className="rounded-lg border p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">{t('booking_title')}</p>
-                  {preview && (
-                    <div className="flex gap-2">
-                      {isEditing && (
-                        <Button variant="ghost" size="sm" onClick={resetEdits} disabled={isConfirming}>
-                          {t('booking_reset')}
-                        </Button>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setIsEditing((v) => !v)}
-                        disabled={isConfirming}
-                      >
-                        {isEditing ? t('booking_done_editing') : (
-                          <>
-                            <Pencil className="h-3 w-3 mr-1" />
-                            {t('booking_edit')}
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Prefer the route's own structured message (resolved through
-                    getErrorMessage, so it follows the UI locale) over the
-                    generic "continue or cancel" copy: when the server named a
-                    reason the user can act on it, and "continue" is often not
-                    actually available. */}
+              <PaymentPreviewLinesCard
+                editor={editor}
+                lines={preview && !overpaymentUnplaced && !feeUnplaced ? preview.lines : null}
+                canEdit={!!preview && !overpaymentUnplaced && !feeUnplaced}
+                disabled={isConfirming}
+              >
+                {/* Prefer the route's own structured message (resolved
+                    through getErrorMessage, so it follows the UI locale) over
+                    the generic "continue or cancel" copy: when the server
+                    named a reason the user can act on it, and "continue" is
+                    often not actually available. */}
+                {previewFailure && !preview && previewFailure.registrationFirst && (
+                  <p className="text-[13px] text-muted-foreground">{t('registration_first_refused')}</p>
+                )}
                 {previewFailure && !preview && (
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-[13px] text-muted-foreground">
                     {previewFailure.message ?? t('booking_unavailable')}
                   </p>
                 )}
-
-                {preview && !isEditing && (
-                  <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                      {t('booking_account')}
-                    </div>
-                    <div />
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">
-                      {t('booking_debit')}
-                    </div>
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">
-                      {t('booking_credit')}
-                    </div>
-                    {/* Verifikat amounts are always denominated in SEK (the
-                        bookkeeping home currency): the preview route builds
-                        every line via resolveSekAmount. Format them as SEK,
-                        NOT transaction.currency, otherwise a foreign-currency
-                        payment (e.g. 19 USD) shows the converted SEK figure
-                        with the wrong symbol ("175,28 US$" instead of
-                        "175,28 kr"). */}
-                    {preview.lines.map((line, i) => (
-                      <div key={i} className="contents">
-                        <div className="font-medium">{line.account_number}</div>
-                        <div className="text-muted-foreground truncate">{line.description}</div>
-                        <div className="text-right">
-                          {line.debit_amount > 0
-                            ? formatCurrency(line.debit_amount, 'SEK')
-                            : ''}
-                        </div>
-                        <div className="text-right">
-                          {line.credit_amount > 0
-                            ? formatCurrency(line.credit_amount, 'SEK')
-                            : ''}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                {overpaymentUnplaced && (
+                  <p className="text-[13px] text-muted-foreground">{t('customer_overpayment_choose_first')}</p>
                 )}
-
-                {preview && isEditing && (
-                  <div className="space-y-2">
-                    {editLines.map((line, i) => (
-                      <div
-                        key={i}
-                        className="grid grid-cols-[minmax(180px,1.6fr)_minmax(0,1fr)_140px_110px_28px] gap-2 items-center"
-                      >
-                        <AccountCombobox
-                          value={line.account_number}
-                          accounts={accounts}
-                          onChange={(acc) => updateEditLine(i, { account_number: acc })}
-                        />
-                        <Input
-                          value={line.description}
-                          onChange={(e) => updateEditLine(i, { description: e.target.value })}
-                          placeholder={t('booking_description_placeholder')}
-                        />
-                        {/* Side toggle: segmented control. Clicking either
-                            button picks that side; the amount stays the
-                            same. */}
-                        <div className="inline-flex rounded-lg border bg-background overflow-hidden h-9">
-                          <button
-                            type="button"
-                            onClick={() => updateEditLine(i, { side: 'debit' })}
-                            className={cn(
-                              'flex-1 px-2 text-xs font-medium transition-colors',
-                              line.side === 'debit'
-                                ? 'bg-secondary text-foreground'
-                                : 'text-muted-foreground hover:bg-secondary/60',
-                            )}
-                            aria-pressed={line.side === 'debit'}
-                          >
-                            {t('booking_debit')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => updateEditLine(i, { side: 'credit' })}
-                            className={cn(
-                              'flex-1 px-2 text-xs font-medium border-l transition-colors',
-                              line.side === 'credit'
-                                ? 'bg-secondary text-foreground'
-                                : 'text-muted-foreground hover:bg-secondary/60',
-                            )}
-                            aria-pressed={line.side === 'credit'}
-                          >
-                            {t('booking_credit')}
-                          </button>
-                        </div>
-                        <Input
-                          inputMode="decimal"
-                          value={line.amount}
-                          onChange={(e) => updateEditLine(i, { amount: e.target.value })}
-                          className="text-right tabular-nums"
-                          placeholder="0"
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => removeEditLine(i)}
-                          disabled={editLines.length <= 2}
-                          aria-label={t('booking_remove_line')}
-                          className="h-8 w-8"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    ))}
-
-                    <div className="flex items-center justify-between pt-1">
-                      <Button variant="ghost" size="sm" onClick={addEditLine}>
-                        <Plus className="h-3 w-3 mr-1" />
-                        {t('booking_add_line')}
-                      </Button>
-                      <div className="text-xs tabular-nums text-muted-foreground">
-                        {/* SEK: edited verifikat rows are home-currency, like the read-only preview above. */}
-                        {t('booking_debit')} {formatCurrency(editValidation.totalDebit, 'SEK')}
-                        {' / '}
-                        {t('booking_credit')} {formatCurrency(editValidation.totalCredit, 'SEK')}
-                      </div>
-                    </div>
-
-                    {!editValidation.isBalanced && (
-                      <p className="text-xs text-destructive">
-                        {t('booking_unbalanced', {
-                          diff: formatCurrency(Math.abs(editValidation.diff), 'SEK'),
-                        })}
-                      </p>
-                    )}
-                    {editValidation.accountInvalid && (
-                      <p className="text-xs text-destructive">{t('booking_account_invalid')}</p>
-                    )}
-                  </div>
+                {feeUnplaced && (
+                  <p className="text-[13px] text-muted-foreground">{t('payment_fee_choose_first')}</p>
                 )}
-              </div>
+              </PaymentPreviewLinesCard>
             )}
 
-            {!targetBlocked && (
-              <div className="rounded-lg bg-muted/50 p-4 space-y-2">
-                <p className="text-sm font-medium">{t('on_confirm_title')}</p>
-                <ul className="text-sm text-muted-foreground space-y-1">
-                  <li>• {isSupplierInvoice ? t('on_confirm_link_supplier') : t('on_confirm_link_customer')}</li>
-                  <li>• {isSupplierInvoice ? t('on_confirm_mark_paid_supplier') : t('on_confirm_mark_paid_customer')}</li>
-                  <li>• {t('on_confirm_voucher')}</li>
-                </ul>
-              </div>
+            {showSplitLink && (
+              <button
+                type="button"
+                className={cn(QUIET_LINK_CLASS, 'block text-left')}
+                onClick={onSplitAcrossInvoices}
+                disabled={isConfirming}
+              >
+                {t('split_across_invoices')}
+              </button>
             )}
           </div>
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isConfirming}>
+          {consequence && <DialogConsequence>{consequence}</DialogConsequence>}
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={isConfirming}>
             {t('cancel')}
           </Button>
-          <Button
-            onClick={() => handleConfirm()}
-            disabled={
-              isConfirming ||
-              isCheckingDuplicate ||
-              // Blocked target: the route rejects this unconditionally, so the
-              // button has no reachable success path.
-              targetBlocked ||
-              (isEditing && !editValidation.isValid) ||
-              // Block confirm when cross-currency lookup failed and the user
-              // hasn't typed a manual rate yet. Same-currency and auto-rate
-              // paths pass through unaffected.
-              (preview?.fx_conversion?.required === true &&
-                'error' in preview.fx_conversion &&
-                parseAmount(manualRate) <= 0) ||
-              // Cross-currency invoice with no booked exchange rate: the FX
-              // result of the settlement is uncomputable, so there is no
-              // honest entry to approve and the POST would reject it with the
-              // same MATCH_INVOICE_BOOKING_RATE_MISSING the preview already
-              // returned. A hand-written entry is still allowed through: the
-              // user has then supplied the numbers themselves rather than
-              // approving a fabricated preview. (Edit mode requires a
-              // successful preview to enter, so today this only relaxes the
-              // guard in the defense-in-depth branch of
-              // isInvoiceBookingRateMissing.)
-              (invoiceRateMissing && !(isEditing && editValidation.isValid))
-            }
-          >
-            {isConfirming ? t('confirming') : t('confirm_match')}
+          <Button onClick={() => handleConfirm()} loading={isConfirming} disabled={confirmDisabled}>
+            {t('confirm_match')}
           </Button>
         </DialogFooter>
       </DialogContent>

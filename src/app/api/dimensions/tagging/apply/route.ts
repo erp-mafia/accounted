@@ -11,24 +11,30 @@
  * batch, and the response is 200 even on partial failure so the UI can present
  * per-line errors:
  *
- *   200 { data: { retagged, unchanged, failed: [{ line_id, error }] } }
+ *   200 { data: { outcome, retagged, unchanged, failed: [{ line_id, error,
+ *         reason }], failed_by_reason: [{ reason, lines, message }] } }
  *
- * RPC error messages pass through as-is: they are already Swedish domain
- * errors (closed/locked period, lock date, archived/unknown codes, drafts).
+ * outcome says how much went through ('complete', 'partial', 'none'), and
+ * failed_by_reason counts the lines left untagged per reason. A line behind
+ * a lock (closed or locked period, the company lock date) is refused before
+ * the RPC with that reason; the RPC's own messages pass through as-is: they
+ * are already Swedish domain errors (archived/unknown codes, drafts).
+ *
+ * The loop is lib/dimensions/retag-service.ts, shared with the v1 retag
+ * operation and the approval of gnubok_tag_journal_lines. The workbench sends
+ * each line's resulting map, so this door retags as a replace.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { DimensionTaggingApplySchema } from '@/lib/api/schemas'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
+import { retagLines } from '@/lib/dimensions/retag-service'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 export const POST = withRouteContext(
   'dimensions.tagging.apply',
   async (request, ctx) => {
-    const { supabase, companyId, user, log } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
 
     const validation = await validateBody(request, DimensionTaggingApplySchema, {
       log,
@@ -37,31 +43,13 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
     const { line_ids, dimensions, reason } = validation.data
 
-    let retagged = 0
-    let unchanged = 0
-    const failed: { line_id: string; error: string }[] = []
-
-    // Sequential on purpose: each RPC call takes a row lock and writes an
-    // audit row; hammering hundreds of concurrent transactions buys nothing
-    // and risks lock contention with live bookkeeping.
-    for (const lineId of line_ids) {
-      const { data, error } = await supabase.rpc('retag_line_dimensions', {
-        p_company_id: companyId,
-        p_line_id: lineId,
-        p_dimensions: dimensions,
-        p_reason: reason,
-        p_user_id: user.id,
-      })
-
-      if (error) {
-        failed.push({ line_id: lineId, error: getUserErrorMessage(error) })
-        continue
-      }
-
-      const changed = (data as { changed?: boolean } | null)?.changed === true
-      if (changed) retagged++
-      else unchanged++
-    }
+    const outcome = await retagLines(
+      { supabase, companyId, userId: user.id, log },
+      { line_ids, dimensions, mode: 'replace', reason },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    const { retagged, unchanged, failed, failed_by_reason } = outcome.data
 
     log.info('bulk retag applied', {
       requested: line_ids.length,
@@ -70,7 +58,9 @@ export const POST = withRouteContext(
       failedCount: failed.length,
     })
 
-    return NextResponse.json({ data: { retagged, unchanged, failed } })
+    return NextResponse.json({
+      data: { outcome: outcome.data.outcome, retagged, unchanged, failed, failed_by_reason },
+    })
   },
   { requireWrite: true },
 )

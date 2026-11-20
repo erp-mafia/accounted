@@ -58,6 +58,18 @@ describe('sortSupplierInvoiceList', () => {
     ])
   })
 
+  // crm#1039: an invoice without the supplier's number sorts last both ways.
+  it('keeps invoices without a number last in both directions', () => {
+    const invoices = [
+      make({ id: 'none', supplier_invoice_number: null }),
+      make({ id: '2', supplier_invoice_number: 'F-2' }),
+      make({ id: '1', supplier_invoice_number: 'F-1' }),
+    ]
+
+    expect(sort(invoices, { column: 'number', direction: 'asc' }).map((i) => i.id)).toEqual(['1', '2', 'none'])
+    expect(sort(invoices, { column: 'number', direction: 'desc' }).map((i) => i.id)).toEqual(['2', '1', 'none'])
+  })
+
   it('sorts invoice and due dates in both directions', () => {
     const invoices = [
       make({ id: 'late', invoice_date: '2024-08-01', due_date: '2024-09-01' }),

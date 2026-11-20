@@ -1,19 +1,22 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { Plus, UserCircle } from 'lucide-react'
+import { PlusIcon, UserCircleIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatRowAmount } from '@/lib/utils'
+import { useEmployees } from '@/lib/reference-data/hooks'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import type { EmployeeMasked } from '@/types'
 
 const NewEmployeeDialog = dynamic(
   () => import('@/components/salary/NewEmployeeDialog'),
@@ -33,8 +36,17 @@ const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
  */
 export default function EmployeesPage() {
   const t = useTranslations('employees')
-  const [employees, setEmployees] = useState<EmployeeMasked[]>([])
-  const [loading, setLoading] = useState(true)
+  const tCommon = useTranslations('common')
+  // The whole register, inactive rows included, filtered here: the page has
+  // to know that inactive employees exist to offer the way back to them.
+  // Before, "Inaktivera" made the person vanish with nothing on the page
+  // saying where they went (crm#1133). The session cache (lib/reference-data)
+  // refetches after a create, edit or deactivation anywhere.
+  const { employees, isLoading: loading, error: employeesError, refresh: refreshEmployees } = useEmployees({ includeInactive: true })
+  // A failed first load says so in place of the rows; a failed refresh keeps
+  // the rows on screen and says so in one line above them.
+  const loadFailed = Boolean(employeesError) && employees.length === 0
+  const refreshFailed = Boolean(employeesError) && employees.length > 0
   const { canWrite } = useCanWrite()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -42,47 +54,68 @@ export default function EmployeesPage() {
   // The "Ny anställd" modal is driven by the URL (?new=1) so every entry
   // point (the header button and the empty state) opens the same dialog, and
   // the browser back button closes it. Same pattern as /invoices.
-  const showNewEmployee = searchParams.has('new')
+  // A viewer creates nothing, so the link opens nothing for one (use-can-write.ts).
+  const showNewEmployee = canWrite && searchParams.has('new')
   const closeNewEmployee = () => router.replace('/salary/employees', { scroll: false })
   const openNewEmployee = () => router.push('/salary/employees?new=1', { scroll: false })
 
-  // Bumped after a create in the dialog so the effect refetches the list.
-  const [refreshKey, setRefreshKey] = useState(0)
-
-  useEffect(() => {
-    async function load() {
-      const res = await fetch('/api/salary/employees')
-      if (res.ok) {
-        const { data } = await res.json()
-        setEmployees(data || [])
-      }
-      setLoading(false)
-    }
-    load()
-  }, [refreshKey])
+  const inactiveCount = employees.filter((emp) => !emp.is_active).length
+  // null = not chosen yet. Until the user flips the switch, inactive rows show
+  // only when there would otherwise be nothing to show: a register whose
+  // employees are all inactive must not read as "Inga anställda".
+  const [showInactiveChoice, setShowInactiveChoice] = useState<boolean | null>(null)
+  const showInactive = showInactiveChoice ?? (inactiveCount > 0 && inactiveCount === employees.length)
+  const visibleEmployees = showInactive ? employees : employees.filter((emp) => emp.is_active)
 
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 28) */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        <h1 className="page-header-title">{t('title')}</h1>
         {canWrite && (
-          <Button onClick={openNewEmployee}>
-            <Plus className="mr-2 h-4 w-4" />
+          <Button size="toolbar" onClick={openNewEmployee}>
+            <PlusIcon className="h-4 w-4" />
             {t('new_employee')}
           </Button>
         )}
       </div>
 
-      {loading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map(i => (
-            <Skeleton key={i} className="h-10 rounded-lg" />
-          ))}
+      {/* Toolbar: only when there is something to reveal. Same switch as the
+          kontoplan's "Visa inaktiva". */}
+      {!loading && inactiveCount > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="ml-auto flex items-center gap-2 text-sm">
+            <Switch
+              checked={showInactive}
+              onCheckedChange={setShowInactiveChoice}
+              className="scale-75"
+            />
+            <span className="text-muted-foreground">{t('show_inactive')}</span>
+          </label>
         </div>
-      ) : employees.length === 0 ? (
+      )}
+
+      {refreshFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshEmployees() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
+      {loading ? (
+        <LateReveal>
+          {[1, 2, 3].map(i => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="hidden h-3.5 w-28 md:block" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+            </div>
+          ))}
+        </LateReveal>
+      ) : loadFailed ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void refreshEmployees()} />
+      ) : visibleEmployees.length === 0 ? (
         <EmptyState
-          icon={UserCircle}
+          icon={UserCircleIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('add_employee') : undefined}
@@ -90,7 +123,7 @@ export default function EmployeesPage() {
         />
       ) : (
         <div>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -103,10 +136,15 @@ export default function EmployeesPage() {
                 </tr>
               </thead>
               <tbody className="stagger-enter">
-                {employees.map(emp => (
+                {visibleEmployees.map(emp => (
                   <tr
                     key={emp.id}
-                    className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                    className={cn(
+                      'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
+                      // Dim the text, not the row: row opacity would take the
+                      // "Inaktiv" chip below readable contrast with it.
+                      !emp.is_active && 'text-muted-foreground',
+                    )}
                     onClick={() => router.push(`/salary/employees/${emp.id}`)}
                   >
                     <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
@@ -117,6 +155,13 @@ export default function EmployeesPage() {
                       >
                         {emp.first_name} {emp.last_name}
                       </Link>
+                      {/* Exception chip: only on screen while "Visa inaktiva"
+                          is on, so it never lands on every row by default. */}
+                      {!emp.is_active && (
+                        <Badge variant="secondary" className="ml-2">
+                          {t('inactive_badge')}
+                        </Badge>
+                      )}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground md:table-cell')}>
                       {emp.personnummer_masked}
@@ -128,8 +173,8 @@ export default function EmployeesPage() {
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                       {emp.salary_type === 'hourly'
-                        ? emp.hourly_rate ? `${formatCurrency(emp.hourly_rate)}${t('hourly_suffix')}` : '-'
-                        : emp.monthly_salary ? formatCurrency(emp.monthly_salary) : '-'}
+                        ? emp.hourly_rate ? `${formatRowAmount(emp.hourly_rate)}${t('hourly_suffix')}` : '-'
+                        : emp.monthly_salary ? formatRowAmount(emp.monthly_salary) : '-'}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums sm:table-cell')}>
                       {emp.employment_degree}%
@@ -144,7 +189,7 @@ export default function EmployeesPage() {
           </div>
           {/* Footer note (concept pgnote) */}
           <p className="px-1 pt-3 text-xs text-muted-foreground tabular-nums">
-            {t('registered_count', { count: employees.length })}
+            {t('registered_count', { count: visibleEmployees.length })}
           </p>
         </div>
       )}
@@ -155,10 +200,7 @@ export default function EmployeesPage() {
           onOpenChange={(open) => {
             if (!open) closeNewEmployee()
           }}
-          onCreated={() => {
-            closeNewEmployee()
-            setRefreshKey((k) => k + 1)
-          }}
+          onCreated={closeNewEmployee}
         />
       )}
     </div>

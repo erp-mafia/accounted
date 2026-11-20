@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 // The two Storage primitives are the seam: the routes must hand the RAW
@@ -34,7 +34,7 @@ import { processArchivedDocument } from '@/extensions/general/invoice-inbox/lib/
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path,
   )!
 }
@@ -43,7 +43,6 @@ const createRoute = findRoute('POST', '/upload/create')
 const completeRoute = findRoute('POST', '/upload/complete')
 
 const UPLOAD_ID = '33333333-3333-4333-8333-333333333333'
-const TX_ID = '44444444-4444-4444-8444-444444444444'
 const RAW_SIGNED_URL =
   'https://proj.supabase.co/storage/v1/object/upload/sign/documents/documents/company-1/user-1/pending/x.pdf?token=signed'
 
@@ -56,7 +55,6 @@ function buildCtx(supabase: unknown): ExtensionContext {
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
   } as unknown as ExtensionContext
@@ -93,10 +91,6 @@ beforeEach(() => {
 })
 
 describe('POST /upload/create (signed direct-to-storage upload)', () => {
-  it('returns 401 without a context', async () => {
-    const res = await createRoute.handler(createMockRequest('/upload/create', { method: 'POST', body: createBody() }))
-    expect(res.status).toBe(401)
-  })
 
   it('returns 400 on an invalid body', async () => {
     const mock = createQueuedMockSupabase()
@@ -213,13 +207,6 @@ describe('POST /upload/complete (signed direct-to-storage upload)', () => {
     page_count: 3,
   }
 
-  it('returns 401 without a context', async () => {
-    const res = await completeRoute.handler(
-      createMockRequest('/upload/complete', { method: 'POST', body: completeBody() }),
-    )
-    expect(res.status).toBe(401)
-  })
-
   it('returns 400 when upload_id is not a UUID', async () => {
     const mock = createQueuedMockSupabase()
     const res = await completeRoute.handler(
@@ -244,22 +231,6 @@ describe('POST /upload/complete (signed direct-to-storage upload)', () => {
     expect(completePendingDocumentUpload).not.toHaveBeenCalled()
   })
 
-  it('rejects a matched_transaction_id outside the company before touching Storage', async () => {
-    const mock = createQueuedMockSupabase()
-    mock.enqueue({ data: null }) // transactions lookup: not ours
-    const res = await completeRoute.handler(
-      createMockRequest('/upload/complete', {
-        method: 'POST',
-        body: completeBody({ matched_transaction_id: TX_ID }),
-      }),
-      buildCtx(mock.supabase),
-    )
-    const { status, body } = await parseJsonResponse<Envelope>(res)
-    expect(status).toBe(400)
-    expect(body.error.code).toBe('INBOX_UPLOAD_TX_NOT_IN_COMPANY')
-    expect(completePendingDocumentUpload).not.toHaveBeenCalled()
-  })
-
   it('archives through the reservation and joins the multipart pipeline (deferred extraction)', async () => {
     const buffer = new TextEncoder().encode('%PDF-1.4\n').buffer as ArrayBuffer
     vi.mocked(completePendingDocumentUpload).mockResolvedValueOnce({
@@ -268,14 +239,10 @@ describe('POST /upload/complete (signed direct-to-storage upload)', () => {
     })
     vi.mocked(processArchivedDocument).mockResolvedValueOnce(pipelineResult as never)
     const mock = createQueuedMockSupabase()
-    mock.enqueue({ data: { id: TX_ID } }) // transactions lookup: ours
     mock.enqueue({ data: null }) // no inbox item yet for this document
 
     const res = await completeRoute.handler(
-      createMockRequest('/upload/complete', {
-        method: 'POST',
-        body: completeBody({ matched_transaction_id: TX_ID, skip_extraction: true }),
-      }),
+      createMockRequest('/upload/complete', { method: 'POST', body: completeBody() }),
       buildCtx(mock.supabase),
     )
     const { status, body } = await parseJsonResponse<{ data: typeof pipelineResult }>(res)
@@ -304,8 +271,8 @@ describe('POST /upload/complete (signed direct-to-storage upload)', () => {
       { name: 'faktura.pdf', buffer, type: 'application/pdf' },
       'upload',
       undefined,
-      TX_ID,
-      { skipExtraction: true, deferExtraction: true },
+      null,
+      { deferExtraction: true },
     )
   })
 

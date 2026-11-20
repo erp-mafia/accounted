@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   buildPageAttentionSentence,
   getConnectionUiState,
+  nextScheduledSyncFrom,
+  offersAccountChoice,
   selectPageAttention,
   sortConnectionsByPrecedence,
   EXPIRY_WARNING_DAYS,
@@ -22,6 +24,9 @@ function conn(overrides: {
   last_synced_at?: string | null
   created_at?: string
   bank_name?: string
+  error_message?: string | null
+  sunset?: 'switch' | 'import' | null
+  paused?: 'subscription' | 'connector_key' | null
 }) {
   return {
     status: 'active',
@@ -90,6 +95,77 @@ describe('getConnectionUiState', () => {
 
   it('handles a row with no consent date', () => {
     expect(getConnectionUiState(conn({ consent_expires: null }), NOW)).toBe('active')
+  })
+})
+
+describe('the paused state (the company holds no bank_sync capability)', () => {
+  it('outranks every state but sunset and an attempt still at the bank', () => {
+    expect(getConnectionUiState(conn({ paused: 'subscription', last_synced_at: iso(-60) }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'subscription', status: 'expired' }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'subscription', status: 'error', error_message: 'x' }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'subscription', consent_expires: iso(2) }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'connector_key', status: 'pending_selection' }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'subscription', status: 'pending', created_at: iso(0) }), NOW)).toBe('pending')
+    expect(getConnectionUiState(conn({ paused: 'subscription', sunset: 'switch' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ paused: null, last_synced_at: iso(-60) }), NOW)).toBe('stale')
+  })
+
+  it('sorts paused rows right after sunset ones and makes them the page attention instead of "stale"', () => {
+    const rows = [
+      conn({ bank_name: 'Healthy' }),
+      conn({ bank_name: 'Svea', paused: 'subscription', last_synced_at: iso(-60) }),
+      conn({ bank_name: 'Gone', sunset: 'switch' }),
+    ]
+    expect(sortConnectionsByPrecedence(rows, NOW).map((r) => r.bank_name)).toEqual(['Gone', 'Svea', 'Healthy'])
+    const pausedOnly = [conn({ bank_name: 'Svea', paused: 'subscription', last_synced_at: iso(-60) })]
+    expect(selectPageAttention(pausedOnly, NOW)).toMatchObject({ state: 'paused', connection: { bank_name: 'Svea' } })
+  })
+
+  it('says the syncs are paused and why, never "kör Synka"', () => {
+    const hosted = selectPageAttention([conn({ bank_name: 'Svea Bank', paused: 'subscription', last_synced_at: iso(-60) })], NOW)!
+    expect(buildPageAttentionSentence(hosted, NOW)).toBe(
+      'Svea Bank: synkningen är pausad eftersom abonnemanget saknas. Uppgradera för att hämta transaktioner igen.',
+    )
+    const selfHosted = selectPageAttention([conn({ bank_name: 'SEB', paused: 'connector_key' })], NOW)!
+    expect(buildPageAttentionSentence(selfHosted, NOW)).toBe(
+      'SEB: synkningen är pausad eftersom connector-nyckeln saknas. Lägg in nyckeln för att hämta transaktioner igen.',
+    )
+  })
+})
+
+describe('the sunset state (the Enable Banking feed has ended)', () => {
+  it('outranks every other state of a row, except an attempt still at the bank', () => {
+    expect(getConnectionUiState(conn({ sunset: 'switch' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'import', status: 'expired' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'switch', status: 'error', error_message: 'x' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'switch', consent_expires: iso(2) }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'switch', status: 'pending_selection' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'switch', status: 'pending', created_at: iso(0) }), NOW)).toBe('pending')
+    expect(getConnectionUiState(conn({ sunset: null }), NOW)).toBe('active')
+  })
+
+  it('sorts sunset rows first and makes them the page attention, worst first', () => {
+    const rows = [conn({ bank_name: 'Healthy' }), conn({ bank_name: 'Errored', status: 'error' }), conn({ bank_name: 'Gone', sunset: 'switch' })]
+    expect(sortConnectionsByPrecedence(rows, NOW).map((r) => r.bank_name)).toEqual(['Gone', 'Errored', 'Healthy'])
+    expect(selectPageAttention(rows, NOW)).toMatchObject({ state: 'sunset', connection: { bank_name: 'Gone' } })
+  })
+
+  it('says the old provider has stopped and offers the switch, or the file import for a bank the new one does not reach', () => {
+    const covered = selectPageAttention([conn({ bank_name: 'Swedbank', sunset: 'switch' })], NOW)!
+    expect(buildPageAttentionSentence(covered, NOW)).toBe(
+      'Swedbank: den gamla bankkopplingen har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.',
+    )
+    const uncovered = selectPageAttention([conn({ bank_name: 'Wise', sunset: 'import' })], NOW)!
+    expect(buildPageAttentionSentence(uncovered, NOW)).toBe(
+      'Wise: den gamla bankkopplingen har upphört, och banken nås inte än genom den nya leverantören. Importera kontoutdrag som fil (SIE eller CSV) tills vidare.',
+    )
+  })
+
+  it('offers no account choice and no next scheduled sync for a row whose feed has ended', () => {
+    const savingsOff = { uid: 'b', name: 'Sparkonto', iban: 'SE2', enabled: false }
+    expect(offersAccountChoice(conn({}), [savingsOff], NOW)).toBe(true)
+    expect(offersAccountChoice(conn({ sunset: 'switch' }), [savingsOff], NOW)).toBe(false)
+    expect(nextScheduledSyncFrom(conn({ sunset: 'import' }), NOW)).toBeNull()
   })
 })
 
@@ -175,5 +251,105 @@ describe('buildPageAttentionSentence', () => {
     )
     const fresh = new Date(NOW - 5000).toISOString()
     expect(selectPageAttention([conn({ status: 'pending', created_at: fresh })], NOW)).toBeNull()
+  })
+})
+
+describe('offersAccountChoice (crm#1097)', () => {
+  const main = { uid: 'a', name: 'Företagskonto', iban: 'SE1', enabled: true }
+  const savingsOff = { uid: 'b', name: 'Sparkonto', iban: 'SE2', enabled: false }
+  const cardOff = { uid: 'c', name: 'SVEA_MQ_Debit_B2B', enabled: false }
+  const claimedOff = { uid: 'd', iban: 'SE3', enabled: false, claimed_by_company_id: 'company-b' }
+
+  it('offers nothing for the reported shape: every own account syncs, the card account is off', () => {
+    // The card account mirrors the main account and can never be switched
+    // on: an action beside it would open a picker where it cannot be ticked.
+    expect(offersAccountChoice(conn({}), [main, cardOff], NOW)).toBe(false)
+  })
+
+  it('offers "Välj konton" when an ordinary account of this company does not sync', () => {
+    expect(offersAccountChoice(conn({}), [main, savingsOff], NOW)).toBe(true)
+    expect(offersAccountChoice(conn({}), [main, savingsOff, cardOff, claimedOff], NOW)).toBe(true)
+    // Expiring, stale and never-synced rows can still save a selection.
+    expect(offersAccountChoice(conn({ consent_expires: iso(2) }), [savingsOff], NOW)).toBe(true)
+    expect(offersAccountChoice(conn({ last_synced_at: iso(-10) }), [savingsOff], NOW)).toBe(true)
+    expect(offersAccountChoice(conn({ last_synced_at: null }), [savingsOff], NOW)).toBe(true)
+  })
+
+  it('never offers it for an account another company books or a card account, on or off', () => {
+    expect(offersAccountChoice(conn({}), [main, claimedOff], NOW)).toBe(false)
+    expect(offersAccountChoice(conn({}), [main, { ...cardOff, enabled: true }], NOW)).toBe(false)
+    expect(offersAccountChoice(conn({}), [main], NOW)).toBe(false)
+    expect(offersAccountChoice(conn({}), [], NOW)).toBe(false)
+  })
+
+  it('adds no second one where the primary action already is "Välj konton"', () => {
+    expect(offersAccountChoice(conn({ error_message: 'Synkningen har stannat.' }), [savingsOff], NOW)).toBe(false)
+    expect(offersAccountChoice(conn({ status: 'pending_selection' }), [savingsOff], NOW)).toBe(false)
+  })
+
+  it('offers no choice the save refuses: expired, failed or unfinished connections', () => {
+    // The selection save accepts only pending_selection and active rows.
+    for (const status of ['expired', 'error', 'pending', 'revoked']) {
+      expect(offersAccountChoice(conn({ status }), [savingsOff], NOW)).toBe(false)
+    }
+  })
+})
+
+describe('nextScheduledSyncFrom (crm#1097)', () => {
+  // The picker's line for an account switched on later: from which date the
+  // next scheduled sync (the cron's own window) fetches it.
+  const imported = (overrides: Parameters<typeof conn>[0] = {}) => ({
+    ...conn(overrides),
+    initial_sync_completed_at: iso(-30),
+  })
+
+  it('is about a week back on a healthy connection: no history from the connection start', () => {
+    expect(nextScheduledSyncFrom(imported(), NOW)).toBe('2026-08-12')
+    // Expiring still syncs on schedule until the consent runs out.
+    expect(nextScheduledSyncFrom(imported({ consent_expires: iso(2) }), NOW)).toBe('2026-08-12')
+  })
+
+  it('covers the gap since the last sync on a stale connection', () => {
+    expect(nextScheduledSyncFrom(imported({ last_synced_at: iso(-20) }), NOW)).toBe('2026-07-29')
+  })
+
+  it('is the first import\'s 90 days while that import is still owed', () => {
+    expect(nextScheduledSyncFrom({ ...conn({}), initial_sync_completed_at: null }, NOW)).toBe('2026-05-21')
+    expect(nextScheduledSyncFrom(conn({ last_synced_at: null }), NOW)).toBe('2026-05-21')
+  })
+
+  it('is the saved start date while the first import is still owed', () => {
+    expect(nextScheduledSyncFrom({ ...conn({}), initial_sync_completed_at: null, initial_sync_requested_from: '2026-01-01' }, NOW))
+      .toBe('2026-01-01')
+  })
+
+  it('says nothing where no scheduled sync comes next', () => {
+    // A stopped sync is run right after the save (BankingSettingsPanel), with its own window.
+    expect(nextScheduledSyncFrom(imported({ error_message: 'Synkningen har stannat.' }), NOW)).toBeNull()
+    // A waiting connection runs its own first import; the others cannot save.
+    for (const status of ['pending_selection', 'expired', 'error', 'pending', 'revoked']) {
+      expect(nextScheduledSyncFrom(imported({ status }), NOW)).toBeNull()
+    }
+  })
+})
+
+describe('needs_configuration (sync stopped on a stale account selection)', () => {
+  const advice = 'Banksynkningen har stannat: kontovalet behöver sparas om.'
+
+  it('derives it from a stored message on an active row, ahead of an expiring consent', () => {
+    expect(getConnectionUiState(conn({ error_message: advice }), NOW)).toBe('needs_configuration')
+    expect(getConnectionUiState(conn({ error_message: advice, consent_expires: iso(2) }), NOW)).toBe('needs_configuration')
+    expect(getConnectionUiState(conn({ error_message: null }), NOW)).toBe('active')
+    expect(getConnectionUiState(conn({ status: 'error', error_message: advice }), NOW)).toBe('error')
+  })
+
+  it('earns the page sentence over an expiring consent, pointing at the account picker', () => {
+    const stopped = conn({ bank_name: 'SEB', error_message: advice })
+    const expiring = conn({ bank_name: 'Nordea', consent_expires: iso(2) })
+    const attention = selectPageAttention([expiring, stopped], NOW)
+    expect(attention).toEqual({ state: 'needs_configuration', connection: stopped })
+    expect(buildPageAttentionSentence(attention!, NOW)).toBe(
+      'SEB: synkningen har stannat. Öppna Välj konton och spara kontovalet igen.',
+    )
   })
 })
