@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   buildAnlaggningstillgangarNote,
   computeRollforwardTotals,
+  depreciationPrincipleLines,
+  holdsWriteDowns,
   _buildRollforwardForTests,
   type AnlaggningAsset,
 } from '../anlaggningstillgangar-note'
@@ -36,6 +38,39 @@ describe('buildAnlaggningstillgangarNote: roll-forward', () => {
         periodEnd: PERIOD_END,
       }),
     ).toBeNull()
+  })
+
+  it('writes a zero reduction as "0 kr", never "-0 kr"', () => {
+    const note = buildAnlaggningstillgangarNote({
+      noteNumber: 4,
+      assets: [
+        makeAsset({
+          acquisition_date: '2025-06-01',
+          figures: { ibAck: 0, aretsAvskrivning: 7_000, avgaendeAck: 0 },
+        }),
+      ],
+      periodStart: PERIOD_START,
+      periodEnd: PERIOD_END,
+    })
+    expect(note?.body).toContain('Ingående ackumulerade avskrivningar: 0 kr')
+    expect(note?.body).toContain('Årets avskrivningar: -7 000 kr')
+    expect(note?.body).not.toContain('-0 kr')
+  })
+
+  // F3: the ÅRL 5:8 roll-forward headed a row with the raw category "land".
+  it('heads mark\'s row "Mark", after Byggnader', () => {
+    const note = buildAnlaggningstillgangarNote({
+      noteNumber: 4,
+      assets: [
+        makeAsset({ category: 'land', useful_life_months: 0, acquisition_cost: 900_000 }),
+        makeAsset({ category: 'building', useful_life_months: 600, acquisition_cost: 2_000_000 }),
+      ],
+      periodStart: PERIOD_START,
+      periodEnd: PERIOD_END,
+    })
+    const heads = (note?.body ?? '').split('\n').filter((line) => line && !line.startsWith(' '))
+    expect(heads.slice(0, 2)).toEqual(['Byggnader', 'Mark'])
+    expect(note?.body).not.toMatch(/^land$/m)
   })
 
   it('skips assets disposed before the period', () => {
@@ -242,5 +277,84 @@ describe('computeRollforwardTotals', () => {
     // equipment: 60,000 - 24,000 = 36,000; computer: 20,000 - 13,334 = 6,666
     expect(totals.ubAck).toBe(37_334)
     expect(totals.ubRedovisat).toBe(42_666)
+  })
+})
+
+describe('depreciationPrincipleLines (the K2 Avskrivningar note)', () => {
+  // F3: "• land: 0 år" under "Avskrivningar görs linjärt" reached the filed
+  // K2 document.
+  it('states that mark is not depreciated instead of listing it with 0 år', () => {
+    expect(
+      depreciationPrincipleLines([
+        { category: 'building', useful_life_months: 600, disposed_at: null },
+        { category: 'land', useful_life_months: 0, disposed_at: null },
+        { category: 'equipment', useful_life_months: 60, disposed_at: null },
+      ]),
+    ).toEqual([
+      'Avskrivningar görs linjärt över bedömd nyttjandeperiod:',
+      '• Byggnader: 50 år',
+      '• Inventarier: 5 år',
+      'Mark skrivs inte av.',
+    ])
+    expect(depreciationPrincipleLines([{ category: 'land', useful_life_months: 0, disposed_at: null }])).toEqual([
+      'Mark skrivs inte av.',
+    ])
+    expect(depreciationPrincipleLines([{ category: 'land', useful_life_months: 0, disposed_at: '2025-03-01' }])).toEqual([])
+  })
+})
+
+describe('buildAnlaggningstillgangarNote: write-downs (ÅRL 5:8 § p. 5)', () => {
+  const movement = (over: Partial<{ opening: number; writtenDown: number; reversed: number; disposed: number; closing: number }>) => ({
+    opening: 0,
+    writtenDown: 0,
+    reversed: 0,
+    disposed: 0,
+    closing: 0,
+    ...over,
+  })
+
+  it('shows the year\'s write-down and reversal, and takes them off the redovisat värde', () => {
+    const assets = [
+      makeAsset({
+        category: 'machinery',
+        acquisition_cost: 200_000,
+        figures: { ibAck: 40_000, aretsAvskrivning: 20_000, avgaendeAck: 0 },
+        writeDowns: movement({ opening: 10_000, writtenDown: 30_000, reversed: 5_000, closing: 35_000 }),
+      }),
+    ]
+    const note = buildAnlaggningstillgangarNote({ noteNumber: 4, assets, periodStart: PERIOD_START, periodEnd: PERIOD_END })
+    expect(note?.body).toMatch(/Ingående ackumulerade nedskrivningar: -10\s000 kr/)
+    expect(note?.body).toMatch(/Årets nedskrivningar: -30\s000 kr/)
+    expect(note?.body).toMatch(/Årets återförda nedskrivningar: 5\s000 kr/)
+    expect(note?.body).toMatch(/Utgående ackumulerade nedskrivningar: -35\s000 kr/)
+    // 200 000 - 60 000 - 35 000
+    expect(note?.body).toMatch(/Utgående redovisat värde: 105\s000 kr/)
+    expect(computeRollforwardTotals(assets, PERIOD_START, PERIOD_END)).toMatchObject({ ubRedovisat: 105_000, ubNed: 35_000 })
+    expect(holdsWriteDowns(assets)).toBe(true)
+  })
+
+  it('takes a disposed asset\'s write-downs off with it', () => {
+    const note = buildAnlaggningstillgangarNote({
+      noteNumber: 4,
+      assets: [
+        makeAsset({
+          disposed_at: '2025-09-30',
+          figures: { ibAck: 12_000, aretsAvskrivning: 9_000, avgaendeAck: 21_000 },
+          writeDowns: movement({ opening: 8_000, disposed: 8_000 }),
+        }),
+      ],
+      periodStart: PERIOD_START,
+      periodEnd: PERIOD_END,
+    })
+    expect(note?.body).toMatch(/Återförda nedskrivningar på avgående: 8\s000 kr/)
+    expect(note?.body).toMatch(/Utgående ackumulerade nedskrivningar: 0 kr/)
+    expect(note?.body).toMatch(/Utgående redovisat värde: 0 kr/)
+  })
+
+  it('prints no write-down rows for a category without any', () => {
+    const assets = [makeAsset({ writeDowns: movement({}) })]
+    const note = buildAnlaggningstillgangarNote({ noteNumber: 4, assets, periodStart: PERIOD_START, periodEnd: PERIOD_END })
+    expect(note?.body).not.toContain('nedskrivningar')
+    expect(holdsWriteDowns(assets)).toBe(false)
   })
 })

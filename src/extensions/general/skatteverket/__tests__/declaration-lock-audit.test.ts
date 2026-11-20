@@ -15,6 +15,12 @@ vi.mock('../lib/audit', () => ({
   writeSkatteverketAudit: (...args: unknown[]) => mockWriteSkatteverketAudit(...args),
 }))
 
+// The company's own redovisare, which the lock route now reads instead of the URL's.
+vi.mock('../lib/declaration-prep', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/declaration-prep')>()),
+  resolveRedovisare: vi.fn(async () => '165560000000'),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return {
@@ -26,6 +32,15 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
 
+/** The write-role gate reads company_members; this caller is a member. */
+function memberSupabase() {
+  const membership = {
+    eq: () => membership,
+    maybeSingle: async () => ({ data: { role: 'member' }, error: null }),
+  }
+  return { from: () => ({ select: () => membership }) }
+}
+
 function makeContext(): ExtensionContext {
   return {
     userId: 'user-1',
@@ -33,7 +48,7 @@ function makeContext(): ExtensionContext {
     extensionId: 'skatteverket',
     requestId: 'req-lock-audit',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    supabase: {} as any,
+    supabase: memberSupabase() as any,
     emit: vi.fn().mockResolvedValue(undefined),
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     settings: {
@@ -58,7 +73,9 @@ describe('direct VAT declaration lock audit', () => {
     vi.clearAllMocks()
   })
 
-  it('records a successful lock before persisting the signing state', async () => {
+  // The transport writes the row inside skvRequest (transport-audit.test.ts
+  // counts it); the route only names the guard-read label and writes none.
+  it('labels the lock for the reset guards and persists the signing state after the call', async () => {
     mockSkvRequest.mockResolvedValue({
       ok: true,
       status: 200,
@@ -74,23 +91,25 @@ describe('direct VAT declaration lock audit', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(mockWriteSkatteverketAudit).toHaveBeenCalledWith(ctx, {
-      endpoint: 'declaration/lock',
-      agRegistreradId: '165560000000',
-      redovisningsperiod: '202606',
-      outcome: 'ok',
-      responseStatus: 200,
-    })
+    expect(mockSkvRequest).toHaveBeenCalledWith(
+      ctx.supabase,
+      'user-1',
+      'company-1',
+      'PUT',
+      '/las/165560000000/202606',
+      { endpoint: 'declaration/lock', agRegistreradId: '165560000000', redovisningsperiod: '202606' },
+    )
+    expect(mockWriteSkatteverketAudit).not.toHaveBeenCalled()
     expect(ctx.settings.set).toHaveBeenCalledWith(
       'submission_202606',
       expect.stringContaining('"status":"draft_locked"'),
     )
-    expect(mockWriteSkatteverketAudit.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mockSkvRequest.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(ctx.settings.set).mock.invocationCallOrder[0]!,
     )
   })
 
-  it('records a rejected lock response', async () => {
+  it('does not persist a rejected lock', async () => {
     mockSkvRequest.mockResolvedValue({
       ok: false,
       status: 409,
@@ -106,13 +125,7 @@ describe('direct VAT declaration lock audit', () => {
     )
 
     expect(response.status).toBe(409)
-    expect(mockWriteSkatteverketAudit).toHaveBeenCalledWith(ctx, {
-      endpoint: 'declaration/lock',
-      agRegistreradId: '165560000000',
-      redovisningsperiod: '202606',
-      outcome: 'skv_error',
-      responseStatus: 409,
-    })
+    expect(mockWriteSkatteverketAudit).not.toHaveBeenCalled()
     expect(ctx.settings.set).not.toHaveBeenCalled()
   })
 })

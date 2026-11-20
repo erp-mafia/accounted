@@ -25,7 +25,7 @@ import {
  * about whether a column exists. That blind spot kept article delete broken for
  * ten days, hid sixteen more phantom-column sites, two phantom CHECK values
  * (`source_type = 'transaction'` against a real `bank_transaction`: 0 rows where
- * prod has 3 917) and one `onConflict` naming a dropped unique constraint, which
+ * thousands exist) and one `onConflict` naming a dropped unique constraint, which
  * raised 42P10 on every call. Mocked tests provably cannot catch that class.
  *
  * This test compares two things that cannot lie to each other: the schema
@@ -35,7 +35,7 @@ import {
  * and asserts a contract against checked-in code.
  *
  * GROUND TRUTH: the migration files. Not a live database (a pg-real test would
- * be authoritative but only runs in the `test-pg-real` CI job, so a developer's
+ * be authoritative but only runs in the `pg-real` CI job, so a developer's
  * `npm test` would never see it), and not a checked-in snapshot (which rots).
  * Replaying the migrations costs ~250ms, runs everywhere, and has no artifact to
  * go stale: the migrations are already the repo's contract with prod. No test in
@@ -67,7 +67,16 @@ const KNOWN_PHANTOM_TABLES: Record<string, string> = {}
 /** Pre-existing literal values that no CHECK constraint allows. */
 const KNOWN_PHANTOM_VALUES: Record<string, string> = {}
 
-/** Pre-existing `onConflict` targets with no matching unique constraint. */
+/**
+ * Pre-existing `onConflict` targets with no matching unique constraint.
+ *
+ * 2026-10-11: these two surfaced when the replay learned the names Postgres
+ * gives unnamed UNIQUE/PK constraints, so the 20260330130000 drops of
+ * `fiscal_periods_user_id_period_start_period_end_key` and
+ * `extension_data_user_id_extension_id_key_key` now retract their sets. The
+ * two fiscal_periods sites were fixed by fix/categorize-fiscal-period-conflict,
+ * which landed in the same batch as this guard, so the list is empty.
+ */
 const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 
 /**
@@ -192,6 +201,18 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // the day's other merges (peppol, SIE set-based import) under the Motparter
 // page. Same escape hatch, same reason: one expression somewhere in the files
 // the branches do not share.
+// 2026-09-19: 407 -> 409 with the per-key company allowlist (api_key_companies):
+// the OAuth token route and the settings key-creation route write the
+// allowlist as one bulk insert of { api_key_id, company_id } rows mapped from
+// the selected ids (a row per company cannot be an object literal). Both
+// columns are created by migration 20260928112721 and the same shape is
+// pinned by tests/pg/api-key-companies.pg.test.ts.
+// 2026-09-19 later: those two bulk inserts, the PATCH route's upsert array
+// and its interpolated not-in prune moved into two SECURITY DEFINER RPCs
+// (create_api_key_with_allowlist, replace_api_key_allowlist, migration
+// 20260928112722) so key + allowlist are one transaction; the count is 405.
+// The ceiling stayed at 409 as headroom; merged 2026-09-23 under the
+// Arkiv ceiling below, which already covers it.
 // 2026-09-21 Arkiv merge train (phases 1 to 5 each add their own entry below;
 // main stood at 407 of 407 when the train started). Headroom of 3 restored
 // here so a parallel merge to main does not stall the train: 407 -> 410 base.
@@ -212,7 +233,92 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // behandlingshistorik.ts: valid_from/valid_to as of a date, belief window,
 // ilike on title and counterparty), which PostgREST can only express as a
 // formatted or-string.
-const UNRESOLVED_CEILING = 422
+// API parity wave 3, documents (+2): the (created_at, id) keyset cursor of
+// documents.list and inbox-items.list (lib/documents/document-actions.ts,
+// lib/documents/inbox-item-actions.ts) is a runtime or-string, the same
+// shape expense-claims.list already carries.
+// MCP create_invoice on the shared builder (+1): commitCreateInvoice inserts
+// buildInvoiceWriteData's invoiceFields instead of its own literal copy of
+// the invoice columns, the same spread the web, v1, webshop and sales-order
+// inserts already carry. Listing the columns literally again would bring
+// back the hand copy this change removes.
+// Payment orders (+1): lib/payments/orders/types.ts recordPaymentOrderEvents,
+// the one insert site for payment_order_events, inserts one row per event
+// built by a map, the same shape as the Arkiv phase 1 and 4 entries. The
+// headroom it once fitted in went to the MCP create_invoice entry above, so
+// the ceiling rises by exactly that one site.
+// Payment orders over v1 and MCP (+1): lib/operations/payment-orders.ts
+// paymentOrdersList pages with the (created_at, id) keyset .or() filter the
+// supplier payment batch list already carries (a runtime or-string).
+// Salary correction (+2): lib/salary/correct-run.ts copyRosterToCorrection
+// copies the original roster and line rows minus a deny-list. Its columns
+// come from the rows it just read, so none can be phantom; listing them
+// literally again would bring back the hand copy that dropped every column
+// added after it.
+// v1 invoice bulk-create on the shared builder (+1): the header insert
+// spreads buildInvoiceWriteData's invoiceFields instead of its own literal
+// copy of the invoice columns, the same spread as POST /invoices. The copy
+// is what dropped discounts and every later invoice field.
+// Bankgirot split (+1): lib/transactions/parts-store.ts storeTransactionParts,
+// the one insert site for bank_transaction_parts, inserts one row per part
+// built by a map, the same shape as the payment_order_events entry above.
+// Payee change alert (+5, fitted in the headroom) and the invoice beside the
+// payment (+2, over it): both read shared column lists so every payment path
+// selects the same payee and document columns. lib/payments/payee-alerts.ts
+// (two selects and the card update), payee-registration.ts
+// CARD_PAYEE_COLUMNS and the MCP supplier invoice read; then
+// lib/payments/orders/invoice-document.ts INVOICE_DOCUMENT_COLUMNS, read on
+// its own and embedded in the payment order list of
+// app/api/payments/orders/route.ts. Each change fitted alone; together they are
+// one over, so the ceiling rises by exactly that one site.
+// 433 (2026-10-15): +1 for the v1 pending-operations list's keyset cursor,
+// the same (created_at, id) .or() predicate every v1 list builds at runtime.
+// 434 (2026-10-17): +1 for lib/vendor-logos/run.ts queueDomains, which
+// upserts one { domain } row per new vendor domain, built by a map in
+// chunks of 500 (the payment_order_events shape above); one row per request
+// would be hundreds of requests a run.
+// 435 (2026-10-18): +1 for the webhook fan-out from the event outbox
+// (lib/webhooks/handler.ts): the upsert keyed by outbox id writes the same
+// per-webhook rows the inline insert beside it already builds at runtime.
+// 436 (2026-10-21, crm#1347): +1 for MCP gnubok_get_transaction
+// (lib/transactions/read-with-vouchers.ts), which now selects the v1 detail
+// endpoint's TRANSACTION_DETAIL_COLUMNS instead of its own literal copy, the
+// copy that never had external_id. The shared list is checked against the
+// replayed schema in lib/transactions/__tests__/detail-columns.test.ts.
+// 438 (2026-10-19): +2 for lib/digital-mailboxes/connections.ts, the one
+// store of the Kivra/Billo connection row: upsertConnection spreads and
+// updateConnection writes a typed ConnectionPatch that the connect, sync and
+// webhook paths each build for their own state change. Its reads select '*'.
+// 439 (2026-10-23): +1 for lib/invoices/autogiro/service.ts createDebitFile,
+// which inserts one autogiro_debits row per invoice of the file in one
+// request, built by a map: the one-live-debit index must refuse the whole
+// file at once, before any file row exists.
+// 443 (2026-10-25): +4 for BankID signing (lib/signing, lib/documents/deletion):
+// the signers of a request and their personnummer locks are each inserted in
+// one request built by a map (a failed insert takes the request with it), the
+// poll lease is a lease-free-or-expired .or(), and a document is found as the
+// signed original, its signed copy or its evidence package with one .or().
+// 444 (2026-10-26): +1, the fifth signing site the 443 entry did not count:
+// the signing request list filtered by document (lib/signing/requests.ts)
+// matches original, signed copy or evidence package with the same .or() as
+// lib/documents/deletion.ts. Surfaced when main grew to its own ceiling.
+// 445 (2026-10-29): +1 for the year-end stock count (lib/bokslut/stock-count/
+// register.ts insertRows): the rows of an inventeringslista (up to 5 000)
+// are inserted in one request built by a map, so a failed insert leaves no
+// half list behind and a pasted list is not thousands of requests. Every
+// other stock count select and payload is a literal.
+// 450 (2026-10-26, K3 components): +5 for the component register
+// (lib/bokslut/assets/asset-service.ts, component-service.ts): a component
+// row is built once by componentInsertRow so create, add and the full-list
+// patch write the same columns, and a component update writes only the
+// fields that changed (a changed estimate must pass a posted, locked basis).
+// 451 (2026-11-01, batched attest mail, crm#1569): +1 for storeAttestBatches
+// (lib/supplier-invoices/attest-batches.ts): the link rows of one round, one
+// per attester, are inserted in one request built by a map, so the round is
+// on record whole or not at all before any mail goes out. Every other select,
+// payload and filter of the attest mail is a literal; the lease is a plain
+// lt() against a '-infinity' default, not an .or().
+const UNRESOLVED_CEILING = 451
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
@@ -375,7 +481,7 @@ describe('schema replay (parser fidelity)', () => {
     expect(sourceType, 'journal_entries.source_type should be a closed value set').toBeDefined()
     expect(sourceType!.has('bank_transaction')).toBe(true)
     expect(sourceType!.has('stripe_payout')).toBe(true)
-    // The phantom value that read 0 rows where prod had 3 917.
+    // The phantom value that read 0 rows where thousands existed.
     expect(sourceType!.has('transaction')).toBe(false)
   })
 })
@@ -609,6 +715,15 @@ describe('scanner behaviour (the net catches, and does not over-catch)', () => {
     expect(
       scanSourceText(code, 'probe.ts', schema).unresolved.map((u) => u.reason)
     ).toContain('unknown-builder-table')
+  })
+
+  it('retracts an unnamed unique constraint dropped by its generated name', () => {
+    // extension_data was created with an inline `unique(user_id, extension_id, key)`,
+    // which Postgres names extension_data_user_id_extension_id_key_key;
+    // 20260330130000 dropped that name and added (company_id, extension_id, key).
+    const sets = schema.tables.get('extension_data')!.uniqueSets
+    expect(sets.has('extension_id,key,user_id')).toBe(false)
+    expect(sets.has('company_id,extension_id,key')).toBe(true)
   })
 
   it('catches a phantom value on a CHECK-constrained column', () => {

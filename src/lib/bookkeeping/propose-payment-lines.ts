@@ -4,21 +4,22 @@
  *
  * No DB or Supabase dependency: all inputs are plain data.
  */
-import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
-import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
-import {
-  getRevenueAccount,
-  getOutputVatAccount,
-  InvoiceFxRateMissingError,
-} from './invoice-accounts'
-import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { isKronorCurrency, resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
+import { roundOre, ORE_TOLERANCE } from '@/lib/money'
+import { InvoiceFxRateMissingError } from './invoice-accounts'
+import { buildInvoiceCashLines } from './invoice-lines'
+import { statedSettlement } from './ledger-carried-sek'
+import { bookedOreRounding, fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
+import type { CreateJournalEntryLineInput, EntityType, InvoiceItem, VatTreatment } from '@/types'
 
 export interface ProposePaymentLinesInput {
   invoice: {
+    id: string
     invoice_number: string | null
+    /** The customer's name, for the payment line text as the other doors book it. */
+    customer_name?: string | null
     total: number
     total_sek?: number | null
     subtotal: number
@@ -28,6 +29,8 @@ export interface ProposePaymentLinesInput {
     currency: string
     exchange_rate?: number | null
     vat_treatment: VatTreatment
+    /** #2906: goods delivered abroad preview on 3105 / 3108, as they book. */
+    delivery_country?: string | null
     items?: InvoiceItem[]
     /** Per-invoice öresavrundning override; null = inherit the company setting. */
     ore_rounding?: boolean | null
@@ -47,11 +50,11 @@ export interface ProposePaymentLinesInput {
      */
     deduction_reclaimed_total?: number | null
     /**
-     * Dimensions PR7: the invoice's default bag. Stamped on every proposed
-     * line: the payment dialog always submits its (editable) lines, so the
-     * preview IS the booked entry and must re-propagate the tag like the
-     * no-override generator path does. Per-item bags are not split out here
-     * (the preview groups per rate); users can retag lines in the grid.
+     * Dimensions PR7: the invoice's default bag. The payment dialog always
+     * submits its (editable) lines, so the preview IS the booked entry and
+     * must carry the tag like the generator path does: stamped on every
+     * clearing line; on the kontantmetoden entry each line carries the bag
+     * buildInvoiceCashLines gives it (an item's own tag merged over this one).
      */
     default_dimensions?: Record<string, string> | null
     /**
@@ -63,10 +66,18 @@ export interface ProposePaymentLinesInput {
      */
     paid_amount?: number | null
     remaining_amount?: number | null
+    /**
+     * What 1510 carries (carriedSekOf): for a foreign invoice, and for a SEK
+     * invoice whose issue verifikat booked the öresavrundning. The proposal
+     * clears exactly that, so nothing is stranded on a paid invoice and the öre
+     * are not booked twice.
+     */
+    carried_sek?: number | null
   }
   accountingMethod: 'accrual' | 'cash'
   entityType: EntityType
-  paymentAccount?: string
+  /** The account the money landed on: the caller names it. */
+  paymentAccount: string
   exchangeRateDifference?: number
   /**
    * company_settings.ore_rounding. Combined with the per-invoice override via
@@ -105,11 +116,11 @@ export function resolveInvoicePaymentSourceType(opts: {
  * Propose journal entry lines for an invoice payment.
  *
  * Accrual: Debit paymentAccount, Credit 1510, optional exchange rate diff.
- * Cash: Debit paymentAccount, Credit 30xx + 26xx per VAT rate group.
+ * Cash: the kontantmetoden entry of buildInvoiceCashLines (see proposeCashLines).
  */
 export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[] {
   const { invoice, accountingMethod, entityType, exchangeRateDifference } = input
-  const paymentAccount = input.paymentAccount || '1930'
+  const { paymentAccount } = input
   const desc = invoice.invoice_number ? `Betalning faktura ${invoice.invoice_number}` : 'Betalning faktura'
 
   // #1717: an invoice with a prior partial payment gets a proposal that
@@ -127,15 +138,18 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
     input.companyOreRounding === undefined ? undefined : { ore_rounding: input.companyOreRounding },
   ).roundingDelta
 
+  if (accountingMethod === 'cash') {
+    return proposeCashLines(invoice, paymentAccount, entityType, roundingDelta)
+  }
+
   // 1513 is a kronor receivable, so the deduction converts with the invoice's
   // booking rate or not at all: same refusal as generateRotRutLines.
   const deductionSek = resolveDeductionSek(invoice)
 
-  const lines = accountingMethod === 'accrual'
-    ? proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference, roundingDelta, deductionSek)
-    : proposeCashLines(invoice, paymentAccount, desc, entityType, roundingDelta, deductionSek)
-
-  return withInvoiceDimensions(lines, invoice)
+  return withInvoiceDimensions(
+    proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference, roundingDelta, deductionSek),
+    invoice,
+  )
 }
 
 /**
@@ -186,14 +200,26 @@ function proposeRemainingAwareLines(
   const hasPartial = remaining > ORE_TOLERANCE && total - remaining > ORE_TOLERANCE
   if (!hasPartial) return null
 
-  if (remaining < ORE_ROUNDING_SETTLEMENT_MAX) {
+  // The issue verifikat booked the öresavrundning (carriedSekOf): 1510 gives
+  // up what it carries, the bank the remaining, and 3740 the difference, so
+  // the öre on the issue verifikat are not booked twice.
+  if (bookedOreRounding(remaining, invoice.carried_sek) !== 0) {
+    const carried = roundOre(invoice.carried_sek!)
+    const lines: FormLine[] = [
+      { account_number: paymentAccount, debit_amount: toFormAmount(remaining), credit_amount: '', line_description: desc },
+      { account_number: '1510', debit_amount: '', credit_amount: toFormAmount(carried), line_description: desc },
+    ]
+    const issueOre = oreSettlementResidual(carried, remaining)
+    if (issueOre !== 0) lines.push(toFormLine(oreRoundingLine(issueOre, 'customer')))
+    return lines
+  }
+
+  // Nothing arrives at the bank, so the whole remaining is the residual; it
+  // is öresavrundning only inside the shared band.
+  const residual = oreSettlementResidual(remaining, 0)
+  if (residual !== 0) {
     return [
-      {
-        account_number: '3740',
-        debit_amount: toFormAmount(remaining),
-        credit_amount: '',
-        line_description: 'Öresavrundning',
-      },
+      toFormLine(oreRoundingLine(residual, 'customer')),
       {
         account_number: '1510',
         debit_amount: '',
@@ -242,17 +268,16 @@ function resolveDeductionSek(invoice: ProposePaymentLinesInput['invoice']): numb
   return roundOre(sek)
 }
 
-/**
- * The 3740 (öres- och kronutjämning) residual line. Customer paid over the
- * stored total (rounded up) → credit (vinst); under (rounded down) → debit
- * (förlust). Same polarity as buildInvoicePaymentClearingLines.
- */
-function oreRoundingLine(roundingDelta: number): FormLine {
+/** A built verifikat line as an editable dialog row, its bag kept. */
+function toFormLine(line: CreateJournalEntryLineInput): FormLine {
   return {
-    account_number: '3740',
-    debit_amount: roundingDelta < 0 ? toFormAmount(Math.abs(roundingDelta)) : '',
-    credit_amount: roundingDelta > 0 ? toFormAmount(roundingDelta) : '',
-    line_description: 'Öresavrundning',
+    account_number: line.account_number,
+    debit_amount: toFormAmount(line.debit_amount),
+    credit_amount: toFormAmount(line.credit_amount),
+    line_description: line.line_description ?? '',
+    ...(line.dimensions && Object.keys(line.dimensions).length > 0
+      ? { dimensions: { ...line.dimensions } }
+      : {}),
   }
 }
 
@@ -266,20 +291,22 @@ function proposeAccrualLines(
 ): FormLine[] {
   // The customer's share only: 1510 was debited total minus the ROT/RUT
   // deduction at issue (1513 took the rest), so that is what the payment clears.
-  const bookedSekAmount = Math.round((resolveSekAmount(
-    invoice.total,
-    invoice.total_sek,
-    invoice.currency,
-    invoice.exchange_rate
-  ) - deductionSek) * 100) / 100
+  const sekAtRate = roundOre(
+    resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate) - deductionSek,
+  )
+  const bookedSekAmount = invoice.carried_sek ?? sekAtRate
   const lines: FormLine[] = []
 
   if (exchangeRateDifference && exchangeRateDifference !== 0) {
-    const actualSekReceived = bookedSekAmount + exchangeRateDifference
+    const { bankSek, gainSek } = statedSettlement({
+      cleared: bookedSekAmount,
+      sekAtRate,
+      difference: exchangeRateDifference,
+    })
 
     lines.push({
       account_number: paymentAccount,
-      debit_amount: toFormAmount(actualSekReceived),
+      debit_amount: toFormAmount(bankSek),
       credit_amount: '',
       line_description: desc,
     })
@@ -291,26 +318,18 @@ function proposeAccrualLines(
       line_description: desc,
     })
 
-    if (exchangeRateDifference > 0) {
-      lines.push({
-        account_number: '3960',
-        debit_amount: '',
-        credit_amount: toFormAmount(exchangeRateDifference),
-        line_description: 'Valutakursvinst',
-      })
-    } else {
-      lines.push({
-        account_number: '7960',
-        debit_amount: toFormAmount(Math.abs(exchangeRateDifference)),
-        credit_amount: '',
-        line_description: 'Valutakursförlust',
-      })
-    }
+    if (gainSek !== 0) lines.push(toFormLine(fxDifferenceLine(gainSek)))
   } else {
     const amount = Math.round(bookedSekAmount * 100) / 100
+    // The customer pays "Att betala": the total plus the öresavrundning. On a
+    // SEK invoice whose issue verifikat booked that rounding, 1510 carries it
+    // already (carried_sek), so the residual below is 0 and 3740 is not
+    // booked twice. A foreign invoice has no rounding: the bank takes what
+    // 1510 carries.
+    const bank = isKronorCurrency(invoice.currency) ? roundOre(sekAtRate + roundingDelta) : roundOre(amount + roundingDelta)
     lines.push({
       account_number: paymentAccount,
-      debit_amount: toFormAmount(amount + roundingDelta),
+      debit_amount: toFormAmount(bank),
       credit_amount: '',
       line_description: desc,
     })
@@ -320,156 +339,46 @@ function proposeAccrualLines(
       credit_amount: toFormAmount(amount),
       line_description: desc,
     })
-    if (roundingDelta !== 0) {
-      lines.push(oreRoundingLine(roundingDelta))
+    const residual = oreSettlementResidual(amount, bank)
+    if (residual !== 0) {
+      lines.push(toFormLine(oreRoundingLine(residual, 'customer')))
     }
   }
 
   return lines
 }
 
+/**
+ * The kontantmetoden proposal. PaymentBookingDialog submits these lines
+ * verbatim, so they come from buildInvoiceCashLines, the builder
+ * createInvoiceCashEntry books on every other door (bank match, v1, MCP).
+ * This used to be a hand-kept copy that had drifted from it: it credited the
+ * VAT rate's default account where an invoice line named its own (an artikel
+ * or line override on 3041, say, was proposed and booked on 3001), and split
+ * neither per-item dimension bags nor per-item 1513 lines. A foreign invoice
+ * with no rate makes the builder refuse (InvoiceFxRateMissingError) instead
+ * of relabelling the foreign numbers as kronor; the dialog shows it as a toast.
+ *
+ * Öresavrundning: the customer pays the rounded "Att betala", so that is the
+ * bank amount the builder is given, exactly as a bank match gives it the
+ * bank row: 1930 takes it and 3740 the residual.
+ */
 function proposeCashLines(
   invoice: ProposePaymentLinesInput['invoice'],
   paymentAccount: string,
-  desc: string,
   entityType: EntityType,
   roundingDelta = 0,
-  deductionSek = 0
 ): FormLine[] {
-  const lines: FormLine[] = []
-  const isForeign = invoice.currency !== 'SEK'
-
-  // The cash-method preview IS the entry: PaymentBookingDialog submits these
-  // lines verbatim. A foreign invoice with no rate therefore must not be
-  // pre-filled with the raw foreign numbers relabelled as kronor: refuse with
-  // the same error the server generator raises (createInvoiceCashEntry). The
-  // dialog resolves the proposal inside a try/catch and surfaces the refusal as
-  // a translated toast, so throwing here is a visible dead-end, not a crash.
-  const toSek = (amount: number): number => {
-    const sek = resolveSekAmountOrNull(amount, null, invoice.currency, invoice.exchange_rate)
-    if (sek === null) throw new InvoiceFxRateMissingError(invoice.currency)
-    return sek
-  }
-
-  // Build credit lines per VAT rate group. Free-text / blank rows carry no
-  // amounts and never book: drop them first.
-  const creditLines: FormLine[] = []
-  const billableItems = (invoice.items ?? []).filter((item) => item.line_type !== 'text')
-
-  if (billableItems.length > 0) {
-    const hasPerLineVat = billableItems.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
-
-    if (!hasPerLineVat) {
-      // Legacy: single rate from invoice level
-      const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
-      const subtotal = billableItems.reduce((sum, item) => sum + item.line_total, 0)
-      creditLines.push({
-        account_number: revenueAccount,
-        debit_amount: '',
-        credit_amount: toFormAmount(toSek(subtotal)),
-        line_description: (invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'),
-      })
-
-      const totalVat = billableItems.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
-      if (totalVat > 0) {
-        const vatAccount = getOutputVatAccount(invoice.vat_treatment)
-        creditLines.push({
-          account_number: vatAccount,
-          debit_amount: '',
-          credit_amount: toFormAmount(toSek(totalVat)),
-          line_description: 'Utgående moms',
-        })
-      }
-    } else {
-      // Group items by vat_rate
-      const rateGroups = new Map<number, { subtotal: number; vatAmount: number }>()
-      for (const item of billableItems) {
-        const rate = item.vat_rate ?? 0
-        const group = rateGroups.get(rate) || { subtotal: 0, vatAmount: 0 }
-        group.subtotal += item.line_total
-        group.vatAmount += item.vat_amount || 0
-        rateGroups.set(rate, group)
-      }
-
-      for (const [rate, group] of rateGroups) {
-        const treatment = rate === 0 && (invoice.vat_treatment === 'reverse_charge' || invoice.vat_treatment === 'export')
-          ? invoice.vat_treatment
-          : getVatTreatmentForRate(rate)
-        const revenueAccount = getRevenueAccount(treatment, entityType)
-
-        creditLines.push({
-          account_number: revenueAccount,
-          debit_amount: '',
-          credit_amount: toFormAmount(Math.round(toSek(group.subtotal) * 100) / 100),
-          line_description: (invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'),
-        })
-
-        const roundedVat = Math.round(toSek(group.vatAmount) * 100) / 100
-        if (roundedVat !== 0) {
-          const vatAccount = getOutputVatAccount(treatment)
-          creditLines.push({
-            account_number: vatAccount,
-            debit_amount: '',
-            credit_amount: toFormAmount(roundedVat),
-            line_description: `Utgående moms ${rate}%`,
-          })
-        }
-      }
-    }
-  } else {
-    // Fallback: invoice-level amounts
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
-    const subtotalSek = resolveSekAmount(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
-    creditLines.push({
-      account_number: revenueAccount,
-      debit_amount: '',
-      credit_amount: toFormAmount(subtotalSek),
-      line_description: (invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'),
-    })
-
-    if (invoice.vat_amount > 0) {
-      const vatSek = resolveSekAmount(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
-      const vatAccount = getOutputVatAccount(invoice.vat_treatment)
-      creditLines.push({
-        account_number: vatAccount,
-        debit_amount: '',
-        credit_amount: toFormAmount(vatSek),
-        line_description: (invoice.invoice_number ? `Utgående moms faktura ${invoice.invoice_number}` : 'Utgående moms faktura'),
-      })
-    }
-  }
-
-  // Debit: balance guarantee
-  const totalCredits = creditLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-  const debitAmount = isForeign
-    ? Math.round(totalCredits * 100) / 100
-    : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
-
-  // Cash method: revenue + moms on the full amount, but the bank only ever
-  // receives the customer's share; the ROT/RUT deduction is debited to 1513
-  // (Skatteverket pays it later), mirroring createInvoiceCashEntry.
-  lines.push({
-    account_number: paymentAccount,
-    debit_amount: toFormAmount(debitAmount - deductionSek + roundingDelta),
-    credit_amount: '',
-    line_description: desc,
-  })
-  if (deductionSek > 0) {
-    lines.push({
-      account_number: '1513',
-      debit_amount: toFormAmount(deductionSek),
-      credit_amount: '',
-      line_description: invoice.invoice_number
-        ? `ROT/RUT-avdrag faktura ${invoice.invoice_number}`
-        : 'ROT/RUT-avdrag faktura',
-    })
-  }
-
-  lines.push(...creditLines)
-
+  // Kontantmetoden only reaches here: a ROT/RUT invoice books its first step.
+  const build = (knownBankSek?: number) =>
+    buildInvoiceCashLines(
+      invoice, entityType, invoice.customer_name ?? undefined, paymentAccount, knownBankSek, undefined,
+      { deferDeductionShare: true },
+    )
+  let { lines } = build()
   if (roundingDelta !== 0) {
-    lines.push(oreRoundingLine(roundingDelta))
+    // The builder's first line is the settlement debit: the customer share.
+    lines = build(roundOre(lines[0].debit_amount + roundingDelta)).lines
   }
-
-  return lines
+  return lines.map(toFormLine)
 }

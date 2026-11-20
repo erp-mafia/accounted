@@ -59,7 +59,7 @@ export const onboardingEmpty = defineAgentIntent<OnboardingEmptyArgs, CapturedOn
     if (captured.route) lines.push(`Route: ${captured.route}`)
     lines.push('')
     lines.push(
-      'Förklara kort vad sidan är till för och vilka 1-2 nästa steg som ger mest värde för just denna användare. Var konkret. Svara på svenska.',
+      'Förklara kort vad sidan är till för och vilka 1-2 nästa steg som ger mest värde för just denna användare. Var konkret.',
     )
     return lines.join('\n')
   },

@@ -3,7 +3,7 @@ import {
   readInviteCookie,
   type InviteAcceptProblem,
 } from '@/lib/auth/consume-invite-cookie'
-import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { mfaStepUpApplies } from '@/lib/auth/mfa'
 
 /**
  * Invite handoff for the password-recovery flow.
@@ -111,12 +111,12 @@ export async function handoffPendingInvite(
  * legitimate invitee would be told their invitation belongs to someone else.
  *
  * The predicate mirrors the middleware's own condition exactly
- * (`shouldEnforceMfa` plus aal1-with-aal2-required), which makes "we skipped"
+ * (`mfaStepUpApplies` plus aal1-with-aal2-required), which makes "we skipped"
  * and "the middleware will bounce this user to /mfa/verify" the same statement:
  * the cookie survives untouched and `/mfa/verify` consumes it once the second
- * factor is in. A user whose MFA is not enforced (self-hosted, BankID-linked)
- * is deliberately never deferred, because nothing would bounce them and the
- * token would sit there unused.
+ * factor is in. A user the step-up does not apply to (self-hosted,
+ * BankID-linked, exempt) is deliberately never deferred, because nothing would
+ * bounce them and the token would sit there unused.
  *
  * A failed read is not evidence of a pending step-up, so it falls through to
  * the attempt: the server is the authority, and a 403 keeps the token anyway.
@@ -124,7 +124,7 @@ export async function handoffPendingInvite(
 async function mfaStepUpOwed(deps: InviteHandoffDeps): Promise<boolean> {
   try {
     const user = await deps.getUser()
-    if (!user || !shouldEnforceMfa(user)) return false
+    if (!user || !mfaStepUpApplies(user)) return false
 
     const aal = await deps.getAssuranceLevel()
     return aal?.nextLevel === 'aal2' && aal.currentLevel === 'aal1'

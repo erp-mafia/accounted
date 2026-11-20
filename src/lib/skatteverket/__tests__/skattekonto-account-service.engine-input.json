@@ -1,0 +1,66 @@
+[
+  {
+    "name": "an överskott left on 1630 moves to 2012",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Omföring av skattekontot från 1630 till 2012",
+          "source_type": "manual",
+          "notes": "Utkast skapat när skattekontots konto ändrades till 2012. Saldot på 1630 per 2026-09-01. Kontrollera beloppet mot skattekontoutdraget innan du bokför.",
+          "lines": [
+            {
+              "account_number": "2012",
+              "debit_amount": 800,
+              "credit_amount": 0,
+              "line_description": "Omföring av skattekontot från 1630 till 2012"
+            },
+            {
+              "account_number": "1630",
+              "debit_amount": 0,
+              "credit_amount": 800,
+              "line_description": "Omföring av skattekontot från 1630 till 2012"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a debt left on 2012 moves back to 1630",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-14",
+          "description": "Omföring av skattekontot från 2012 till 1630",
+          "source_type": "manual",
+          "notes": "Utkast skapat när skattekontots konto ändrades till 1630. Saldot på 2012 per 2026-10-14. Kontrollera beloppet mot skattekontoutdraget innan du bokför.",
+          "lines": [
+            {
+              "account_number": "2012",
+              "debit_amount": 1234.5,
+              "credit_amount": 0,
+              "line_description": "Omföring av skattekontot från 2012 till 1630"
+            },
+            {
+              "account_number": "1630",
+              "debit_amount": 0,
+              "credit_amount": 1234.5,
+              "line_description": "Omföring av skattekontot från 2012 till 1630"
+            }
+          ]
+        }
+      ]
+    ]
+  }
+]

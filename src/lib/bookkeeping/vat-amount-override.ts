@@ -1,4 +1,5 @@
 import type { MappingResult, Transaction, VatTreatment } from '@/types'
+import { maxVatInGross, vatWithinGrossCeiling } from './gross-split'
 import { roundOre } from '@/lib/money'
 import { resolveSekAmount } from './currency-utils'
 import { getVatRate } from './vat-entries'
@@ -7,7 +8,8 @@ import { getVatRate } from './vat-entries'
  * Replace the rate-based VAT line of a template booking with the underlag's
  * actual moms. A clean 25 % receipt gives the same figure either way; one
  * with dricks, mixed rates or öresavrundning does not, and the document is
- * the truth (ML 8 kap. 17 §: the deduction follows the invoice).
+ * the truth: the deduction (ML 2023:200 13 kap.) is of the VAT amount the
+ * invoice states (17 kap. 24 § p.11).
  *
  * Same rules and bounds as buildMappingResultFromCategory's
  * vatAmountOverride: only on a rate-based treatment, positive, at most the
@@ -30,8 +32,8 @@ export function applyVatAmountOverride(
     throw new Error(`vat_amount must be a positive number, got ${vatAmount}.`)
   }
   const absAmount = Math.abs(transaction.amount)
-  const maxVat = roundOre((absAmount * 0.25) / 1.25)
-  if (vatAmount > maxVat) {
+  const maxVat = maxVatInGross(absAmount)
+  if (!vatWithinGrossCeiling(vatAmount, absAmount)) {
     throw new Error(
       `vat_amount ${vatAmount} exceeds the maximum possible Swedish VAT on ${absAmount} (${maxVat} at 25%). ` +
         'Check the underlag: the override must be the document\'s actual moms.',

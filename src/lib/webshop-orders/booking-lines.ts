@@ -1,3 +1,5 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { splitGrossVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre as round } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
@@ -5,6 +7,12 @@ import type {
   WebshopStoreSettings,
   WebshopVatBreakdownLine,
 } from '@/types'
+import {
+  routeOrderBuckets,
+  usesSwedishAccounts,
+  type OrderRouting,
+  type RoutableOrder,
+} from './country-routing'
 
 /**
  * Pure builder for the journal lines that PREFILL the order booking dialog.
@@ -17,7 +25,16 @@ import type {
  *   Credit 3001                              400.00   net per rate
  *   Credit 2611                              100.00   VAT per rate
  * Refund rows mirror (debit revenue/VAT, credit the payment account).
- * A rounding residual goes to 3740 Öresavrundning so the entry balances.
+ * A rounding residual up to MAX_RESIDUAL_SEK goes to 3740 Öresavrundning so
+ * the entry balances; a larger gap never does (OrderBookingGap).
+ *
+ * A Shopify order shipped outside Sweden books each VAT bucket on the store's
+ * country rules (country-routing.ts) instead, e.g. 3106/2670 for an OSS sale;
+ * a bucket no rule covers, or an order without a destination country in a
+ * store with rules, keeps the Swedish accounts here, which only the single
+ * dialog may show (as an editable prefill). An order shipped to Sweden, or
+ * without a country, books on the store's Sverige row when it has one: its
+ * own sales account, the output VAT account for the rate.
  *
  * Non-SEK orders book in SEK via the row's stored exchange_rate (rate date =
  * paid date, captured at sync); every line carries the currency metadata trio
@@ -69,6 +86,14 @@ const VAT_ACCOUNT_BY_RATE: Record<number, string> = {
 export const ROUNDING_ACCOUNT = '3740'
 
 /**
+ * A gap between an order's gross total and its VAT buckets above this
+ * magnitude (SEK) is not öresavrundning: per-bucket öre rounding and FX drift
+ * stay well below it. The prefill never books such a gap on 3740, and an
+ * unattended booking refuses the order (unattended-lines.ts).
+ */
+export const MAX_RESIDUAL_SEK = 1
+
+/**
  * Every account this prefill can emit, as a closed set.
  *
  * seed_chart_of_accounts() seeds a minimal chart: 3001/3002/3003 and
@@ -104,6 +129,24 @@ export function resolvePaymentAccount(
     return { account: DEFAULT_PAYMENT_ACCOUNT, invoiceMode: true, mapped: true }
   }
   return { account: policy.account, invoiceMode: false, mapped: true }
+}
+
+/**
+ * The payment methods a store's orders carry, each with a display title, in
+ * first-seen order (the mapping form's rows). A needs_review row's title says
+ * why the order is held (Zettle: "Dricks ingår: bokför manuellt"), not what
+ * the method is, so it never names the method.
+ */
+export function paymentMethodsSeen(
+  rows: ReadonlyArray<Pick<WebshopOrder, 'payment_method' | 'payment_method_title' | 'status'>>,
+): Array<{ method: string; title: string | null }> {
+  const seen = new Map<string, string | null>()
+  for (const row of rows) {
+    if (!row.payment_method) continue
+    const title = row.status === 'needs_review' ? null : row.payment_method_title
+    if (!seen.get(row.payment_method)) seen.set(row.payment_method, title)
+  }
+  return Array.from(seen.entries()).map(([method, title]) => ({ method, title }))
 }
 
 /**
@@ -143,26 +186,78 @@ export function unsupportedVatRates(breakdown: WebshopVatBreakdownLine[]): numbe
   return Array.from(bad).sort((a, b) => a - b)
 }
 
-export type BookingWarning = 'zero_rate_foreign' | 'foreign_vat'
+/**
+ * The breakdown an order books from: the store's own per-rate split, or the
+ * ratio-inferred single bucket when the store sent none.
+ */
+export function bookingBreakdown(
+  order: Pick<WebshopOrder, 'vat_breakdown' | 'total' | 'total_tax'>,
+): WebshopVatBreakdownLine[] {
+  return order.vat_breakdown.length > 0
+    ? order.vat_breakdown
+    : fallbackVatBreakdown(order.total, order.total_tax)
+}
+
+/** Route an order's VAT buckets through its store's country rules. */
+export function routeOrder(
+  order: RoutableOrder & Pick<WebshopOrder, 'vat_breakdown' | 'total' | 'total_tax'>,
+  settings: Pick<WebshopStoreSettings, 'country_account_rules'> | null | undefined,
+): OrderRouting {
+  return routeOrderBuckets(order, bookingBreakdown(order), settings?.country_account_rules)
+}
+
+/**
+ * unsupportedVatRates() for the buckets that book on the Swedish accounts:
+ * a bucket a country rule books on its own accounts may carry any rate
+ * (19 % to Germany through OSS), the rest must be a Swedish rate.
+ */
+export function unsupportedSwedishRates(routing: OrderRouting): number[] {
+  return unsupportedVatRates(
+    routing.buckets.filter(usesSwedishAccounts).map((route) => route.bucket),
+  )
+}
+
+export type BookingWarning =
+  | 'country_not_routed'
+  | 'country_unknown'
+  | 'zero_rate_foreign'
+  | 'foreign_vat'
 
 /**
  * Advisory (never blocking, per the soft-guard rule) compliance hints for
  * the booking dialog:
+ * - country_not_routed: a Shopify order shipped outside Sweden with a VAT
+ *   bucket the store's country rules do not cover, so the prefill books it
+ *   on the Swedish accounts (crm#1032). First, since it outranks the rest.
+ * - country_unknown: a Shopify order without a destination country in a
+ *   store that has country rules (isDestinationUnknown), so the prefill uses
+ *   the Swedish accounts without knowing where the goods went. The bulk
+ *   sweep refuses the same order.
  * - zero_rate_foreign: a 0%-rate amount on an order with a known non-SE
  *   billing country. The prefill's 3004 (ruta 42) is only right for
  *   domestic momsfri sales; export/EU sales belong on 31xx/33xx accounts.
  * - foreign_vat: VAT charged on a non-SEK order. Swedish 2611-series output
  *   VAT may be wrong if the merchant is over the EU distance-selling
- *   threshold (OSS) — the store's tax setup decides, the user must check.
+ *   threshold (OSS): the store's tax setup decides, the user must check. Not
+ *   for a bucket a 'swedish' country rule books: the store has answered that
+ *   question for it (Swedish VAT on EU sales, crm#1449).
  */
 export function resolveBookingWarnings(
-  order: Pick<
-    WebshopOrder,
-    'currency' | 'total_tax' | 'vat_breakdown' | 'customer_country'
-  >,
+  order: RoutableOrder &
+    Pick<WebshopOrder, 'currency' | 'total' | 'total_tax' | 'vat_breakdown' | 'customer_country'>,
+  settings?: Pick<WebshopStoreSettings, 'country_account_rules'> | null,
 ): BookingWarning[] {
+  // The same routing the prefill books from (routeOrder: the store's split,
+  // or the ratio-inferred bucket when it sent none), so a hint never misses
+  // a bucket the prefill shows. Buckets a country rule books on its own
+  // accounts are not the Swedish prefill these hints are about.
+  const routing = routeOrder(order, settings)
+  const swedishBuckets = routing.buckets.filter(usesSwedishAccounts).map((route) => route.bucket)
+  const defaultBuckets = routing.buckets.filter((route) => route.rule === null).map((route) => route.bucket)
   const warnings: BookingWarning[] = []
-  const hasZeroRateAmount = order.vat_breakdown.some(
+  if (routing.unroutedRates.length > 0) warnings.push('country_not_routed')
+  if (routing.destinationUnknown) warnings.push('country_unknown')
+  const hasZeroRateAmount = swedishBuckets.some(
     (b) => b.rate === 0 && b.net !== 0,
   )
   if (
@@ -172,7 +267,13 @@ export function resolveBookingWarnings(
   ) {
     warnings.push('zero_rate_foreign')
   }
-  if (order.currency.toUpperCase() !== 'SEK' && order.total_tax !== 0) {
+  // An order without the store's own split warns whatever its inferred
+  // bucket routes to: the rate itself is a guess the user must check.
+  if (
+    order.currency.toUpperCase() !== 'SEK' &&
+    order.total_tax !== 0 &&
+    (order.vat_breakdown.length === 0 || defaultBuckets.some((b) => b.tax !== 0))
+  ) {
     warnings.push('foreign_vat')
   }
   return warnings
@@ -211,7 +312,8 @@ export interface OrderBookingLinesInput {
     | 'total_sek'
     | 'exchange_rate'
     | 'vat_breakdown'
-  >
+  > &
+    RoutableOrder
   settings?: WebshopStoreSettings | null
   /** Explicit override of the payment counter-account (dialog edit). */
   paymentAccount?: string
@@ -219,20 +321,50 @@ export interface OrderBookingLinesInput {
    * Revenue template: revenue account per Swedish VAT rate. A rate not in
    * the map falls back to DEFAULT_REVENUE_ACCOUNT_BY_RATE. Only the revenue
    * side is templated; output VAT accounts are always derived from the rate.
+   * Applies to buckets on the Swedish accounts only, never to one a country
+   * rule books on its own accounts (usesRevenueTemplate): a 'swedish' rule's
+   * own revenue account outranks it.
    */
   revenueAccounts?: Partial<Record<number, string>>
+}
+
+/**
+ * The part of an order's gross total its VAT buckets do not cover, when it
+ * is above MAX_RESIDUAL_SEK. amount is in SEK, positive when the gross is the
+ * larger (in the refund's own direction for a refund row).
+ * - booked 'shipping': the gross is the larger and every bucket books on one
+ *   rate and one pair of accounts, so the gap is split at that rate onto
+ *   those accounts, like shipping that follows the goods (a refund whose
+ *   shipping part has no tax line, crm#1993). The lines balance.
+ * - booked null: several rates, no bucket, or buckets above the gross. The
+ *   lines leave the gap out and do not balance, so a person decides.
+ */
+export interface OrderBookingGap {
+  amount: number
+  booked: 'shipping' | null
+}
+
+export interface OrderBooking {
+  lines: CreateJournalEntryLineInput[]
+  /** null when the gross and the buckets agree within MAX_RESIDUAL_SEK. */
+  gap: OrderBookingGap | null
 }
 
 /**
  * Build balanced prefill lines for one order/refund row. Throws if total_sek
  * is required but unresolved: callers gate on it first.
  */
-export function buildOrderBookingLines({
+export function buildOrderBookingLines(input: OrderBookingLinesInput): CreateJournalEntryLineInput[] {
+  return buildOrderBooking(input).lines
+}
+
+/** buildOrderBookingLines() with the gap it could not book as öresavrundning. */
+export function buildOrderBooking({
   order,
   settings,
   paymentAccount,
   revenueAccounts,
-}: OrderBookingLinesInput): CreateJournalEntryLineInput[] {
+}: OrderBookingLinesInput): OrderBooking {
   const isSek = order.currency.toUpperCase() === 'SEK'
   const rate = isSek ? 1 : order.exchange_rate
   const grossSek = isSek ? round(order.total) : order.total_sek
@@ -246,12 +378,9 @@ export function buildOrderBookingLines({
   const isRefund = order.row_type === 'refund'
   const grossAbs = round(Math.abs(grossSek))
 
-  const breakdown =
-    order.vat_breakdown.length > 0
-      ? order.vat_breakdown
-      : fallbackVatBreakdown(order.total, order.total_tax)
+  const routing = routeOrder(order, settings)
 
-  const toSek = (amount: number) => round(Math.abs(amount) * rate)
+  const toSek = (amount: number) => sekOfForeign(Math.abs(amount), rate)
 
   const description = orderBookingDescription(order)
 
@@ -291,8 +420,11 @@ export function buildOrderBookingLines({
   // finding). counterSum accumulates the signed counter-direction total so
   // the residual stays a pure öre artifact.
   let counterSum = 0
+  // The same total in the order currency, for a gap above the residual limit.
+  let counterSumOriginal = 0
   const pushSigned = (account: string, signedOriginal: number) => {
     if (signedOriginal === 0) return
+    counterSumOriginal = round(counterSumOriginal + signedOriginal)
     const amountAbs = round(Math.abs(signedOriginal))
     const sekAbs = toSek(amountAbs)
     if (sekAbs === 0) return
@@ -300,22 +432,67 @@ export function buildOrderBookingLines({
     lines.push(line(account, sekAbs, side, amountAbs))
     counterSum = round(counterSum + (signedOriginal > 0 ? sekAbs : -sekAbs))
   }
-  for (const bucket of breakdown) {
+  // The rate and accounts of every bucket with an amount.
+  const targets: Array<{ rate: number; revenueAccount: string; vatAccount: string | null }> = []
+  for (const { bucket, rule } of routing.buckets) {
+    const hasAmount = round(bucket.net) !== 0 || round(bucket.tax) !== 0
+    if (rule && rule.mode === 'accounts') {
+      pushSigned(rule.revenue_account, round(bucket.net))
+      // routeOrderBuckets never routes a bucket with tax to a rule without
+      // a VAT account, so a missing one here means the bucket has no tax.
+      if (rule.vat_account) pushSigned(rule.vat_account, round(bucket.tax))
+      if (hasAmount) {
+        targets.push({ rate: bucket.rate, revenueAccount: rule.revenue_account, vatAccount: rule.vat_account })
+      }
+      continue
+    }
+    // A 'swedish' rule may name the revenue account (Swedish VAT on EU sales
+    // on an account of their own, crm#1449); the VAT account follows the rate.
+    const ruleRevenueAccount = rule?.mode === 'swedish' ? rule.revenue_account : null
     const revenueAccount =
-      revenueAccounts?.[bucket.rate] ??
-      REVENUE_ACCOUNT_BY_RATE[bucket.rate] ??
-      REVENUE_ACCOUNT_BY_RATE[25]
+      ruleRevenueAccount ||
+      (revenueAccounts?.[bucket.rate] ??
+        REVENUE_ACCOUNT_BY_RATE[bucket.rate] ??
+        REVENUE_ACCOUNT_BY_RATE[25])
     const vatAccount = VAT_ACCOUNT_BY_RATE[bucket.rate] ?? VAT_ACCOUNT_BY_RATE[25]
     pushSigned(revenueAccount, round(bucket.net))
     pushSigned(vatAccount, round(bucket.tax))
+    if (hasAmount) targets.push({ rate: bucket.rate, revenueAccount, vatAccount })
   }
 
-  // Balance residual (per-line rounding, FX drift) to öresavrundning. The
-  // residual can fall on either side. No currency metadata: the residual is
-  // an SEK-conversion artifact, not an amount that exists in the order
-  // currency.
+  // A gap above the residual limit is not öresavrundning (OrderBookingGap):
+  // split at the order's one rate when the gross is the larger, else left
+  // out for a person to book.
+  let gap: OrderBookingGap | null = null
+  const bucketGap = round(grossAbs - counterSum)
+  if (Math.abs(bucketGap) > MAX_RESIDUAL_SEK) {
+    const [first] = targets
+    const oneTarget =
+      first &&
+      targets.every(
+        (t) => t.rate === first.rate && t.revenueAccount === first.revenueAccount && t.vatAccount === first.vatAccount,
+      )
+        ? first
+        : null
+    const gapOriginal = round(Math.abs(order.total) - counterSumOriginal)
+    if (bucketGap > 0 && gapOriginal > 0 && oneTarget && (oneTarget.vatAccount || oneTarget.rate <= 0)) {
+      const { vat, net } = splitGrossVat(gapOriginal, oneTarget.rate / 100)
+      pushSigned(oneTarget.revenueAccount, net)
+      if (oneTarget.vatAccount) pushSigned(oneTarget.vatAccount, vat)
+      gap = { amount: bucketGap, booked: 'shipping' }
+    } else {
+      gap = { amount: bucketGap, booked: null }
+    }
+  }
+
+  // Balance residual (per-line rounding, FX drift) to öresavrundning, only
+  // within the limit. The residual can fall on either side. No currency
+  // metadata: the residual is an SEK-conversion artifact, not an amount that
+  // exists in the order currency.
   const residual = round(grossAbs - counterSum)
-  if (residual !== 0) {
+  // A split the SEK conversion leaves unbalanced beyond the limit is not booked.
+  if (gap && Math.abs(residual) > MAX_RESIDUAL_SEK) gap = { amount: gap.amount, booked: null }
+  if (residual !== 0 && Math.abs(residual) <= MAX_RESIDUAL_SEK) {
     const side: 'debit' | 'credit' = residual > 0 ? counterSide : grossSide
     const residualAbs = round(Math.abs(residual))
     lines.push({
@@ -326,5 +503,5 @@ export function buildOrderBookingLines({
     })
   }
 
-  return lines
+  return { lines, gap }
 }

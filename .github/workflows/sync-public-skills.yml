@@ -1,0 +1,45 @@
+name: Sync public accounting skills
+on:
+  push:
+    branches: [main]
+    paths: ['.claude/skills/swedish-*/**', 'scripts/sync-public-skills.ts', 'scripts/lib/atom-discovery.ts', '.github/workflows/sync-public-skills.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sync-public-skills
+  cancel-in-progress: false
+jobs:
+  sync:
+    # The push to the public mirror waits for a reviewer: PUBLIC_SKILLS_SYNC_TOKEN
+    # lives on this environment, which requires approval before the job runs.
+    environment: public-skills
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: erp-mafia/swedish-accounting-agents
+          token: ${{ secrets.PUBLIC_SKILLS_SYNC_TOKEN }}
+          path: public-skills-checkout
+          persist-credentials: false
+      - name: Generate and verify mirror
+        run: |
+          mv public-skills-checkout "$RUNNER_TEMP/public-skills-checkout"
+          git -C "$RUNNER_TEMP/public-skills-checkout" config user.name "Accounted skills sync"
+          git -C "$RUNNER_TEMP/public-skills-checkout" config user.email "skills-sync@users.noreply.github.com"
+          npm run skills:sync-public -- --target "$RUNNER_TEMP/public-skills-checkout" --commit
+          npm run skills:sync-public -- --target "$RUNNER_TEMP/public-skills-checkout" --check
+      - name: Publish generated commit
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_SKILLS_SYNC_TOKEN }}
+        run: |
+          gh auth setup-git
+          git -C "$RUNNER_TEMP/public-skills-checkout" push origin HEAD:main

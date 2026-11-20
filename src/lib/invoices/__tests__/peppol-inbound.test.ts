@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { createLogger } from '@/lib/logger'
@@ -8,12 +8,14 @@ import { sha256Hex } from '@/lib/invoices/peppol-delivery'
 import {
   PEPPOL_INBOUND_AWAITING_OWNER,
   PEPPOL_INBOUND_AWAITING_XML,
+  PEPPOL_INBOUND_MAX_PAGES,
   PEPPOL_INBOUND_RECIPIENT_MISSING,
   PEPPOL_INBOUND_UNARCHIVABLE_PREFIX,
   PEPPOL_INBOUND_UNREADABLE,
   PEPPOL_INBOUND_XML_UNAVAILABLE,
   PeppolInboundArchiveError,
   archiveInboundPeppolMessage,
+  isPeppolInboundSweepRun,
   orderInboundMessagesOldestFirst,
   processInboundPeppolRow,
   reprocessInboundPeppolDocuments,
@@ -48,6 +50,7 @@ const message: PeppolInboundMessage = {
 function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTransport {
   return {
     provider: 'qvalia',
+    tenantId: 'SE5595386219',
     lookupRecipient: vi.fn(),
     submit: vi.fn(),
     verifyWebhook: vi.fn(),
@@ -376,6 +379,8 @@ describe('processInboundPeppolRow', () => {
 })
 
 describe('syncInboundPeppolDocuments', () => {
+  /** Minute 30: not the hourly sweep run. */
+  const LISTING_NOW = new Date('2026-09-10T12:30:00.000Z')
   const older: PeppolInboundMessage = { ...message, providerDocumentId: 'older', receivedAt: '2026-09-10T10:00:00.000Z' }
   const newer: PeppolInboundMessage = { ...message, providerDocumentId: 'newer', receivedAt: '2026-09-10T10:05:00.000Z' }
   const listing = (messages: PeppolInboundMessage[]) =>
@@ -397,12 +402,13 @@ describe('syncInboundPeppolDocuments', () => {
     enqueue({ data: row({ company_id: 'company-1', status: 'converted' }), error: null })
     enqueue({ data: null, error: null })                                          // credit note cursor: nothing archived
 
-    const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log })
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log, now: LISTING_NOW })
 
     expect(transport.listInboundDocuments).toHaveBeenCalledTimes(2)
     expect(summary).toEqual({
+      pages: 2, sweep: false,
       listed: 1, archived: 1, duplicates: 0, routed: 0, unrouted: 0, delivered: 1, failed: 0,
-      terminal: 0, terminalDocuments: [], errors: [],
+      terminal: 0, terminalDocuments: [], relisted: 0, recovered: 0, recoveredHeld: 0, deferred: 0, outOfTime: false, errors: [],
     })
   })
 
@@ -437,6 +443,390 @@ describe('syncInboundPeppolDocuments', () => {
     expect(inserts()).toHaveLength(1)
     expect(inserts()[0]).toMatchObject({ provider_document_id: 'older' })
     expect(transport.fetchInboundDocumentXml).toHaveBeenCalledTimes(1)
+  })
+
+  it('archives the rest of the page past a failure when the listing consumes it (Qvalia direct marks the page read)', async () => {
+    const transport = makeTransport({ listInboundDocuments: listing([newer, older]), inboundListingConsumes: true })
+    enqueue({ data: null, error: null })                                          // invoice cursor
+    enqueue({ data: null, error: null })                                          // older: no existing row
+    enqueue({ data: null, error: { code: '08006', message: 'connection failure' } }) // older: insert fails transiently
+    enqueue({ data: null, error: null })                                          // newer: no existing row
+    enqueue({ data: row({ id: 'doc-2', provider_document_id: 'newer' }), error: null }) // newer insert
+    unregistered()                                                                // newer: nobody registered
+    enqueue({ data: row({ id: 'doc-2', provider_document_id: 'newer', status: 'unrouted' }), error: null })
+    enqueue({ data: null, error: null })                                          // credit note cursor
+
+    const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => {})
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, now: LISTING_NOW })
+
+    expect(summary).toMatchObject({ listed: 2, archived: 1, failed: 1, unrouted: 1 })
+    expect(summary.errors).toEqual([{ providerDocumentId: 'older', reason: expect.stringContaining('connection failure') }])
+    expect(inserts().map((insert) => insert.provider_document_id)).toEqual(['older', 'newer'])
+    // Not listed again by the provider: an error, not a warning.
+    expect(errorSpy).toHaveBeenCalledWith(
+      'inbound Peppol document could not be archived; the provider does not list it again',
+      expect.anything(),
+      { documentType: 'Invoice', providerDocumentId: 'older' },
+    )
+    errorSpy.mockRestore()
+  })
+
+  it('gives every document of a consumed page its row before the first XML fetch or delivery', async () => {
+    // Qvalia marks the listed page read and nothing lists read documents
+    // again: a run that ends mid-page must have left a row for each of them.
+    const rowsAtFetch: number[] = []
+    const rowsAtDelivery: number[] = []
+    const transport = makeTransport({
+      listInboundDocuments: listing([newer, older]),
+      inboundListingConsumes: true,
+      fetchInboundDocumentXml: vi.fn().mockImplementation(async () => {
+        rowsAtFetch.push(inserts().length)
+        return FETCHED_XML
+      }),
+    })
+    const deliver = vi.fn().mockImplementation(async () => {
+      rowsAtDelivery.push(inserts().length)
+      return { inboxItemId: 'inbox-1', xmlDocumentId: null }
+    })
+    const bare = (id: string) => row({ id: `doc-${id}`, provider_document_id: id, xml_payload: null, xml_sha256: null })
+    enqueue({ data: null, error: null })                                          // invoice cursor
+    for (const id of ['older', 'newer']) {
+      enqueue({ data: null, error: null })                                        // no existing row
+      enqueue({ data: bare(id), error: null })                                    // insert, JSON only
+    }
+    for (const id of ['older', 'newer']) {
+      enqueue({ data: { ...bare(id), xml_payload: FETCHED_XML }, error: null })   // XML stored
+      registered()
+      enqueue({ data: { ...bare(id), xml_payload: FETCHED_XML, company_id: 'company-1', status: 'routed' }, error: null })
+      enqueue({ data: { ...bare(id), xml_payload: FETCHED_XML, company_id: 'company-1', status: 'converted' }, error: null })
+    }
+    enqueue({ data: null, error: null })                                          // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log, now: LISTING_NOW })
+
+    expect(summary).toMatchObject({ listed: 2, archived: 2, delivered: 2, failed: 0, deferred: 0, outOfTime: false, errors: [] })
+    expect(inserts().map((insert) => [insert.provider_document_id, insert.xml_payload])).toEqual([['older', null], ['newer', null]])
+    expect(rowsAtFetch).toEqual([2, 2])
+    expect(rowsAtDelivery).toEqual([2, 2])
+    expect(updates()[0]).toEqual({ xml_payload: FETCHED_XML, xml_sha256: sha256Hex(FETCHED_XML) })
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ xml: FETCHED_XML }))
+  })
+
+  it('gives a consuming listing the time its function has left, less the archive and re-listing reserves, and asks for none without it', async () => {
+    // A consumed page given up early is handed over and never received: the
+    // listing waits for as long as the run can still find it again with the
+    // read re-listing (60 s) and archive what that answers (30 s).
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(100_000)
+    try {
+      const transport = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]), inboundListingConsumes: true })
+      enqueue({ data: null, error: null })                                        // invoice cursor
+      enqueue({ data: null, error: null })                                        // credit note cursor
+      await syncInboundPeppolDocuments({ service, transport, deliver: null, log, now: LISTING_NOW, functionEndsAt: 300_000 })
+      expect((transport.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual([
+        { documentType: 'Invoice', limit: 50, timeoutMs: 110_000 },
+        { documentType: 'CreditNote', limit: 50, timeoutMs: 110_000 },
+      ])
+
+      // 35 s before the end there is no time to answer in: nothing is listed, so nothing is handed over.
+      reset()
+      const late = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]), inboundListingConsumes: true })
+      enqueue({ data: null, error: null })                                        // invoice cursor
+      const summary = await syncInboundPeppolDocuments({ service, transport: late, deliver: null, log, now: LISTING_NOW, functionEndsAt: 135_000 })
+      expect(late.listInboundDocuments).not.toHaveBeenCalled()
+      expect(summary).toMatchObject({ pages: 0, outOfTime: true })
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('lists read documents again after a consuming listing failed, and files only what the archive lacks', async () => {
+    // The read endpoint marked the page read, but its answer never came. Its
+    // plain listing with includeRead still returns those documents.
+    const known: PeppolInboundMessage = { ...message, providerDocumentId: 'known', receivedAt: '2026-09-10T10:00:00.000Z' }
+    const lost: PeppolInboundMessage = { ...message, providerDocumentId: 'lost', receivedAt: '2026-09-10T10:05:00.000Z' }
+    const listInboundDocuments = vi.fn().mockImplementation(async (options: { documentType: string; includeRead?: boolean }) => {
+      if (options.documentType !== 'Invoice') return []
+      if (!options.includeRead) throw new Error('Could not reach Qvalia')
+      return [lost, known]
+    })
+    const transport = makeTransport({ listInboundDocuments, inboundListingConsumes: true })
+    const deliver = vi.fn().mockResolvedValue({ inboxItemId: 'inbox-1', xmlDocumentId: null })
+    const bare = row({ id: 'doc-lost', provider_document_id: 'lost', xml_payload: null, xml_sha256: null })
+    enqueue({ data: null, error: null })                                          // invoice cursor
+    enqueue({ data: [{ provider_document_id: 'known' }], error: null })           // what the archive holds of the re-listing
+    enqueue({ data: null, error: null })                                          // lost: no existing row
+    enqueue({ data: bare, error: null })                                          // lost: insert, JSON only
+    enqueue({ data: { ...bare, xml_payload: FETCHED_XML }, error: null })         // lost: XML stored
+    registered()
+    enqueue({ data: { ...bare, xml_payload: FETCHED_XML, company_id: 'company-1', status: 'routed' }, error: null })
+    enqueue({ data: { ...bare, xml_payload: FETCHED_XML, company_id: 'company-1', status: 'converted' }, error: null })
+    enqueue({ data: null, error: null })                                          // credit note cursor
+    const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => {})
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log, now: LISTING_NOW })
+
+    expect(listInboundDocuments.mock.calls.map((c) => c[0])).toEqual([
+      { documentType: 'Invoice', limit: 50 },
+      { documentType: 'Invoice', limit: 100, includeRead: true },
+      { documentType: 'CreditNote', limit: 50 },
+    ])
+    expect(calls.filter((c) => c.table === 'peppol_inbound_documents' && c.method === 'in').map((c) => c.args)).toEqual([
+      ['provider_document_id', ['lost', 'known']],
+    ])
+    expect(inserts().map((insert) => insert.provider_document_id)).toEqual(['lost'])
+    expect(deliver).toHaveBeenCalledTimes(1)
+    expect(summary).toMatchObject({ relisted: 2, recovered: 1, archived: 1, delivered: 1 })
+    // The failed listing is still paged.
+    expect(summary.errors).toEqual([{ providerDocumentId: 'list:Invoice', reason: 'Could not reach Qvalia' }])
+    errorSpy.mockRestore()
+  })
+
+  it('finds the page a consuming listing lost at its limit, in the same run: the route\'s time arithmetic end to end', async () => {
+    // The route's numbers: the run starts at 0, starts nothing after 150 s,
+    // and its function is stopped at 300 s. The listing starts at 5 s and is
+    // given up at its limit; the access point marked the page read anyway.
+    let clock = 5_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const lost: PeppolInboundMessage = { ...message, providerDocumentId: 'lost', receivedAt: '2026-09-10T10:05:00.000Z' }
+    const listInboundDocuments = vi.fn().mockImplementation(async (options: { documentType: string; includeRead?: boolean; timeoutMs: number }) => {
+      if (options.documentType !== 'Invoice') return []
+      if (!options.includeRead) {
+        clock += options.timeoutMs
+        throw new Error('Could not reach Qvalia')
+      }
+      clock += 5_000
+      return [lost]
+    })
+    const transport = makeTransport({ listInboundDocuments, inboundListingConsumes: true })
+    const deliver = vi.fn()
+    enqueue({ data: null, error: null })                                          // invoice cursor
+    enqueue({ data: [], error: null })                                            // the archive holds none of the re-listing
+    enqueue({ data: null, error: null })                                          // lost: no existing row
+    enqueue({ data: row({ id: 'doc-lost', provider_document_id: 'lost', xml_payload: null }), error: null }) // insert
+    enqueue({ data: null, error: null })                                          // released to the reprocessing pass
+    const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => {})
+    try {
+      const summary = await syncInboundPeppolDocuments({
+        service, transport, deliver, log, now: LISTING_NOW, deadline: 150_000, functionEndsAt: 300_000,
+      })
+
+      expect(listInboundDocuments.mock.calls.map((c) => c[0])).toEqual([
+        // 300 s, less 5 s gone, less the 30 s archive and 60 s re-listing reserves.
+        { documentType: 'Invoice', limit: 50, timeoutMs: 205_000 },
+        // At 210 s, past the run's deadline but with a full 60 s before the 30 s reserve.
+        { documentType: 'Invoice', limit: 100, includeRead: true, timeoutMs: 60_000 },
+      ])
+      // The lost document has its row; its delivery is left to the reprocessing pass.
+      expect(inserts().map((insert) => insert.provider_document_id)).toEqual(['lost'])
+      expect(summary).toMatchObject({ relisted: 1, recovered: 1, archived: 1, deferred: 1, outOfTime: true })
+      expect(deliver).not.toHaveBeenCalled()
+      expect(updates()).toEqual([{ processed_at: '2026-09-10T11:59:59.000Z' }])
+    } finally {
+      errorSpy.mockRestore()
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('holds a document the re-listing finds from before its delivery window instead of delivering it, and delivers a recent one', async () => {
+    // One lost months ago would otherwise land in the Inkorg as a new item,
+    // with a bank match proposed, before anyone at Accounted had seen it.
+    const old: PeppolInboundMessage = { ...message, providerDocumentId: 'old', receivedAt: '2026-08-14T09:00:00.000Z' }
+    const recent: PeppolInboundMessage = { ...message, providerDocumentId: 'recent', receivedAt: '2026-09-09T09:00:00.000Z' }
+    const listInboundDocuments = vi.fn().mockImplementation(async (options: { documentType: string; includeRead?: boolean }) => {
+      if (options.documentType !== 'Invoice') return []
+      if (!options.includeRead) throw new Error('Could not reach Qvalia')
+      return [recent, old]
+    })
+    const transport = makeTransport({ listInboundDocuments, inboundListingConsumes: true })
+    const deliver = vi.fn().mockResolvedValue({ inboxItemId: 'inbox-1', xmlDocumentId: null })
+    const marker = 'terminal: held for review, found again by the re-listing (received 2026-08-14)'
+    const bare = (id: string, overrides: Partial<PeppolInboundRow> = {}) =>
+      row({ id: `doc-${id}`, provider_document_id: id, xml_payload: null, xml_sha256: null, ...overrides })
+    enqueue({ data: null, error: null })                                          // invoice cursor
+    enqueue({ data: [], error: null })                                            // the archive holds neither
+    enqueue({ data: null, error: null })                                          // old: no existing row
+    enqueue({ data: bare('old', { last_error: marker }), error: null })           // old: insert, held
+    enqueue({ data: null, error: null })                                          // recent: no existing row
+    enqueue({ data: bare('recent'), error: null })                                // recent: insert
+    enqueue({ data: bare('old', { last_error: marker, xml_payload: FETCHED_XML }), error: null }) // old: XML stored, nothing else
+    enqueue({ data: bare('recent', { xml_payload: FETCHED_XML }), error: null })  // recent: XML stored
+    registered()
+    enqueue({ data: bare('recent', { xml_payload: FETCHED_XML, company_id: 'company-1', status: 'routed' }), error: null })
+    enqueue({ data: bare('recent', { xml_payload: FETCHED_XML, company_id: 'company-1', status: 'converted' }), error: null })
+    enqueue({ data: null, error: null })                                          // credit note cursor
+    const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => {})
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log, now: LISTING_NOW })
+
+    expect(inserts().map((insert) => [insert.provider_document_id, insert.last_error])).toEqual([
+      ['old', marker],
+      ['recent', undefined],
+    ])
+    expect(deliver).toHaveBeenCalledTimes(1)
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ row: expect.objectContaining({ provider_document_id: 'recent' }) }))
+    // The held one still has its exact XML archived, and is never routed.
+    expect(updates()[0]).toEqual({ xml_payload: FETCHED_XML, xml_sha256: sha256Hex(FETCHED_XML) })
+    expect(calls.filter((c) => c.table === 'peppol_registrations' && c.method === 'select')).toHaveLength(1)
+    expect(summary).toMatchObject({ recovered: 2, recoveredHeld: 1, delivered: 1 })
+    errorSpy.mockRestore()
+  })
+
+  it('judges a recovered document without a receipt time by its IssueDate, and holds one that has neither', async () => {
+    // Qvalia's listing carries no receipt time, so a missing one held every
+    // recovered document, new ones included.
+    const issued = (id: string, issueDate: string | null): PeppolInboundMessage => {
+      const payload = JSON.parse(JSON.stringify(QVALIA_MESSAGE)) as { Invoice: Record<string, unknown> }
+      if (issueDate) payload.Invoice['cbc:IssueDate'] = [{ _: issueDate }]
+      else delete payload.Invoice['cbc:IssueDate']
+      return { ...message, providerDocumentId: id, receivedAt: null, payload }
+    }
+    const listInboundDocuments = vi.fn().mockImplementation(async (options: { documentType: string; includeRead?: boolean }) => {
+      if (options.documentType !== 'Invoice') return []
+      if (!options.includeRead) throw new Error('Could not reach Qvalia')
+      return [issued('recent', '2026-09-08'), issued('old', '2026-08-21'), issued('undated', null)]
+    })
+    const transport = makeTransport({ listInboundDocuments, inboundListingConsumes: true })
+    const deliver = vi.fn().mockResolvedValue({ inboxItemId: 'inbox-1', xmlDocumentId: null })
+    const oldMarker = 'terminal: held for review, found again by the re-listing (issued 2026-08-21, receipt time unknown)'
+    const undatedMarker = 'terminal: held for review, found again by the re-listing (no receipt or issue date)'
+    const bare = (id: string, overrides: Partial<PeppolInboundRow> = {}) =>
+      row({ id: `doc-${id}`, provider_document_id: id, xml_payload: null, xml_sha256: null, ...overrides })
+    enqueue({ data: null, error: null })                                          // invoice cursor
+    enqueue({ data: [], error: null })                                            // the archive holds none of them
+    for (const [id, lastError] of [['recent', null], ['old', oldMarker], ['undated', undatedMarker]] as const) {
+      enqueue({ data: null, error: null })                                        // no existing row
+      enqueue({ data: bare(id, { last_error: lastError }), error: null })         // insert
+    }
+    enqueue({ data: bare('recent', { xml_payload: FETCHED_XML }), error: null })  // recent: XML stored
+    registered()
+    enqueue({ data: bare('recent', { xml_payload: FETCHED_XML, company_id: 'company-1', status: 'routed' }), error: null })
+    enqueue({ data: bare('recent', { xml_payload: FETCHED_XML, company_id: 'company-1', status: 'converted' }), error: null })
+    enqueue({ data: bare('old', { last_error: oldMarker, xml_payload: FETCHED_XML }), error: null })         // old: XML only
+    enqueue({ data: bare('undated', { last_error: undatedMarker, xml_payload: FETCHED_XML }), error: null }) // undated: XML only
+    enqueue({ data: null, error: null })                                          // credit note cursor
+    const warn = vi.spyOn(log, 'warn')
+    const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => {})
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log, now: LISTING_NOW })
+
+    expect(inserts().map((insert) => [insert.provider_document_id, insert.last_error])).toEqual([
+      ['recent', undefined],
+      ['old', oldMarker],
+      ['undated', undatedMarker],
+    ])
+    expect(deliver).toHaveBeenCalledTimes(1)
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ row: expect.objectContaining({ provider_document_id: 'recent' }) }))
+    expect(summary).toMatchObject({ recovered: 3, recoveredHeld: 2, delivered: 1 })
+    // The warning says which date it judged by, and never calls an unknown age old.
+    expect(warn).toHaveBeenCalledWith(
+      'inbound Peppol document found again by the re-listing was issued more than 14 days ago; held for a person',
+      { documentType: 'Invoice', providerDocumentId: 'old', judgedBy: 'issued', date: '2026-08-21' },
+    )
+    expect(warn).toHaveBeenCalledWith(
+      'inbound Peppol document found again by the re-listing has no receipt or issue date; held for a person',
+      { documentType: 'Invoice', providerDocumentId: 'undated', judgedBy: 'unknown', date: null },
+    )
+    warn.mockRestore()
+    errorSpy.mockRestore()
+  })
+
+  it('lists read documents again in the hourly sweep after a listing that answered, and warns when that listing fails', async () => {
+    const sweepNow = new Date('2026-09-10T12:05:00.000Z')
+    const listInboundDocuments = vi.fn().mockImplementation(async (options: { documentType: string; includeRead?: boolean }) => {
+      if (options.includeRead && options.documentType === 'CreditNote') throw new Error('Qvalia answered 503')
+      return []
+    })
+    const transport = makeTransport({ listInboundDocuments, inboundListingConsumes: true })
+    const warn = vi.spyOn(log, 'warn')
+    enqueue({ data: null, error: null })                                          // invoice cursor
+    enqueue({ data: null, error: null })                                          // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, now: sweepNow })
+
+    expect(listInboundDocuments.mock.calls.map((c) => c[0])).toEqual([
+      { documentType: 'Invoice', limit: 50 },
+      { documentType: 'Invoice', limit: 100, includeRead: true },
+      { documentType: 'CreditNote', limit: 50 },
+      { documentType: 'CreditNote', limit: 100, includeRead: true },
+    ])
+    // The re-listing hands nothing over: its failure is asked again next sweep, not paged.
+    expect(summary).toMatchObject({ sweep: true, relisted: 0, recovered: 0, errors: [] })
+    expect(warn).toHaveBeenCalledWith('inbound Peppol re-listing of read documents failed; the next sweep asks again', {
+      documentType: 'CreditNote',
+      reason: 'Qvalia answered 503',
+    })
+    warn.mockRestore()
+  })
+
+  describe('with a deadline', () => {
+    let clock = 0
+    beforeEach(() => {
+      clock = 1_000
+      vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    })
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('lists nothing once the deadline has passed: a consumed page nobody has time to archive is lost', async () => {
+      const transport = makeTransport({ inboundListingConsumes: true })
+      enqueue({ data: null, error: null })                                        // invoice cursor
+      const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, now: NOW, deadline: 500 })
+      expect(transport.listInboundDocuments).not.toHaveBeenCalled()
+      expect(summary).toMatchObject({ pages: 0, listed: 0, outOfTime: true })
+    })
+
+    it('archives a consumed page it has no time to deliver, and hands the rows to the reprocessing pass', async () => {
+      const transport = makeTransport({
+        // The listing answers after the deadline has passed.
+        listInboundDocuments: vi.fn().mockImplementation(async () => {
+          clock = 5_000
+          return [newer, older]
+        }),
+        inboundListingConsumes: true,
+      })
+      const deliver = vi.fn()
+      enqueue({ data: null, error: null })                                        // invoice cursor
+      for (const id of ['older', 'newer']) {
+        enqueue({ data: null, error: null })                                      // no existing row
+        enqueue({ data: row({ id: `doc-${id}`, provider_document_id: id, xml_payload: null }), error: null })
+      }
+      enqueue({ data: null, error: null })                                        // release for the reprocessing pass
+
+      const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log, now: NOW, deadline: 2_000 })
+
+      expect(summary).toMatchObject({ pages: 1, listed: 2, archived: 2, delivered: 0, deferred: 2, outOfTime: true, errors: [] })
+      expect(inserts().map((insert) => insert.provider_document_id)).toEqual(['older', 'newer'])
+      expect(transport.fetchInboundDocumentXml).not.toHaveBeenCalled()
+      expect(deliver).not.toHaveBeenCalled()
+      // Stamped as rested (outside the 30 minute backoff), so the next reprocessing pass takes them.
+      expect(updates()).toEqual([{ processed_at: '2026-09-10T11:29:59.000Z' }])
+      expect(calls.find((c) => c.table === 'peppol_inbound_documents' && c.method === 'in')?.args).toEqual(['id', ['doc-older', 'doc-newer']])
+      // The credit notes are not listed either.
+      expect(transport.listInboundDocuments).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops a cursor listing at the deadline without archiving past it, so the rest is listed again', async () => {
+      const transport = makeTransport({
+        listInboundDocuments: listing([older, newer]),
+        fetchInboundDocumentXml: vi.fn().mockImplementation(async () => {
+          clock = 5_000
+          return FETCHED_XML
+        }),
+      })
+      enqueue({ data: null, error: null })                                        // invoice cursor
+      enqueue({ data: null, error: null })                                        // older: no existing row
+      enqueue({ data: row({ provider_document_id: 'older' }), error: null })      // older: insert
+      unregistered()
+      enqueue({ data: row({ provider_document_id: 'older', status: 'unrouted' }), error: null })
+
+      const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, now: NOW, deadline: 2_000 })
+
+      expect(summary).toMatchObject({ listed: 2, archived: 1, unrouted: 1, deferred: 1, outOfTime: true, errors: [] })
+      expect(inserts().map((insert) => insert.provider_document_id)).toEqual(['older'])
+      expect(transport.listInboundDocuments).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('records a payload the archive can never hold as a terminal stub and moves on to the newer document', async () => {
@@ -521,10 +911,176 @@ describe('syncInboundPeppolDocuments', () => {
   })
 })
 
+describe('syncInboundPeppolDocuments: paging and the hourly sweep', () => {
+  /** Minute 30: an ordinary run. */
+  const LISTING_NOW = new Date('2026-09-10T12:30:00.000Z')
+  /** Minute 5: the first run of the hour, which sweeps. */
+  const SWEEP_NOW = new Date('2026-09-10T12:05:00.000Z')
+  const at = (id: string, receivedAt: string): PeppolInboundMessage => ({ ...message, providerDocumentId: id, receivedAt })
+  /** A document the archive already holds, converted: one read, nothing else. */
+  const held = (id: string) => enqueue({ data: row({ id, provider_document_id: id, status: 'converted', company_id: 'company-1' }), error: null })
+  /** Invoice listing answered page by page; credit notes list nothing. */
+  const pagedListing = (pages: PeppolInboundMessage[][]) => {
+    let call = 0
+    return vi.fn().mockImplementation(async ({ documentType }: { documentType: string }) => {
+      if (documentType !== 'Invoice') return []
+      const page = pages[Math.min(call, pages.length - 1)]
+      call += 1
+      return page
+    })
+  }
+  const invoiceListCalls = (transport: PeppolTransport) =>
+    (transport.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0] as { documentType: string; limit: number; receivedAfter?: string })
+      .filter((options) => options.documentType === 'Invoice')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('follows a full page with the next one, from one second before the newest document it listed', async () => {
+    const transport = makeTransport({
+      listInboundDocuments: pagedListing([
+        [at('b', '2026-09-10T10:02:00.000Z'), at('a', '2026-09-10T10:01:00.000Z')],
+        [at('c', '2026-09-10T10:03:00.000Z')],
+      ]),
+    })
+    enqueue({ data: { received_at: '2026-09-10T09:00:00.000Z' }, error: null }) // invoice cursor
+    held('a')
+    held('b')
+    held('c')
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 2, now: LISTING_NOW })
+
+    expect(invoiceListCalls(transport)).toEqual([
+      { documentType: 'Invoice', limit: 2, receivedAfter: '2026-09-10T08:59:59.000Z' },
+      { documentType: 'Invoice', limit: 2, receivedAfter: '2026-09-10T10:01:59.000Z' },
+    ])
+    expect(summary).toMatchObject({ pages: 3, sweep: false, listed: 3, duplicates: 3, failed: 0, errors: [] })
+  })
+
+  it('stops at the page cap and leaves the rest to the next run', async () => {
+    const pages = Array.from({ length: 12 }, (_, i) => [at(`doc-${i}`, new Date(Date.UTC(2026, 8, 10, 10, i)).toISOString())])
+    const transport = makeTransport({ listInboundDocuments: pagedListing(pages) })
+    enqueue({ data: null, error: null }) // invoice cursor: nothing archived yet
+    for (let i = 0; i < PEPPOL_INBOUND_MAX_PAGES; i += 1) held(`doc-${i}`)
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 1, now: LISTING_NOW })
+
+    expect(invoiceListCalls(transport)).toHaveLength(PEPPOL_INBOUND_MAX_PAGES)
+    expect(summary).toMatchObject({ pages: PEPPOL_INBOUND_MAX_PAGES + 1, listed: PEPPOL_INBOUND_MAX_PAGES, errors: [] })
+  })
+
+  it('stops when a full page does not move the cursor, as from a service that answers newest first and ignores it', async () => {
+    const warn = vi.spyOn(log, 'warn')
+    const samePage = [at('newest', '2026-09-10T10:05:00.000Z'), at('older', '2026-09-10T10:04:00.000Z')]
+    const transport = makeTransport({ listInboundDocuments: pagedListing([samePage]) })
+    enqueue({ data: { received_at: '2026-09-10T09:00:00.000Z' }, error: null }) // invoice cursor
+    held('older')
+    held('newest')
+    held('older')
+    held('newest')
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 2, now: LISTING_NOW })
+
+    expect(invoiceListCalls(transport).map((options) => options.receivedAfter)).toEqual([
+      '2026-09-10T08:59:59.000Z',
+      '2026-09-10T10:04:59.000Z',
+    ])
+    expect(summary).toMatchObject({ pages: 3, listed: 4, duplicates: 4, errors: [] })
+    expect(warn).toHaveBeenCalledWith(
+      'inbound Peppol listing returned a full page that does not move the cursor; the rest is listed next run',
+      expect.objectContaining({ documentType: 'Invoice', page: 2 }),
+    )
+    warn.mockRestore()
+  })
+
+  it('does not ask for the next page after an archive failure, so the cursor never passes an unarchived document', async () => {
+    const transport = makeTransport({
+      listInboundDocuments: pagedListing([[at('a', '2026-09-10T10:01:00.000Z'), at('b', '2026-09-10T10:02:00.000Z')]]),
+    })
+    enqueue({ data: null, error: null }) // invoice cursor
+    enqueue({ data: null, error: null }) // a: not archived yet
+    enqueue({ data: null, error: { code: '08006', message: 'connection failure' } }) // a: insert fails transiently
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 2, now: LISTING_NOW })
+
+    expect(invoiceListCalls(transport)).toHaveLength(1)
+    expect(summary).toMatchObject({ pages: 2, listed: 2, failed: 1 })
+    expect(summary.errors).toEqual([{ providerDocumentId: 'a', reason: expect.stringContaining('connection failure') }])
+  })
+
+  it('sweeps the last seven days in the first run of each hour, never starting later than the archive cursor', async () => {
+    const transport = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]) })
+    enqueue({ data: { received_at: '2026-09-10T11:00:00.000Z' }, error: null }) // invoice cursor: inside the week
+    enqueue({ data: { received_at: '2026-08-01T10:00:00.000Z' }, error: null }) // credit note cursor: older than the week
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, now: SWEEP_NOW })
+
+    expect((transport.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual([
+      { documentType: 'Invoice', limit: 50, receivedAfter: '2026-09-03T12:05:00.000Z' },
+      { documentType: 'CreditNote', limit: 50, receivedAfter: '2026-08-01T09:59:59.000Z' },
+    ])
+    expect(summary).toMatchObject({ sweep: true, pages: 2 })
+  })
+
+  it('lists everything in a sweep over an empty archive, and from the archive cursor in the other runs', async () => {
+    const sweeping = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]) })
+    enqueue({ data: null, error: null }) // invoice cursor: empty archive
+    enqueue({ data: null, error: null }) // credit note cursor
+    await syncInboundPeppolDocuments({ service, transport: sweeping, deliver: null, log, now: SWEEP_NOW })
+    expect((sweeping.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual({ documentType: 'Invoice', limit: 50 })
+
+    const ordinary = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]) })
+    enqueue({ data: { received_at: '2026-09-10T11:00:00.000Z' }, error: null }) // invoice cursor
+    enqueue({ data: null, error: null }) // credit note cursor
+    const summary = await syncInboundPeppolDocuments({ service, transport: ordinary, deliver: null, log, now: LISTING_NOW })
+    expect((ordinary.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual({
+      documentType: 'Invoice',
+      limit: 50,
+      receivedAfter: '2026-09-10T10:59:59.000Z',
+    })
+    expect(summary.sweep).toBe(false)
+  })
+
+  it('pages through the sweep window the same way', async () => {
+    const transport = makeTransport({
+      listInboundDocuments: pagedListing([[at('x', '2026-09-05T10:00:00.000Z')], []]),
+    })
+    enqueue({ data: { received_at: '2026-09-10T11:00:00.000Z' }, error: null }) // invoice cursor
+    held('x')
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 1, now: SWEEP_NOW })
+
+    expect(invoiceListCalls(transport).map((options) => options.receivedAfter)).toEqual([
+      '2026-09-03T12:05:00.000Z',
+      '2026-09-05T09:59:59.000Z',
+    ])
+  })
+
+  it('makes the first run of each hour the sweep run', () => {
+    expect(isPeppolInboundSweepRun(new Date('2026-09-10T12:00:00.000Z'))).toBe(true)
+    expect(isPeppolInboundSweepRun(new Date('2026-09-10T12:09:59.999Z'))).toBe(true)
+    expect(isPeppolInboundSweepRun(new Date('2026-09-10T12:10:00.000Z'))).toBe(false)
+    expect(isPeppolInboundSweepRun(new Date('2026-09-10T12:50:00.000Z'))).toBe(false)
+  })
+})
+
 describe('reprocessInboundPeppolDocuments', () => {
   const now = NOW
+  /** The two candidate reads, in order: rows still received, then the other pending ones. */
+  const pendingRows = (received: PeppolInboundRow[], others: PeppolInboundRow[] = []) => {
+    enqueue({ data: received, error: null })
+    enqueue({ data: others, error: null })
+  }
   const stamped = (overrides: Partial<PeppolInboundRow>) => row({ ...overrides, processed_at: now.toISOString() })
-  const empty = { candidates: 0, xmlFetched: 0, xmlMissed: 0, retried: 0, held: 0, routed: 0, delivered: 0, terminal: 0, terminalDocuments: [], errors: [] }
+  const empty = { candidates: 0, xmlFetched: 0, xmlMissed: 0, retried: 0, held: 0, routed: 0, delivered: 0, terminal: 0, terminalDocuments: [], deferred: 0, heldXmlFetched: 0, errors: [] }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -533,21 +1089,82 @@ describe('reprocessInboundPeppolDocuments', () => {
 
   it('selects pending rows of this provider outside the backoff with literal filters, terminal rows excluded, least recently processed first', async () => {
     const transport = makeTransport()
-    enqueue({ data: [], error: null })
+    pendingRows([])
     const result = await reprocessInboundPeppolDocuments({ service, transport, deliver: null, log, now })
     expect(result).toEqual(empty)
     const query = calls.filter((c) => c.table === 'peppol_inbound_documents')
-    expect(query.find((c) => c.method === 'eq')?.args).toEqual(['provider', 'qvalia'])
-    expect(query.find((c) => c.method === 'in')?.args).toEqual(['status', ['received', 'routed', 'unrouted', 'failed']])
-    expect(query.find((c) => c.method === 'lt')?.args).toEqual(['processed_at', '2026-09-10T11:30:00.000Z'])
-    expect(query.filter((c) => c.method === 'or').map((c) => c.args[0])).toEqual(['last_error.is.null,last_error.not.like.terminal:*'])
+    // The two pending reads, then the held documents still without XML.
+    expect(query.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([['provider', 'qvalia'], ['provider', 'qvalia'], ['provider', 'qvalia']])
+    expect(query.filter((c) => c.method === 'in').map((c) => c.args)).toEqual([
+      ['status', ['received']],
+      ['status', ['routed', 'unrouted', 'failed']],
+    ])
+    expect(query.filter((c) => c.method === 'lt').map((c) => c.args[1])).toEqual([
+      '2026-09-10T11:30:00.000Z', '2026-09-10T11:30:00.000Z', '2026-09-10T11:30:00.000Z',
+    ])
+    expect(query.filter((c) => c.method === 'or').map((c) => c.args[0])).toEqual([
+      'last_error.is.null,last_error.not.like.terminal:*',
+      'last_error.is.null,last_error.not.like.terminal:*',
+    ])
     expect(query.find((c) => c.method === 'order')?.args).toEqual(['processed_at', { ascending: true }])
-    expect(query.find((c) => c.method === 'limit')?.args).toEqual([25])
+    expect(query.filter((c) => c.method === 'limit').map((c) => c.args)).toEqual([[25], [25], [25]])
+  })
+
+  it('fetches the XML of a held document and does nothing else with it', async () => {
+    // Held after the re-listing's deadline, it had no XML, and every pass
+    // skips terminal rows: the archive would never hold the e-invoice as received.
+    const transport = makeTransport()
+    const deliver = vi.fn()
+    const held = row({
+      id: 'doc-held',
+      provider_document_id: 'pd-held',
+      xml_payload: null,
+      xml_sha256: null,
+      last_error: 'terminal: held for review, found again by the re-listing (issued 2026-08-21, receipt time unknown)',
+      processed_at: '2026-09-10T09:00:00.000Z',
+    })
+    pendingRows([])
+    enqueue({ data: [held], error: null })                                        // held without XML
+    enqueue({ data: stamped(held), error: null })                                 // rested
+    enqueue({ data: stamped({ ...held, xml_payload: FETCHED_XML }), error: null }) // XML stored
+
+    const result = await reprocessInboundPeppolDocuments({ service, transport, deliver, log, now })
+
+    expect(result).toEqual({ ...empty, heldXmlFetched: 1 })
+    const query = calls.filter((c) => c.table === 'peppol_inbound_documents')
+    expect(query.filter((c) => c.method === 'like').map((c) => c.args)).toEqual([
+      ['last_error', 'terminal: held for review, found again by the re-listing%'],
+    ])
+    expect(query.filter((c) => c.method === 'is').map((c) => c.args)).toEqual([['xml_payload', null]])
+    expect(updates()).toEqual([
+      { processed_at: now.toISOString() },
+      { xml_payload: FETCHED_XML, xml_sha256: sha256Hex(FETCHED_XML) },
+    ])
+    expect(deliver).not.toHaveBeenCalled()
+    expect(calls.some((c) => c.table === 'peppol_registrations')).toBe(false)
+  })
+
+  it('takes rows still received before the rest, so a new document never waits behind rows that cannot finish', async () => {
+    // One queue by processed_at put a received row behind every unrouted
+    // document nobody registers for, 25 per run.
+    const transport = makeTransport()
+    const fresh = row({ id: 'doc-new', provider_document_id: 'pd-new', status: 'received' })
+    const stale = row({ id: 'doc-old', provider_document_id: 'pd-old', status: 'unrouted', processed_at: '2026-08-01T00:00:00.000Z' })
+    pendingRows([fresh], [stale])
+    const result = await reprocessInboundPeppolDocuments({ service, transport, deliver: null, log, now, limit: 2, deadline: Date.now() - 1 })
+    expect(result).toMatchObject({ candidates: 2, deferred: 2 })
+    expect(calls.filter((c) => c.method === 'limit').map((c) => c.args)).toEqual([[2], [1]])
+
+    // A full page of received rows asks for nothing else.
+    reset()
+    enqueue({ data: [fresh, { ...fresh, id: 'doc-new-2' }], error: null })
+    await reprocessInboundPeppolDocuments({ service, transport, deliver: null, log, now, limit: 2, deadline: Date.now() - 1 })
+    expect(calls.filter((c) => c.method === 'in').map((c) => c.args)).toEqual([['status', ['received']]])
   })
 
   it('leaves an already terminal row alone and does not count it as newly terminal', async () => {
     const transport = makeTransport()
-    enqueue({ data: [row({ status: 'unrouted', xml_payload: null, xml_sha256: null, last_error: PEPPOL_INBOUND_XML_UNAVAILABLE })], error: null })
+    pendingRows([], [row({ status: 'unrouted', xml_payload: null, xml_sha256: null, last_error: PEPPOL_INBOUND_XML_UNAVAILABLE })])
     const result = await reprocessInboundPeppolDocuments({ service, transport, deliver: null, log, now })
     expect(result).toEqual({ ...empty, candidates: 1 })
     expect(updates()).toHaveLength(0)
@@ -558,7 +1175,7 @@ describe('reprocessInboundPeppolDocuments', () => {
     const transport = makeTransport()
     const deliver = vi.fn().mockResolvedValue({ inboxItemId: 'inbox-1', xmlDocumentId: 'doc-xml-1' })
     const held = row({ company_id: 'company-1', status: 'routed', xml_payload: null, xml_sha256: null, last_error: xmlMissMarker(2), processed_at: '2026-09-10T10:00:00.000Z' })
-    enqueue({ data: [held], error: null })                                        // candidates
+    pendingRows([], [held])                                                           // candidates
     enqueue({ data: stamped(held), error: null })                                 // processed_at stamp
     enqueue({ data: stamped({ ...held, xml_payload: FETCHED_XML, xml_sha256: sha256Hex(FETCHED_XML), last_error: null }), error: null }) // xml stored
     enqueue({ data: stamped({ ...held, xml_payload: FETCHED_XML, status: 'converted', inbox_item_id: 'inbox-1' }), error: null })
@@ -580,7 +1197,7 @@ describe('reprocessInboundPeppolDocuments', () => {
 
     for (const miss of [1, 2]) {
       reset()
-      enqueue({ data: [pending], error: null })
+      pendingRows([], [pending])
       enqueue({ data: stamped(pending), error: null })                            // stamp
       const missed = stamped({ ...pending, last_error: xmlMissMarker(miss) })
       enqueue({ data: missed, error: null })                                      // miss recorded
@@ -593,7 +1210,7 @@ describe('reprocessInboundPeppolDocuments', () => {
     }
 
     reset()
-    enqueue({ data: [pending], error: null })
+    pendingRows([], [pending])
     enqueue({ data: stamped(pending), error: null })
     const terminalRow = stamped({ ...pending, last_error: PEPPOL_INBOUND_XML_UNAVAILABLE })
     enqueue({ data: terminalRow, error: null })
@@ -608,7 +1225,7 @@ describe('reprocessInboundPeppolDocuments', () => {
 
     // A later pass that still sees the row (defensive: the query excludes it) leaves it alone.
     reset()
-    enqueue({ data: [terminalRow], error: null })
+    pendingRows([], [terminalRow])
     const fourth = await reprocessInboundPeppolDocuments({ service, transport, deliver, log, now })
     expect(fourth).toEqual({ ...empty, candidates: 1 })
     expect(transport.fetchInboundDocumentXml).toHaveBeenCalledTimes(3)
@@ -618,7 +1235,7 @@ describe('reprocessInboundPeppolDocuments', () => {
   it('counts a transport error as retried, not as an error, and still re-runs routing', async () => {
     const transport = makeTransport({ fetchInboundDocumentXml: vi.fn().mockRejectedValue(new Error('timeout')) })
     const pending = row({ status: 'unrouted', xml_payload: null, xml_sha256: null })
-    enqueue({ data: [pending], error: null })
+    pendingRows([], [pending])
     enqueue({ data: stamped(pending), error: null })                              // stamp
     enqueue({ data: stamped(pending), error: null })                              // attempt stamp on error
     unregistered()                                            // still no registration
@@ -635,7 +1252,7 @@ describe('reprocessInboundPeppolDocuments', () => {
     const transport = makeTransport()
     const deliver = vi.fn().mockResolvedValue({ inboxItemId: 'inbox-2', xmlDocumentId: 'doc-xml-2' })
     const unrouted = row({ status: 'unrouted', recipient_identifier: '5595386219', processed_at: '2026-09-01T00:00:00.000Z' })
-    enqueue({ data: [unrouted], error: null })
+    pendingRows([], [unrouted])
     enqueue({ data: stamped(unrouted), error: null })                             // stamp
     registered()                                           // the company registered since
     enqueue({ data: stamped({ ...unrouted, company_id: 'company-1', status: 'routed' }), error: null })
@@ -653,7 +1270,7 @@ describe('reprocessInboundPeppolDocuments', () => {
     const transport = makeTransport()
     const deliver = vi.fn().mockResolvedValue({ inboxItemId: null, xmlDocumentId: null, holdReason: PEPPOL_INBOUND_AWAITING_OWNER })
     const routed = row({ company_id: 'company-1', status: 'routed', processed_at: '2026-09-10T09:00:00.000Z' })
-    enqueue({ data: [routed], error: null })
+    pendingRows([], [routed])
     enqueue({ data: stamped(routed), error: null })
     enqueue({ data: stamped({ ...routed, last_error: PEPPOL_INBOUND_AWAITING_OWNER }), error: null })
     const result = await reprocessInboundPeppolDocuments({ service, transport, deliver, log, now })
@@ -666,11 +1283,12 @@ describe('reprocessInboundPeppolDocuments', () => {
     const deliver = vi.fn().mockRejectedValue(new Error('storage down'))
     const failed = row({ company_id: 'company-1', status: 'failed', last_error: 'storage down', processed_at: '2026-09-10T09:00:00.000Z' })
     const unreadable = row({ id: 'doc-9', provider_document_id: 'pd-9', ubl_json: {}, processed_at: '2026-09-10T09:30:00.000Z' })
-    enqueue({ data: [failed, unreadable], error: null })
-    enqueue({ data: stamped(failed), error: null })
-    enqueue({ data: stamped({ ...failed, last_error: 'storage down' }), error: null })
+    // The unreadable row is still 'received', so it is examined first.
+    pendingRows([unreadable], [failed])
     enqueue({ data: stamped(unreadable), error: null })
     enqueue({ data: stamped({ ...unreadable, status: 'failed', last_error: PEPPOL_INBOUND_UNREADABLE }), error: null })
+    enqueue({ data: stamped(failed), error: null })
+    enqueue({ data: stamped({ ...failed, last_error: 'storage down' }), error: null })
 
     const result = await reprocessInboundPeppolDocuments({ service, transport, deliver, log, now })
 
@@ -680,12 +1298,26 @@ describe('reprocessInboundPeppolDocuments', () => {
     expect(result.delivered).toBe(0)
   })
 
+  it('stops at its deadline and leaves the rest unstamped, so they head the next pass', async () => {
+    const transport = makeTransport()
+    const deliver = vi.fn()
+    const first = row({ id: 'doc-a', provider_document_id: 'pd-a', company_id: 'company-1', status: 'failed' })
+    const second = row({ id: 'doc-b', provider_document_id: 'pd-b', company_id: 'company-1', status: 'failed' })
+    pendingRows([], [first, second])
+
+    const result = await reprocessInboundPeppolDocuments({ service, transport, deliver, log, now, deadline: Date.now() - 1 })
+
+    expect(result).toEqual({ ...empty, candidates: 2, deferred: 2 })
+    expect(updates()).toHaveLength(0)
+    expect(deliver).not.toHaveBeenCalled()
+  })
+
   it('bounds the pass by the limit and keeps going past a row that throws', async () => {
     const transport = makeTransport()
     const deliver = vi.fn().mockResolvedValue({ inboxItemId: 'inbox-3', xmlDocumentId: null })
     const first = row({ id: 'doc-a', provider_document_id: 'pd-a', company_id: 'company-1', status: 'failed' })
     const second = row({ id: 'doc-b', provider_document_id: 'pd-b', company_id: 'company-1', status: 'failed' })
-    enqueue({ data: [first, second], error: null })
+    pendingRows([], [first, second])
     enqueue({ data: null, error: { message: 'connection reset' } })              // stamp of doc-a fails
     enqueue({ data: stamped(second), error: null })                               // stamp of doc-b
     enqueue({ data: stamped({ ...second, status: 'converted', inbox_item_id: 'inbox-3' }), error: null })

@@ -22,6 +22,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { JAMKNING_END_REQUIRED, JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
+import { EXTRA_TAX_ONE_FORM } from '@/lib/salary/extra-tax'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
@@ -47,6 +48,12 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { DELETE, GET, PATCH } from '../route'
 import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
 
@@ -130,6 +137,9 @@ const CHECK_CONSTRAINT_ERROR = {
 // refusal sentence is derived from. This one has no beslut.
 const DELETE_READ_ROW = {
   id: 'emp-1',
+  first_name: 'Test',
+  last_name: 'Testsson',
+  is_active: true,
   jamkning_percentage: null,
   jamkning_valid_from: null,
   jamkning_valid_to: null,
@@ -179,7 +189,7 @@ describe('DELETE /api/salary/employees/[id]', () => {
   })
 
   it('404 when no employee row matches (unknown id or another company), and nothing is written', async () => {
-    enqueue({ data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } })
+    enqueue({ data: null })
 
     const response = await DELETE(deleteRequest(), params)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
@@ -194,7 +204,7 @@ describe('DELETE /api/salary/employees/[id]', () => {
     // #2240, no end date. The constraint refuses ANY update of it, the
     // deactivation included. The user must be told what to complete, in the
     // validator's own words, not "not found" (the row exists) and not 500.
-    enqueue({ data: { id: 'emp-1', jamkning_percentage: 30, jamkning_valid_from: '2025-09-29', jamkning_valid_to: null } })
+    enqueue({ data: { ...DELETE_READ_ROW, jamkning_percentage: 30, jamkning_valid_from: '2025-09-29', jamkning_valid_to: null } })
     enqueue({ data: null, error: CHECK_CONSTRAINT_ERROR })
 
     const response = await DELETE(deleteRequest(), params)
@@ -481,5 +491,410 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
 
     expect(status).toBe(500)
     expect(body.error).not.toContain('JAMKNING')
+  })
+})
+
+/**
+ * The update contract on the route the edit page calls (#3008): an explicit
+ * null clears a nullable column, an absent key leaves it unchanged. Before,
+ * the schema refused null and the form dropped emptied fields, so an emptied
+ * slutdatum came back after save.
+ */
+describe('clearing optional fields on PATCH /api/salary/employees/[id] (#3008)', () => {
+  const ENDED_ROW = {
+    ...EXISTING_ROW,
+    employment_start: '2024-01-15',
+    employment_end: '2026-06-30',
+    email: 'anna@example.test',
+    clearing_number: '6000',
+    bank_account_number: '12345678',
+    vaxa_stod_eligible: false,
+    vaxa_stod_start: null,
+  }
+
+  function useRow(existing: Record<string, unknown> | null) {
+    const mock = employeeSupabase(existing as Record<string, unknown>)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('401 when unauthenticated, and nothing is written', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await PATCH(patchRequest({ employment_end: null }), params)
+
+    expect(response.status).toBe(401)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('200 and writes null when the slutdatum is cleared: the employment is ongoing again', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ employment_end: null }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    // Only the cleared key reaches the UPDATE: absent keys stay untouched.
+    expect(captured.updates).toEqual({ employment_end: null })
+    expect(body.data.employment_end).toBeNull()
+  })
+
+  it('200 and clears contact fields and both bank fields together', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(
+      patchRequest({ email: null, phone: null, clearing_number: null, bank_account_number: null }),
+      params,
+    )
+
+    expect(response.status).toBe(200)
+    expect(captured.updates).toEqual({ email: null, phone: null, clearing_number: null, bank_account_number: null })
+  })
+
+  it('400 for a malformed date, and nothing is written', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ employment_end: '30-06-2026' }), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 for null on a NOT NULL column (employment_start cannot be cleared)', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ employment_start: null }), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when clearing the monthly salary of a monthly employee (merged row)', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ monthly_salary: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('Månadslön krävs')
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when clearing the Växa-stöd start while the stored flag stays on', async () => {
+    const captured = useRow({ ...ENDED_ROW, vaxa_stod_eligible: true, vaxa_stod_start: '2026-01-01' })
+
+    const response = await PATCH(patchRequest({ vaxa_stod_start: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('Växa-stöd')
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when clearing only one of the bank fields (both-or-neither)', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ bank_account_number: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('Kontonummer krävs')
+    expect(captured.updates).toBeNull()
+  })
+
+  it('404 when no employee row matches, and nothing is written', async () => {
+    const captured = useRow(null)
+
+    const response = await PATCH(patchRequest({ employment_end: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('Anställd hittades inte')
+    expect(captured.updates).toBeNull()
+  })
+})
+
+/**
+ * is_active on the route the employee page calls (crm#1133). The key was
+ * missing from UpdateEmployeeSchema, so a PATCH carrying it answered 200 with
+ * the employee unchanged and "Inaktivera" had no way back. true reactivates;
+ * false is the same single-column write DELETE makes.
+ */
+describe('is_active on PATCH /api/salary/employees/[id] (crm#1133)', () => {
+  const INACTIVE_ROW = { ...EXISTING_ROW, is_active: false }
+  const ACTIVE_ROW = { ...EXISTING_ROW, is_active: true }
+
+  function useRow(existing: Record<string, unknown>, updateError: { code: string; message: string } | null = null) {
+    const mock = employeeSupabase(existing, updateError)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('200 and writes is_active true, and nothing else, on an inactive employee', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+
+    const response = await PATCH(patchRequest({ is_active: true }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({ is_active: true })
+    expect(body.data.is_active).toBe(true)
+    // The write response keeps the personnummer contract of every other PATCH.
+    expect(body.data.personnummer_masked).toBe('19020304-XXXX')
+    expect('personnummer' in body.data).toBe(false)
+  })
+
+  it('200 and writes is_active false: the write DELETE makes, through PATCH', async () => {
+    const captured = useRow({ ...ACTIVE_ROW })
+
+    const response = await PATCH(patchRequest({ is_active: false }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({ is_active: false })
+    expect(body.data.is_active).toBe(false)
+  })
+
+  it('writes the flag together with another field in the same PATCH', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+
+    const response = await PATCH(patchRequest({ is_active: true, phone: '0700000000' }), params)
+
+    expect(response.status).toBe(200)
+    expect(captured.updates).toEqual({ is_active: true, phone: '0700000000' })
+  })
+
+  it('leaves the flag out of the write when the PATCH does not name it', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+
+    const response = await PATCH(patchRequest({ phone: '0700000000' }), params)
+
+    expect(response.status).toBe(200)
+    expect(captured.updates).toEqual({ phone: '0700000000' })
+  })
+
+  it('400 for a value that is not a boolean (null, a string), and nothing is written', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+
+    expect((await PATCH(patchRequest({ is_active: null }), params)).status).toBe(400)
+    expect((await PATCH(patchRequest({ is_active: 'true' }), params)).status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('403 for a viewer, and nothing is written', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+
+    const response = await PATCH(patchRequest({ is_active: true }), params)
+
+    expect(response.status).toBe(403)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('404 when no employee row matches, and nothing is written', async () => {
+    const captured = useRow(null as unknown as Record<string, unknown>)
+
+    const response = await PATCH(patchRequest({ is_active: true }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('Anställd hittades inte')
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 with the jämkning sentence when the NOT VALID check refuses to reactivate a legacy incomplete row', async () => {
+    // employees_jamkning_dates_check is checked on the row's next UPDATE,
+    // whatever column it names, the reactivation included: the user is told
+    // what to complete, never "not found" and never a 500.
+    const captured = useRow(
+      { ...INACTIVE_ROW, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null },
+      CHECK_CONSTRAINT_ERROR,
+    )
+
+    const response = await PATCH(patchRequest({ is_active: true }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(JAMKNING_END_REQUIRED)
+    expect(captured.updates).toEqual({ is_active: true })
+  })
+})
+
+describe('förhöjt skatteavdrag on PATCH /api/salary/employees/[id]', () => {
+  function useRow(existing: Record<string, unknown> | null, updateError: { code: string; message: string } | null = null) {
+    const mock = employeeSupabase(existing as Record<string, unknown>, updateError)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('401 when unauthenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await PATCH(patchRequest({ extra_tax_percentage: 45 }), params)
+    expect(response.status).toBe(401)
+  })
+
+  it.each([
+    ['both forms at once', { extra_tax_amount: 500, extra_tax_percentage: 45 }],
+    ['fractional kronor', { extra_tax_amount: 500.5 }],
+    ['101 %', { extra_tax_percentage: 101 }],
+    ['0 %', { extra_tax_percentage: 0 }],
+    ['a third decimal', { extra_tax_percentage: 33.333 }],
+  ])('400 for %s, and nothing is written', async (_name, body) => {
+    const captured = useRow({ ...EXISTING_ROW, extra_tax_amount: null, extra_tax_percentage: null })
+
+    const response = await PATCH(patchRequest(body), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when one form is sent while the other is stored (merged row)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, extra_tax_amount: 500, extra_tax_percentage: null })
+
+    const response = await PATCH(patchRequest({ extra_tax_percentage: 45 }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(EXTRA_TAX_ONE_FORM)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 with the same sentence when the CHECK constraint catches a concurrent edit', async () => {
+    const captured = useRow(
+      { ...EXISTING_ROW, extra_tax_amount: null, extra_tax_percentage: null },
+      {
+        code: '23514',
+        message: 'new row for relation "employees" violates check constraint "employees_extra_tax_one_form_check"',
+      },
+    )
+
+    const response = await PATCH(patchRequest({ extra_tax_percentage: 45 }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(EXTRA_TAX_ONE_FORM)
+    expect(captured.updates).toEqual({ extra_tax_percentage: 45 })
+  })
+
+  it('404 when the employee does not exist', async () => {
+    const captured = useRow(null)
+
+    const response = await PATCH(patchRequest({ extra_tax_percentage: 45 }), params)
+
+    expect(response.status).toBe(404)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('200 and switches the form in one PATCH (happy path)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, extra_tax_amount: 500, extra_tax_percentage: null })
+
+    const response = await PATCH(patchRequest({ extra_tax_amount: null, extra_tax_percentage: 45 }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({ extra_tax_amount: null, extra_tax_percentage: 45 })
+    expect(body.data.extra_tax_percentage).toBe(45)
+    expect(body.data.extra_tax_amount).toBeNull()
+  })
+})
+
+/**
+ * Personalkategori on the route the employee page calls: the wage series the
+ * booking resolves (arbetare 70xx, tjänsteman 72xx). NOT NULL with no clear.
+ */
+describe('personnel_category on PATCH /api/salary/employees/[id]', () => {
+  function useRow(existing: Record<string, unknown> | null) {
+    const mock = employeeSupabase(existing as Record<string, unknown>)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('401 when unauthenticated, and nothing is written', async () => {
+    const captured = useRow({ ...EXISTING_ROW })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await PATCH(patchRequest({ personnel_category: 'arbetare' }), params)
+
+    expect(response.status).toBe(401)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('200 and writes only the category', async () => {
+    const captured = useRow({ ...EXISTING_ROW, personnel_category: 'tjansteman' })
+
+    const response = await PATCH(patchRequest({ personnel_category: 'arbetare' }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({ personnel_category: 'arbetare' })
+    expect(body.data.personnel_category).toBe('arbetare')
+  })
+
+  it('400 for an unknown category, and nothing is written', async () => {
+    const captured = useRow({ ...EXISTING_ROW })
+
+    const response = await PATCH(patchRequest({ personnel_category: 'kollektiv' }), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 for null (NOT NULL column), and nothing is written', async () => {
+    const captured = useRow({ ...EXISTING_ROW })
+
+    const response = await PATCH(patchRequest({ personnel_category: null }), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('404 when no employee row matches, and nothing is written', async () => {
+    const captured = useRow(null)
+
+    const response = await PATCH(patchRequest({ personnel_category: 'arbetare' }), params)
+
+    expect(response.status).toBe(404)
+    expect(captured.updates).toBeNull()
   })
 })

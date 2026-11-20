@@ -12,6 +12,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { RECURRING_LINE_PERIOD_ORDER_MESSAGE } from '@/lib/api/schemas'
 import { RECURRING_LINE_AMOUNT_SIGN_MESSAGE } from '@/lib/salary/recurring-lines'
+import { TEXT_ROW_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
+import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE } from '@/lib/salary/line-account-override'
 import {
   createEmployeeRecurringLine,
   deleteEmployeeRecurringLine,
@@ -19,6 +21,12 @@ import {
   updateEmployeeRecurringLine,
   type EmployeeRecurringLineRow,
 } from '@/lib/salary/employee-recurring-lines'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -34,6 +42,7 @@ const STORED: EmployeeRecurringLineRow = {
   description: 'Förmånscykel bruttolöneavdrag',
   amount: -670.17,
   account_number: null,
+  benefit_type: null,
   valid_from: '2026-01-01',
   valid_to: null,
   metadata: {},
@@ -184,6 +193,7 @@ describe('createEmployeeRecurringLine', () => {
       description: 'Förmånscykel bruttolöneavdrag',
       amount: -670.17,
       account_number: null,
+      benefit_type: null,
       valid_from: '2026-01-01',
       valid_to: null,
       metadata: {},
@@ -345,6 +355,7 @@ describe('updateEmployeeRecurringLine', () => {
     expect(Object.keys(update).sort()).toEqual([
       'account_number',
       'amount',
+      'benefit_type',
       'description',
       'is_active',
       'metadata',
@@ -475,5 +486,261 @@ describe('deleteEmployeeRecurringLine', () => {
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.code).toBe('NOT_FOUND')
     })
+  })
+})
+
+describe('recurring text rows', () => {
+  const TEXT_STORED: EmployeeRecurringLineRow = {
+    ...STORED,
+    item_type: 'text',
+    description: 'Lönen består av grundlön och personligt tillägg',
+    amount: 0,
+  }
+  const create = (input: Record<string, unknown>) =>
+    createEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      userId: USER_ID,
+      input: input as never,
+    })
+
+  it('stores a text row with no amount as amount 0, no account and normalised text', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: TEXT_STORED })
+    const result = await create({
+      item_type: 'text',
+      description: ' Lönen består av grundlön\noch personligt tillägg ',
+      account_number: '7210',
+      valid_from: '2026-01-01',
+    })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({
+      item_type: 'text',
+      description: 'Lönen består av grundlön och personligt tillägg',
+      amount: 0,
+      account_number: null,
+    })
+  })
+
+  it('refuses an amount on a text row, and blank text, before touching the database', async () => {
+    expect(await create({ item_type: 'text', description: 'Text', amount: 500, valid_from: '2026-01-01' })).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { issues: [{ field: 'amount', message: TEXT_ROW_AMOUNT_MESSAGE }] },
+    })
+    expect(await create({ item_type: 'text', description: '  \n ', valid_from: '2026-01-01' })).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { issues: [{ field: 'description' }] },
+    })
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('a deduction still needs a negative amount', async () => {
+    expect(await create({ ...validInput, amount: undefined })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+  })
+
+  it('a patch keeps a text row without an account and refuses an amount', async () => {
+    const base = { companyId: COMPANY_ID, employeeId: EMPLOYEE_ID, lineId: LINE_ID }
+    mock.enqueue({ data: TEXT_STORED })
+    mock.enqueue({ data: TEXT_STORED })
+    await updateEmployeeRecurringLine(supabase, { ...base, patch: { description: 'Ny\ntext', account_number: '7210' } })
+    const written = mock.findCall('employee_recurring_lines', 'update')?.[0] as Record<string, unknown>
+    expect(written.description).toBe('Ny text')
+    expect(written.account_number).toBeUndefined()
+
+    mock.enqueue({ data: TEXT_STORED })
+    expect(await updateEmployeeRecurringLine(supabase, { ...base, patch: { amount: -100 } })).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+    })
+  })
+})
+
+describe('a benefit payment names its benefit (crm#1492)', () => {
+  const PAYMENT_STORED: EmployeeRecurringLineRow = {
+    ...STORED,
+    item_type: 'net_deduction_benefit_payment',
+    description: 'Nettolöneavdrag bilförmån',
+    amount: -13713.75,
+    benefit_type: 'car',
+  }
+  const payment = (extra: Record<string, unknown> = {}) =>
+    createEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      userId: USER_ID,
+      input: {
+        item_type: 'net_deduction_benefit_payment',
+        description: 'Nettolöneavdrag bilförmån',
+        amount: -13713.75,
+        valid_from: '2026-10-01',
+        ...extra,
+      } as never,
+    })
+  // The reported shape: a car benefit and a sjukvårdsförmån (benefit_type other).
+  const twoBenefits = { data: [{ benefit_type: 'car', valid_to: null }, { benefit_type: 'other', valid_to: null }] }
+
+  it('stores the named benefit when the employee has it (the reported case: car + other)', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue(twoBenefits)
+    mock.enqueue({ data: PAYMENT_STORED })
+    const result = await payment({ benefit_type: 'car' })
+    expect(result).toEqual({ ok: true, data: PAYMENT_STORED })
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({
+      item_type: 'net_deduction_benefit_payment',
+      benefit_type: 'car',
+    })
+  })
+
+  it('refuses an unnamed payment next to two benefit types when staged, naming them', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue(twoBenefits)
+    const result = await payment()
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+    const issue = (result as unknown as { details: { issues: Array<{ field: string; message: string }> } }).details.issues[0]
+    expect(issue.field).toBe('benefit_type')
+    expect(issue.message).toContain('bilförmån, övrig förmån')
+    expect(mock.findCall('employee_recurring_lines', 'insert')).toBeUndefined()
+  })
+
+  it('keeps an unnamed payment with one benefit type working as before', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: [{ benefit_type: 'car', valid_to: null }] })
+    mock.enqueue({ data: { ...PAYMENT_STORED, benefit_type: null } })
+    const result = await payment()
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({ benefit_type: null })
+  })
+
+  it('refuses a named benefit the employee does not have, or one that ended before the line starts', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: [{ benefit_type: 'car', valid_to: '2026-09-30' }, { benefit_type: 'meals', valid_to: null }] })
+    const result = await payment({ benefit_type: 'car' })
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+    const issue = (result as unknown as { details: { issues: Array<{ field: string; message: string }> } }).details.issues[0]
+    expect(issue.field).toBe('benefit_type')
+    expect(issue.message).toContain('ingen registrerad bilförmån')
+    expect(issue.message).toContain('(kostförmån)')
+  })
+
+  it('never reads the benefit register for another item type, and refuses a benefit on it', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    const result = await createEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      userId: USER_ID,
+      input: { item_type: 'net_deduction_union', description: 'Fack', amount: -300, valid_from: '2026-10-01', benefit_type: 'car' } as never,
+    })
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+    expect(mock.findCall('employee_benefits', 'select')).toBeUndefined()
+  })
+
+  it('an update can name the benefit; a non-payment line cannot take one', async () => {
+    mock.enqueue({ data: { ...PAYMENT_STORED, benefit_type: null } })
+    mock.enqueue(twoBenefits)
+    mock.enqueue({ data: PAYMENT_STORED })
+    const named = await updateEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      lineId: LINE_ID,
+      patch: { benefit_type: 'car' },
+    })
+    expect(named).toEqual({ ok: true, data: PAYMENT_STORED })
+    expect(mock.findCall('employee_recurring_lines', 'update')?.[0]).toMatchObject({ benefit_type: 'car' })
+
+    mock.reset()
+    mock.enqueue({ data: STORED })
+    const refused = await updateEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      lineId: LINE_ID,
+      patch: { benefit_type: 'car' },
+    })
+    expect(refused).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+  })
+
+  it('an unrelated edit of a stored unnamed payment is never blocked by the register', async () => {
+    mock.enqueue({ data: { ...PAYMENT_STORED, benefit_type: null } })
+    mock.enqueue({ data: { ...PAYMENT_STORED, benefit_type: null, amount: -14000 } })
+    const result = await updateEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      lineId: LINE_ID,
+      patch: { amount: -14000 },
+    })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('employee_benefits', 'select')).toBeUndefined()
+  })
+})
+
+// Every run would derive the row and credit 2710-2739, which the run books
+// itself from the numbers the AGI declares (line-account-override.ts).
+describe('accounts the run books itself (2710-2739)', () => {
+  const base = { companyId: COMPANY_ID, employeeId: EMPLOYEE_ID, lineId: LINE_ID }
+  const NET_INPUT = {
+    item_type: 'net_deduction_other' as const,
+    description: 'Frivilligt extra skatteavdrag',
+    amount: -500,
+    valid_from: '2026-01-01',
+  }
+  const NET_STORED: EmployeeRecurringLineRow = { ...STORED, ...NET_INPUT, account_number: '2794' }
+  const REFUSAL = {
+    ok: false,
+    code: 'VALIDATION_ERROR',
+    details: { issues: [{ field: 'account_number', message: RUN_COMPUTED_TAX_ACCOUNT_MESSAGE }] },
+  }
+  const create = (input: Record<string, unknown>, dryRun?: boolean) =>
+    createEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      userId: USER_ID,
+      input: input as never,
+      dryRun,
+    })
+
+  it.each(['2710', '2731', '2739'])('refuses a net deduction on %s before touching the database', async (account) => {
+    expect(await create({ ...NET_INPUT, account_number: account })).toEqual(REFUSAL)
+    expect(await create({ ...NET_INPUT, account_number: account }, true)).toEqual(REFUSAL)
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it.each(['2794', '2750', '2799'])('still stores a net deduction on %s (happy path)', async (account) => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: { ...NET_STORED, account_number: account } })
+    const result = await create({ ...NET_INPUT, account_number: account })
+    expect(result).toEqual({ ok: true, data: { ...NET_STORED, account_number: account } })
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({ account_number: account })
+  })
+
+  it('ignores the account on a text row, which stores none', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: { ...STORED, item_type: 'text', amount: 0 } })
+    const result = await create({ item_type: 'text', description: 'Extra skatt enligt begäran', account_number: '2710', valid_from: '2026-01-01' })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({ account_number: null })
+  })
+
+  it('refuses a patch that moves a line onto 2710, before writing', async () => {
+    mock.enqueue({ data: NET_STORED })
+    expect(await updateEmployeeRecurringLine(supabase, { ...base, patch: { account_number: '2710' } })).toEqual(REFUSAL)
+    expect(mock.findCall('employee_recurring_lines', 'update')).toBeUndefined()
+  })
+
+  it('accepts a patch onto 2750 and one that clears the account', async () => {
+    for (const account_number of ['2750', null]) {
+      mock.reset()
+      mock.enqueue({ data: NET_STORED })
+      mock.enqueue({ data: { ...NET_STORED, account_number } })
+      const result = await updateEmployeeRecurringLine(supabase, { ...base, patch: { account_number } })
+      expect(result).toEqual({ ok: true, data: { ...NET_STORED, account_number } })
+      expect(mock.findCall('employee_recurring_lines', 'update')?.[0]).toEqual({ account_number })
+    }
+  })
+
+  it('lets an unrelated patch through on a line stored on 2710 before the refusal', async () => {
+    mock.enqueue({ data: { ...NET_STORED, account_number: '2710' } })
+    const result = await updateEmployeeRecurringLine(supabase, { ...base, patch: { amount: -400 }, dryRun: true })
+    expect(result.ok).toBe(true)
   })
 })

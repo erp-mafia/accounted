@@ -1,0 +1,464 @@
+[
+  {
+    "name": "registration: domestic at 25 % for an aktiebolag, with invoice dimensions",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Kundfaktura F-1000, Kund AB",
+          "source_type": "invoice_created",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Faktura F-1000",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Försäljning faktura F-1000",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Utgående moms 25% faktura F-1000",
+              "dimensions": {
+                "6": "P100"
+              }
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-0"
+    }
+  },
+  {
+    "name": "registration: mixed rates 25 %, 12 % and 6 % for an enskild firma",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Kundfaktura F-1001, Kund AB",
+          "source_type": "invoice_created",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 1792,
+              "credit_amount": 0,
+              "line_description": "Faktura F-1001"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 600,
+              "line_description": "Försäljning faktura F-1001"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 150,
+              "line_description": "Utgående moms 25% faktura F-1001"
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 200,
+              "line_description": "Försäljning faktura F-1001"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 24,
+              "line_description": "Utgående moms 12% faktura F-1001"
+            },
+            {
+              "account_number": "3003",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Försäljning faktura F-1001"
+            },
+            {
+              "account_number": "2631",
+              "debit_amount": 0,
+              "credit_amount": 18,
+              "line_description": "Utgående moms 6% faktura F-1001"
+            },
+            {
+              "account_number": "3004",
+              "debit_amount": 0,
+              "credit_amount": 500,
+              "line_description": "Försäljning faktura F-1001"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-1"
+    }
+  },
+  {
+    "name": "registration: EU business customer in EUR under reverse charge",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Kundfaktura F-1002, Kunde GmbH",
+          "source_type": "invoice_created",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Faktura F-1002",
+              "currency": "EUR",
+              "amount_in_currency": 200,
+              "exchange_rate": 11.5
+            },
+            {
+              "account_number": "3308",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Försäljning faktura F-1002"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-2"
+    }
+  },
+  {
+    "name": "registration: a periodisering defers the revenue to 2970",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Kundfaktura F-1003",
+          "source_type": "invoice_created",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 15000,
+              "credit_amount": 0,
+              "line_description": "Faktura F-1003"
+            },
+            {
+              "account_number": "2970",
+              "debit_amount": 0,
+              "credit_amount": 12000,
+              "line_description": "Försäljning faktura F-1003"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 3000,
+              "line_description": "Utgående moms 25% faktura F-1003"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-3"
+    }
+  },
+  {
+    "name": "registration: a RUT invoice splits the receivable over 1510 and 1513",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Kundfaktura F-1004, Privatkund",
+          "source_type": "invoice_created",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 3500,
+              "credit_amount": 0,
+              "line_description": "Faktura F-1004"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 2500,
+              "credit_amount": 0,
+              "line_description": "RUT-avdrag faktura F-1004"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 4800,
+              "line_description": "Försäljning faktura F-1004"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Utgående moms 25% faktura F-1004"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-4"
+    }
+  },
+  {
+    "name": "registration: the send dialog's user-edited lines are booked verbatim",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Kundfaktura F-1005, Kund AB",
+          "source_type": "invoice_created",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Faktura F-1005"
+            },
+            {
+              "account_number": "3041",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Konsulttjänster"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Utgående moms 25 %"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-5"
+    }
+  },
+  {
+    "name": "registration: a received självfaktura books under the counterparty's number",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Självfaktura SF-77, Uppdragsgivaren AB",
+          "source_type": "invoice_created",
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Faktura SF-77"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Försäljning faktura SF-77"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Utgående moms 25% faktura SF-77"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-6"
+    }
+  },
+  {
+    "name": "registration: no open fiscal period, nothing posted",
+    "calls": [],
+    "outcome": null
+  },
+  {
+    "name": "credit note: domestic, pointing back at the original verifikat",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kreditfaktura KR-F-1000, Kund AB (avser verifikation B-12)",
+          "source_type": "credit_note",
+          "source_id": "00000000-0000-4000-8000-000000000009",
+          "lines": [
+            {
+              "account_number": "3001",
+              "debit_amount": 1200,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura KR-F-1000 (avser B-12)"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura KR-F-1000 (avser B-12)"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Kreditfaktura KR-F-1000"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-8"
+    }
+  },
+  {
+    "name": "credit note: a RUT invoice credited back over 1510 and 1513",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-21",
+          "description": "Kreditfaktura KR-F-1004, Privatkund (avser verifikation B-14)",
+          "source_type": "credit_note",
+          "source_id": "00000000-0000-4000-8000-000000000010",
+          "lines": [
+            {
+              "account_number": "3001",
+              "debit_amount": 4800,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura KR-F-1004 (avser B-14)"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 1200,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura KR-F-1004 (avser B-14)"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 3500,
+              "line_description": "Kreditfaktura KR-F-1004"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "RUT-avdrag kreditfaktura KR-F-1004"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-9"
+    }
+  },
+  {
+    "name": "credit note: EU business customer in EUR under reverse charge",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-22",
+          "description": "Kreditfaktura KR-F-1002, Kunde GmbH",
+          "source_type": "credit_note",
+          "source_id": "00000000-0000-4000-8000-000000000011",
+          "lines": [
+            {
+              "account_number": "3308",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura KR-F-1002"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Kreditfaktura KR-F-1002"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-10"
+    }
+  },
+  {
+    "name": "credit note: no open fiscal period, nothing posted",
+    "calls": [],
+    "outcome": null
+  }
+]

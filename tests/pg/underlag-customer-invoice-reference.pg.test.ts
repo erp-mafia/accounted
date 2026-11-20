@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { getPool } from './setup'
-import { seedCompany, insertPostedJournalEntry, insertTransaction } from './fixtures'
+import { seedCompany, insertPostedBankJournalEntry, insertPostedJournalEntry, insertTransaction } from './fixtures'
 
 /**
  * Customer-invoice hänvisning in the missing-underlag predicate (#2298,
@@ -111,7 +111,7 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
   let jeManualRegistered: string // manual booking the invoice register links directly → covered
   let jeBankLinked: string // bank-driven entry, invoice matched to it → covered on BOTH surfaces
   let jeImportForeignLink: string // linked only from ANOTHER company's invoice → still missing
-  let jeManualDraftLink: string // a DRAFT invoice points at it: no document yet → still missing
+  let jeManualCancelledLink: string // a CANCELLED invoice points at it: no document → still missing
   let jeImportCancelledPayment: string // payment row of a CANCELLED invoice → still missing
 
   beforeAll(async () => {
@@ -121,8 +121,8 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
 
     // The importer's shape for an EU service sale under kontantmetoden:
     // debit bank, credit 3308. Source type 'import' is in the needs-doc list.
-    const mkJe = (n: number, sourceType: string) =>
-      insertPostedJournalEntry({
+    const mkJe = async (n: number, sourceType: string) => {
+      const entry = {
         userId,
         companyId,
         fiscalPeriodId,
@@ -134,14 +134,20 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
           { accountNumber: '1930', debitAmount: 10000, creditAmount: 0 },
           { accountNumber: '3308', debitAmount: 0, creditAmount: 10000 },
         ],
-      })
+      }
+      if (sourceType !== 'bank_transaction') return insertPostedJournalEntry(entry)
+      const transactionId = await insertTransaction({ userId, companyId, amount: 10000, date: entry.entryDate })
+      const id = await insertPostedBankJournalEntry({ ...entry, transactionId })
+      await getPool().query('UPDATE transactions SET journal_entry_id = $2 WHERE id = $1', [transactionId, id])
+      return id
+    }
 
     jeImportLinked = await mkJe(1, 'import')
     jeImportLoose = await mkJe(2, 'import')
     jeManualRegistered = await mkJe(3, 'manual')
     jeBankLinked = await mkJe(4, 'bank_transaction')
     jeImportForeignLink = await mkJe(5, 'import')
-    jeManualDraftLink = await mkJe(6, 'manual')
+    jeManualCancelledLink = await mkJe(6, 'manual')
     jeImportCancelledPayment = await mkJe(7, 'import')
 
     const linkedInvoice = await insertCustomerInvoice({ userId, companyId })
@@ -150,8 +156,10 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
     await insertCustomerInvoice({ userId, companyId, journalEntryId: jeManualRegistered })
 
     // Non-issued invoices: the link row exists but no document does, the
-    // counterpart of an unanchored supplier document.
-    await insertCustomerInvoice({ userId, companyId, journalEntryId: jeManualDraftLink, status: 'draft' })
+    // counterpart of an unanchored supplier document. A draft never holds a
+    // verifikat (invoices_draft_has_no_verifikat), so the direct link is a
+    // cancelled invoice's.
+    await insertCustomerInvoice({ userId, companyId, journalEntryId: jeManualCancelledLink, status: 'cancelled' })
     const cancelledInvoice = await insertCustomerInvoice({ userId, companyId, status: 'cancelled' })
     await linkAsPayment({
       userId,
@@ -160,7 +168,6 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
       journalEntryId: jeImportCancelledPayment,
     })
 
-    await insertTransaction({ userId, companyId, journalEntryId: jeBankLinked, date: '2026-06-04' })
     const bankInvoice = await insertCustomerInvoice({ userId, companyId })
     await linkAsPayment({ userId, companyId, invoiceId: bankInvoice, journalEntryId: jeBankLinked })
 
@@ -203,9 +210,9 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
     for (const id of tx) expect(ver).toContain(id)
   })
 
-  it('a DRAFT invoice pointing at the entry is no underlag: still missing', async () => {
+  it('a CANCELLED invoice pointing at the entry is no underlag: still missing', async () => {
     const ids = await verifikatSurface(companyId)
-    expect(ids).toContain(jeManualDraftLink)
+    expect(ids).toContain(jeManualCancelledLink)
   })
 
   it('a payment row of a CANCELLED invoice is no underlag: still missing', async () => {
@@ -216,7 +223,18 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
   it('the full verdict: exactly the unlinked, foreign-linked and non-issued-linked entries remain', async () => {
     const ids = await verifikatSurface(companyId)
     expect(ids.sort()).toEqual(
-      [jeImportLoose, jeImportForeignLink, jeManualDraftLink, jeImportCancelledPayment].sort(),
+      [jeImportLoose, jeImportForeignLink, jeManualCancelledLink, jeImportCancelledPayment].sort(),
     )
+  })
+
+  it('the verifikat list filter (list_verifikat_missing_underlag) reaches the same verdict (crm#1390)', async () => {
+    const { rows } = await getPool().query<{ r: { ok: boolean; total_count: number; ids: string[] } }>(
+      `SELECT public.list_verifikat_missing_underlag($1, p_limit => 1000) AS r`,
+      [companyId],
+    )
+    expect(rows[0].r.ok).toBe(true)
+    const badge = await verifikatSurface(companyId)
+    expect([...rows[0].r.ids].sort()).toEqual([...badge].sort())
+    expect(rows[0].r.total_count).toBe(badge.length)
   })
 })

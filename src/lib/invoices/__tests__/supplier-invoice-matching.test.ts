@@ -41,6 +41,17 @@ describe('findSupplierInvoiceMatch', () => {
     expect(findSupplierInvoiceMatch(tx, [inv])).toBeNull()
   })
 
+  // The statuses match-supplier-invoice takes a payment in: an overdue or
+  // part-paid invoice is still a debt the payment can settle.
+  it.each(['overdue', 'partially_paid'] as const)('suggests a %s invoice like a registered one', (status) => {
+    const tx = makeTransaction({ amount: -1000, reference: '12345' })
+    const inv = makeSupplierInvoice({ status, remaining_amount: 1000, payment_reference: '12345' })
+
+    const result = findSupplierInvoiceMatch(tx, [inv])
+
+    expect(result?.matchMethod).toBe('payment_reference')
+  })
+
   // Pass 1: Payment reference
   it('matches by payment reference with confidence 0.98', () => {
     const tx = makeTransaction({ amount: -5000, reference: '73100 12345 67890' })
@@ -74,6 +85,44 @@ describe('findSupplierInvoiceMatch', () => {
     expect(result).not.toBeNull()
     expect(result!.confidence).toBe(0.92)
     expect(result!.matchMethod).toBe('amount_bankgiro')
+  })
+
+  // crm#1204: the shared giro reading (lib/transactions/giro-counterparty).
+  // 999-0003 is a valid bankgiro; the digit substring never found it written
+  // with its hyphen or only in the bank's counterparty account.
+  describe('giro from the shared reading', () => {
+    const giroSupplier = makeSupplier({ name: 'Leverantör AB', bankgiro: '999-0003', plusgiro: null })
+
+    it.each([
+      ['a formatted bankgiro in the text', { description: 'BG 999-0003', original_description: 'BG 999-0003' }],
+      ['the bank counterparty account', { counterparty_account: '999-0003' }],
+    ])('matches %s at 0.92', (_label, fields) => {
+      const tx = makeTransaction({ amount: -10000, ...fields })
+      const inv = makeSupplierInvoice({ status: 'approved', remaining_amount: 10000, supplier: giroSupplier })
+
+      expect(findSupplierInvoiceMatch(tx, [inv])).toMatchObject({ confidence: 0.92, matchMethod: 'amount_bankgiro' })
+    })
+
+    it('matches the giro the invoice states when the card has none', () => {
+      const tx = makeTransaction({ amount: -10000, counterparty_account: '999-0003' })
+      const inv = makeSupplierInvoice({
+        status: 'approved',
+        remaining_amount: 10000,
+        payee_bankgiro: '9990003',
+        supplier: { ...giroSupplier, bankgiro: null },
+      })
+
+      expect(findSupplierInvoiceMatch(tx, [inv])?.matchMethod).toBe('amount_bankgiro')
+    })
+
+    it('never matches on Bankgirot settlement through the company own giro', () => {
+      // SEB prints the company's own bankgiro on a leverantörsbetalning; a
+      // supplier card that wrongly carries it must not turn that into 0.92.
+      const tx = makeTransaction({ amount: -10000, description: 'LBE 999-0003', original_description: 'LBE 999-0003' })
+      const inv = makeSupplierInvoice({ status: 'approved', remaining_amount: 10000, supplier: giroSupplier })
+
+      expect(findSupplierInvoiceMatch(tx, [inv])?.matchMethod).not.toBe('amount_bankgiro')
+    })
   })
 
   // Pass 3: Amount + date
@@ -196,11 +245,11 @@ describe('findSupplierInvoiceMatch', () => {
     expect(result).toBeNull()
   })
 
-  // Pass 3, widened window: early payments (the reported RosholmDell case)
+  // Pass 3, widened window: early payments (a reported case)
   it('auto-matches an EARLY exact payment near the invoice date, weeks before due', () => {
     // Paid 2026-06-08, invoice issued 2026-06-05, due 2026-07-05 (27 days out).
     // The old due-date-only ±5d window missed this; the issue→due window catches it.
-    const tx = makeTransaction({ amount: -29890, date: '2026-06-08', description: 'RosholmDell Advo BG 0000007746514' })
+    const tx = makeTransaction({ amount: -29890, date: '2026-06-08', description: 'Nordljus Advo BG 0000001234567' })
     const inv = makeSupplierInvoice({
       status: 'registered',
       remaining_amount: 29890,

@@ -15,16 +15,40 @@ vi.mock('@/lib/logger', () => ({
   }),
 }))
 
-import { commitEntry, getNextVoucherNumber, createJournalEntry } from '../engine'
+import { commitEntry, allocateVoucherNumber, createJournalEntry } from '../engine'
 import { runWithActor } from '../actor-context-node'
 import { BookkeepingDatabaseError } from '../errors'
+
+/**
+ * journal_entries as commitEntry reads it: the draft's source_type first (a
+ * periodisering draft is refused before the RPC), then, once posted, the
+ * entry with its lines. Every other table answers nothing, so the dimension
+ * rule probe fails open as it does on a bare client.
+ */
+function clientWith(rpc: ReturnType<typeof vi.fn>, posted: unknown = null) {
+  const entries = () => {
+    const chain: Record<string, unknown> = {}
+    chain.eq = vi.fn(() => chain)
+    chain.maybeSingle = vi.fn().mockResolvedValue({ data: { source_type: 'manual' }, error: null })
+    chain.single = vi.fn().mockResolvedValue({ data: posted, error: null })
+    return { select: vi.fn(() => chain) }
+  }
+  return { from: vi.fn((table: string) => (table === 'journal_entries' ? entries() : undefined)), rpc }
+}
+
+/** The columns commitEntry selected from journal_entries, in order. */
+function entrySelects(supabase: ReturnType<typeof clientWith>): unknown[] {
+  return supabase.from.mock.results
+    .filter((_, i) => supabase.from.mock.calls[i]![0] === 'journal_entries')
+    .map((r) => (r.value as { select: ReturnType<typeof vi.fn> }).select.mock.calls[0]?.[0])
+}
 
 describe('voucher number atomicity', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('getNextVoucherNumber returns incrementing numbers from RPC', async () => {
+  it('allocateVoucherNumber returns incrementing numbers from RPC', async () => {
     let callCount = 0
     const supabase = {
       rpc: vi.fn().mockImplementation(() => {
@@ -33,9 +57,9 @@ describe('voucher number atomicity', () => {
       }),
     }
 
-    const n1 = await getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
-    const n2 = await getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
-    const n3 = await getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
+    const n1 = await allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
+    const n2 = await allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
+    const n3 = await allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
 
     expect(n1).toBe(1)
     expect(n2).toBe(2)
@@ -43,13 +67,13 @@ describe('voucher number atomicity', () => {
     expect(supabase.rpc).toHaveBeenCalledTimes(3)
   })
 
-  it('getNextVoucherNumber throws on RPC error', async () => {
+  it('allocateVoucherNumber throws on RPC error', async () => {
     const supabase = {
       rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'connection lost' } }),
     }
 
     await expect(
-      getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
+      allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
     ).rejects.toThrow(BookkeepingDatabaseError)
   })
 
@@ -60,13 +84,12 @@ describe('voucher number atomicity', () => {
    * rolls back: no burned number, no gap.
    */
   it('commitEntry RPC failure does not burn a sequence number', async () => {
-    const supabase = {
-      from: vi.fn(),
-      rpc: vi.fn().mockResolvedValue({
+    const supabase = clientWith(
+      vi.fn().mockResolvedValue({
         data: null,
         error: { message: 'Journal entry is not balanced: debit=1000 credit=500' },
       }),
-    }
+    )
 
     await expect(
       commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1')
@@ -83,10 +106,12 @@ describe('voucher number atomicity', () => {
       p_actor_label: null,
     })
 
-    // No line/entry fetch happened: the RPC handles everything atomically.
-    // (PR10: commitEntry now also probes account_dimension_rules first; the
-    // bare mock makes that probe fail open, which is exactly the posture.)
-    expect(supabase.from).not.toHaveBeenCalledWith('journal_entries')
+    // No line or entry fetch around the commit: the RPC handles everything
+    // atomically. The one read before it is the draft's source_type, which
+    // keeps a periodisering draft out of this generic commit. (PR10:
+    // commitEntry also probes account_dimension_rules first; the bare mock
+    // makes that probe fail open, which is exactly the posture.)
+    expect(entrySelects(supabase)).toEqual(['source_type'])
     expect(supabase.from).not.toHaveBeenCalledWith('journal_entry_lines')
   })
 
@@ -101,17 +126,8 @@ describe('voucher number atomicity', () => {
       lines: [],
     }
 
-    const supabase = {
-      from: vi.fn().mockImplementation(() => ({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: postedEntry, error: null }),
-          }),
-        }),
-      })),
-      // Atomic RPC returns the assigned voucher number
-      rpc: vi.fn().mockResolvedValue({ data: [{ voucher_number: 3 }], error: null }),
-    }
+    // Atomic RPC returns the assigned voucher number
+    const supabase = clientWith(vi.fn().mockResolvedValue({ data: [{ voucher_number: 3 }], error: null }), postedEntry)
 
     const result = await commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1')
 
@@ -125,8 +141,20 @@ describe('voucher number atomicity', () => {
       p_actor_type: null,
       p_actor_label: null,
     })
-    // from() called once to fetch the complete entry with lines
-    expect(supabase.from).toHaveBeenCalledWith('journal_entries')
+    // The source_type check before the RPC, then the complete entry with lines.
+    expect(entrySelects(supabase)).toEqual(['source_type', '*, lines:journal_entry_lines(*)'])
+  })
+
+  it('preserves a bank source conflict so REST and MCP can request refreshed inputs', async () => {
+    const supabase = clientWith(
+      vi.fn().mockResolvedValue({ data: null, error: { code: 'PT409', message: 'BANK_BOOKING_SOURCE_CHANGED' } }),
+    )
+    await expect(commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1')).rejects.toMatchObject({
+      code: 'BANK_BOOKING_SOURCE_CHANGED', pgCode: 'PT409', operation: 'commit_entry',
+    })
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    // Nothing is read after the refused commit; before it, only the source_type.
+    expect(entrySelects(supabase)).toEqual(['source_type'])
   })
 
   /**
@@ -143,16 +171,7 @@ describe('voucher number atomicity', () => {
       status: 'posted' as JournalEntryStatus,
       lines: [],
     }
-    const supabase = {
-      from: vi.fn().mockImplementation(() => ({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: postedEntry, error: null }),
-          }),
-        }),
-      })),
-      rpc: vi.fn().mockResolvedValue({ data: [{ voucher_number: 1 }], error: null }),
-    }
+    const supabase = clientWith(vi.fn().mockResolvedValue({ data: [{ voucher_number: 1 }], error: null }), postedEntry)
 
     await runWithActor({ type: 'api_key', label: 'Claude Desktop' }, () =>
       commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1', 'api_key')
@@ -169,18 +188,18 @@ describe('voucher number atomicity', () => {
   })
 
   /**
-   * getNextVoucherNumber is still used by reverseEntry and storno-service.
-   * Those flows INSERT a new entry (not UPDATE a draft), so the atomic
-   * commit_journal_entry RPC doesn't apply. Burned numbers can still occur
-   * in reversal/correction flows if the INSERT fails after the counter
-   * increments. This is documented and expected.
+   * reverseEntry and storno-service no longer draw a number up front: they
+   * insert an unnumbered draft and post it through commit_journal_entry
+   * (commitStornoOrCorrectionDraft), so a failed reversal or correction burns
+   * no number. allocateVoucherNumber stays exported as the primitive over
+   * next_voucher_number.
    */
-  it('getNextVoucherNumber remains available for reversal/storno flows', async () => {
+  it('allocateVoucherNumber draws from next_voucher_number in the given series', async () => {
     const supabase = {
       rpc: vi.fn().mockResolvedValue({ data: 7, error: null }),
     }
 
-    const num = await getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'B')
+    const num = await allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'B')
 
     expect(num).toBe(7)
     expect(supabase.rpc).toHaveBeenCalledWith('next_voucher_number', {

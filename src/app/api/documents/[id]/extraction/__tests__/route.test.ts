@@ -16,20 +16,25 @@ const call = () => GET(new Request(`http://localhost/api/documents/${DOC}/extrac
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })
 
 describe('GET /api/documents/[id]/extraction', () => {
-  it('is 404 outside the rollout', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call())).status).toBe(404)
+  it('answers "no reading" (200, null) outside the rollout, without a read', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    const { status, body } = await parseJsonResponse<{ data: unknown }>(await call())
+    expect(status).toBe(200)
+    expect(body.data).toBeNull()
+    expect(findCalls('document_extractions', 'eq')).toEqual([])
   })
 
-  it('is 404 before the first extraction, and reads only the company\'s current record', async () => {
+  it('answers "no reading" before the first extraction, and reads only the company\'s current record', async () => {
     enqueue({ data: null })
-    expect((await parseJsonResponse(await call())).status).toBe(404)
+    const { status, body } = await parseJsonResponse<{ data: unknown }>(await call())
+    expect(status).toBe(200)
+    expect(body.data).toBeNull()
     expect(findCalls('document_extractions', 'eq')).toEqual([['document_id', DOC], ['company_id', 'company-1'], ['is_current', true]])
   })
 

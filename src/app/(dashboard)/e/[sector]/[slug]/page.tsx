@@ -11,6 +11,7 @@ import {
   getDashboardAuthContext,
   getDashboardCompanyId,
   getDashboardSettings,
+  redirectInvoicerOffPage,
 } from '../../../request-context'
 
 export default async function ExtensionWorkspacePage({
@@ -22,6 +23,8 @@ export default async function ExtensionWorkspacePage({
   const [{ supabase, user }, companyId] = await Promise.all([
     getDashboardAuthContext(),
     getDashboardCompanyId(),
+    // An invoicer goes to the invoices before the capability read below.
+    redirectInvoicerOffPage(),
   ])
 
   if (!user) redirect('/login')

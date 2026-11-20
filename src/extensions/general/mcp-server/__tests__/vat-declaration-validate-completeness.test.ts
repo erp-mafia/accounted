@@ -26,11 +26,20 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', async (importOrigina
   return { ...actual, skvRequest: (...a: unknown[]) => mockSkvRequest(...a) }
 })
 
+// The declaration figures are the unit under test here, so they are supplied
+// directly instead of being reconstructed from a ledger fixture: the
+// declaration buildMomsuppgift maps the momsuppgift from is the one the
+// completeness verdict judges.
+const mockDeclaration = vi.fn()
 vi.mock('@/extensions/general/skatteverket/lib/declaration-prep', () => ({
   buildMomsuppgift: vi.fn(async () => ({
     redovisare: '165560000000',
     redovisningsperiod: '202601',
     momsuppgift: { summaMoms: 2500 },
+    declaration: {
+      period: { type: 'monthly', year: 2026, period: 1, start: '2026-01-01', end: '2026-01-31' },
+      ...(await mockDeclaration()),
+    },
   })),
   resolveRedovisare: vi.fn(async () => '165560000000'),
 }))
@@ -39,22 +48,22 @@ vi.mock('@/extensions/general/skatteverket/lib/audit', () => ({
   writeSkatteverketAudit: vi.fn(),
 }))
 
-// The declaration figures are the unit under test here, so they are supplied
-// directly instead of being reconstructed from a ledger fixture.
-const mockCalculateVatDeclaration = vi.fn()
-vi.mock('@/lib/reports/vat-declaration', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>
-  return {
-    ...actual,
-    calculateVatDeclaration: (...a: unknown[]) => mockCalculateVatDeclaration(...a),
-  }
-})
-
 vi.mock('@/lib/reports/rc-basis-gaps', () => ({
   findRcBasisGaps: (...args: unknown[]) => mockFindRcBasisGaps(...args),
 }))
 
+// The kontantmetoden cut-off facts (#3440) have their own tests
+// (lib/vat/__tests__/kontantmetod-cutoff-vat-facts.test.ts): not a cash
+// company unless a case says otherwise.
+const mockCutoffFacts = vi.fn()
+vi.mock('@/lib/vat/kontantmetod-cutoff-vat-facts', () => ({
+  fetchKontantmetodCutoffVatFacts: (...args: unknown[]) => mockCutoffFacts(...args),
+}))
+
 import { tools } from '../server'
+import { vatCheckFingerprint } from '@/lib/vat/check-reviews'
+import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
+import { withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
 
 const validate = tools.find((t) => t.name === 'gnubok_vat_declaration_validate')!
 
@@ -80,7 +89,7 @@ function makeRutor(partial: Partial<VatDeclarationRutor> = {}): VatDeclarationRu
 }
 
 /**
- * `rcInputAccountTotals` is the 2645/2647 pair the real calculateVatDeclaration
+ * `rcInputAccountTotals` is the 2645/2647 pair the real declaration
  * carries alongside the rutor. Omitting it here is not neutral: the tool then
  * runs RC_INPUT_VAT_MISMATCH against the ruta 48 aggregate instead of the
  * reverse-charge input accounts, which is exactly the weaker form.
@@ -90,7 +99,7 @@ function setDeclaration(
   rcInput?: Record<string, { debit: number; credit: number }>,
   rcBasisByRate?: { r25: number; r12: number; r6: number },
 ) {
-  mockCalculateVatDeclaration.mockResolvedValue({
+  mockDeclaration.mockResolvedValue({
     rutor,
     ...(rcInput ? { rcInputAccountTotals: rcInput } : {}),
     ...(rcBasisByRate ? { rcBasisByRate } : {}),
@@ -163,6 +172,24 @@ describe('gnubok_vat_declaration_validate', () => {
     expect(result.summary).toMatch(/ofullständig/)
   })
 
+  // #3440: the same KONTANTMETOD_CUTOFF_INCOMPLETE finding the web view shows.
+  // A WARNING: it never makes the declaration incomplete for filing.
+  it('warns, without blocking, while the kontantmetoden cut-off of a year ending in the period is incomplete', async () => {
+    setDeclaration(CLEAN)
+    skvOk()
+    mockCutoffFacts.mockResolvedValueOnce({
+      incompleteYearEnds: [{ fiscal_period_id: 'fp-2026', period_end: '2026-12-31' }],
+      legacyCutoffPeriodEnds: [],
+    })
+
+    const result = await run()
+
+    expect(result.completeness_ok).toBe(true)
+    expect(result.completeness_checks).toEqual([expect.objectContaining({
+      code: 'KONTANTMETOD_CUTOFF_INCOMPLETE', status: 'WARNING',
+    })])
+  })
+
   it('reports both green on a clean period, and still calls only /kontrollera', async () => {
     setDeclaration(CLEAN)
     skvOk()
@@ -232,6 +259,75 @@ describe('gnubok_vat_declaration_validate', () => {
 
     expect(result.completeness_checks.find((c) => c.code === 'RC_BASIS_MISSING')?.status)
       .toBe('WARNING')
+    expect(result.completeness_ok).toBe(true)
+  })
+
+  // crm#1171: the user reviewed that advisory for the period. It is reported
+  // with its review and no longer counted as a warning to review.
+  it('reports a reviewed advisory with its review and leaves it out of the warning count', async () => {
+    const gaps = [{ entryId: 'je-1', rcOutputAccount: '2614', rcOutputAmount: 1250, missingBasisAmount: 5000 }]
+    mockFindRcBasisGaps.mockResolvedValue(gaps)
+    const rutor = makeRutor({ ruta20: 5000, ruta30: 1250, ruta48: 1250 })
+    const rcBasisByRate = { r25: 5000, r12: 0, r6: 0 }
+    const rcInputTotals = rcInput({ '2645': 1250 })
+    setDeclaration(rutor, rcInputTotals, rcBasisByRate)
+    skvOk()
+    const declaration = {
+      period: { type: 'monthly', year: 2026, period: 1, start: '2026-01-01', end: '2026-01-31' },
+      rutor,
+      rcInputAccountTotals: rcInputTotals,
+      rcBasisByRate,
+    }
+    const advisory = withRcBasisGapFindings(
+      runVatDeclarationChecks(rutor, new Map(Object.entries(rcInputTotals))),
+      { status: 'scanned', gapCount: 1 },
+      { rutor, rcBasisByRate },
+    ).find((c) => c.code === 'RC_BASIS_MISSING')!
+    const reviewRow = {
+      check_code: 'RC_BASIS_MISSING',
+      action: 'reviewed',
+      fingerprint: vatCheckFingerprint(advisory, { declaration: declaration as never, gaps }),
+      note: 'Rättelse A61',
+      source: 'web',
+      actor: 'user-1',
+      created_at: '2026-10-15T09:00:00Z',
+    }
+    const rows = (table: string) => (table === 'vat_check_reviews' ? [reviewRow] : [])
+    const chain = (table: string): Record<string, unknown> => {
+      const c: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'order', 'limit']) c[m] = () => c
+      c.then = (resolve: (v: unknown) => void) => resolve({ data: rows(table), error: null })
+      return c
+    }
+    const db = { from: (table: string) => chain(table) } as never
+
+    const result = (await validate.execute(ARGS, 'company-1', 'user-1', db, { type: 'api_key' })) as ValidateResult & {
+      completeness_checks: Array<{ code: string; reviewable?: boolean; review?: { note: string | null } | null }>
+    }
+
+    const finding = result.completeness_checks.find((c) => c.code === 'RC_BASIS_MISSING')
+    expect(finding).toEqual(expect.objectContaining({ status: 'WARNING', reviewable: true, review: expect.objectContaining({ note: 'Rättelse A61' }) }))
+    expect(result.completeness_ok).toBe(true)
+    expect(result.summary).toContain('Vår kontroll av underlaget: inga fel.')
+  })
+
+  // #3387: the declaration carries the class 3 accounts that reach no ruta.
+  // The rutor look consistent, so only that list can surface the gap.
+  it('warns about a revenue account without a ruta and still reports completeness ok', async () => {
+    mockDeclaration.mockResolvedValue({
+      rutor: CLEAN,
+      revenueAccountsWithoutRuta: [
+        { account_number: '3543', account_name: 'Faktureringsavgift', amount: 1250 },
+      ],
+    })
+    skvOk()
+
+    const result = await run()
+
+    const finding = result.completeness_checks.find((c) => c.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')
+    expect(finding?.status).toBe('WARNING')
+    expect(finding?.message).toMatch(/3543 Faktureringsavgift/)
+    expect(finding?.rutor).toEqual(['ruta05', 'ruta42'])
     expect(result.completeness_ok).toBe(true)
   })
 

@@ -31,6 +31,11 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
 }))
 
+const mockVoucherOwner = vi.fn()
+vi.mock('@/lib/core/bookkeeping/voucher-owner', () => ({
+  voucherOwnerOrNull: (...args: unknown[]) => mockVoucherOwner(...args),
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/bookkeeping/journal-entries/[id]/reverse', () => {
@@ -38,14 +43,15 @@ describe('POST /api/bookkeeping/journal-entries/[id]/reverse', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockVoucherOwner.mockResolvedValue(null)
     mockCreateClient.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     })
   })
 
   it('returns 401 when not authenticated', async () => {
     mockCreateClient.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/reverse', {
@@ -137,6 +143,34 @@ describe('POST /api/bookkeeping/journal-entries/[id]/reverse', () => {
       undefined,
       { allowDeepChain: true },
     )
+  })
+
+  // Advice, never a refusal: an agent or a bulk flow may mean to reverse an
+  // invoice's verifikat on its own, so the storno is posted and the answer
+  // names the invoice and its own action.
+  it('reverses an owned verifikat and names its owner in owned_by', async () => {
+    mockReverseEntry.mockResolvedValue(makeJournalEntry({ id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' }))
+    mockVoucherOwner.mockResolvedValue({ kind: 'supplier_invoice', owner_id: 'si-1', action: 'credit_supplier_invoice' })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/reverse', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { id: string }; owned_by: { kind: string } | null }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.id).toBe('reversal-1')
+    expect(body.owned_by).toMatchObject({ kind: 'supplier_invoice', owner_id: 'si-1' })
+    expect(mockVoucherOwner).toHaveBeenCalledWith(expect.anything(), 'company-1', { id: 'entry-1' })
+  })
+
+  it('answers owned_by null for a verifikat no object owns', async () => {
+    mockReverseEntry.mockResolvedValue(makeJournalEntry({ id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' }))
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/reverse', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ owned_by: unknown }>(response)
+
+    expect(status).toBe(200)
+    expect(body.owned_by).toBeNull()
   })
 
   it('maps a typed concurrent-reversal error to the canonical envelope (409)', async () => {

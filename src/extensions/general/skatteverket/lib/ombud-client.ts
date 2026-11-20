@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { createLogger } from '@/lib/logger'
-import { getSkatteverketEnvironment, skvRequestWithAuth, SkatteverketAuthError } from './api-client'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { getSkatteverketEnvironment, skvRequestWithAuth, SkatteverketAuthError, type SkvAudit } from './api-client'
+import type { SkvAuditActor } from './audit'
 import type { SkvBehorighet } from './connection-store'
 
 const log = createLogger('skatteverket-ombud-client')
@@ -11,7 +13,8 @@ const log = createLogger('skatteverket-ombud-client')
  * Source: Tjänstebeskrivning Ombudshantering via API v2.0, dokumentversion
  * 1.0 (2022-06-16).
  * Base URI `{host}/behorighet/ombudshantering/v2`, JSON over HTTPS, headers
- * Accept + content-type application/json, Authorization Bearer, client_id,
+ * Accept + content-type application/json (on every call: a GET without
+ * Content-Type is answered 400), Authorization Bearer, client_id,
  * client_secret, skv_client_correlation_id. Operations:
  *
  *   GET  /ombud/autentisieratOmbud?huvudman&roll&giltigFrom&giltigTom
@@ -34,18 +37,26 @@ const log = createLogger('skatteverket-ombud-client')
  * the register what companies granted Accounted, and to mint deep links
  * that name Accounted as the ombud.
  *
- * Two things the service description does not pin down, deliberately
- * handled tolerantly and logged so the first live call against the test
- * service settles them:
- *   - the JSON envelope of list responses (bare array vs. an object holding
- *     the list): both are accepted,
- *   - the rollbeteckning codes for "Juridiskt läsombud" and "Momsdeklaration,
- *     ombud": pin them via env once known; until then roles are classified
- *     by their rollbeskrivning text, which the register returns alongside.
+ * The first live calls against the test service (2026-11-03) settled what
+ * the service description left open: both list operations answer with a
+ * bare JSON array (an enveloped list is still accepted), and the role codes
+ * are the ones in OMBUD_ROLES below.
  */
 
 export const OMBUD_API_TEST_BASE_URL = 'https://api.test.skatteverket.se/behorighet/ombudshantering/v2'
 export const OMBUD_API_PROD_BASE_URL = 'https://api.skatteverket.se/behorighet/ombudshantering/v2'
+
+/**
+ * The fallback beside the deep link: Skatteverket's guide "Utse ombud för ett
+ * företag", which lists who can use the e-service Ombud och behörigheter
+ * (enskilda firmor, aktiebolag, handelsbolag, kommanditbolag, ekonomiska
+ * föreningar) and links into it. Not
+ * skatteverket.se/ombud: that lands on "Ombud för en privatperson" and reads
+ * as if the ombud were for the person signing, not for the company
+ * (both pages read 2026-11-08).
+ */
+export const OMBUD_COMPANY_GUIDE_URL =
+  'https://www.skatteverket.se/foretag/drivaforetag/ombudforettforetag/utseombudforettforetag.4.5a85666214dbad743ff1158c.html'
 
 /** Deep links from /djuplank/utseombud are valid this long (service description 4.1.1). */
 export const OMBUD_DEEP_LINK_VALIDITY_WEEKS = 3
@@ -60,55 +71,36 @@ export function getOmbudApiBaseUrl(): string {
 export const OMBUD_ROLE_KEYS: readonly SkvBehorighet[] = ['lasombud', 'moms_ombud'] as const
 
 /**
- * Pinned rollbeteckning codes (exact match on `roll`). Unknown until read
- * from GET /roller in the test service; env-configurable so no deploy is
- * needed when Skatteverket confirms them.
+ * The register role (rollbeteckning) behind each behörighet, with
+ * Skatteverket's name for it (the role the company picks in the e-service
+ * "Ombud och behörigheter"; the settings page shows it from the
+ * system_behorighet_* messages). Read from GET /roller in the test service on
+ * 2026-11-03, where no role called "Juridiskt läsombud" exists.
+ *   lasombud    skol, "Skattekonto, bara läsbehörighet": the skattekonto
+ *               saldo and transaktioner reads. A huvudman that gave only
+ *               momsdeklaration_ombud answers the saldo read with 403
+ *               felkod 6 "Auktorisation saknas".
+ *   moms_ombud  momsdeklaration_ombud, "Momsdeklaration, ombud"; not the
+ *               broader "Momsdeklaration, deklarationsombud".
+ * Matching is on the code alone, never on the description text. The env
+ * var overrides a code without a deploy, should production differ.
  */
-const ROLE_CODE_ENV: Record<SkvBehorighet, string> = {
-  lasombud: 'SKATTEVERKET_OMBUD_ROLL_LASOMBUD',
-  moms_ombud: 'SKATTEVERKET_OMBUD_ROLL_MOMS',
+export const OMBUD_ROLES: Record<SkvBehorighet, { code: string; env: string }> = {
+  lasombud: { code: 'skol', env: 'SKATTEVERKET_OMBUD_ROLL_LASOMBUD' },
+  moms_ombud: { code: 'momsdeklaration_ombud', env: 'SKATTEVERKET_OMBUD_ROLL_MOMS' },
 }
 
-/**
- * Description-text fallback. Skatteverket's own labels in the e-service are
- * "Juridiskt läsombud" and "Momsdeklaration, ombud"; the register returns a
- * rollbeskrivning with every behörighetspost, so the text is available even
- * before the codes are pinned. Matching is exact on the whole label (case and
- * whitespace aside): "Momsdeklaration, deklarationsombud" is a broader role
- * and must never be read as "Momsdeklaration, ombud".
- */
-const ROLE_DESCRIPTION_PATTERNS: Record<SkvBehorighet, RegExp> = {
-  lasombud: /^juridiskt\s+l[äa]sombud$/i,
-  moms_ombud: /^momsdeklaration,\s*ombud$/i,
-}
-
-export function getPinnedRoleCode(key: SkvBehorighet): string | null {
-  const raw = process.env[ROLE_CODE_ENV[key]]?.trim()
-  return raw ? raw : null
-}
-
-export interface OmbudRoleLike {
-  roll: string
-  rollbeskrivning?: string | null
+/** The rollbeteckning for a behörighet: the env override, else the register's code. */
+export function getOmbudRoleCode(key: SkvBehorighet): string {
+  return process.env[OMBUD_ROLES[key].env]?.trim() || OMBUD_ROLES[key].code
 }
 
 /**
  * Which of Accounted's behörigheter a register role represents, or null
  * when it is some other role (companies hand out many; only two matter).
- * A pinned code wins over the text match, and a pinned code that does NOT
- * match disqualifies the text fallback for that key: once Emil has told us
- * the code, a differently-coded role with similar wording is a different role.
  */
-export function classifyOmbudRole(role: OmbudRoleLike): SkvBehorighet | null {
-  for (const key of OMBUD_ROLE_KEYS) {
-    const pinned = getPinnedRoleCode(key)
-    if (pinned) {
-      if (role.roll === pinned) return key
-      continue
-    }
-    if (role.rollbeskrivning && ROLE_DESCRIPTION_PATTERNS[key].test(role.rollbeskrivning)) return key
-  }
-  return null
+export function classifyOmbudRole(role: Rollbeskrivningspost): SkvBehorighet | null {
+  return OMBUD_ROLE_KEYS.find((key) => role.roll === getOmbudRoleCode(key)) ?? null
 }
 
 // ── Wire schemas ─────────────────────────────────────────────────────
@@ -174,7 +166,6 @@ export type OmbudApiErrorCode =
   | 'OBR_FORBIDDEN' // 401/403 for the system identity: scope/avtal missing, not a company-level fact
   | 'OBR_BAD_RESPONSE'
   | 'OBR_HTTP_ERROR'
-  | 'OBR_ROLE_UNRESOLVED'
 
 export class OmbudApiError extends Error {
   constructor(
@@ -187,11 +178,30 @@ export class OmbudApiError extends Error {
   }
 }
 
-async function ombudRequest(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Response> {
+/**
+ * Whose register call this is. A company's own (the grant lookup for its org
+ * number, its deep link) is audited against that company; 'ombud_register'
+ * marks Accounted's own calls as ombud that belong to no company (the
+ * whole-register listing, /roller): the transport logs those instead, since
+ * the audit table is per company.
+ */
+export type OmbudCaller = SkvAuditActor | 'ombud_register'
+
+function ombudAudit(caller: OmbudCaller, endpoint: string, huvudman?: string): SkvAudit {
+  if (caller === 'ombud_register') return { unaudited: 'ombud_register', operation: endpoint }
+  // Every company-scoped register call reads its answer with readJsonOrThrow,
+  // so a 2xx without JSON is the caller's error and must not be recorded 'ok'.
+  return { endpoint, ...caller, agRegistreradId: huvudman ?? null, expectJson: true }
+}
+
+async function ombudRequest(method: 'GET' | 'POST', path: string, audit: SkvAudit, body?: unknown): Promise<Response> {
   try {
-    return await skvRequestWithAuth({ mode: 'system' }, method, path, body, {
+    return await skvRequestWithAuth({ mode: 'system' }, method, path, audit, body, {
       baseUrl: getOmbudApiBaseUrl(),
       accept: 'application/json',
+      // Named, so it goes on the GETs too: the register answers 400
+      // "Required header 'Content-Type' not specified" without it.
+      contentType: 'application/json',
     })
   } catch (err) {
     // api-client maps a system-mode 403 to OMBUD_GRANT_MISSING because on the
@@ -256,10 +266,15 @@ export type ListOmbudGrantsFilter = {
  * pairs that with its empty-register guard (a zero result downgrades nothing).
  */
 export async function listOmbudGrants(
-  filter: ListOmbudGrantsFilter = {},
+  filter: ListOmbudGrantsFilter,
+  caller: OmbudCaller,
   options: { emptyOn404?: boolean } = {}
 ): Promise<Behorighetspost[]> {
-  const response = await ombudRequest('GET', `/ombud/autentisieratOmbud${buildQuery(filter)}`)
+  const response = await ombudRequest(
+    'GET',
+    `/ombud/autentisieratOmbud${buildQuery(filter)}`,
+    ombudAudit(caller, 'ombud/autentisieratOmbud', filter.huvudman)
+  )
   if (response.status === 404 && options.emptyOn404) return []
   const json = await readJsonOrThrow(response, 'ombud/autentisieratOmbud')
   const rows = unwrapList(json, ['behorighetsposter', 'Behorighetsposter', 'behorigheter'], 'ombud/autentisieratOmbud')
@@ -270,9 +285,14 @@ export async function listOmbudGrants(
   return parsed.data
 }
 
-/** GET /roller: all rollbeteckningar with descriptions (or one, when filtered). */
+/**
+ * GET /roller: all rollbeteckningar with descriptions (or one, when filtered).
+ * A lookup about the register itself, never about a company: not audited in
+ * the company table (see OmbudCaller). Diagnostics only (the smoke script):
+ * the codes Accounted asks for are in OMBUD_ROLES.
+ */
 export async function getOmbudRoleDescriptions(roll?: string): Promise<Rollbeskrivningspost[]> {
-  const response = await ombudRequest('GET', `/roller${buildQuery({ roll })}`)
+  const response = await ombudRequest('GET', `/roller${buildQuery({ roll })}`, ombudAudit('ombud_register', 'roller'))
   const json = await readJsonOrThrow(response, 'roller')
   const rows = unwrapList(json, ['rollbeskrivningsposter', 'Rollbeskrivningsposter', 'roller'], 'roller')
   const parsed = z.array(RollbeskrivningspostSchema).safeParse(rows)
@@ -280,42 +300,6 @@ export async function getOmbudRoleDescriptions(roll?: string): Promise<Rollbeskr
     throw new OmbudApiError('Rollbeskrivningar från Ombudshantering kunde inte tolkas.', 'OBR_BAD_RESPONSE')
   }
   return parsed.data
-}
-
-/**
- * The rollbeteckning codes to put in a deep link: pinned env values first,
- * otherwise resolved from GET /roller by description. Throws when a key
- * cannot be resolved rather than minting a link with a guessed role.
- */
-export async function resolveOmbudRoleCodes(keys: readonly SkvBehorighet[]): Promise<Record<SkvBehorighet, string>> {
-  const resolved: Partial<Record<SkvBehorighet, string>> = {}
-  const missing: SkvBehorighet[] = []
-  for (const key of keys) {
-    const pinned = getPinnedRoleCode(key)
-    if (pinned) resolved[key] = pinned
-    else missing.push(key)
-  }
-  if (missing.length > 0) {
-    const roles = await getOmbudRoleDescriptions()
-    for (const key of missing) {
-      const hit = roles.find((role) => classifyOmbudRole(role) === key)
-      if (hit) resolved[key] = hit.roll
-    }
-    const unresolved = missing.filter((key) => !resolved[key])
-    if (unresolved.length > 0) {
-      log.warn('ombud role codes unresolved from /roller', {
-        unresolved,
-        available: roles.map((r) => `${r.roll}=${r.rollbeskrivning ?? ''}`),
-      })
-      throw new OmbudApiError(
-        `Rollkod saknas för ${unresolved.join(', ')}: sätt ${unresolved
-          .map((key) => ROLE_CODE_ENV[key])
-          .join(' och ')} efter uppslag i GET /roller.`,
-        'OBR_ROLE_UNRESOLVED'
-      )
-    }
-  }
-  return resolved as Record<SkvBehorighet, string>
 }
 
 export interface UtseOmbudDeepLink {
@@ -333,18 +317,19 @@ export interface UtseOmbudDeepLink {
  */
 export async function createUtseOmbudDeepLink(
   huvudman: string,
+  actor: SkvAuditActor,
   keys: readonly SkvBehorighet[] = OMBUD_ROLE_KEYS,
   giltigTom?: string,
   now: Date = new Date()
 ): Promise<UtseOmbudDeepLink> {
-  const roller = await resolveOmbudRoleCodes(keys)
-  const body: { ombudsroller: string[]; giltigTom?: string } = {
-    ombudsroller: keys.map((key) => roller[key]),
-  }
+  const ombudsroller = keys.map(getOmbudRoleCode)
+  const roller = Object.fromEntries(keys.map((key, i) => [key, ombudsroller[i]])) as Record<SkvBehorighet, string>
+  const body: { ombudsroller: string[]; giltigTom?: string } = { ombudsroller }
   if (giltigTom) body.giltigTom = giltigTom
   const response = await ombudRequest(
     'POST',
     `/ombud/autentisieratOmbud/huvudman/${encodeURIComponent(huvudman)}/djuplank/utseombud`,
+    ombudAudit(actor, 'system-connection/deeplink', huvudman),
     body
   )
   const json = await readJsonOrThrow(response, 'djuplank/utseombud')
@@ -353,16 +338,12 @@ export async function createUtseOmbudDeepLink(
     log.warn('deep link rejected', { issues: parsed.error.issues.map((i) => i.message) })
     throw new OmbudApiError('Djuplänken från Ombudshantering kunde inte tolkas.', 'OBR_BAD_RESPONSE')
   }
-  const expires = new Date(now.getTime() + OMBUD_DEEP_LINK_VALIDITY_WEEKS * 7 * 24 * 60 * 60 * 1000)
-  return { djuplank: parsed.data.djuplank, roller, expiresOn: expires.toISOString().slice(0, 10) }
+  // Shown to the user as a date: counted from the Swedish calendar day.
+  const expiresOn = addDaysIso(todayIsoStockholm(now), OMBUD_DEEP_LINK_VALIDITY_WEEKS * 7)
+  return { djuplank: parsed.data.djuplank, roller, expiresOn }
 }
 
 // ── Pure helpers over behörighetsposter ──────────────────────────────
-
-/** yyyy-mm-dd for the given instant, in UTC (Skatteverket dates are date-only). */
-export function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
 
 /**
  * A grant counts today when giltigFrom is today or earlier and giltigTom is
@@ -393,10 +374,16 @@ export interface HuvudmanGrantSummary {
   /**
    * True when at least one post (active or not) classified as one of
    * Accounted's behörigheter. False with a non-empty `roles` means the
-   * register lists roles we cannot name: a code-pinning problem, not a
-   * company decision.
+   * register lists roles we cannot name: a wrong role code (OMBUD_ROLES or
+   * its env override), not a company decision.
    */
   recognized: boolean
+  /**
+   * Per behörighet, the latest giltigFrom (yyyy-mm-dd) among its ACTIVE
+   * posts: when the newest standing grant was signed. Null when none is
+   * active. Read through grantCountsFor, never on its own.
+   */
+  signedFrom: Record<SkvBehorighet, string | null>
 }
 
 /**
@@ -414,14 +401,81 @@ export function summarizeGrants(posts: Behorighetspost[], today: string): Map<st
     }
     let row = out.get(huvudman)
     if (!row) {
-      row = { huvudman, lasombud: false, moms_ombud: false, roles: [], recognized: false }
+      row = {
+        huvudman,
+        lasombud: false,
+        moms_ombud: false,
+        roles: [],
+        recognized: false,
+        signedFrom: { lasombud: null, moms_ombud: null },
+      }
       out.set(huvudman, row)
     }
     if (!row.roles.includes(post.roll)) row.roles.push(post.roll)
     const key = classifyOmbudRole(post)
     if (!key) continue
     row.recognized = true
-    if (isGrantActive(post, today)) row[key] = true
+    if (isGrantActive(post, today)) {
+      row[key] = true
+      const from = post.giltigFrom.slice(0, 10)
+      const latest = row.signedFrom[key]
+      if (!latest || from > latest) row.signedFrom[key] = from
+    }
   }
   return out
+}
+
+/**
+ * A company's claim on the org number it asks the ombud connection for, as
+ * Swedish days (yyyy-mm-dd). `optInDay`: its connection row was created for
+ * this org number. `provenOn`: per behörighet, the latest day a current
+ * member read that behörighet's data for the number with their own BankID
+ * for this company (findCompaniesWithOwnershipProof in connection-store),
+ * null for none.
+ */
+export interface OmbudGrantClaim {
+  optInDay: string
+  provenOn: Record<SkvBehorighet, string | null>
+}
+
+/** How long before its opt-in a company's BankID proof still speaks for it. */
+export const OMBUD_PROOF_WINDOW_DAYS = 30
+
+/**
+ * Whether a register grant counts for a company's claim.
+ *
+ * Org-number proof (product decisions 2026-10-02 and 2026-11-13): org numbers
+ * are public and any tenant can type one, so a grant signed BEFORE the tenant
+ * opted in may have been given for someone else's use of the number (a
+ * former customer who left without withdrawing it) and is not inherited on
+ * the number alone. A grant signed on or after the opt-in was signed by a
+ * firmatecknare for this very connection. An earlier grant counts when the
+ * company proved with BankID that it may see that behörighet's own data for
+ * the number (a skattekonto read for läsombud, a VAT read for momsombud), on
+ * or after the grant was signed and no more than OMBUD_PROOF_WINDOW_DAYS
+ * before its opt-in: someone Skatteverket let in while the grant stood, and
+ * around the time this company asked for it. Older proof speaks for nobody
+ * now (a seller, or an accountant whose access has ended). Asking such a
+ * company to sign again is a dead end: Skatteverket refuses to sign a grant
+ * that already stands ("Behörigheten finns redan", crm#1762).
+ */
+export function grantCountsFor(
+  summary: HuvudmanGrantSummary | undefined,
+  key: SkvBehorighet,
+  claim: OmbudGrantClaim
+): boolean {
+  const from = summary?.signedFrom[key]
+  if (!summary?.[key] || !from) return false
+  if (from >= claim.optInDay) return true
+  const proof = claim.provenOn[key]
+  return proof !== null && proof >= from && proof >= addDaysIso(claim.optInDay, -OMBUD_PROOF_WINDOW_DAYS)
+}
+
+/** True when the behörighet is active at Skatteverket but does not count: signed before the opt-in, with no BankID proof. */
+export function grantPredatesOptIn(
+  summary: HuvudmanGrantSummary | undefined,
+  key: SkvBehorighet,
+  claim: OmbudGrantClaim
+): boolean {
+  return Boolean(summary?.[key]) && !grantCountsFor(summary, key, claim)
 }

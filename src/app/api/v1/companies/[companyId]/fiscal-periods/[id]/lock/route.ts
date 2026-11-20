@@ -10,9 +10,8 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { lockPeriod } from '@/lib/core/bookkeeping/period-service'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const PeriodLockedResponse = z.object({
   id: z.string().uuid(),
@@ -26,15 +25,17 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/fiscal-periods/:id/lock',
   summary: 'Lock a fiscal period (no new entries can be posted into it).',
   description:
-    'Sets locked_at on the period. Refuses if uncategorised business transactions remain in the period: they must be bokfört first. The DB trigger blocks JE inserts into locked periods; locking is the application-level pre-step before /close. Sync.',
+    'Sets locked_at on the period. Refuses if uncategorised business transactions remain in the period: they must be bokfört first. The DB trigger blocks JE inserts into locked periods. /year-end locks and closes a fiscal year itself, so this is for interim locks. Sync.',
   useWhen:
-    'Finishing a period and you want to stop new postings. Step 1 of a three-step year-end flow: lock → year-end → close.',
+    'Freezing a finished period you are NOT year-end closing (an interim month or quarter). Do not lock a fiscal year before /year-end: year-end posts its closing entry into the open period, then locks and closes it itself, and refuses a locked one.',
   doNotUseFor:
     'Locking an already-closed period (no-op). Bypassing the uncategorised-transactions guard: categorise or mark-private first.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'A period with uncategorised business transactions cannot be locked; the response surfaces the count.',
-    'Locking is reversible until /close. The unlock endpoint is not in v1; use the dashboard.',
+    'A period with uncategorised business transactions cannot be locked: 400 PERIOD_HAS_UNBOOKED_TRANSACTIONS, the message names the count.',
+    'An already locked period returns 409 PERIOD_LOCK_ALREADY_LOCKED; a closed one 409 PERIOD_ALREADY_CLOSED.',
+    'A year that an SIE import, or its undo, still holds returns 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume it (POST /imports/sie/{id}/resume) or undo it (POST /imports/sie/{id}/undo) first, then lock.',
+    'Locking is reversible until /close: POST /fiscal-periods/{id}/unlock lifts it.',
   ],
   example: {
     response: {
@@ -72,37 +73,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         { requestId: ctx.requestId },
       )
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'unknown'
-      ctx.log.warn('fiscal-periods.lock refused', { fiscalPeriodId: idParse.data, reason: msg })
-      // Map known throw messages to structured codes
-      if (msg.includes('not found')) {
-        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-          requestId: ctx.requestId,
-          details: { resource: 'fiscal_period' },
-        })
-      }
-      if (msg.includes('already closed') || msg.includes('already locked')) {
-        return v1ErrorResponseFromCode('CONFLICT', ctx.log, {
-          requestId: ctx.requestId,
-          details: { reason: getErrorMessage(err, { locale: 'en' }) },
-        })
-      }
-      // lockPeriod's uncategorised-transactions error message is in Swedish
-      // ("affärstransaktion(er) saknar bokföring"). Only map TO that code
-      // when the message actually looks like that path: otherwise an
-      // infra error (DB timeout, network) would loop the agent through
-      // pointless remediation.
-      if (msg.includes('saknar bokföring') || msg.toLowerCase().includes('uncategorised')) {
-        return v1ErrorResponseFromCode('PERIOD_HAS_UNBOOKED_TRANSACTIONS', ctx.log, {
-          requestId: ctx.requestId,
-          details: { reason: getErrorMessage(err, { locale: 'en' }) },
-        })
-      }
-      ctx.log.error('fiscal-periods.lock unexpected error', err as Error, { fiscalPeriodId: idParse.data })
-      return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: getErrorMessage(err, { locale: 'en' }) },
-      })
+      // lockPeriod's refusals carry their codes, so this answers the same
+      // code as the dashboard and MCP (classifyError).
+      return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
     }
   },
   { requireIdempotencyKey: true },

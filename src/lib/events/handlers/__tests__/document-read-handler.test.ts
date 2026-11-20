@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
+
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn(() => ({ tag: 'service' })) }))
 vi.mock('@/lib/documents/jobs/queue', () => ({ enqueueDocumentJob: vi.fn() }))
 
@@ -7,10 +10,10 @@ import { eventBus } from '@/lib/events/bus'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { registerDocumentReadHandler } from '../document-read-handler'
 
-const upload = (documentCompanyId: string | null) =>
+const upload = (documentCompanyId: string | null, mimeType: string | null = 'application/pdf') =>
   eventBus.emit({
     type: 'document.uploaded',
-    payload: { document: { id: 'doc-1', company_id: documentCompanyId } as never, userId: 'user-1', companyId: 'co-1' },
+    payload: { document: { id: 'doc-1', company_id: documentCompanyId, mime_type: mimeType } as never, userId: 'user-1', companyId: 'co-1' },
   })
 
 beforeEach(() => {
@@ -28,8 +31,22 @@ describe('document read handler', () => {
     expect(enqueueDocumentJob).toHaveBeenLastCalledWith({ tag: 'service' }, 'co-1', 'doc-1', 'read')
   })
 
-  it('never fails the upload when queueing fails', async () => {
+  it('queues nothing for a structured archive: a bank response or an XML payload is never read into pages', async () => {
+    ;(enqueueDocumentJob as ReturnType<typeof vi.fn>).mockResolvedValue(true)
+    await upload('co-1', 'application/json')
+    await upload('co-1', 'application/xml')
+    expect(enqueueDocumentJob).not.toHaveBeenCalled()
+    await upload('co-1', 'image/heic')
+    await upload('co-1', null)
+    expect(enqueueDocumentJob).toHaveBeenCalledTimes(2)
+  })
+
+  it('never fails the upload when queueing fails, and the failure reaches the bus as an error', async () => {
     ;(enqueueDocumentJob as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('database unavailable'))
     await expect(upload('co-1')).resolves.toBeUndefined()
+    expect(logMock.error).toHaveBeenCalledWith('handler failed', expect.any(Error), expect.objectContaining({
+      eventType: 'document.uploaded',
+      handler: 'enqueueDocumentRead',
+    }))
   })
 })

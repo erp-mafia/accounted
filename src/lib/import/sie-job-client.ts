@@ -3,6 +3,7 @@ import type { ImportResult } from './types'
 import { describeSIEJobFailure, formatImportFailure, type ImportFailure } from './import-failure'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
+import { announceSIEHoldsChanged } from './sie-holds-client'
 
 /**
  * A polled job ended in failed, paused or undone. The message is the job's
@@ -40,6 +41,8 @@ export async function fetchSIEJob(importId:string, signal?:AbortSignal):Promise<
 
 /** Poll a durable execution before starting a dependent fiscal year. */
 export async function waitForSIEJob(importId:string,onProgress?:(job:SIEJob)=>void,signal?:AbortSignal):Promise<ImportResult> {
+  // The job holds its year from admission: the hold banner can show it now.
+  announceSIEHoldsChanged()
   while (!signal?.aborted) {
     const job = await fetchSIEJob(importId,signal)
     onProgress?.(job)

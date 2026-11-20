@@ -7,19 +7,21 @@
  *
  * The operation_id is global (cross-company in the URL) but every read is
  * scoped to the caller's company in `getOperation()`: so two companies'
- * UUIDs can never collide into the wrong tenant. The wrapper has already
- * validated company membership.
+ * UUIDs can never collide into the wrong tenant. The URL names no company,
+ * so the route resolves it from the operation row and runs the wrapper's
+ * company gate on it (`ctx.checkCompanyAccess`): membership and the key's
+ * company allowlist, exactly as a /companies/{companyId}/ URL gets.
  *
- * Webhook alternative (Phase 6): subscribe to `operation.completed` instead
- * of polling.
+ * Polling is the completion signal: `webhook_event: operation.completed` is
+ * a reserved name, not a deliverable webhook (OperationWebhookEventField).
  */
 
 import { z } from 'zod'
-import { ok } from '@/lib/api/v1/response'
+import { ok, OperationWebhookEventField } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { getOperation } from '@/lib/api/v1/operations'
+import { failAbandonedOperation, getOperation } from '@/lib/api/v1/operations'
 
 const OperationStatus = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled'])
 
@@ -35,7 +37,7 @@ const OperationDetail = z.object({
   started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   poll_url: z.string(),
-  webhook_event: z.literal('operation.completed'),
+  webhook_event: OperationWebhookEventField,
 })
 
 registerEndpoint({
@@ -46,13 +48,14 @@ registerEndpoint({
   description:
     'Returns the current snapshot of a v1 async operation: status (queued / running / succeeded / failed / cancelled), progress (jsonb, free-form), result (on success), and error (on failure). The operation_id is returned by the POST endpoints that initiate async work (period close, year-end, currency revaluation, SIE import).',
   useWhen:
-    'You started an async operation and need to know whether it has finished. Poll every 5-30 seconds until a terminal status. (The 202 response advertises `operation.completed` as the eventual push signal, but that webhook event is not deliverable yet — polling is the only supported completion signal today.)',
+    'You started an async operation and need to know whether it has finished. Poll every 5-30 seconds until a terminal status. (The 202 response names `operation.completed` in webhook_event as the eventual push signal, but that webhook event is not deliverable yet: polling is the only supported completion signal today.)',
   doNotUseFor:
     'Fetching the resource the operation produced: once status=succeeded, read the result field or call the resource-specific GET endpoint. Cancelling a running operation (no cancel endpoint exists in v1).',
   pitfalls: [
     'Terminal statuses (`succeeded`, `failed`, `cancelled`) are final; the row never transitions out of them.',
     'progress is free-form jsonb; agents should treat it as opaque except for the documented fields `phase` (string), `current` / `total` (numbers for percent calculation).',
     'started_at is null while status=queued (the work has not begun yet); completed_at is null until a terminal status is reached.',
+    'An operation still `running` 15 minutes after started_at has lost the request that ran it: it is reported as `failed` with error.code `OPERATION_ABANDONED`. The work may be partly or fully done, so read the resource it was changing before starting it again.',
   ],
   example: {
     response: {
@@ -95,9 +98,9 @@ export const GET = withApiV1<{ params: Promise<{ id: string }> }>(
 
     // The operations URL has no /companies/:companyId prefix, so the wrapper
     // can't resolve ctx.companyId from a path segment. We fetch by id alone
-    // (service-role bypasses RLS), then verify the operation's company is one
-    // this caller belongs to. Two-step lookup keeps the resource id global
-    // while still hard-scoping reads to the caller's tenancies.
+    // (service-role bypasses RLS), then run the wrapper's company gate on the
+    // operation's company. Two-step lookup keeps the resource id global
+    // while still hard-scoping reads to the companies this key may reach.
     const { data: opRow, error: opErr } = await ctx.supabase
       .from('operations')
       .select('company_id')
@@ -116,26 +119,20 @@ export const GET = withApiV1<{ params: Promise<{ id: string }> }>(
     }
 
     const opCompanyId = (opRow as { company_id: string }).company_id
-    const { data: membership } = await ctx.supabase
-      .from('company_members')
-      .select('company_id')
-      .eq('user_id', ctx.userId)
-      .eq('company_id', opCompanyId)
-      .maybeSingle()
+    // Enumeration hardening: a wrong id, a cross-tenant id and a company
+    // outside the key's allowlist are indistinguishable from outside.
+    const denied = await ctx.checkCompanyAccess(opCompanyId, {
+      notFoundDetails: { resource: 'operation' },
+    })
+    if (denied) return denied
 
-    if (!membership) {
-      // Enumeration hardening: wrong id and cross-tenant id are
-      // indistinguishable from outside.
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-        details: { resource: 'operation' },
-      })
-    }
-
-    const row = await getOperation(ctx.supabase, {
+    const stored = await getOperation(ctx.supabase, {
       id: operationId,
       companyId: opCompanyId,
     })
+    // An operation whose request was killed is answered as failed
+    // (OPERATION_ABANDONED), not as running forever.
+    const row = stored ? await failAbandonedOperation(ctx.supabase, stored, ctx.log) : null
 
     if (!row) {
       // Race between the membership read and the operation read, extremely

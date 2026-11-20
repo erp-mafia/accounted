@@ -51,11 +51,13 @@ describe('getTokens', () => {
     // so we assert by .name + .code instead of instanceof.
     await mockSelectReturning({
       data: {
+        id: 'row-corrupt',
         access_token: 'this-is-not-valid-base64url-ciphertext',
         refresh_token: null,
         expires_at: new Date(Date.now() + 60_000).toISOString(),
-        refresh_count: 0,
+        refresh_count: 4,
         scope: 'momsdeklaration',
+        created_at: new Date().toISOString(),
       },
       error: null,
     })
@@ -66,10 +68,12 @@ describe('getTokens', () => {
       await fresh(fakeSupabase, 'user-1', 'comp-1')
       expect.fail('expected throw')
     } catch (e) {
-      const err = e as { name: string; code: string; message: string }
+      const err = e as { name: string; code: string; message: string; tokenRow?: unknown }
       expect(err.name).toBe('SkatteverketAuthError')
       expect(err.code).toBe('TOKEN_CORRUPTED')
       expect(err.message).toMatch(/BankID/)
+      // The verdict is about this row: a flag cannot land on a row stored after it.
+      expect(err.tokenRow).toEqual({ userId: 'user-1', version: { rowId: 'row-corrupt', refreshCount: 4 } })
     }
   })
 })

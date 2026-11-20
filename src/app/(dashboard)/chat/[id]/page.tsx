@@ -1,7 +1,11 @@
 import { notFound, redirect } from 'next/navigation'
+import { getTranslations } from 'next-intl/server'
 import ChatConversationView from '@/components/agent/ChatConversationView'
+import { intentLabelKey } from '@/components/agent/intent-label-keys'
 import type { StoredStagedOperation } from '@/types'
+import { readWithOperationNumber } from '@/lib/pending-operations/operation-number-read'
 import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
+import { leaveWhenChatSwitchedOff } from '../chat-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,9 +25,13 @@ export default async function ChatConversationPage({ params }: PageProps) {
   ])
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
+  // The built-in assistant switched off for the company
+  // (ASSISTANT_CHAT_ENABLED): no stored conversation is shown, whatever its
+  // intent and whether or not the id exists, and nothing is read for it.
+  leaveWhenChatSwitchedOff(companyId)
 
   // Both queries key on the route id, so they run in parallel. The tenant
-  // check on the conversation row still gates rendering — when it fails,
+  // check on the conversation row still gates rendering - when it fails,
   // notFound() throws and the messages result is discarded unrendered.
   const [{ data: conversation }, { data: messages }, staged] = await Promise.all([
     supabase
@@ -40,13 +48,24 @@ export default async function ChatConversationPage({ params }: PageProps) {
     // Proposals this thread staged that are still unanswered, so the approval
     // card comes back on resume rather than the proposal quietly waiting out
     // its expiry in Granskning with nothing here pointing at it.
-    supabase
-      .from('pending_operations')
-      .select('id, operation_type, title, risk_level, preview_data, params, created_at')
-      .eq('company_id', companyId)
-      .eq('status', 'pending')
-      .eq('agent_metadata->>conversation_id', id)
-      .order('created_at', { ascending: true }),
+    // operation_number: the proposal's number ("Förslag 128"), read without
+    // it while the column is not there yet.
+    readWithOperationNumber((withOperationNumber) => {
+      const numbered = () =>
+        supabase
+          .from('pending_operations')
+          .select('id, operation_number, operation_type, title, risk_level, preview_data, params, created_at')
+      const query = withOperationNumber
+        ? numbered()
+        : (supabase
+            .from('pending_operations')
+            .select('id, operation_type, title, risk_level, preview_data, params, created_at') as unknown as ReturnType<typeof numbered>)
+      return query
+        .eq('company_id', companyId)
+        .eq('status', 'pending')
+        .eq('agent_metadata->>conversation_id', id)
+        .order('created_at', { ascending: true })
+    }),
   ])
 
   if (!conversation) notFound()
@@ -54,30 +73,16 @@ export default async function ChatConversationPage({ params }: PageProps) {
   // failure this query exists to prevent: fail loudly instead of quietly
   // rendering a thread that looks like it never staged anything.
   if (staged.error) throw staged.error
+  const t = await getTranslations('agent_chat')
 
   return (
     <ChatConversationView
       conversationId={id}
       intentId={conversation.intent_id}
       contextRef={conversation.context_ref}
-      title={conversation.title ?? intentLabel(conversation.intent_id)}
+      title={conversation.title ?? t(intentLabelKey(conversation.intent_id))}
       rawMessages={(messages ?? []) as { role: string; content: unknown; hidden?: boolean }[]}
       stagedOperations={(staged.data ?? []) as StoredStagedOperation[]}
     />
   )
-}
-
-function intentLabel(intentId: string): string {
-  switch (intentId) {
-    case 'general.help':
-      return 'Fråga din assistent'
-    case 'transaction.categorization':
-      return 'Hjälp med transaktion'
-    case 'invoice.draft':
-      return 'Hjälp med faktura'
-    case 'supplier_invoice.review':
-      return 'Granska leverantörsfaktura'
-    default:
-      return intentId
-  }
 }

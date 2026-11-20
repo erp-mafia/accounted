@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   generateSRUSubmission,
-  validateBlanketterSru,
   getZipFilename,
 } from '../sru-generator'
+import { validateInk2BlanketterSru } from '@/tests/sru-validators'
 import type { INK2Declaration } from '../types'
 
 function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration {
@@ -51,7 +51,10 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       '7651': 0,
       '7653': 0,
       '7754': 0,
+      '7654': 0,
       '7763': 0,
+      '7666': 0,
+      '7765': 0,
       '7670': 302000,
       '7770': 0,
     },
@@ -64,6 +67,7 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
     },
     companyInfo: {
       companyName: 'Test AB',
+      entityType: 'aktiebolag',
       orgNumber: '556677-8899',
       addressLine1: 'Testgatan 1',
       postalCode: '11122',
@@ -107,6 +111,7 @@ describe('INK2 SRU Generator', () => {
       const declaration = makeDeclaration({
         companyInfo: {
           companyName: 'Test AB',
+          entityType: 'aktiebolag',
           orgNumber: '165566778899',
           addressLine1: null,
           postalCode: '11122',
@@ -131,7 +136,7 @@ describe('INK2 SRU Generator', () => {
     it('validates the generated BLANKETTER.SRU', () => {
       const declaration = makeDeclaration()
       const submission = generateSRUSubmission(declaration)
-      const validation = validateBlanketterSru(submission.blanketterSru)
+      const validation = validateInk2BlanketterSru(submission.blanketterSru)
       expect(validation.isValid).toBe(true)
       expect(validation.errors).toEqual([])
     })
@@ -157,7 +162,23 @@ describe('INK2 SRU Generator', () => {
       expect(submission.blanketterSru).toContain('INK2-2025P1')
     })
 
-    it('uses P2 suffix for fiscal year ending in May-Aug', () => {
+    it('uses P3 suffix for a fiscal year ending in July or August (was P2)', () => {
+      const declaration = makeDeclaration({
+        fiscalYear: {
+          id: 'p3',
+          name: 'FY',
+          start: '2024-09-01',
+          end: '2025-08-31',
+          isClosed: true,
+        },
+      })
+      const submission = generateSRUSubmission(declaration)
+      expect(submission.blanketterSru).toContain('#BLANKETT INK2-2025P3')
+      expect(submission.blanketterSru).toContain('#BLANKETT INK2R-2025P3')
+      expect(submission.blanketterSru).toContain('#BLANKETT INK2S-2025P3')
+    })
+
+    it('uses P2 suffix for fiscal year ending in May-June', () => {
       const declaration = makeDeclaration({
         fiscalYear: {
           id: 'p2',
@@ -267,6 +288,20 @@ describe('INK2 SRU Generator', () => {
       expect(ink2sBlock).toContain('#UPPGIFT 7754 1000')
     })
 
+    it('files the schablonintäkt on 7654 (INK2S 4.6a) in form order and omits it at zero', () => {
+      const base = makeDeclaration()
+      expect(extractBlock(generateSRUSubmission(base).blanketterSru, 'INK2S')).not.toContain('#UPPGIFT 7654')
+
+      const submission = generateSRUSubmission(makeDeclaration({
+        ink2s: { ...base.ink2s, '7754': 1_000, '7654': 3_920, '7763': 100_000 },
+      }))
+      const ink2sBlock = extractBlock(submission.blanketterSru, 'INK2S')
+      expect(ink2sBlock).toContain('#UPPGIFT 7654 3920')
+      // 4.5c before 4.6a before 4.14 a.
+      expect(ink2sBlock.indexOf('#UPPGIFT 7754')).toBeLessThan(ink2sBlock.indexOf('#UPPGIFT 7654'))
+      expect(ink2sBlock.indexOf('#UPPGIFT 7654')).toBeLessThan(ink2sBlock.indexOf('#UPPGIFT 7763'))
+    })
+
     it('files the prior-year deficit on 7763 (INK2S 4.14 a) and omits it at zero', () => {
       const base = makeDeclaration()
       expect(extractBlock(generateSRUSubmission(base).blanketterSru, 'INK2S')).not.toContain('#UPPGIFT 7763')
@@ -303,6 +338,7 @@ describe('INK2 SRU Generator', () => {
       const declaration = makeDeclaration({
         companyInfo: {
           companyName: 'Test #1 AB',
+          entityType: 'aktiebolag',
           orgNumber: '556677-8899',
           addressLine1: null,
           postalCode: '11122',
@@ -315,16 +351,16 @@ describe('INK2 SRU Generator', () => {
     })
   })
 
-  describe('validateBlanketterSru', () => {
+  describe('validateInk2BlanketterSru', () => {
     it('validates a correct BLANKETTER.SRU', () => {
       const declaration = makeDeclaration()
       const submission = generateSRUSubmission(declaration)
-      const result = validateBlanketterSru(submission.blanketterSru)
+      const result = validateInk2BlanketterSru(submission.blanketterSru)
       expect(result.isValid).toBe(true)
     })
 
     it('detects missing INK2R block', () => {
-      const result = validateBlanketterSru(
+      const result = validateInk2BlanketterSru(
         '#BLANKETT INK2-2025P4\r\n#IDENTITET 165566778899 20250101 100000\r\n#NAMN Test\r\n#BLANKETTSLUT\r\n' +
         '#BLANKETT INK2S-2025P4\r\n#IDENTITET 165566778899 20250101 100002\r\n#NAMN Test\r\n#BLANKETTSLUT\r\n' +
         '#FIL_SLUT\r\n'
@@ -334,7 +370,7 @@ describe('INK2 SRU Generator', () => {
     })
 
     it('detects missing #FIL_SLUT', () => {
-      const result = validateBlanketterSru(
+      const result = validateInk2BlanketterSru(
         '#BLANKETT INK2-2025P4\r\n#IDENTITET x\r\n#NAMN T\r\n#BLANKETTSLUT\r\n' +
         '#BLANKETT INK2R-2025P4\r\n#IDENTITET x\r\n#NAMN T\r\n#BLANKETTSLUT\r\n' +
         '#BLANKETT INK2S-2025P4\r\n#IDENTITET x\r\n#NAMN T\r\n#BLANKETTSLUT\r\n'
@@ -354,6 +390,7 @@ describe('INK2 SRU Generator', () => {
       const declaration = makeDeclaration({
         companyInfo: {
           companyName: 'Test AB',
+          entityType: 'aktiebolag',
           orgNumber: null,
           addressLine1: null,
           postalCode: null,

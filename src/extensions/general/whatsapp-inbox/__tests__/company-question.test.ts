@@ -837,7 +837,7 @@ describe('drainParkedRows', () => {
 describe('truncateTitle', () => {
   it('keeps short titles untouched and cuts long ones cleanly at a word boundary', () => {
     expect(truncateTitle('Bolag AB', 20)).toBe('Bolag AB')
-    const cut = truncateTitle('Wennberg Fastighetsförvaltning i Stockholm AB', 20)
+    const cut = truncateTitle('Exempel Fastighetsförvaltning i Stockholm AB', 20)
     expect(cut.length).toBeLessThanOrEqual(20)
     expect(cut.endsWith('…')).toBe(true)
     expect(cut).not.toMatch(/\s…$/) // no dangling space before the ellipsis
@@ -854,22 +854,22 @@ describe('uniqueTitles', () => {
   })
 
   it('disambiguates identical names with their 1-based position (Meta #131009)', () => {
-    const titles = uniqueTitles(['Capelix AB', 'Capelix AB'], 20)
+    const titles = uniqueTitles(['Exempelbolaget AB', 'Exempelbolaget AB'], 20)
     expect(new Set(titles).size).toBe(2)
-    expect(titles[0]).toBe('Capelix AB 1')
-    expect(titles[1]).toBe('Capelix AB 2')
+    expect(titles[0]).toBe('Exempelbolaget AB 1')
+    expect(titles[1]).toBe('Exempelbolaget AB 2')
     for (const t of titles) expect(t.length).toBeLessThanOrEqual(20)
   })
 
   it('disambiguates names that only collide after truncation, within the limit', () => {
     const titles = uniqueTitles(
-      ['Wennberg Fastighetsförvaltning AB', 'Wennberg Fastighetsförvaltning Holding AB'],
+      ['Exempel Fastighetsförvaltning AB', 'Exempel Fastighetsförvaltning Holding AB'],
       20,
     )
     expect(new Set(titles.map((t) => t.toLowerCase())).size).toBe(2)
     for (const t of titles) {
       expect(t.length).toBeLessThanOrEqual(20)
-      expect(t.startsWith('Wennberg')).toBe(true)
+      expect(t.startsWith('Exempel')).toBe(true)
     }
     expect(titles[0].endsWith(' 1')).toBe(true)
     expect(titles[1].endsWith(' 2')).toBe(true)

@@ -1,13 +1,6 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import {
-  prepareInvoicePdfRender,
-  buildSwishQrDataUrl,
-  buildPaymentLinkQrDataUrl,
-} from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import {
@@ -27,14 +20,12 @@ import {
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/send-payment-confirmation (#1693)
@@ -61,7 +52,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.email_send)
     if (capBlocked) return capBlocked
 
-    const emailService = getEmailService()
+    const emailService = await getEmailService()
     if (!emailService.isConfigured()) {
       return errorResponseFromCode('INVOICE_SEND_EMAIL_NOT_CONFIGURED', opLog, { requestId })
     }
@@ -143,24 +134,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     let pdfBuffer: Buffer
     try {
-      const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-        company as CompanySettings,
-        (invoice as Invoice).currency,
-        { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
-      )
-      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, invoice as Invoice)
-      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice)
-      pdfBuffer = await renderToBuffer(
-        InvoicePDF({
+      // The PAID re-render: the resolver gives a paid invoice no QR code
+      // (not_payable), so the confirmation never carries a pay-again code.
+      pdfBuffer = (
+        await renderInvoicePdfBuffer({
           invoice: invoice as Invoice,
           customer,
           items,
-          company: renderCompany,
-          branding,
-          swishQrDataUrl,
-          paymentLinkQrDataUrl,
-        }),
-      )
+          company: company as CompanySettings,
+          paymentAccountRequired,
+        })
+      ).buffer
     } catch (err) {
       opLog.error('payment confirmation PDF render failed', err as Error)
       return errorResponseFromCode('INVOICE_PDF_RENDER_FAILED', opLog, { requestId })

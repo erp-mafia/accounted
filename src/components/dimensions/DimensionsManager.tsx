@@ -1,19 +1,22 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { useDimensions } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { Skeleton } from '@/components/ui/skeleton'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, QUIET_LINK_CLASS, SortableTh } from '@/components/ui/dry-table'
 import {
   Dialog,
   DialogContent,
@@ -27,30 +30,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDate } from '@/lib/utils'
 import {
-  Plus,
-  Search,
-  Lock,
-  Tags,
-  ChevronUp,
-  ChevronDown,
-  ChevronRight,
-  ChevronsUpDown,
-  Loader2,
-} from 'lucide-react'
+  ChevronRightIcon,
+  HashtagIcon,
+  LockClosedIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@/components/icons'
 import DimensionValueForm, {
   type DimensionValueFormInput,
 } from '@/components/dimensions/DimensionValueForm'
 import {
-  PROJECT_DIM_NO,
   type DimensionDto,
   type DimensionValueDto,
 } from '@/components/dimensions/types'
+import { placementOf, planDimensionReorder } from '@/components/dimensions/dimension-order'
 
 type SortColumn = 'code' | 'name' | 'status' | 'start_date' | 'end_date'
 type SortDir = 'asc' | 'desc'
@@ -65,15 +65,17 @@ function compareStrings(a: string, b: string): number {
 }
 
 /**
- * Register for dimension values (kostnadsställen & projekt): the
- * customers-page register recipe hosted behind one segmented tab per registry
- * dimension. Archive rides the edit form's aktiv switch (PATCH is_active);
- * delete lives only in the edit dialog and surfaces the DB retention
- * trigger's Swedish "…arkivera det istället" message when the value is
- * referenced by posted lines.
+ * Register for the dimensions (kostnadsställe, projekt and custom ones) and
+ * their values: the customers-page register recipe hosted behind one
+ * segmented tab per registry dimension. Values and dimensions follow the same
+ * recipe: archive rides the edit form's aktiv switch (PATCH is_active), and
+ * delete lives only in the edit dialog and surfaces the DB guard's Swedish
+ * message when posted lines still reference the value or dimension.
  */
 export default function DimensionsManager() {
   const t = useTranslations('dimensions')
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -99,18 +101,9 @@ export default function DimensionsManager() {
   const [dialog, setDialog] = useState<DialogState>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [newDimDialogOpen, setNewDimDialogOpen] = useState(false)
-  const [confirmDeleteDimOpen, setConfirmDeleteDimOpen] = useState(false)
-  const [isDeletingDim, setIsDeletingDim] = useState(false)
+  const [editDimDialogOpen, setEditDimDialogOpen] = useState(false)
+  const [isUpdatingDim, setIsUpdatingDim] = useState(false)
   const [isCreatingDimension, setIsCreatingDimension] = useState(false)
-
-  useEffect(() => {
-    if (!loadError) return
-    toast({
-      title: t('load_failed_title'),
-      description: getErrorMessage(loadError, { locale: errorLocale }),
-      variant: 'destructive',
-    })
-  }, [loadError, toast, t, errorLocale])
 
   /** After a write: refresh the shared registry (this list and every picker). */
   const loadDimensions = useCallback(() => invalidateReferenceData('ref:dimensions'), [])
@@ -119,7 +112,9 @@ export default function DimensionsManager() {
     () => dimensions.find((d) => d.id === activeDimId) ?? null,
     [dimensions, activeDimId],
   )
-  const isProjectTab = activeDim?.sie_dim_no === PROJECT_DIM_NO
+  // Values carry start/end dates on accumulating dimensions only, the same
+  // rule DimensionValueForm and the API apply.
+  const showDates = activeDim ? !activeDim.resets_annually : false
 
   // Parent (#UNDERDIM) of the active tab's dimension, when it has one.
   const parentDimName = useMemo(() => {
@@ -273,32 +268,86 @@ export default function DimensionsManager() {
     }
   }
 
+  // Rename, archive and reorder through PATCH /api/dimensions/[id]. The
+  // edited dimension goes first, its own fields and new sort_order in one
+  // PATCH, so a refused rename writes nothing; the neighbours a move
+  // renumbers follow (dimension-order.ts). The registry refreshes after a
+  // partial failure too, so the tabs show what was actually saved.
+  async function handleUpdateDimension(input: EditDimensionFormInput) {
+    if (!activeDim) return
+    // Pin the tab: a move must not hand the default first tab to another
+    // dimension while the user is looking at this one.
+    setActiveDimId(activeDim.id)
+    const reorder = planDimensionReorder(dimensions, activeDim.id, input.after)
+    const own: Record<string, unknown> = {}
+    // The route refuses renaming the system pair (1, 6); the form never
+    // offers it, and this keeps an unchanged name out of the body entirely.
+    if (!activeDim.is_system && input.name !== activeDim.name) own.name = input.name
+    if (input.is_active !== activeDim.is_active) own.is_active = input.is_active
+    const ownOrder = reorder.find((write) => write.id === activeDim.id)
+    if (ownOrder) own.sort_order = ownOrder.sort_order
+    const patches = [
+      ...(Object.keys(own).length > 0 ? [{ id: activeDim.id, body: own }] : []),
+      ...reorder
+        .filter((write) => write.id !== activeDim.id)
+        .map((write) => ({ id: write.id, body: { sort_order: write.sort_order } })),
+    ]
+    if (patches.length === 0) {
+      setEditDimDialogOpen(false)
+      return
+    }
+    setIsUpdatingDim(true)
+    // The PATCHes are sequential, not atomic: when a later one fails the
+    // earlier ones stay saved, so the user is told the order may be mixed.
+    let saved = 0
+    try {
+      for (const patch of patches) {
+        const res = await fetch(`/api/dimensions/${patch.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch.body),
+        })
+        const json = await res.json().catch(() => null)
+        if (!res.ok) throw json ?? new Error()
+        saved++
+      }
+      toast({ title: t('dim_updated_title') })
+      setEditDimDialogOpen(false)
+    } catch (err) {
+      const reason = getErrorMessage(err, { locale: errorLocale })
+      toast({
+        title: t('save_failed_title'),
+        description: saved > 0 ? `${reason} ${t('dim_update_partial')}` : reason,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsUpdatingDim(false)
+    }
+    await loadDimensions()
+  }
+
   // Remove a custom dimension nobody has booked on (issue #2219). The DB
   // registry guard refuses the delete with a Swedish P0001 when any posted
   // line carries the number; the route passes that message through, so the
-  // toast says exactly which dimension and why.
+  // toast says exactly which dimension and why. Runs inside the edit
+  // dialog's confirm, which shows its own pending state.
   async function handleDeleteDimension() {
     if (!activeDim || activeDim.is_system) return
-    setIsDeletingDim(true)
-    try {
-      const res = await fetch(`/api/dimensions/${activeDim.id}`, { method: 'DELETE' })
-      if (!res.ok) {
-        const json = await res.json().catch(() => null)
-        toast({
-          title: t('delete_failed_title'),
-          description: getErrorMessage(json, { locale: errorLocale }),
-          variant: 'destructive',
-        })
-        return
-      }
-      toast({ title: t('dimension_deleted_title') })
-      setConfirmDeleteDimOpen(false)
-      setActiveDimId(null)
-      setSearchTerm('')
-      await loadDimensions()
-    } finally {
-      setIsDeletingDim(false)
+    const res = await fetch(`/api/dimensions/${activeDim.id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const json = await res.json().catch(() => null)
+      toast({
+        title: t('delete_failed_title'),
+        description: getErrorMessage(json, { locale: errorLocale }),
+        variant: 'destructive',
+      })
+      return
     }
+    toast({ title: t('dimension_deleted_title') })
+    setEditDimDialogOpen(false)
+    setActiveDimId(null)
+    setSearchTerm('')
+    await loadDimensions()
   }
 
   async function handleDeleteValue() {
@@ -329,31 +378,6 @@ export default function DimensionsManager() {
     }
   }
 
-  function SortableHeader({
-    column,
-    label,
-    className,
-  }: {
-    column: SortColumn
-    label: string
-    className?: string
-  }) {
-    const isActive = sortColumn === column
-    const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
-    return (
-      <th className={cn(TH_CLASS, className)}>
-        <button
-          type="button"
-          onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 transition-colors duration-150 hover:text-foreground"
-        >
-          {label}
-          <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
-        </button>
-      </th>
-    )
-  }
-
   function renderStatus(value: DimensionValueDto) {
     return value.is_active ? (
       <span className="text-muted-foreground">{t('status_active')}</span>
@@ -362,33 +386,74 @@ export default function DimensionsManager() {
     )
   }
 
+  // The top bar: the title, the quiet way to the retro-tagging workbench and
+  // the page's one primary (V7: the primary sits in the top bar, never in the
+  // toolbar). Rendered in every state so the chrome stays put.
+  const header = (
+    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="page-header-title">{tNav('dimensions')}</h1>
+      <PageHeaderActions className="flex items-center gap-4">
+        <Link href="/dimensions/tagging" className={QUIET_LINK_CLASS}>
+          {t('tag_history')}
+        </Link>
+        {activeDim && (
+          <Button
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setDialog({ mode: 'create' })}
+          >
+            {canWrite ? <PlusIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
+            {t('new_value')}
+          </Button>
+        )}
+      </PageHeaderActions>
+    </div>
+  )
+
   if (isLoading) {
     return (
       <div className="space-y-8">
+      {header}
+      <LateReveal className="space-y-8">
         <Skeleton className="h-9 w-64" />
-        <div className="space-y-3">
+        <div>
           {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+            <div key={i} className="flex h-11 items-center gap-6 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-64" />
+              <Skeleton className="ml-auto h-3.5 w-16" />
+            </div>
           ))}
         </div>
+      </LateReveal>
       </div>
     )
   }
 
   if (loadFailed && dimensions.length === 0) {
     return (
-      <EmptyState
-        icon={Tags}
-        title={t('load_failed_title')}
-        description={t('load_failed_description')}
-        actionLabel={t('retry')}
-        onAction={() => void refreshDimensions()}
-      />
+      <div className="space-y-8">
+        {header}
+        <LoadError
+          title={t('load_failed_title')}
+          description={t('load_failed_description')}
+          onRetry={() => void refreshDimensions()}
+        />
+      </div>
     )
   }
 
   return (
     <div className="space-y-8">
+      {header}
+      {/* A failed refresh keeps the register on screen (Stil v3 states). */}
+      {loadFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshDimensions() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {/* Toolbar (concept scene 31): seg per registry dimension with a
           muted value count, search, and the actions far right. */}
       <div className="space-y-2">
@@ -404,51 +469,49 @@ export default function DimensionsManager() {
               label: (
                 // data-ph-mask: dimension names are user data; the wrapper
                 // keeps the segment button's inline gap between name and count.
+                // An archived dimension keeps its tab (its values stay on
+                // posted lines) and carries the same chip as an archived value.
                 <span data-ph-mask="" className="inline-flex items-center gap-1.5">
                   {dim.name}
                   {dim.values.length > 0 && (
                     <span className="text-muted-foreground tabular-nums">{dim.values.length}</span>
                   )}
+                  {!dim.is_active && (
+                    <Badge variant="outline" className="font-normal">{t('status_archived')}</Badge>
+                  )}
                 </span>
               ),
             }))}
           />
+          {/* The dimension's own actions follow the view as outline buttons;
+              the search ends the row (V7 list toolbars). */}
+          <Button
+            variant="outline"
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setNewDimDialogOpen(true)}
+          >
+            <PlusIcon className="h-4 w-4" />
+            {t('new_dimension')}
+          </Button>
+          {activeDim && (
+            <Button
+              variant="outline"
+              size="toolbar"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              onClick={() => setEditDimDialogOpen(true)}
+            >
+              {t('edit_dimension')}
+            </Button>
+          )}
           <ToolbarSearch
             placeholder={t('search_placeholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            containerClassName="min-w-[180px] max-w-xs flex-1"
+            containerClassName={TOOLBAR_SEARCH_END_CLASS}
           />
-          <div className="ml-auto flex items-center gap-4">
-            <button
-              type="button"
-              className={cn(QUIET_LINK_CLASS, 'disabled:pointer-events-none disabled:opacity-50')}
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              onClick={() => setNewDimDialogOpen(true)}
-            >
-              {t('new_dimension')}
-            </button>
-            {activeDim && !activeDim.is_system && (
-              <button
-                type="button"
-                className={cn(QUIET_LINK_CLASS, 'disabled:pointer-events-none disabled:opacity-50')}
-                disabled={!canWrite || isDeletingDim}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                onClick={() => setConfirmDeleteDimOpen(true)}
-              >
-                {t('delete_dimension')}
-              </button>
-            )}
-            <Button
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              onClick={() => setDialog({ mode: 'create' })}
-            >
-              {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-              {t('new_value')}
-            </Button>
-          </div>
         </div>
         {parentDimName && (
           <p className="text-xs text-muted-foreground">
@@ -460,15 +523,17 @@ export default function DimensionsManager() {
       {/* Value list (concept dry-table: Kod, Namn, Start, Slut, Status) */}
       {sortedValues.length === 0 ? (
         searchTerm ? (
-          <EmptyState
-            icon={Search}
-            title={t('no_search_results_title')}
-            /* data-ph-mask: the search term is user data */
-            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
-          />
+          // No hits: one muted line in the list with the quiet way back.
+          <p className="px-1 py-3 text-[13px] text-muted-foreground">
+            {/* data-ph-mask: the search term is user data */}
+            <span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>{' '}
+            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSearchTerm('')}>
+              {tCommon('clear_search')}
+            </button>
+          </p>
         ) : (
           <EmptyState
-            icon={Tags}
+            icon={HashtagIcon}
             title={t('empty_title')}
             /* data-ph-mask: the dimension name is user data */
             description={<span data-ph-mask="">{t('empty_description', { dimension: activeDim?.name ?? '' })}</span>}
@@ -477,27 +542,29 @@ export default function DimensionsManager() {
           />
         )
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
-                <SortableHeader column="code" label={t('col_code')} />
-                <SortableHeader column="name" label={t('col_name')} className="w-full" />
-                {isProjectTab && (
+                <SortableTh direction={sortColumn === 'code' ? sortDir : null} onSort={() => updateSort('code')} label={t('col_code')} />
+                <SortableTh direction={sortColumn === 'name' ? sortDir : null} onSort={() => updateSort('name')} label={t('col_name')} className="w-full" />
+                {showDates && (
                   <>
-                    <SortableHeader
-                      column="start_date"
+                    <SortableTh
+                      direction={sortColumn === 'start_date' ? sortDir : null}
+                      onSort={() => updateSort('start_date')}
                       label={t('col_start')}
                       className="hidden text-right sm:table-cell"
                     />
-                    <SortableHeader
-                      column="end_date"
+                    <SortableTh
+                      direction={sortColumn === 'end_date' ? sortDir : null}
+                      onSort={() => updateSort('end_date')}
                       label={t('col_end')}
                       className="hidden text-right sm:table-cell"
                     />
                   </>
                 )}
-                <SortableHeader column="status" label={t('col_status')} />
+                <SortableTh direction={sortColumn === 'status' ? sortDir : null} onSort={() => updateSort('status')} label={t('col_status')} />
               </tr>
             </thead>
             <tbody className="stagger-enter">
@@ -505,7 +572,8 @@ export default function DimensionsManager() {
                 <tr
                   key={value.id}
                   className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
-                  onClick={() => setDialog({ mode: 'edit', value })}
+                  // The edit dialog is a write surface: inert for a read-only member.
+                  onClick={canWrite ? () => setDialog({ mode: 'edit', value }) : undefined}
                 >
                   <td className={cn(TD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
                     {value.code}
@@ -513,12 +581,12 @@ export default function DimensionsManager() {
                   <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
                     <span className="block truncate">{value.name}</span>
                   </td>
-                  {isProjectTab && (
+                  {showDates && (
                     <>
-                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right date-figures text-muted-foreground sm:table-cell')}>
                         {value.start_date ? formatDate(value.start_date) : ''}
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right date-figures text-muted-foreground sm:table-cell')}>
                         {value.end_date ? formatDate(value.end_date) : ''}
                       </td>
                     </>
@@ -532,48 +600,64 @@ export default function DimensionsManager() {
       )}
 
       {/* Create/edit dialog */}
-      <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}>
-        <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      {/* A value is a small record: created and edited in a drawer over its
+          list (V7 creation forms). The form, its validation and its submit are
+          the same component as before. */}
+      <CreateDrawer
+        open={dialog !== null}
+        onOpenChange={(open) => !open && setDialog(null)}
+        // data-ph-mask: the dimension name is user data
+        title={
+          <span data-ph-mask="">
+            {dialog?.mode === 'edit'
+              ? t('edit_value_title')
+              : t('new_value_title', { dimension: activeDim?.name ?? '' })}
+          </span>
+        }
+      >
+        {activeDim && dialog && (
+          <DimensionValueForm
+            key={dialog.mode === 'edit' ? dialog.value.id : 'create'}
+            dimension={activeDim}
+            value={dialog.mode === 'edit' ? dialog.value : null}
+            isSaving={isSaving}
+            onSubmit={handleSubmitValue}
+            onDelete={dialog.mode === 'edit' ? handleDeleteValue : undefined}
+          />
+        )}
+      </CreateDrawer>
+
+      {/* Edit dimension dialog (name, placement, aktiv, delete) for the
+          active tab. The content unmounts on close, so each open starts
+          from the dimension's saved state. */}
+      <Dialog
+        open={editDimDialogOpen}
+        onOpenChange={(open) => !open && setEditDimDialogOpen(false)}
+      >
+        <DialogContent size="form">
           <DialogHeader>
-            {/* data-ph-mask: the dimension name is user data */}
-            <DialogTitle data-ph-mask="">
-              {dialog?.mode === 'edit'
-                ? t('edit_value_title')
-                : t('new_value_title', { dimension: activeDim?.name ?? '' })}
-            </DialogTitle>
+            <DialogTitle>{t('edit_dimension_title')}</DialogTitle>
           </DialogHeader>
-          {activeDim && dialog && (
-            <DimensionValueForm
-              key={dialog.mode === 'edit' ? dialog.value.id : 'create'}
+          {activeDim && (
+            <EditDimensionForm
+              key={activeDim.id}
               dimension={activeDim}
-              value={dialog.mode === 'edit' ? dialog.value : null}
-              isSaving={isSaving}
-              onSubmit={handleSubmitValue}
-              onDelete={dialog.mode === 'edit' ? handleDeleteValue : undefined}
+              dimensions={dimensions}
+              isSaving={isUpdatingDim}
+              onSubmit={handleUpdateDimension}
+              onDelete={activeDim.is_system ? undefined : handleDeleteDimension}
             />
           )}
         </DialogContent>
       </Dialog>
 
-      {/* New dimension dialog — the content (and thus the form state)
+      {/* New dimension dialog: the content (and thus the form state)
           unmounts on close, so each open starts from a blank form. */}
-      {activeDim && !activeDim.is_system && (
-        <DestructiveConfirmDialog
-          open={confirmDeleteDimOpen}
-          onOpenChange={setConfirmDeleteDimOpen}
-          title={t('delete_dimension_confirm_title')}
-          description={t('delete_dimension_confirm_description', { name: activeDim.name })}
-          confirmLabel={t('delete_confirm_label')}
-          cancelLabel={t('delete_cancel_label')}
-          onConfirm={handleDeleteDimension}
-        />
-      )}
-
       <Dialog
         open={newDimDialogOpen}
         onOpenChange={(open) => !open && setNewDimDialogOpen(false)}
       >
-        <DialogContent className="sm:max-w-lg max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('new_dimension_title')}</DialogTitle>
           </DialogHeader>
@@ -599,7 +683,7 @@ interface NewDimensionFormInput {
 
 /**
  * Create form for a custom registry dimension (#DIM 20+). The parent
- * (#UNDERDIM) select is an advanced, rarely-used SIE concept — kept behind a
+ * (#UNDERDIM) select is an advanced, rarely-used SIE concept - kept behind a
  * quiet disclosure so the common path stays name + number.
  */
 function NewDimensionForm({
@@ -607,7 +691,7 @@ function NewDimensionForm({
   isSaving,
   onSubmit,
 }: {
-  /** Existing dims — active ones populate the parent select. */
+  /** Existing dims - active ones populate the parent select. */
   dimensions: DimensionDto[]
   isSaving: boolean
   onSubmit: (input: NewDimensionFormInput) => void | Promise<void>
@@ -708,7 +792,7 @@ function NewDimensionForm({
           className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
           aria-expanded={showAdvanced}
         >
-          <ChevronRight
+          <ChevronRightIcon
             className={`h-3 w-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
             aria-hidden="true"
           />
@@ -736,11 +820,153 @@ function NewDimensionForm({
       </div>
 
       <div className="flex justify-end pt-2">
-        <Button type="submit" disabled={isSaving}>
-          {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button type="submit" loading={isSaving}>
           {t('form_create')}
         </Button>
       </div>
+    </form>
+  )
+}
+
+/** Select value for "first in the list"; every other option is a dimension id. */
+const PLACEMENT_FIRST = 'first'
+
+interface EditDimensionFormInput {
+  /** Trimmed; ignored for a system dimension, which cannot be renamed. */
+  name: string
+  is_active: boolean
+  /** Id of the dimension to list right before this one; null = first. */
+  after: string | null
+}
+
+/**
+ * Edit form for a registry dimension, the value form's recipe one level up:
+ * name (custom dimensions only: the route refuses renaming the system pair
+ * 1/6), placement in the register order, the aktiv switch for archiving,
+ * and delete for custom dimensions behind a confirm.
+ */
+function EditDimensionForm({
+  dimension,
+  dimensions,
+  isSaving,
+  onSubmit,
+  onDelete,
+}: {
+  dimension: DimensionDto
+  /** The registry in display order: populates the placement select. */
+  dimensions: DimensionDto[]
+  isSaving: boolean
+  onSubmit: (input: EditDimensionFormInput) => void | Promise<void>
+  /** Custom dimensions only. The caller performs the DELETE and toasts a refusal. */
+  onDelete?: () => void | Promise<void>
+}) {
+  const t = useTranslations('dimensions')
+  const [name, setName] = useState(dimension.name)
+  const [isActive, setIsActive] = useState(dimension.is_active)
+  const [after, setAfter] = useState(
+    () => placementOf(dimensions, dimension.id) ?? PLACEMENT_FIRST,
+  )
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+
+  const others = dimensions.filter((d) => d.id !== dimension.id)
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const trimmedName = name.trim()
+    if (!dimension.is_system && (!trimmedName || trimmedName.length > 60)) {
+      setNameError(t('dim_form_name_invalid'))
+      return
+    }
+    setNameError(null)
+    void onSubmit({
+      name: trimmedName,
+      is_active: isActive,
+      after: after === PLACEMENT_FIRST ? null : after,
+    })
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="edit-dimension-name">{t('form_name_label')}</Label>
+          <Input
+            id="edit-dimension-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={dimension.is_system}
+            autoComplete="off"
+          />
+          {dimension.is_system && (
+            <p className="text-xs text-muted-foreground">{t('dim_form_system_name_help')}</p>
+          )}
+          {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="edit-dimension-placement">{t('dim_form_placement_label')}</Label>
+          <Select value={after} onValueChange={setAfter}>
+            <SelectTrigger id="edit-dimension-placement">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={PLACEMENT_FIRST}>{t('dim_form_placement_first')}</SelectItem>
+              {others.map((dim) => (
+                <SelectItem key={dim.id} value={dim.id}>
+                  {t('dim_form_placement_after', { name: dim.name })}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{t('dim_form_placement_help')}</p>
+        </div>
+      </div>
+
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="edit-dimension-active">{t('dim_form_active_label')}</Label>
+          <p className="text-xs text-muted-foreground max-w-md">
+            {t('dim_form_active_help')}
+          </p>
+        </div>
+        <Switch
+          id="edit-dimension-active"
+          checked={isActive}
+          onCheckedChange={setIsActive}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-3 pt-2">
+        {onDelete ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            disabled={isSaving}
+            onClick={() => setConfirmDeleteOpen(true)}
+          >
+            <TrashIcon className="h-4 w-4" />
+            {t('delete_dimension')}
+          </Button>
+        ) : (
+          <span />
+        )}
+        <Button type="submit" loading={isSaving}>
+          {t('form_save')}
+        </Button>
+      </div>
+
+      {onDelete && (
+        <DestructiveConfirmDialog
+          open={confirmDeleteOpen}
+          onOpenChange={setConfirmDeleteOpen}
+          title={t('delete_dimension_confirm_title')}
+          description={t('delete_dimension_confirm_description', { name: dimension.name })}
+          confirmLabel={t('delete_confirm_label')}
+          cancelLabel={t('delete_cancel_label')}
+          onConfirm={onDelete}
+        />
+      )}
     </form>
   )
 }

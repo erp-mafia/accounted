@@ -1,6 +1,6 @@
 /**
  * WL-13 brand-mail snapshot suite: for every template class (invite, payslip,
- * invoice, reminder) assert the three sender states:
+ * invoice) assert the three sender states:
  *
  *   - branded company  -> brand sender + brand-domain links + no platform
  *                         ("Accounted") leakage in the mail body
@@ -28,11 +28,6 @@ import {
   generateInviteEmailHtml,
   generateInviteEmailText,
 } from '../invite-templates'
-import {
-  generateReminderEmailHtml,
-  generateReminderEmailText,
-  type ReminderEmailData,
-} from '../reminder-templates'
 import { generateInvoiceEmailHtml } from '../invoice-templates'
 import { buildPayslipLinkEmail } from '@/lib/salary/payslips/email-template'
 
@@ -206,60 +201,5 @@ describe('invoice mail (template class: invoice)', () => {
     resolveBrandForCompanyMock.mockResolvedValue(UNVERIFIED)
     const sender = await getSenderForCompany('company-1')
     expect(sender.fromAddress).toBeNull()
-  })
-})
-
-describe('reminder mail (template class: reminder)', () => {
-  function makeReminderData(actionUrl: string): ReminderEmailData {
-    return {
-      invoice: makeInvoice({
-        invoice_number: 'F-1001',
-        invoice_date: '2026-05-01',
-        due_date: '2026-06-01',
-        total: 1250,
-        currency: 'SEK',
-      }),
-      customer: makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se' }),
-      company: makeCompanySettings({ company_name: 'Kund AB' }),
-      reminderLevel: 1,
-      daysOverdue: 20,
-      actionUrl,
-      interestAmount: 0,
-      interestRate: 0,
-      interestFromDate: '2026-06-02',
-      interestDays: 0,
-      reminderFee: 0,
-    }
-  }
-
-  it('branded: action link on the brand home domain, no Accounted leakage', async () => {
-    resolveBrandForCompanyMock.mockResolvedValue(VERIFIED)
-    const sender = await getSenderForCompany('company-1')
-    const baseUrl = getBaseUrlForBrand(sender.brand)
-    const data = makeReminderData(`${baseUrl}/invoice-action/tok-1`)
-    const html = generateReminderEmailHtml(data)
-    const text = generateReminderEmailText(data)
-    expect(sender.fromAddress).toBe('noreply@post.siffra.se')
-    expect(html).toContain('https://app.siffra.se/invoice-action/tok-1')
-    expect(html).not.toMatch(/accounted/i)
-    expect(text).toContain('https://app.siffra.se/invoice-action/tok-1')
-  })
-
-  it('unbranded: canonical action link and unchanged output', async () => {
-    const sender = await getSenderForCompany('company-1')
-    const baseUrl = getBaseUrlForBrand(sender.brand)
-    const data = makeReminderData(`${baseUrl}/invoice-action/tok-1`)
-    const html = generateReminderEmailHtml(data)
-    expect(sender.fromAddress).toBeNull()
-    expect(html).toContain('https://app.gnubok.se/invoice-action/tok-1')
-    expect(html).not.toMatch(/accounted/i)
-    expect(html).toMatchSnapshot()
-  })
-
-  it('unverified sender domain: brand link but platform From address', async () => {
-    resolveBrandForCompanyMock.mockResolvedValue(UNVERIFIED)
-    const sender = await getSenderForCompany('company-1')
-    expect(sender.fromAddress).toBeNull()
-    expect(getBaseUrlForBrand(sender.brand)).toBe('https://app.siffra.se')
   })
 })

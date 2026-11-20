@@ -203,9 +203,11 @@ describe('document-immutability.pg: BFL retention bypass guards', () => {
       ),
     ).rejects.toThrow(BFL_RETENTION_ERROR)
 
+    // Production's block_document_deletion() spells it ASCII "Bokforingslagen"
+    // (restated verbatim by 20261012100600); older repo bodies used the ö.
     await expect(
       getPool().query(`DELETE FROM public.document_attachments WHERE id = $1`, [docId]),
-    ).rejects.toThrow(/Bokföringslagen/i)
+    ).rejects.toThrow(/Bokf[öo]ringslagen/i)
   })
 
   it('respects gnubok.allow_delete bypass: delete_last_voucher RPC keeps working', async () => {

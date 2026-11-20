@@ -168,7 +168,7 @@ describe('gnubok_update_customer: country', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/country/i)
+    ).rejects.toMatchObject({ code: 'CUSTOMER_COUNTRY_MISMATCH' })
   })
 
   it('refuses a country change that contradicts the stored VAT prefix', async () => {

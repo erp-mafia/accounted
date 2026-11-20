@@ -27,6 +27,7 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
 })
 
 import { setActiveCompany, CompanyContextError, getCompanyDisplayName, getActiveCompanyId } from '../context'
+import type { ActiveCompanyFacts } from '../active-company'
 
 type CapturedCall = { table: string; method: string; args: unknown[] }
 
@@ -345,6 +346,76 @@ describe('getActiveCompanyId via resolve_active_company RPC', () => {
     )
 
     expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('company-1')
+  })
+})
+
+describe('getActiveCompanyId reports the role the RPC returned', () => {
+  it('fills facts.role from the RPC row, still without any table query', async () => {
+    const { supabase } = buildSupabase(
+      {},
+      { data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false, role: 'viewer' }] },
+    )
+    const facts: ActiveCompanyFacts = {}
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1', facts)).toBe('company-1')
+    expect(facts.role).toBe('viewer')
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('fills facts.role from the GATED rpc too', async () => {
+    multiUserSeam.enforced = true
+    const { supabase } = buildSupabase(
+      {},
+      {
+        data: [
+          { company_id: 'company-1', locale: 'sv', used_fallback: false, has_locked_membership: false, role: 'admin' },
+        ],
+      },
+    )
+    const facts: ActiveCompanyFacts = {}
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1', facts)).toBe('company-1')
+    expect(facts.role).toBe('admin')
+  })
+
+  it('leaves facts.role unset when the database predates the role column (deploy race)', async () => {
+    const { supabase } = buildSupabase(
+      {},
+      { data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }] },
+    )
+    const facts: ActiveCompanyFacts = {}
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1', facts)).toBe('company-1')
+    expect(facts).toEqual({})
+  })
+
+  it('leaves facts.role unset for an unknown role value or when no company resolved', async () => {
+    const unknown = buildSupabase(
+      {},
+      { data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false, role: 'superuser' }] },
+    )
+    const unknownFacts: ActiveCompanyFacts = {}
+    await getActiveCompanyId(unknown.supabase as never, 'user-1', unknownFacts)
+    expect(unknownFacts).toEqual({})
+
+    const none = buildSupabase({}, { data: [{ company_id: null, locale: 'sv', used_fallback: true, role: null }] })
+    const noneFacts: ActiveCompanyFacts = {}
+    expect(await getActiveCompanyId(none.supabase as never, 'user-1', noneFacts)).toBeNull()
+    expect(noneFacts).toEqual({})
+  })
+
+  it('leaves facts.role unset on the query fallback path (service-role client)', async () => {
+    const { supabase } = buildSupabase(
+      {
+        user_preferences: { maybeSingle: { data: null } },
+        company_members: { maybeSingle: { data: { company_id: 'company-1' } } },
+      },
+      { data: [] },
+    )
+    const facts: ActiveCompanyFacts = {}
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1', facts)).toBe('company-1')
+    expect(facts).toEqual({})
   })
 })
 

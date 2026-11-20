@@ -31,33 +31,10 @@ vi.mock('@/lib/vat/vies-client', () => ({
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as bulkCreate } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const USER_ID = 'user-1'
@@ -97,13 +74,13 @@ beforeEach(() => {
 describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
   it('creates two customers and returns a 200 with summary', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         customers: [
           { data: { id: 'c1', name: 'Acme', customer_type: 'swedish_business' }, error: null },
           { data: { id: 'c2', name: 'Beta', customer_type: 'swedish_business' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const res = await bulkCreate(
@@ -122,10 +99,10 @@ describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
 
   it('returns per-item failure for org_number duplicate', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         customers: { data: null, error: { code: '23505', message: 'duplicate' } },
-      }),
+      }).supabase,
     )
 
     const res = await bulkCreate(
@@ -145,9 +122,9 @@ describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
 
   it('rejects more than 50 customers per request', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const customers = Array.from({ length: 51 }, () => SAMPLE())
 
@@ -165,9 +142,9 @@ describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
 
   it('rejects all_or_nothing: true with 501 NOT_IMPLEMENTED', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await bulkCreate(
@@ -184,9 +161,9 @@ describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
   })
 
   it('dry-run returns previews without inserting', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-    })
+    }).supabase
     mockServiceClient.mockReturnValue(supabaseMock)
 
     const res = await bulkCreate(
@@ -209,9 +186,9 @@ describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
 
   it('rejects empty customers array', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await bulkCreate(
@@ -233,7 +210,7 @@ describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
       scopes: ['customers:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await bulkCreate(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/bulk-create`, {

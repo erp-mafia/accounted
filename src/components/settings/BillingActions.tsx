@@ -1,13 +1,13 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
-import { ChevronRight } from 'lucide-react'
+import { useTranslations, useLocale } from 'next-intl'
+import { ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import type { BillingPlan } from '@/lib/stripe/client'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { cn, formatCurrency } from '@/lib/utils'
 import { PLAN_PRICES } from '@/components/settings/billing-plans'
 
 /**
@@ -25,13 +25,17 @@ export function BillingActions({
   configured,
   plan = 'yearly',
   firstChargeDeferred = false,
+  className,
 }: {
   isPaying: boolean
   configured: boolean
   plan?: BillingPlan
   firstChargeDeferred?: boolean
+  /** Width for the checkout button (e.g. full width inside a plan card). */
+  className?: string
 }) {
   const t = useTranslations('settings_billing')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
 
@@ -47,8 +51,7 @@ export function BillingActions({
         url?: string
         error?: string | { message?: string }
       }
-      const errorMessage = typeof data.error === 'string' ? data.error : data.error?.message
-      if (!res.ok || !data.url) throw new Error(errorMessage || t('checkout_failed'))
+      if (!res.ok || !data.url) throw new Error(getUserErrorMessage(data, { locale: errorLocale, fallback: t('checkout_failed') }))
       window.location.href = data.url
     } catch (e) {
       toast({
@@ -62,7 +65,7 @@ export function BillingActions({
 
   if (isPaying) {
     return (
-      <Button variant="outline" size="sm" onClick={() => go('/api/billing/portal')} disabled={loading}>
+      <Button variant="outline" onClick={() => go('/api/billing/portal')} disabled={loading}>
         {t('manage_cta')}
       </Button>
     )
@@ -70,7 +73,7 @@ export function BillingActions({
 
   if (!configured) {
     return (
-      <Button size="lg" disabled className="w-full sm:w-auto">
+      <Button size="lg" disabled className={cn('w-full sm:w-auto', className)}>
         {t('cta_coming_soon')}
       </Button>
     )
@@ -87,10 +90,10 @@ export function BillingActions({
       size="lg"
       onClick={() => go('/api/billing/checkout', { plan })}
       disabled={loading}
-      className="w-full sm:w-auto"
+      className={cn('w-full sm:w-auto', className)}
     >
       {label}
-      {!loading && <ChevronRight className="h-4 w-4" />}
+      {!loading && <ChevronRightIcon className="h-4 w-4" />}
     </Button>
   )
 }

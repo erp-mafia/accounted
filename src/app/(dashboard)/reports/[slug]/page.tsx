@@ -1,7 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { getReport } from '@/lib/reports/catalog'
 import { FocusedReport } from '@/components/reports/FocusedReport'
-import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
+import { getDashboardCompanyId, getDashboardFiscalPeriods } from '../../request-context'
 import type { FiscalPeriod } from '@/types'
 
 /**
@@ -25,17 +25,11 @@ export default async function ReportSlugPage({
     redirect(slug === 'bank-reconciliation' && query.autorun === '1' ? `${report.route}?autorun=1` : report.route)
   }
 
-  const [{ supabase }, companyId] = await Promise.all([
-    getDashboardAuthContext(),
-    getDashboardCompanyId(),
-  ])
+  const companyId = await getDashboardCompanyId()
   const needsFiscalPeriod = report.params !== 'calendar' && report.params !== 'none'
+  // Request-cached: the dashboard layout already read the same list.
   const { data: periods } = companyId && needsFiscalPeriod
-    ? await supabase
-        .from('fiscal_periods')
-        .select('*')
-        .eq('company_id', companyId)
-        .order('period_start', { ascending: false })
+    ? await getDashboardFiscalPeriods()
     : { data: [] }
 
   return (

@@ -13,6 +13,17 @@ GNU Affero General Public License for more details.
 
 ----------------------------------------------------------------------
 
+TRADEMARKS
+
+Additional term under GNU AGPL version 3 section 7(e)
+
+This License does not grant any rights under trademark law to the
+names "Accounted" and "gnubok" or to the Accounted logo, which are
+trademarks of Arcim Technology AB. How you may use them is described
+in TRADEMARK.md.
+
+----------------------------------------------------------------------
+
 EXTENSION EXCEPTION
 
 Additional Permission under GNU AGPL version 3 section 7
@@ -20,9 +31,9 @@ Additional Permission under GNU AGPL version 3 section 7
 As a special exception, the copyright holder of gnubok gives you
 permission to create extensions ("plugins") that interact with gnubok
 solely through the documented Extension API — defined in
-lib/extensions/types.ts (the Extension interface, ExtensionContext,
-and related types), lib/events/types.ts (the event bus), and the
-extension catch-all API route (app/api/extensions/ext/[...path]/route.ts)
+src/lib/extensions/types.ts (the Extension interface, ExtensionContext,
+and related types), src/lib/events/types.ts (the event bus), and the
+extension catch-all API route (src/app/api/extensions/ext/[...path]/route.ts)
 — without those extensions being
 considered derivative works of gnubok under the terms of this License.
 

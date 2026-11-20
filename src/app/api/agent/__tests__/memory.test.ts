@@ -7,6 +7,10 @@ import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => supabase,
+}))
+
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -18,7 +22,8 @@ vi.mock('@/lib/company/context', () => ({
 }))
 
 const requireWriteMock = vi.fn()
-vi.mock('@/lib/auth/require-write', () => ({
+vi.mock('@/lib/auth/require-write', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/require-write')>()),
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
@@ -53,34 +58,37 @@ describe('GET /api/agent/memory', () => {
     expect(status).toBe(400)
   })
 
-  it('lists memory entries', async () => {
-    enqueue({ data: [{ id: 'mem-1', kind: 'fact', content: 'Fakturerar i SEK' }] })
+  it('lists memory entries with who saved them', async () => {
+    enqueue({ data: [{ id: 'mem-1', kind: 'fact', content: 'Fakturerar i SEK', created_by_user_id: 'user-1' }] })
+    enqueue({ data: [{ id: 'user-1', full_name: 'Anna Andersson', deleted_at: null, anonymized_at: null }] })
 
-    const { status, body } = await parseJsonResponse<{ data: unknown[] }>(
+    const { status, body } = await parseJsonResponse<{ data: Array<{ created_by: unknown }> }>(
       await GET(createMockRequest('/api/agent/memory'), routeParams)
     )
 
     expect(status).toBe(200)
     expect(body.data).toHaveLength(1)
+    expect(body.data[0]?.created_by).toEqual({ name: 'Anna Andersson', deleted: false })
   })
 })
 
 describe('POST /api/agent/memory', () => {
   it('rejects a viewer in the target company with 403', async () => {
     // requireWrite passed for the ACTIVE company, but the body targets a
-    // company where the caller is only a viewer — the re-check must refuse.
+    // company where the caller is only a viewer - the re-check must refuse.
     enqueue({ data: { role: 'viewer' } })
 
     const req = createMockRequest('/api/agent/memory', {
       method: 'POST',
       body: { company_id: '7f3e0b1a-9c4d-4a2b-8f6e-1d2c3b4a5e6f', content: 'Ett minne' },
     })
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { code: string } } }>(
       await POST(req, routeParams)
     )
 
     expect(status).toBe(403)
-    expect(body.error.code).toBe('WRITE_PERMISSION_REQUIRED')
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('ROLE_READ_ONLY')
   })
 
   it('rejects an invalid body with 400', async () => {

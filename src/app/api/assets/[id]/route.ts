@@ -1,17 +1,19 @@
 import { NextResponse } from 'next/server'
+import { frameworkOnDate } from '@/lib/company/accounting-framework'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import {
+  AssetComponentsInvalidError,
   getAsset,
   updateAsset,
   deleteNeverPostedAsset,
   defaultAccountsForCategory,
   hasPostedDepreciation,
   assetDeleteBlockReason,
+  planComponentPatch,
 } from '@/lib/bokslut/assets/asset-service'
 import { UpdateAssetSchema } from '@/lib/bokslut/assets/asset-api'
-import { validateComponents } from '@/lib/bokslut/assets/k3-components'
 import {
   findK2ExcludedAccount,
   k2ExcludedAccountMessages,
@@ -47,7 +49,7 @@ export const PATCH = withRouteContext(
   'assets.update',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     const validation = await validateBody(request, UpdateAssetSchema)
     if (!validation.success) return validation.response
 
@@ -56,15 +58,15 @@ export const PATCH = withRouteContext(
     // so we do both the framework check and the sum validation here at
     // route level before delegating to updateAsset().
     if (validation.data.k3_components !== undefined && validation.data.k3_components !== null) {
-      const [{ data: company }, existing] = await Promise.all([
-        supabase
-          .from('companies')
-          .select('accounting_framework')
-          .eq('id', companyId)
-          .single(),
-        getAsset(supabase, companyId, id),
-      ])
-      if (!company || company.accounting_framework !== 'k3') {
+      const existing = await getAsset(supabase, companyId, id)
+      // The framework of the year the asset was acquired in, not the
+      // company's latest: components are K3 only (BFNAR 2016:10 10.2).
+      const framework = await frameworkOnDate(
+        supabase,
+        companyId,
+        validation.data.acquisition_date ?? existing?.acquisition_date,
+      )
+      if (framework !== 'k3') {
         return NextResponse.json(
           {
             error: {
@@ -78,23 +80,25 @@ export const PATCH = withRouteContext(
       if (!existing) {
         return NextResponse.json({ error: { code: 'ASSET_NOT_FOUND' } }, { status: 404 })
       }
-      // Validate against the cost that will be in effect after this PATCH —
-      // a body that changes acquisition_cost and k3_components together must
-      // sum to the NEW cost, not the stored one.
-      const { errors } = validateComponents({
-        acquisition_cost: validation.data.acquisition_cost ?? Number(existing.acquisition_cost),
-        k3_components: validation.data.k3_components,
-      })
-      if (errors.length > 0) {
-        return NextResponse.json(
-          {
-            error: {
-              code: 'INVALID_K3_COMPONENTS',
-              message: errors.join(' '),
+      // The plan updateAsset() writes from, judged on the asset as it will
+      // end up: a body that changes acquisition_cost and k3_components
+      // together must sum to the NEW cost, an existing component is named by
+      // its component_id.
+      try {
+        planComponentPatch(existing, validation.data)
+      } catch (err) {
+        if (err instanceof AssetComponentsInvalidError) {
+          return NextResponse.json(
+            {
+              error: {
+                code: 'INVALID_K3_COMPONENTS',
+                message: err.errors.join(' '),
+              },
             },
-          },
-          { status: 400 },
-        )
+            { status: 400 },
+          )
+        }
+        return errorResponse(err, log, { requestId })
       }
     }
 
@@ -122,15 +126,22 @@ export const PATCH = withRouteContext(
       const [{ data: company }, existing] = await Promise.all([
         supabase
           .from('companies')
-          // entity_type rides along on the same fetch: the rejection wording
-          // must not cite BFNAR 2016:10 at an enskild firma, which prepares no
-          // årsredovisning under K2. See lib/bokslut/assets/k2-account-guard.ts.
-          .select('accounting_framework, entity_type')
+          // The rejection wording must not cite BFNAR 2016:10 at an enskild
+          // firma, which prepares no årsredovisning under K2. See
+          // lib/bokslut/assets/k2-account-guard.ts.
+          .select('entity_type')
           .eq('id', companyId)
           .single(),
         getAsset(supabase, companyId, id),
       ])
-      if (!company || company.accounting_framework !== 'k3') {
+      // The framework of the year the asset was acquired in, not the
+      // company's latest.
+      const framework = await frameworkOnDate(
+        supabase,
+        companyId,
+        validation.data.acquisition_date ?? existing?.acquisition_date,
+      )
+      if (framework !== 'k3') {
         if (!existing) {
           return NextResponse.json({ error: { code: 'ASSET_NOT_FOUND' } }, { status: 404 })
         }
@@ -141,10 +152,7 @@ export const PATCH = withRouteContext(
           validation.data.bas_asset_account === undefined &&
           validation.data.bas_accumulated_account === undefined &&
           validation.data.bas_expense_account === undefined
-        const defaults = defaultAccountsForCategory(
-          finalCategory,
-          company?.accounting_framework,
-        )
+        const defaults = defaultAccountsForCategory(finalCategory, framework)
         const excluded = findK2ExcludedAccount([
           validation.data.bas_asset_account ??
             (categoryDefaultsApply ? defaults.asset : existing.bas_asset_account),
@@ -168,7 +176,7 @@ export const PATCH = withRouteContext(
     }
 
     try {
-      const asset = await updateAsset(supabase, companyId, id, validation.data)
+      const asset = await updateAsset(supabase, companyId, id, validation.data, { userId: user.id })
       return NextResponse.json({ data: asset })
     } catch (err) {
       return errorResponse(err, log, { requestId })

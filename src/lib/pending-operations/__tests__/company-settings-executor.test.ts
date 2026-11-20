@@ -9,6 +9,7 @@ vi.mock('@/lib/cash-accounts/invoice-payee', () => ({
 }))
 
 import { commitPendingOperation } from '../commit'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 
 function makePendingOp(params: Record<string, unknown>): PendingOperation {
   return {
@@ -38,24 +39,30 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+/**
+ * update_company_settings is the settings.update operation's pending type
+ * (src/lib/operations/company-settings.ts): approval runs the operation, which
+ * runs lib/company/settings-service.ts. Rows staged by the old hand-written
+ * tool carry `{ changes: {...} }` and still commit.
+ */
+const OWNER = { data: { role: 'owner' } }
+
 describe('commitPendingOperation: update_company_settings', () => {
-  it('updates only validated settings for the selected company', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-settings-1' } })
+  it('commits a row staged in the legacy { changes } shape', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-settings-1' } }) // CAS claim
+    enqueue({ data: { company_id: 'company-1', entity_type: 'aktiebolag' } }) // stored row
+    enqueue(OWNER) // role check
     enqueue({
       data: {
+        company_id: 'company-1',
         bank_name: 'Testbanken',
-        clearing_number: '1234',
-        account_number: '1234567',
         bankgiro: '5050-1055',
-        plusgiro: null,
-        swish: null,
-        iban: null,
-        bic: null,
         default_our_reference: 'Test Contact',
       },
-    })
-    enqueue({ data: null })
+    }) // update ... returning
+    enqueue({ data: null, count: 5 }) // system deadlines exist: no self-heal
+    enqueue({ data: null }) // finalize
 
     const result = await commitPendingOperation(
       supabase as never,
@@ -76,33 +83,32 @@ describe('commitPendingOperation: update_company_settings', () => {
       bankgiro: '5050-1055',
       contact_person: 'Test Contact',
     })
-    expect(supabase.from).toHaveBeenNthCalledWith(2, 'company_settings')
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({
+      bank_name: 'Testbanken',
+      bankgiro: '5050-1055',
+      default_our_reference: 'Test Contact',
+    })
+    expect(propagateLegacyPayeeWrite).toHaveBeenCalledTimes(1)
   })
 
-  it('updates contact details and invoice email texts', async () => {
+  it('commits the flat operation input: contact details and invoice email texts', async () => {
     const emailTexts = {
       sv: { subject: 'Faktura {fakturanummer}', body: 'Tack for fortroendet.' },
       en: { greeting: 'Hi {förnamn},' },
     }
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-settings-1' } })
+    enqueue({ data: { company_id: 'company-1' } })
+    enqueue(OWNER)
     enqueue({
       data: {
-        bank_name: null,
-        clearing_number: null,
-        account_number: null,
-        bankgiro: null,
-        plusgiro: null,
-        swish: null,
-        iban: null,
-        bic: null,
-        default_our_reference: null,
         email: 'faktura@example.se',
         phone: '08-123 456 78',
         website: 'https://example.se',
         invoice_email_texts: emailTexts,
       },
     })
+    enqueue({ data: null, count: 5 })
     enqueue({ data: null })
 
     const result = await commitPendingOperation(
@@ -110,12 +116,10 @@ describe('commitPendingOperation: update_company_settings', () => {
       'user-1',
       'company-1',
       makePendingOp({
-        changes: {
-          email: 'faktura@example.se',
-          phone: '08-123 456 78',
-          website: 'https://example.se',
-          invoice_email_texts: emailTexts,
-        },
+        email: 'faktura@example.se',
+        phone: '08-123 456 78',
+        website: 'https://example.se',
+        invoice_email_texts: emailTexts,
       }),
     )
 
@@ -123,11 +127,32 @@ describe('commitPendingOperation: update_company_settings', () => {
     expect(result.data).toMatchObject({
       company_id: 'company-1',
       email: 'faktura@example.se',
-      phone: '08-123 456 78',
-      website: 'https://example.se',
       invoice_email_texts: emailTexts,
     })
-    expect(supabase.from).toHaveBeenNthCalledWith(2, 'company_settings')
+    // No payment field in the change: nothing written through to cash accounts.
+    expect(propagateLegacyPayeeWrite).not.toHaveBeenCalled()
+  })
+
+  it('refuses, and keeps the row pending, when the approver is not an owner or admin', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-settings-1' } })
+    enqueue({ data: { company_id: 'company-1' } })
+    enqueue({ data: { role: 'member' } })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ phone: '08-1' }),
+    )
+
+    // A role refusal releases the claim: an owner or admin can still approve it.
+    expect(result.status).toBe('failed')
+    expect(result.code).toBe('FORBIDDEN')
+    expect(result.http_status).toBe(403)
+    expect(result.operation_status).toBe('pending')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
   })
 
   it('rejects an unknown invoice email placeholder at the commit boundary', async () => {

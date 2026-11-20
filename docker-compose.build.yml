@@ -1,9 +1,0 @@
-# Override for building from source instead of pulling from GHCR.
-# Usage: docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
-services:
-  app:
-    image: !reset null
-    build:
-      context: .
-      args:
-        EXTENSIONS_PRESET: self-hosted

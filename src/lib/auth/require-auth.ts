@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
+import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
-import { shouldEnforceMfa } from './mfa'
+import { mfaStepUpApplies } from './mfa'
+import { MFA_ASSURANCE_HEADER, verifyNoVerifiedFactor } from './mfa-assurance'
 import type { JwtPayload, User, SupabaseClient } from '@supabase/supabase-js'
 import { claimsPinned, userFromClaims } from './claims'
 
@@ -15,7 +17,8 @@ type AuthResult =
  * Auth + MFA guard for API routes.
  *
  * Returns the authenticated user and Supabase client, or a JSON error response.
- * When MFA is required (hosted deployment), verifies AAL2 assurance level.
+ * On hosted, a session of a user with a verified factor must be AAL2, whatever
+ * NEXT_PUBLIC_REQUIRE_MFA says (see mfaStepUpApplies in ./mfa).
  *
  * Fast path: getClaims() performs local WebCrypto verification against the
  * shared 10-minute JWKS cache instead of a per-request network getUser()
@@ -72,7 +75,11 @@ export async function requireAuth(): Promise<AuthResult> {
     }
   }
 
-  if (shouldEnforceMfa(user) && !(await sessionIsMfaAssured(supabase, claims))) {
+  // Enrolment is never forced here (the middleware's page branch owns that);
+  // this is the step-up alone: a session below AAL2 of a user who HAS a
+  // verified factor is refused. sessionIsMfaAssured answers true for a user
+  // without one.
+  if (mfaStepUpApplies(user) && !(await sessionIsMfaAssured(supabase, claims))) {
     return {
       user: null,
       supabase,
@@ -87,12 +94,16 @@ export async function requireAuth(): Promise<AuthResult> {
  * Whether the session may pass the MFA gate.
  *
  * An AAL2 session, per the signature-verified claims, passes with no extra
- * round trip. Anything else (AAL1, no `aal` claim, or the getUser fallback
- * path where no verified claims exist) asks the auth server through
- * listFactors() (a getUser() call under the hood) whether a verified factor
- * exists: if one does, the session is stuck below the level it could reach
- * and is refused. A failed or throwing lookup is refused too (fail closed):
- * the alternative lets a transient auth error switch MFA off.
+ * round trip. So does a session the proxy vouched for on this very request:
+ * it read the user's factor list off its server-authenticated getUser() and
+ * signed that there is no verified factor, for this user and session
+ * (lib/auth/mfa-assurance.ts). Anything else (AAL1 without that verdict, no
+ * `aal` claim, or the getUser fallback path where no verified claims exist)
+ * asks the auth server through listFactors() (a getUser() call under the
+ * hood) whether a verified factor exists: if one does, the session is stuck
+ * below the level it could reach and is refused. A failed or throwing lookup
+ * is refused too (fail closed): the alternative lets a transient auth error
+ * switch MFA off.
  *
  * Never `mfa.getAuthenticatorAssuranceLevel()` without a JWT: its `nextLevel`
  * is computed from `session.user.factors`, i.e. from the unsigned
@@ -106,6 +117,7 @@ async function sessionIsMfaAssured(
   claims: JwtPayload | null,
 ): Promise<boolean> {
   if (claims?.aal === 'aal2') return true
+  if (claims && (await proxyVouchedNoVerifiedFactor(claims))) return true
 
   try {
     const { data, error } = await supabase.auth.mfa.listFactors()
@@ -118,6 +130,20 @@ async function sessionIsMfaAssured(
     console.error('requireAuth: listFactors threw; treating session as not MFA-assured', err)
     return false
   }
+}
+
+/** The proxy's signed verdict for these claims' user and session, if any. */
+async function proxyVouchedNoVerifiedFactor(claims: JwtPayload): Promise<boolean> {
+  const sessionId = typeof claims.session_id === 'string' ? claims.session_id : null
+  if (!claims.sub || !sessionId) return false
+  let verdict: string | null
+  try {
+    verdict = (await headers()).get(MFA_ASSURANCE_HEADER)
+  } catch {
+    // Outside a request (a script, a test): there is no verdict.
+    return false
+  }
+  return verifyNoVerifiedFactor(verdict, { userId: claims.sub, sessionId })
 }
 
 type FactorList = ReadonlyArray<{ status: string }> | undefined

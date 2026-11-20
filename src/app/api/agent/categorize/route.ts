@@ -13,7 +13,7 @@ import type { Transaction } from '@/types'
 
 /**
  * POST /api/agent/categorize: a provider-agnostic booking proposal for one
- * transaction — the auto-booking cascade end to end (Tier 1 retrieval → Tier 2
+ * transaction - the auto-booking cascade end to end (Tier 1 retrieval → Tier 2
  * selector), minus the write.
  *
  * It gathers the deterministic candidate accounts (counterparty templates,
@@ -24,7 +24,7 @@ import type { Transaction } from '@/types'
  * once. It never posts anything.
  *
  * Runs on any configured backend (Bedrock or a local model), so it is gated on
- * `configured`, not `assistantAvailable` — same as /api/agent/ask.
+ * `configured`, not `assistantAvailable` - same as /api/agent/ask.
  */
 
 const Schema = z.object({

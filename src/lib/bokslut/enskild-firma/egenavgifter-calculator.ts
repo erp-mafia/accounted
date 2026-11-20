@@ -1,4 +1,4 @@
-import { roundOre } from '@/lib/money'
+import { roundOre, wholeKronaPercentage } from '@/lib/money'
 import type { EfDeclarationItem } from './types'
 
 /** Full egenavgifter rate (born 1959 or later, active business, 7 karensdagar). */
@@ -16,22 +16,22 @@ export const SCHABLONAVDRAG_PASSIVE = 0.20
 export type EgenavgiftCategory = 'full' | 'pensioner' | 'passive'
 
 export interface EgenavgifterInput {
-  /** Överskott före egenavgifter, från NE-bilaga (R41 sum-up basis). */
+  /**
+   * NE R42, överskott före årets avdrag för egenavgifter: R35 - R36 + R37
+   * - R38 - R39 + R40 - R41. The schablonavdrag in R43 is at most 25 % of
+   * "det resultat som näringsverksamheten visar före ruta R43"
+   * (Skatteverket, NE hjälptext R43). The preview computes it.
+   */
   surplusBeforeEgenavgifter: number
   /** Vilken kategori. Defaults to 'full'. */
   category?: EgenavgiftCategory
-  /** Föregående års schablonavdrag: läggs tillbaka i R40. Defaults to 0. */
-  priorYearSchablonavdrag?: number
-  /** Föregående års faktiska egenavgifter: dras av i R41. Defaults to 0. */
-  priorYearActualCharged?: number
 }
 
 export interface EgenavgifterComputation {
   category: EgenavgiftCategory
+  /** NE R42, signed. */
   surplusBeforeEgenavgifter: number
-  priorYearSchablonavdrag: number
-  priorYearActualCharged: number
-  /** R40 + (-R41) net: surplusBeforeEgenavgifter + priorYearSchablonavdrag - priorYearActualCharged. */
+  /** R42 when positive, else 0: what the schablon applies to. */
   netSurplusForSchablon: number
   schablonavdragRate: number
   /** R43: schablonavdrag applied to net surplus. */
@@ -43,14 +43,13 @@ export interface EgenavgifterComputation {
 }
 
 /**
- * Compute the NE-bilaga R40-R43 series for egenavgifter.
+ * NE R43, the year's schablonavdrag for egenavgifter, from R42.
  *
  * NEVER produces a journal entry: egenavgifter for enskild firma are paid
  * personally by the owner via Inkomstdeklaration 1, not by the business.
  */
 export function calculateEgenavgifter(input: EgenavgifterInput): EfDeclarationItem {
   const category = input.category ?? 'full'
-  const r1 = (x: number) => Math.round(x * 100) / 100
 
   const ratesByCategory = {
     full: { schablon: SCHABLONAVDRAG_FULL, avgifter: EGENAVGIFTER_FULL },
@@ -59,16 +58,13 @@ export function calculateEgenavgifter(input: EgenavgifterInput): EfDeclarationIt
   } as const
   const rates = ratesByCategory[category]
 
-  const priorSchablon = input.priorYearSchablonavdrag ?? 0
-  const priorActual = input.priorYearActualCharged ?? 0
-  // roundOre before either use below: this is a sum of doubles, and
-  // Math.floor on one that drifted just under a whole krona takes the
-  // schablonavdrag a krona low (#2597).
-  const netSurplus = roundOre(Math.max(
-    0,
-    input.surplusBeforeEgenavgifter + priorSchablon - priorActual,
-  ))
-  const schablonavdrag = Math.floor(netSurplus * rates.schablon)
+  // roundOre before either use below: a caller's sum of doubles can drift
+  // just under a whole krona and take the schablonavdrag a krona low (#2597).
+  const r42 = roundOre(input.surplusBeforeEgenavgifter)
+  const netSurplus = Math.max(0, r42)
+  // Öre dropped (SFL 22 kap 1 §), computed in integer öre so float noise
+  // cannot lose a krona.
+  const schablonavdrag = wholeKronaPercentage(netSurplus, Math.round(rates.schablon * 100))
   const estimatedEgenavgifter = Math.round(netSurplus * rates.avgifter)
 
   const warnings: string[] = []
@@ -77,15 +73,13 @@ export function calculateEgenavgifter(input: EgenavgifterInput): EfDeclarationIt
       'För aktiv näringsverksamhet med överskott > 40 000 kr ges en automatisk nedsättning av egenavgifterna (7,5 %, max 15 000 kr/år) av Skatteverket.',
     )
   }
-  if (input.surplusBeforeEgenavgifter <= 0) {
+  if (r42 <= 0) {
     warnings.push('Inget överskott att beräkna egenavgifter på.')
   }
 
   const computation: EgenavgifterComputation = {
     category,
-    surplusBeforeEgenavgifter: r1(input.surplusBeforeEgenavgifter),
-    priorYearSchablonavdrag: r1(priorSchablon),
-    priorYearActualCharged: r1(priorActual),
+    surplusBeforeEgenavgifter: r42,
     netSurplusForSchablon: netSurplus,
     schablonavdragRate: rates.schablon,
     schablonavdrag,
@@ -96,7 +90,7 @@ export function calculateEgenavgifter(input: EgenavgifterInput): EfDeclarationIt
   return {
     kind: 'egenavgifter',
     label: 'Egenavgifter: schablonavdrag',
-    description: `Schablonavdrag ${(rates.schablon * 100).toFixed(0)} % av nettoöverskott. Faktiska avgifter beräknas av Skatteverket.`,
+    description: `Schablonavdrag ${Math.round(rates.schablon * 100)} % av överskottet före avdrag för egenavgifter (NE R42). Fylls i i R43. Faktiska avgifter beräknas av Skatteverket.`,
     amount: schablonavdrag,
     ne_ruta: 'R43',
     computation: computation as unknown as Record<string, unknown>,

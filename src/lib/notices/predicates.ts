@@ -39,6 +39,8 @@ export function expiringBankConnectionsFrom(
 /** The skatteverket extension's /status response shape (subset we decide on). */
 export interface SkvStatusLike {
   connected?: boolean
+  /** Reads run on Accounted's ombud grant (lib/skatteverket/ombud-access.ts). */
+  ombud?: boolean
   disabled?: boolean
   needsReconsent?: boolean
   expired?: boolean
@@ -49,10 +51,29 @@ export interface SkvStatusLike {
  * The canonical "Skatteverket needs reconnect" predicate over a fetched
  * /status shape. A connection needs reconnecting when it exists, is not
  * env-disabled, and either was flagged needs_reconsent by a cron/API call or
- * has an expired access token with nothing left to refresh with.
+ * has an expired access token with nothing left to refresh with. Never while
+ * the company's reads run on Accounted's ombud grant: the personal session
+ * then only matters for signing, which asks for BankID on its own.
  */
 export function skvStatusNeedsReconnect(s: SkvStatusLike): boolean {
-  return Boolean(s.connected && !s.disabled && (s.needsReconsent || (s.expired && !s.canRefresh)))
+  return Boolean(
+    s.connected && !s.disabled && !s.ombud && (s.needsReconsent || (s.expired && !s.canRefresh)),
+  )
+}
+
+/**
+ * The one-word state of the Skatteverket connection for a /status shape (the
+ * Kopplingar overview row). "connected" only when the company reads on the
+ * ombud grant or the caller's own session is live (or can still refresh).
+ * A stored but dead session is "reconnect", never "connected": counting the
+ * row alone showed Ansluten for a session expired a week earlier while the
+ * agent's tool rightly said needs_reconsent (crm#1622).
+ */
+export function skvConnectionState(s: SkvStatusLike): 'connected' | 'reconnect' | 'off' {
+  if (s.ombud) return 'connected'
+  if (!s.connected) return 'off'
+  if (s.needsReconsent || (s.expired && !s.canRefresh)) return 'reconnect'
+  return 'connected'
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { findMatchSuggestionsBulk } from './skattekonto-match'
 
 const log = createLogger('skattekonto-proposals')
@@ -36,6 +37,7 @@ interface OpenRow {
 export async function refreshSkattekontoProposals(
   supabase: SupabaseClient,
   companyId: string,
+  account?: SkattekontoLedgerAccount,
 ): Promise<RefreshProposalsResult> {
   const zero: RefreshProposalsResult = { considered: 0, proposed: 0, cleared: 0, unchanged: 0 }
   let rows: OpenRow[]
@@ -75,6 +77,7 @@ export async function refreshSkattekontoProposals(
       belopp_skatteverket: Number(r.belopp_skatteverket),
       journal_entry_id: r.journal_entry_id,
     })),
+    account,
   )
 
   const now = new Date().toISOString()

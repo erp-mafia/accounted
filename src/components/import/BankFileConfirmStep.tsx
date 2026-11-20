@@ -7,21 +7,24 @@ import { useAccounts } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
-  ArrowLeft,
-  Loader2,
-  Play,
-  FileText,
-  Link2,
-  Calendar,
-  Landmark,
-  AlertTriangle,
-} from 'lucide-react'
+  ArrowLeftIcon,
+  BuildingLibraryIcon,
+  CalendarIcon,
+  CreditCardIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+  LinkIcon,
+  PlayIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
 import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
+import { fileAccountLabel, type FileAccountMatch } from '@/lib/cash-accounts/file-account'
 
 interface BankAccount {
   account_number: string
@@ -31,6 +34,18 @@ interface BankAccount {
 interface BankFileConfirmStepProps {
   parseResult: BankFileParseResult
   duplicateInfo?: BankFileDuplicateInfo | null
+  /**
+   * The cash account the file's own bank account already is (crm#1204): the
+   * only ledgers offered, since execute refuses any other.
+   */
+  accountMatch?: FileAccountMatch | null
+  /**
+   * The company card the statement goes to (chosen before the preview, which
+   * set the sign): the only account, so no bank account is offered.
+   */
+  card?: { name: string; ledger_account: string } | null
+  /** Why the last import attempt failed, if it did. */
+  error?: string | null
   onExecute: (options: { skip_duplicates: boolean; auto_categorize: boolean; settlement_account?: string }) => void
   onBack: () => void
   isLoading: boolean
@@ -39,6 +54,9 @@ interface BankFileConfirmStepProps {
 export default function BankFileConfirmStep({
   parseResult,
   duplicateInfo,
+  accountMatch,
+  card,
+  error,
   onExecute,
   onBack,
   isLoading,
@@ -55,20 +73,28 @@ export default function BankFileConfirmStep({
   // automatically rather than promising an exact final number.
   const duplicateCount = Math.min(Math.max(duplicateInfo?.duplicate_count ?? 0, 0), stats.parsed_rows)
 
-  const [selectedAccount, setSelectedAccount] = useState('1930')
+  const [selectedAccount, setSelectedAccount] = useState(card?.ledger_account ?? accountMatch?.ledger_account ?? '1930')
   // Active 19xx accounts from the session-cached chart (lib/reference-data):
-  // the account select is populated on the first paint.
+  // the account select is populated on the first paint. A file whose bank
+  // account is already a cash account offers only that account's ledger(s).
   const { accounts } = useAccounts()
-  const bankAccounts = useMemo<BankAccount[]>(
-    () =>
-      accounts
-        .filter((a) => a.account_number >= '1900' && a.account_number <= '1999')
-        .sort((a, b) => a.account_number.localeCompare(b.account_number))
-        .map((a) => ({ account_number: a.account_number, account_name: a.account_name })),
-    [accounts],
-  )
-  // Default to 1930 if available, otherwise the first account (once).
-  const defaultedRef = useRef(false)
+  const bankAccounts = useMemo<BankAccount[]>(() => {
+    const chart = accounts
+      .filter((a) => a.account_number >= '1900' && a.account_number <= '1999')
+      .sort((a, b) => a.account_number.localeCompare(b.account_number))
+      .map((a) => ({ account_number: a.account_number, account_name: a.account_name }))
+    if (!accountMatch) return chart
+    return accountMatch.ledger_accounts.map((ledger) => ({
+      account_number: ledger,
+      account_name: chart.find((a) => a.account_number === ledger)?.account_name ?? '',
+    }))
+  }, [accounts, accountMatch])
+  const matchedAccount = accountMatch
+    ? bankAccounts.find((a) => a.account_number === selectedAccount) ?? bankAccounts[0]
+    : null
+  // Default to 1930 if available, otherwise the first account (once). A
+  // matched file starts on its own account instead.
+  const defaultedRef = useRef(Boolean(accountMatch) || Boolean(card))
   useEffect(() => {
     if (defaultedRef.current || bankAccounts.length === 0) return
     defaultedRef.current = true
@@ -80,7 +106,7 @@ export default function BankFileConfirmStep({
     return (
       <div className="flex flex-col items-center justify-center py-24 space-y-6">
         <div className="relative">
-          <Loader2 className="h-12 w-12 animate-spin text-primary" />
+          <SpinnerIcon className="h-12 w-12 animate-spin text-primary" />
         </div>
         <div className="text-center space-y-2">
           <p className="text-lg font-medium">Importerar transaktioner...</p>
@@ -88,9 +114,7 @@ export default function BankFileConfirmStep({
             {stats.parsed_rows} transaktioner bearbetas
           </p>
         </div>
-        <div className="w-48 h-1 bg-muted rounded-full overflow-hidden">
-          <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '60%' }} />
-        </div>
+        <Skeleton className="h-1 w-48 rounded-full" />
       </div>
     )
   }
@@ -110,7 +134,7 @@ export default function BankFileConfirmStep({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <FileText className="h-4 w-4" />
+                <DocumentTextIcon className="h-4 w-4" />
                 <span className="text-xs">Transaktioner</span>
               </div>
               <p className="text-xl font-display tabular-nums">{stats.parsed_rows}</p>
@@ -123,7 +147,7 @@ export default function BankFileConfirmStep({
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <Calendar className="h-4 w-4" />
+                <CalendarIcon className="h-4 w-4" />
                 <span className="text-xs">Period</span>
               </div>
               <p className="text-sm font-medium">
@@ -133,7 +157,7 @@ export default function BankFileConfirmStep({
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-xs">Inkomster</span>
+                <span className="text-xs">{card ? t('import_card_credits') : 'Inkomster'}</span>
               </div>
               {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
                 <p key={row.currency} className="text-xl font-display tabular-nums">
@@ -144,7 +168,7 @@ export default function BankFileConfirmStep({
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-xs">Utgifter</span>
+                <span className="text-xs">{card ? t('import_card_charges') : 'Utgifter'}</span>
               </div>
               {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
                 <p key={row.currency} className="text-xl font-display tabular-nums">
@@ -154,11 +178,19 @@ export default function BankFileConfirmStep({
             </div>
           </div>
 
+          {/* A card statement goes to its card, chosen before the preview. */}
+          {card && (
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <CreditCardIcon className="h-4 w-4 text-muted-foreground" />
+              {t('import_card_target', { card: card.name, ledger: card.ledger_account })}
+            </div>
+          )}
+
           {/* Bank account selector */}
-          {bankAccounts.length > 1 && (
+          {!card && bankAccounts.length > 1 && (
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
-                <Landmark className="h-4 w-4 text-muted-foreground" />
+                <BuildingLibraryIcon className="h-4 w-4 text-muted-foreground" />
                 Bankkonto
               </Label>
               <Select value={selectedAccount} onValueChange={setSelectedAccount}>
@@ -181,10 +213,30 @@ export default function BankFileConfirmStep({
             </div>
           )}
 
+          {/* The file's own bank account is already a cash account here */}
+          {!card && accountMatch && parseResult.account && matchedAccount && (
+            <div className="space-y-1">
+              {bankAccounts.length <= 1 && (
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <BuildingLibraryIcon className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-mono">{matchedAccount.account_number}</span>
+                  {matchedAccount.account_name}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {t('import_file_account_matched', {
+                  account: fileAccountLabel(parseResult.account),
+                  ledger: matchedAccount.account_number,
+                })}
+              </p>
+              <p className="text-xs text-muted-foreground">{t('import_file_account_change_hint')}</p>
+            </div>
+          )}
+
           {/* Additional info */}
           {refsCount > 0 && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Link2 className="h-3 w-3" />
+              <LinkIcon className="h-3 w-3" />
               {refsCount} med OCR/referens
             </div>
           )}
@@ -203,32 +255,37 @@ export default function BankFileConfirmStep({
         ]}
       />
 
+      {error && (
+        <div className="bg-destructive/8 p-4 rounded-lg flex gap-3">
+          <ExclamationCircleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-muted-foreground">{error}</p>
+        </div>
+      )}
+
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack} disabled={isLoading}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+        <Button variant="outline" onClick={onBack} disabled={isLoading}>
+          <ArrowLeftIcon className="h-4 w-4" />
           Tillbaka
         </Button>
         <Button
-          className="min-h-11"
           onClick={() => onExecute({
             skip_duplicates: true,
             auto_categorize: false,
             // Always sent, 1930 included: ingest binds the rows to the account
             // named here, and an omitted default imported every row unbound.
-            settlement_account: selectedAccount,
+            settlement_account: card ? card.ledger_account : selectedAccount,
           })}
-          disabled={isLoading}
+          loading={isLoading}
         >
           {isLoading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Importerar...
-            </>
+            'Importerar...'
           ) : (
             <>
-              <Play className="mr-2 h-4 w-4" />
-              Importera {stats.parsed_rows - duplicateCount} transaktioner
+              <PlayIcon className="h-4 w-4" />
+              {card
+                ? t('import_card_submit', { count: stats.parsed_rows - duplicateCount, card: card.name, ledger: card.ledger_account })
+                : <>Importera {stats.parsed_rows - duplicateCount} transaktioner</>}
             </>
           )}
         </Button>

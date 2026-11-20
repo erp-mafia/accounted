@@ -19,6 +19,7 @@ import {
   type ObservabilityContext,
   type ObservabilityLevel,
 } from '../observability/sink'
+import { createCronRequest } from '@/tests/helpers'
 
 interface Captured {
   kind: 'exception' | 'message'
@@ -206,15 +207,11 @@ describe('reportCronFailure', () => {
 })
 
 describe('verifyCronSecret reporting', () => {
-  function cronRequest(auth?: string): Request {
-    return new Request('http://localhost/api/invoices/recurring/cron', {
-      headers: auth ? { authorization: auth } : {},
-    })
-  }
+  const CRON_PATH = '/api/invoices/recurring/cron'
 
   it('reports a missing CRON_SECRET, the config error that silently kills every job', () => {
     vi.stubEnv('CRON_SECRET', '')
-    const result = verifyCronSecret(cronRequest('Bearer whatever'))
+    const result = verifyCronSecret(createCronRequest(CRON_PATH, 'Bearer whatever'))
 
     expect(result?.status).toBe(401)
     expect(events).toHaveLength(1)
@@ -230,7 +227,7 @@ describe('verifyCronSecret reporting', () => {
 
   it('reports a token mismatch, i.e. a rotated secret the scheduler still has', () => {
     vi.stubEnv('CRON_SECRET', 'correct-secret')
-    const result = verifyCronSecret(cronRequest('Bearer stale-secret'))
+    const result = verifyCronSecret(createCronRequest(CRON_PATH, 'Bearer stale-secret'))
 
     expect(result?.status).toBe(401)
     expect(events[0].context.reason).toBe('token_mismatch')
@@ -238,34 +235,34 @@ describe('verifyCronSecret reporting', () => {
 
   it('reports a missing authorization header', () => {
     vi.stubEnv('CRON_SECRET', 'correct-secret')
-    verifyCronSecret(cronRequest())
+    verifyCronSecret(createCronRequest(CRON_PATH))
     expect(events[0].context.reason).toBe('missing_authorization')
   })
 
   it('uses an explicit operation name when one is given', () => {
     vi.stubEnv('CRON_SECRET', 'correct-secret')
-    verifyCronSecret(cronRequest('Bearer nope'), { operation: 'cron.invoice-reminders' })
+    verifyCronSecret(createCronRequest(CRON_PATH, 'Bearer nope'), { operation: 'cron.invoice-reminders' })
     expect(events[0].context.operation).toBe('cron.invoice-reminders')
   })
 
   it('reports nothing on a successful auth, and clears the streak', () => {
     vi.stubEnv('CRON_SECRET', 'correct-secret')
-    verifyCronSecret(cronRequest('Bearer wrong'))
+    verifyCronSecret(createCronRequest(CRON_PATH, 'Bearer wrong'))
     expect(events).toHaveLength(1)
 
-    expect(verifyCronSecret(cronRequest('Bearer correct-secret'))).toBeNull()
+    expect(verifyCronSecret(createCronRequest(CRON_PATH, 'Bearer correct-secret'))).toBeNull()
     expect(events).toHaveLength(1)
 
     // Streak was cleared, so the next failure reports immediately rather than
     // being swallowed by the previous report's throttle window.
-    verifyCronSecret(cronRequest('Bearer wrong'))
+    verifyCronSecret(createCronRequest(CRON_PATH, 'Bearer wrong'))
     expect(events).toHaveLength(2)
     expect(events[1].context.consecutiveFailures).toBe(1)
   })
 
   it('can be told not to report', () => {
     vi.stubEnv('CRON_SECRET', 'correct-secret')
-    verifyCronSecret(cronRequest('Bearer wrong'), { report: false })
+    verifyCronSecret(createCronRequest(CRON_PATH, 'Bearer wrong'), { report: false })
     expect(events).toHaveLength(0)
   })
 })

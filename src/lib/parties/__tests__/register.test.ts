@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { defaultRoles, getDossier } from '../register'
+import { defaultRoles, getDossier, periodStart } from '../register'
 import type { LedgerStats } from '../register'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
@@ -81,5 +81,24 @@ describe('defaultRoles', () => {
     expect(defaultRoles(stats({ dominantAccount: '3011' }))).toEqual(['customer'])
     expect(defaultRoles(stats({ dominantAccount: '6212' }))).toEqual(['supplier'])
     expect(defaultRoles(null)).toEqual(['supplier'])
+  })
+})
+
+/*
+ * accounted#18: the register's 12-month period (and the counterpart list,
+ * which reads the same bound) starts twelve months before the Swedish
+ * calendar day. 23:30 UTC is already the next day in Stockholm, in summer
+ * (UTC+2) and in winter (UTC+1).
+ */
+describe('periodStart', () => {
+  it.each([
+    ['summer', '2026-07-01T23:30:00Z', '2025-07-02'],
+    ['winter', '2026-01-15T23:30:00Z', '2025-01-16'],
+  ])('%s: at %s the 12-month period starts %s', (_season, instant, from) => {
+    expect(periodStart('12m', new Date(instant))).toBe(from)
+  })
+
+  it('has no start for all time', () => {
+    expect(periodStart('all', new Date('2026-07-01T23:30:00Z'))).toBeNull()
   })
 })

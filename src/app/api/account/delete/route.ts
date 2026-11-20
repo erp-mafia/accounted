@@ -1,15 +1,14 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { getMailSearchService, type PreparedGrantRevocation } from '@/lib/mail-search/service'
+import { deletePostHogPerson } from '@/lib/analytics/delete-person'
 
 const log = createLogger('api/account/delete')
-
-ensureInitialized()
 
 const DeleteAccountSchema = z.object({
   confirm_email: z.string().email(),
@@ -52,6 +51,17 @@ export async function POST(request: Request) {
     )
   }
 
+  // Mailbox grants the person connected, read while their tokens still
+  // exist: the RPC below shreds them, which ends our copy but not the grant
+  // at Google. Revoked only once the erasure has succeeded; a refusal drops
+  // them untouched. A failed read never blocks the erasure itself.
+  let mailGrants: PreparedGrantRevocation | null = null
+  try {
+    mailGrants = (await (await getMailSearchService()).prepareGrantRevocation?.(user.id)) ?? null
+  } catch (err) {
+    log.error('could not read mailbox grants before erasure', { userId: user.id, err })
+  }
+
   // Anonymize in the DB. Runs as SECURITY DEFINER and checks auth.uid()
   // internally, so we don't need service role here.
   const { error: rpcError } = await supabase.rpc('anonymize_user_account', {
@@ -92,6 +102,19 @@ export async function POST(request: Request) {
     )
   }
 
+  if (mailGrants) {
+    try {
+      await mailGrants.revoke()
+    } catch (err) {
+      log.error('mailbox grants not revoked after erasure', { userId: user.id, err })
+    }
+  }
+
+  // The person's analytics at PostHog (profile, events, session recordings).
+  // Best-effort and never blocking: it logs and moves on when PostHog is not
+  // configured for deletion or does not answer.
+  await deletePostHogPerson(user.id)
+
   // Ban the tombstone row ~100 years. The RPC has already removed every way
   // to sign in (email, identities, sessions, refresh tokens, MFA factors), so
   // the ban is defense in depth. The DB function can't set it: bans are
@@ -99,7 +122,7 @@ export async function POST(request: Request) {
   //
   // Nothing else on the auth row is written here. GoTrue's admin update
   // MERGES metadata maps, so an updateUserById(..., { user_metadata: {} })
-  // wipe is a silent no-op (found on prod 2026-07-24), and
+  // wipe is a silent no-op (seen 2026-07-24), and
   // auth.admin.signOut() takes the user's JWT, not a user id, so the former
   // signOut(user.id, 'global') call could not end sessions. Both jobs live in
   // the RPC.

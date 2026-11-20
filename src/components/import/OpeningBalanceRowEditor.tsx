@@ -1,13 +1,17 @@
 'use client'
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { openingBalanceAmountText, openingBalanceDraftAmount } from '@/lib/import/opening-balance/amount-draft'
 import Fuse, { type IFuseOptions } from 'fuse.js'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Plus, Trash2, AlertTriangle, Scale } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
+import { ExclamationTriangleIcon, PlusIcon, ScaleIcon, TrashIcon } from '@/components/icons'
+import { cn, formatAmount } from '@/lib/utils'
 import { getBasLoaded } from '@/lib/bookkeeping/bas-lazy'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
@@ -70,6 +74,8 @@ function getBalanceFuse(): Fuse<BASReferenceAccount> | null {
   return balanceFuseInstance
 }
 
+type AmountField = 'debit_amount' | 'credit_amount'
+
 let idCounter = 0
 function generateId() {
   return `row_${++idCounter}_${Date.now()}`
@@ -125,6 +131,8 @@ export default function OpeningBalanceRowEditor({
   const [activeAutocomplete, setActiveAutocomplete] = useState<string | null>(null)
   const [autocompleteQuery, setAutocompleteQuery] = useState('')
   const autocompleteRef = useRef<HTMLDivElement>(null)
+  const [amountDraft, setAmountDraft] = useState<{ rowId: string; field: AmountField; text: string } | null>(null)
+  const tCommon = useTranslations('common')
 
   // Hold onChange in a ref so an unstable (inline) callback identity can't
   // retrigger the notifying effect below. Synced after each commit rather than
@@ -135,14 +143,8 @@ export default function OpeningBalanceRowEditor({
   })
 
   const totals = useMemo(() => {
-    let debit = 0
-    let credit = 0
-    for (const row of rows) {
-      debit = Math.round((debit + row.debit_amount) * 100) / 100
-      credit = Math.round((credit + row.credit_amount) * 100) / 100
-    }
-    const diff = Math.round((debit - credit) * 100) / 100
-    return { debit, credit, diff, isBalanced: Math.abs(diff) < 0.01 }
+    const { totalDebit: debit, totalCredit: credit, difference: diff } = lineBalance(rows)
+    return { debit, credit, diff, isBalanced: diff === 0 }
   }, [rows])
 
   const hasErrors = useMemo(() => {
@@ -244,12 +246,34 @@ export default function OpeningBalanceRowEditor({
     setRows((prev) => [...prev, adjustmentRow])
   }, [totals])
 
+  // The field being typed in shows the typed text untouched; the row carries
+  // the amount parsed from it. Writing the parsed number back as the text ate
+  // a trailing decimal mark and a leading zero on every keystroke (crm#1836).
+  const amountInput = (row: EditableRow, field: AmountField, label: string) => {
+    const typing = amountDraft?.rowId === row.id && amountDraft.field === field
+    return (
+      <Input
+        inputMode="decimal"
+        aria-label={label}
+        value={typing ? amountDraft.text : openingBalanceAmountText(row[field])}
+        onChange={(e) => {
+          const text = e.target.value
+          setAmountDraft({ rowId: row.id, field, text })
+          updateRow(row.id, { [field]: openingBalanceDraftAmount(text) })
+        }}
+        onBlur={() => setAmountDraft(null)}
+        placeholder="0,00"
+        className="h-8 text-right tabular-nums w-28"
+      />
+    )
+  }
+
   return (
     <div className="space-y-4">
       {/* Table */}
-      <div className="overflow-x-auto rounded-lg border">
+      <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+          <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b">
               <th className="px-3 py-2 text-left w-28">Konto</th>
               <th className="px-3 py-2 text-left">Kontonamn</th>
@@ -292,12 +316,16 @@ export default function OpeningBalanceRowEditor({
                   {activeAutocomplete === row.id && autocompleteResults.length > 0 && (
                     <div
                       ref={autocompleteRef}
-                      className="absolute z-50 top-full left-3 mt-1 w-72 max-h-48 overflow-y-auto rounded-lg border bg-popover shadow-md"
+                      className={cn(
+                        'absolute z-50 top-full left-3 mt-1 w-72 max-h-48 overflow-y-auto',
+                        POPOVER_SURFACE_CLASS,
+                        POPOVER_ENTER_CLASS,
+                      )}
                     >
                       {autocompleteResults.map((item) => (
                         <button
                           key={item.account_number}
-                          className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm hover:bg-accent transition-colors"
+                          className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm hover:bg-secondary/60 transition-colors"
                           onMouseDown={(e) => {
                             e.preventDefault()
                             selectAutocompleteItem(row.id, item)
@@ -320,49 +348,21 @@ export default function OpeningBalanceRowEditor({
                         className="text-destructive shrink-0"
                         title={row.validation_errors.join(', ')}
                       >
-                        <AlertTriangle className="h-3.5 w-3.5" />
+                        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                       </span>
                     )}
                   </div>
                 </td>
-                <td className="px-3 py-1.5">
-                  <Input
-                    type="number"
-                    value={row.debit_amount || ''}
-                    onChange={(e) =>
-                      updateRow(row.id, {
-                        debit_amount: Math.round(parseFloat(e.target.value || '0') * 100) / 100,
-                      })
-                    }
-                    placeholder="0,00"
-                    className="h-8 text-right tabular-nums w-28"
-                    min={0}
-                    step={0.01}
-                  />
-                </td>
-                <td className="px-3 py-1.5">
-                  <Input
-                    type="number"
-                    value={row.credit_amount || ''}
-                    onChange={(e) =>
-                      updateRow(row.id, {
-                        credit_amount: Math.round(parseFloat(e.target.value || '0') * 100) / 100,
-                      })
-                    }
-                    placeholder="0,00"
-                    className="h-8 text-right tabular-nums w-28"
-                    min={0}
-                    step={0.01}
-                  />
-                </td>
+                <td className="px-3 py-1.5">{amountInput(row, 'debit_amount', 'Debet')}</td>
+                <td className="px-3 py-1.5">{amountInput(row, 'credit_amount', 'Kredit')}</td>
                 <td className="px-3 py-1.5">
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7"
                     onClick={() => deleteRow(row.id)}
+                    aria-label={tCommon('delete')}
                   >
-                    <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                    <TrashIcon className="h-3.5 w-3.5 text-muted-foreground" />
                   </Button>
                 </td>
               </tr>
@@ -408,15 +408,15 @@ export default function OpeningBalanceRowEditor({
 
       {/* Actions row */}
       <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" onClick={addRow}>
-          <Plus className="h-3.5 w-3.5 mr-1.5" />
+        <Button variant="outline" onClick={addRow}>
+          <PlusIcon className="h-3.5 w-3.5" />
           Lägg till rad
         </Button>
         {!totals.isBalanced && Math.abs(totals.diff) <= 1 && Math.abs(totals.diff) >= 0.01 && (
-          <Button variant="outline" size="sm" onClick={handleAutoBalance}>
-            <Scale className="h-3.5 w-3.5 mr-1.5" />
+          <Button variant="outline" onClick={handleAutoBalance}>
+            <ScaleIcon className="h-3.5 w-3.5" />
             Avrunda ({totals.diff > 0 ? '+' : ''}
-            {totals.diff.toFixed(2)} till 2099)
+            {formatAmount(totals.diff)} till 2099)
           </Button>
         )}
       </div>

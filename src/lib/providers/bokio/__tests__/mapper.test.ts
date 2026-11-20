@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bokioUnit,
   isBokioCreditNotePayload,
   mapBokioToCompanyInformation,
   mapBokioToCreditNote,
@@ -103,6 +104,27 @@ describe('mapBokioToSupplierInvoice payment state', () => {
   });
 });
 
+describe('mapBokioToSupplierInvoice invoice number', () => {
+  const base = {
+    id: '6f6b2f17-3c4a-4a69-9f2d-3f5d7e1b8c90',
+    invoiceDate: '2023-10-01',
+    currency: 'SEK',
+    totalAmount: 1000,
+    remainingAmount: 0,
+    supplierRef: { id: 'sup-1', name: 'Leverantör AB' },
+  };
+
+  it('leaves a missing number empty instead of substituting the Bokio record id', () => {
+    expect(mapBokioToSupplierInvoice({ ...base, invoiceNumber: null }).invoiceNumber).toBe('');
+    expect(mapBokioToSupplierInvoice({ ...base }).invoiceNumber).toBe('');
+  });
+
+  it('keeps the supplier number, trimmed, and stringifies a numeric one', () => {
+    expect(mapBokioToSupplierInvoice({ ...base, invoiceNumber: '  F-77 ' }).invoiceNumber).toBe('F-77');
+    expect(mapBokioToSupplierInvoice({ ...base, invoiceNumber: 4711 }).invoiceNumber).toBe('4711');
+  });
+});
+
 /**
  * Shaped like `creditNoteResponseWithDiscount` in Bokio's published
  * company-api spec (github.com/bokio/bokio-api, branch v1,
@@ -154,7 +176,7 @@ describe('mapBokioToCreditNote', () => {
     expect(result.taxTotal?.taxAmount.value).toBe(1275);
     expect(result.legalMonetaryTotal.lineExtensionAmount?.value).toBe(5100);
     expect(result.lines).toHaveLength(2);
-    expect(result.lines[1]).toMatchObject({ quantity: 10, unitCode: 'hour', taxPercent: 25 });
+    expect(result.lines[1]).toMatchObject({ quantity: 10, unitCode: 'tim', taxPercent: 25, lineType: 'product' });
     expect(result.lines[1].lineExtensionAmount.value).toBe(5000);
   });
 
@@ -170,8 +192,9 @@ describe('mapBokioToCreditNote', () => {
     expect(result.status).toBe('draft');
     expect(result.invoiceTypeCode).toBe('381');
     expect(result.creditedInvoiceRef).toBeUndefined();
-    // Same fallback as an unnumbered draft invoice: the id stands in.
-    expect(result.invoiceNumber).toBe('b529df79-eb7f-5ef0-a8dc-c2b71f953554');
+    // Bokio numbers a credit note when it is published: a draft has no
+    // number, and Bokio's record id is not one (crm#1084).
+    expect(result.invoiceNumber).toBe('');
   });
 
   it('is reached through the sales mapper, so a hydrated detail form keeps its type code', () => {
@@ -241,5 +264,210 @@ describe('mapBokioToSalesInvoice status', () => {
     expect(result.status).toBe('sent');
     expect(result.paymentStatus.paid).toBe(false);
     expect(result.paymentStatus.balance.value).toBe(750);
+  });
+});
+
+/**
+ * A Bokio /invoices row in the shape the company-api spec documents
+ * (docs.bokio.se/reference/get-invoices-invoiceid): lineItems is a oneOf of
+ * salesInvoiceItem and descriptionOnlyInvoiceItem, each line an int64 id, a
+ * sales line optionally made from an item (itemRef), and the description
+ * line that explains it right after it (crm#1084).
+ */
+const BOKIO_INVOICE_WITH_TEXT_ROWS = {
+  id: '8f2c1d3e-0b4a-4c5d-9e6f-7a8b9c0d1e2f',
+  invoiceNumber: '1',
+  status: 'paid',
+  invoiceDate: '2025-04-01',
+  dueDate: '2025-05-01',
+  currency: 'EUR',
+  currencyRate: 10.85,
+  totalAmount: 1153,
+  totalTax: 0,
+  paidAmount: 1153,
+  customerRef: { id: '55c899c5-82b2-47fa-9c51-e35fc9b26443', name: 'customer 1' },
+  lineItems: [
+    {
+      id: 101, itemRef: { id: '835ba700-b306-4bd9-8447-59207b6b0002', description: 'Consultancy' },
+      description: 'Consultancy services', itemType: 'salesItem', productType: 'services',
+      unitType: 'month', quantity: 0.5, unitPrice: 2000, taxRate: 0,
+    },
+    {
+      id: 102, description: 'Laptop', itemType: 'salesItem', productType: 'goods',
+      unitType: 'piece', quantity: 1, unitPrice: 100, taxRate: 0,
+    },
+    { id: 103, description: 'SEK 1085 excl VAT at the ECB rate', itemType: 'descriptionOnlyItem' },
+    {
+      id: 104, description: 'Train', itemType: 'salesItem', productType: 'services',
+      unitType: 'unspecified', quantity: 1, unitPrice: 50, taxRate: 0,
+    },
+    { id: 105, description: 'SEK 542.50 excl VAT at the ECB rate', itemType: 'descriptionOnlyItem' },
+    {
+      id: 106, description: 'Mileage', itemType: 'salesItem', productType: 'services',
+      unitType: 'mile', quantity: 2, unitPrice: 1.5, taxRate: 0,
+    },
+  ],
+};
+
+describe('mapBokioToSalesInvoice line items', () => {
+  it('keeps Bokio\'s line order and takes the row kind from itemType', () => {
+    const result = mapBokioToSalesInvoice(BOKIO_INVOICE_WITH_TEXT_ROWS);
+
+    expect(result.lines.map((line) => line.id)).toEqual(['101', '102', '103', '104', '105', '106']);
+    expect(result.lines.map((line) => line.lineType)).toEqual(['product', 'product', 'text', 'product', 'text', 'product']);
+    expect(result.lines[2]).toMatchObject({ description: 'SEK 1085 excl VAT at the ECB rate', quantity: undefined });
+    expect(result.lines[2].lineExtensionAmount.value).toBe(0);
+  });
+
+  it('maps unitType to Accounted units, and unspecified to no unit', () => {
+    const result = mapBokioToSalesInvoice(BOKIO_INVOICE_WITH_TEXT_ROWS);
+
+    expect(result.lines.map((line) => line.unitCode)).toEqual(['månad', 'st', undefined, '', undefined, 'mil']);
+  });
+
+  // crm#1190: the list endpoint served unarranged invoices with their lines
+  // in strictly descending id at import time, and in ascending id (the PDF's
+  // order) a week later. Both readings must import in the printed order.
+  it('turns a strictly descending id sequence back into the printed order', () => {
+    const served = { ...BOKIO_INVOICE_WITH_TEXT_ROWS, lineItems: [...BOKIO_INVOICE_WITH_TEXT_ROWS.lineItems].reverse() };
+    const result = mapBokioToSalesInvoice(served);
+
+    expect(result.lines.map((line) => line.id)).toEqual(['101', '102', '103', '104', '105', '106']);
+    expect(result.lines.map((line) => line.lineType)).toEqual(['product', 'product', 'text', 'product', 'text', 'product']);
+    // The raw payload stays as Bokio served it.
+    expect((result._raw?.['lineItems'] as { id: number }[]).map((line) => line.id)).toEqual([106, 105, 104, 103, 102, 101]);
+  });
+
+  it('turns round a two-line invoice served text first', () => {
+    const [sale, , text] = BOKIO_INVOICE_WITH_TEXT_ROWS.lineItems;
+    const result = mapBokioToSalesInvoice({ ...BOKIO_INVOICE_WITH_TEXT_ROWS, lineItems: [text, sale] });
+
+    expect(result.lines.map((line) => line.id)).toEqual(['101', '103']);
+  });
+
+  it('keeps an order the user arranged in Bokio, where the first line was added last', () => {
+    const [first, ...rest] = BOKIO_INVOICE_WITH_TEXT_ROWS.lineItems;
+    const arranged = [{ ...first, id: 107 }, ...rest];
+    const result = mapBokioToSalesInvoice({ ...BOKIO_INVOICE_WITH_TEXT_ROWS, lineItems: arranged });
+
+    expect(result.lines.map((line) => line.id)).toEqual(['107', '102', '103', '104', '105', '106']);
+  });
+
+  it('keeps the served order when a line has no numeric id', () => {
+    const [a, b, c] = BOKIO_INVOICE_WITH_TEXT_ROWS.lineItems;
+    const result = mapBokioToSalesInvoice({
+      ...BOKIO_INVOICE_WITH_TEXT_ROWS,
+      lineItems: [{ ...c, id: 'x3' }, { ...b, id: 2 }, { ...a, id: 1 }],
+    });
+
+    expect(result.lines.map((line) => line.id)).toEqual(['x3', '2', '1']);
+  });
+
+  it('puts a credit note\'s lines in the printed order too', () => {
+    const result = mapBokioToCreditNote({
+      id: 'c1a2b3c4-0000-4000-8000-000000000001',
+      invoiceNumber: '2',
+      status: 'published',
+      creditDate: '2025-05-01',
+      currency: 'SEK',
+      totalAmount: 100,
+      totalTax: 0,
+      invoiceRef: { id: '8f2c1d3e-0b4a-4c5d-9e6f-7a8b9c0d1e2f', invoiceNumber: '1' },
+      customerRef: { id: '55c899c5-82b2-47fa-9c51-e35fc9b26443', name: 'customer 1' },
+      lineItems: [
+        { id: 202, description: 'Refers to invoice 1', itemType: 'descriptionOnlyItem' },
+        { id: 201, description: 'Laptop', itemType: 'salesItem', unitType: 'piece', quantity: 1, unitPrice: 100, taxRate: 0 },
+      ],
+    });
+
+    expect(result.lines.map((line) => line.id)).toEqual(['201', '202']);
+  });
+
+  it('leaves the row kind to inference when itemType is absent', () => {
+    const result = mapBokioToSalesInvoice({
+      ...BOKIO_INVOICE_WITH_TEXT_ROWS,
+      lineItems: [{ id: 1, description: 'Product 1', quantity: 1, unitPrice: 100, taxRate: 25 }],
+    });
+    expect(result.lines[0].lineType).toBeUndefined();
+  });
+});
+
+describe('bokioUnit', () => {
+  it.each([
+    ['unspecified', ''],
+    ['piece', 'st'],
+    ['hour', 'tim'],
+    ['day', 'dag'],
+    ['month', 'månad'],
+    ['week', 'vecka'],
+    ['year', 'år'],
+    ['minute', 'min'],
+    ['kilogram', 'kg'],
+    ['gram', 'g'],
+    ['ton', 'ton'],
+    ['liter', 'l'],
+    ['meter', 'm'],
+    ['centimeter', 'cm'],
+    ['millimeter', 'mm'],
+    ['kilometer', 'km'],
+    ['mile', 'mil'],
+    ['meterSquared', 'kvm'],
+    ['meterCubic', 'm3'],
+    ['hectar', 'ha'],
+    ['megabyte', 'MB'],
+    ['gigabyte', 'GB'],
+    ['words', 'ord'],
+  ])('maps %s to "%s"', (unitType, expected) => {
+    expect(bokioUnit({ unitType })).toBe(expected);
+  });
+
+  it('takes a custom unit from customUnitType, trimmed and capped', () => {
+    expect(bokioUnit({ unitType: 'custom', customUnitType: '  förp  ' })).toBe('förp');
+    expect(bokioUnit({ unitType: 'custom', customUnitType: 'x'.repeat(40) })).toHaveLength(32);
+    expect(bokioUnit({ unitType: 'custom' })).toBe('');
+  });
+
+  it('says nothing when the line states no unit, and keeps a value it does not know', () => {
+    expect(bokioUnit({ itemType: 'descriptionOnlyItem' })).toBeUndefined();
+    expect(bokioUnit({ unitType: 'lightyear' })).toBe('lightyear');
+  });
+
+  it('maps supplier invoice lines the same way', () => {
+    const result = mapBokioToSupplierInvoice({
+      id: 's-1', invoiceNumber: 'F-1', invoiceDate: '2025-01-10', currency: 'SEK', totalAmount: 125,
+      lineItems: [{ description: 'Paper', quantity: 1, unitPrice: 100, unitType: 'piece', taxRate: 25 }],
+    });
+    expect(result.lines[0].unitCode).toBe('st');
+  });
+});
+
+describe('mapBokioToSalesInvoice invoice number', () => {
+  const draft = {
+    ...BOKIO_INVOICE_WITH_TEXT_ROWS,
+    id: 'cec22965-5dc1-4e13-bde6-4d51c7d7a680',
+    invoiceNumber: null,
+    status: 'draft',
+    paidAmount: 0,
+  };
+
+  it('leaves an unnumbered draft without a number instead of using the Bokio id', () => {
+    expect(mapBokioToSalesInvoice(draft).invoiceNumber).toBe('');
+  });
+
+  it('leaves an unnumbered cancelled draft without a number', () => {
+    const result = mapBokioToSalesInvoice({ ...draft, status: 'cancelled' });
+    expect(result.status).toBe('cancelled');
+    expect(result.invoiceNumber).toBe('');
+  });
+
+  it('keeps the stated number, trimmed and stringified', () => {
+    expect(mapBokioToSalesInvoice({ ...draft, invoiceNumber: ' 1042 ' }).invoiceNumber).toBe('1042');
+    expect(mapBokioToSalesInvoice({ ...draft, invoiceNumber: 1042 }).invoiceNumber).toBe('1042');
+  });
+
+  it('keeps the id on an issued document without a number, which could not be stored with none', () => {
+    const result = mapBokioToSalesInvoice({ ...draft, status: 'published' });
+    expect(result.status).toBe('sent');
+    expect(result.invoiceNumber).toBe('cec22965-5dc1-4e13-bde6-4d51c7d7a680');
   });
 });

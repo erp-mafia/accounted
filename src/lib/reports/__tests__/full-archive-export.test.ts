@@ -3,15 +3,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import JSZip from 'jszip'
 import {
   generateFullArchive,
+  streamFullArchive,
   generateBaseDataArchive,
   estimateArchiveSize,
   MASTER_DATA_DUMP_TABLES,
 } from '../full-archive-export'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { ArchiveTooLargeError } from '../archive-folder'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { generateTrialBalance } from '../trial-balance'
+import { balanceSheetFromTrialBalance } from '../balance-sheet'
 import { generateSIEExport } from '../sie-export'
 import { generateJournalRegister } from '../journal-register'
+import { generateSystemdokumentation } from '../systemdokumentation'
 import type { AuditLogEntry } from '@/types'
 
 vi.mock('../sie-export', () => ({
@@ -34,7 +38,7 @@ vi.mock('../income-statement', () => ({
 }))
 
 vi.mock('../balance-sheet', () => ({
-  generateBalanceSheet: vi.fn().mockResolvedValue({
+  balanceSheetFromTrialBalance: vi.fn().mockResolvedValue({
     asset_sections: [], equity_liability_sections: [],
     total_assets: 0, total_equity_liabilities: 0,
     period: { start: '2024-01-01', end: '2024-12-31' },
@@ -61,6 +65,13 @@ vi.mock('../journal-register', () => ({
 vi.mock('../bokslutsbilagor', () => ({
   generateBokslutsbilagor: vi.fn().mockResolvedValue(null),
 }))
+// The per-period systemdokumentation snapshot: null keeps the queued-mock
+// order intact; one test below returns a report and checks the files.
+vi.mock('../systemdokumentation', () => ({
+  generateSystemdokumentation: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('../systemdokumentation-pdf-template', () => ({ SystemdokumentationPDF: () => null }))
+vi.mock('@react-pdf/renderer', () => ({ renderToBuffer: vi.fn().mockResolvedValue(Buffer.from('%PDF-1.4 stub')) }))
 vi.mock('@/lib/reconciliation/attachments-store', () => ({
   listAttachmentRowsInRange: vi.fn().mockResolvedValue([]),
 }))
@@ -141,6 +152,7 @@ describe('generateFullArchive', () => {
   let supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']
   let enqueueMany: ReturnType<typeof createQueuedMockSupabase>['enqueueMany']
   let findCall: ReturnType<typeof createQueuedMockSupabase>['findCall']
+  let findCalls: ReturnType<typeof createQueuedMockSupabase>['findCalls']
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -150,6 +162,7 @@ describe('generateFullArchive', () => {
     installArchiveReadLease(supabase)
     enqueueMany = mock.enqueueMany
     findCall = mock.findCall
+    findCalls = mock.findCalls
   })
 
   it('refuses an archive before reading anything while an import hold exists', async () => {
@@ -181,6 +194,44 @@ describe('generateFullArchive', () => {
   })
 
   describe('scope: period', () => {
+    it('archives the systemdokumentation snapshot of the year as JSON and PDF beside the archive-wide JSON', async () => {
+      enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
+      vi.mocked(generateSystemdokumentation).mockResolvedValueOnce({ period: { id: PERIOD_2024.id, name: 'Räkenskapsår 2024' }, behorigheter: { members: [] } } as never)
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id, include_documents: false,
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const label = `${PERIOD_2024.period_start}_${PERIOD_2024.period_end}`
+      expect(zip.file(`revision/systemdokumentation/${label}.json`)).not.toBeNull()
+      expect(zip.file(`revision/systemdokumentation/${label}.pdf`)).not.toBeNull()
+      expect(generateSystemdokumentation).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_2024.id, expect.any(Object))
+      const documentation = JSON.parse(await zip.file('revision/systemdokumentation.json')!.async('text'))
+      expect(documentation.fullstandig_dokumentation.arkiverad_kopia).toContain('revision/systemdokumentation/')
+    })
+
+    it("builds the balance sheet from the period's trial balance instead of a second one", async () => {
+      enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
+      const rows = [{ account_number: '1930', account_name: 'Bank', account_class: 1 }]
+      vi.mocked(generateTrialBalance).mockResolvedValueOnce({ rows, totalDebit: 0, totalCredit: 0, isBalanced: true } as never)
+      await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id, include_documents: false,
+      })
+      expect(generateTrialBalance).toHaveBeenCalledTimes(1)
+      expect(generateTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_2024.id, { closingEntry: 'include' })
+      expect(balanceSheetFromTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_2024.id, rows)
+    })
+
+    it('marks a systemdokumentation snapshot that could not be generated instead of leaving it missing', async () => {
+      enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id, include_documents: false,
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const label = `${PERIOD_2024.period_start}_${PERIOD_2024.period_end}`
+      expect(zip.file(`revision/systemdokumentation/${label}.json`)).toBeNull()
+      expect(await zip.file(`revision/systemdokumentation/${label}.error.txt`)!.async('text')).toContain('hittades inte')
+    })
+
     it('exports supplier settlement rules and their legacy limitation for audit interpretation', async () => {
       enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
       const buffer = await generateFullArchive(supabase as any, 'company-1', {
@@ -394,6 +445,50 @@ describe('generateFullArchive', () => {
       expect(zip.file('revision/behandlingshistorik.json')).not.toBeNull()
     })
 
+    it('stops reading the behandlingshistorik once it passes max_bytes, before holding it whole (crm#1703)', async () => {
+      const auditRow = (i: number) => ({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        created_at: `2026-09-27T19:22:19.${String(999999 - i).padStart(6, '0')}+00:00`,
+        action: 'INSERT',
+        new_state: { note: 'x'.repeat(200) },
+      })
+      const page = (from: number) => Array.from({ length: 500 }, (_, i) => auditRow(from + i))
+      mockGetAuditLog
+        .mockResolvedValueOnce({ data: page(0) as never, count: 0 })
+        .mockResolvedValueOnce({ data: page(500) as never, count: 0 })
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: PERIOD_2024 },
+      ])
+
+      // One page is about 150 KB of JSON: the second passes 200 KB.
+      await expect(
+        generateFullArchive(supabase as any, 'company-1', {
+          scope: 'period',
+          period_id: PERIOD_2024.id,
+          include_documents: false,
+          max_bytes: 200 * 1024,
+        }),
+      ).rejects.toBeInstanceOf(ArchiveTooLargeError)
+      expect(mockGetAuditLog).toHaveBeenCalledTimes(2)
+    })
+
+    it('stops collecting the ZIP once it passes max_bytes', async () => {
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: PERIOD_2024 },
+      ])
+
+      await expect(
+        generateFullArchive(supabase as any, 'company-1', {
+          scope: 'period',
+          period_id: PERIOD_2024.id,
+          include_documents: false,
+          max_bytes: 1,
+        }),
+      ).rejects.toBeInstanceOf(ArchiveTooLargeError)
+    })
+
     it('throws when fiscal period not found', async () => {
       enqueueMany([
         { data: COMPANY_ROW },
@@ -501,6 +596,91 @@ describe('generateFullArchive', () => {
     })
   })
 
+  // #142: the archive used to be built whole in memory, which is why the
+  // routes capped it at 80 MB. Streamed, it holds a handful of underlag.
+  describe('streamFullArchive', () => {
+    const DOC_COUNT = 20
+
+    function enqueueDocuments() {
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: PERIOD_2024 },
+        {
+          data: Array.from({ length: DOC_COUNT }, (_, i) => ({
+            id: `doc-${i}`,
+            file_name: `kvitto-${i}.pdf`,
+            storage_path: `company-1/doc-${i}.pdf`,
+            journal_entry_id: 'entry-1',
+            journal_entries: { voucher_number: i + 1, voucher_series: 'A', entry_date: '2024-03-15' },
+          })),
+        },
+        { data: [{ id: 'entry-1', fiscal_period_id: PERIOD_2024.id }] },
+      ])
+    }
+
+    it('writes the first bytes before reading any underlag, then reads them a few at a time after the ledger lease', async () => {
+      enqueueDocuments()
+      let started = 0
+      let inFlight = 0
+      let maxInFlight = 0
+      let readInsideLease = false
+      supabase.storage.from = vi.fn().mockReturnValue({
+        download: vi.fn(async (path: string) => {
+          started++
+          inFlight++
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          if (!supabase.rpc.mock.calls.some(([name]) => name === 'finish_sie_period_read')) readInsideLease = true
+          await new Promise((r) => setTimeout(r, 1))
+          inFlight--
+          return { data: new Blob([path]), error: null }
+        }),
+      })
+
+      const zip = streamFullArchive(supabase as any, 'company-1', { scope: 'period', period_id: PERIOD_2024.id })
+      const first = await zip.next()
+      expect(first.done).toBe(false)
+      expect(started).toBe(0)
+
+      const chunks: Uint8Array[] = [first.value as Uint8Array]
+      let sawPartialRead = false
+      for await (const chunk of zip) {
+        chunks.push(chunk)
+        if (started > 0 && started < DOC_COUNT) sawPartialRead = true
+      }
+
+      expect(sawPartialRead).toBe(true)
+      expect(readInsideLease).toBe(false)
+      expect(maxInFlight).toBeLessThanOrEqual(7)
+      const archive = await JSZip.loadAsync(Buffer.concat(chunks))
+      expect(await archive.file('dokument/2024/A20_kvitto-19.pdf')!.async('text')).toBe('company-1/doc-19.pdf')
+      const manifest = JSON.parse(await archive.file('dokument/manifest.json')!.async('text'))
+      expect(manifest.map((m: { document_id: string }) => m.document_id)).toEqual(
+        Array.from({ length: DOC_COUNT }, (_, i) => `doc-${i}`),
+      )
+      expect(manifest.every((m: { status: string }) => m.status === 'downloaded')).toBe(true)
+    })
+
+    it('records a failed read in the manifest, in document order, and leaves the file out', async () => {
+      enqueueDocuments()
+      supabase.storage.from = vi.fn().mockReturnValue({
+        download: vi.fn(async (path: string) => path === 'company-1/doc-3.pdf'
+          ? { data: null, error: { message: 'Object not found' } }
+          : { data: new Blob([path]), error: null }),
+      })
+
+      const archive = await JSZip.loadAsync(await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id,
+      }))
+
+      const manifest = JSON.parse(await archive.file('dokument/manifest.json')!.async('text'))
+      expect(manifest).toHaveLength(DOC_COUNT)
+      expect(manifest[3]).toMatchObject({ document_id: 'doc-3', status: 'error', error: 'Object not found' })
+      expect(manifest[4]).toMatchObject({ document_id: 'doc-4', status: 'downloaded' })
+      expect(archive.file('dokument/2024/A4_kvitto-3.pdf')).toBeNull()
+      expect(archive.file('dokument/2024/A5_kvitto-4.pdf')).not.toBeNull()
+    })
+  })
+
   describe('scope: all', () => {
     it('keeps current retained vouchers and their linked PDF without depending on an original import file', async () => {
       const entry={id:'retained-entry',voucher_number:17,voucher_series:'A',status:'posted',description:'Retained voucher'}
@@ -547,6 +727,36 @@ describe('generateFullArchive', () => {
       expect(readmeText).toContain('Hela bokföringen')
       // No root bokforing.se in all-mode
       expect(zip.file('bokforing.se')).toBeNull()
+    })
+
+    it('walks the audit trail by keyset: each page starts after the last row of the one before', async () => {
+      const auditRow = (i: number) => ({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        created_at: `2026-09-27T19:22:19.${String(999999 - i).padStart(6, '0')}+00:00`,
+        action: 'INSERT',
+      })
+      const firstPage = Array.from({ length: 500 }, (_, i) => auditRow(i))
+      mockGetAuditLog
+        .mockResolvedValueOnce({ data: firstPage as never, count: 0 })
+        .mockResolvedValueOnce({ data: [auditRow(500)] as never, count: 0 })
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: [PERIOD_2024] },
+        { data: [] },
+      ])
+
+      await generateFullArchive(supabase as any, 'company-1', { scope: 'all' })
+
+      expect(mockGetAuditLog).toHaveBeenCalledTimes(2)
+      const [first, second] = mockGetAuditLog.mock.calls.map((call) => call[2])
+      expect(first).not.toHaveProperty('after')
+      expect(second).toMatchObject({
+        pageSize: 500,
+        includeCount: false,
+        after: { created_at: firstPage[499].created_at, id: firstPage[499].id },
+      })
+      // No page numbers: an OFFSET re-reads every earlier row on each page.
+      expect(second).not.toHaveProperty('page')
     })
 
     it('does not filter audit trail by date in all-mode', async () => {
@@ -817,6 +1027,12 @@ describe('generateFullArchive', () => {
       const imports = JSON.parse(await zip.file('sie/imports.json')!.async('text'))
       expect(imports[0].filename).toBe('original.se')
       expect(zip.file('sie/account_mappings.json')).not.toBeNull()
+      // Paged on a unique order, so no page boundary repeats or skips a
+      // mapping past the first 1000 (the #58 class, #96).
+      expect(findCalls('sie_account_mappings', 'order')).toEqual([
+        ['source_account', { ascending: true }],
+        ['id', { ascending: true }],
+      ])
 
       // Every table in the dump contract gets a file, even when empty.
       for (const t of MASTER_DATA_DUMP_TABLES) {

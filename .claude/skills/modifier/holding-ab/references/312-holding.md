@@ -1,3 +1,7 @@
+---
+areas: [bokslut]
+---
+
 # 3:12-reglerna i holdingstruktur: utvidgad referens
 
 Ladda när uppgiften rör kvalificerade andelar i fåmansföretagshålligning, smitta mellan dotterbolag, löneunderlag, eller 2026-reformen SFS 2025:1361.

@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
-import { useTranslations } from 'next-intl'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
+import { ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -17,7 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatDate } from '@/lib/utils'
 import type { FiscalYearResetBlocker, FiscalYearResetEligibility } from '@/types'
 
@@ -28,17 +28,6 @@ interface FiscalYearResetDialogProps {
   onOpenChange: (open: boolean) => void
   /** Called after a successful reset so the parent can refetch. */
   onReset: () => void
-}
-
-function readApiError(body: unknown, fallback: string): string {
-  if (!body || typeof body !== 'object') return fallback
-  const error = (body as { error?: unknown }).error
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
 }
 
 /**
@@ -57,6 +46,7 @@ export function FiscalYearResetDialog({
   onReset,
 }: FiscalYearResetDialogProps) {
   const t = useTranslations('settings_bookkeeping')
+  const errorLocale = useLocale() as ErrorLocale
   const { role } = useCompany()
   const { toast } = useToast()
   const loadFailedMessage = t('fy_reset_load_failed')
@@ -81,14 +71,15 @@ export function FiscalYearResetDialog({
         )
         const body = await response.json().catch(() => ({}))
         if (!response.ok) {
-          throw new Error(readApiError(body, loadFailedMessage))
+          if (!cancelled) {
+            setLoadError(getUserErrorMessage(body, { locale: errorLocale, fallback: loadFailedMessage }))
+          }
+          return
         }
         if (!cancelled) setEligibility(body.data as FiscalYearResetEligibility)
       } catch (error) {
         if (!cancelled) {
-          setLoadError(
-            error instanceof Error ? getUserErrorMessage(error) : loadFailedMessage,
-          )
+          setLoadError(getUserErrorMessage(error, { locale: errorLocale, fallback: loadFailedMessage }))
         }
       } finally {
         if (!cancelled) setIsLoading(false)
@@ -99,7 +90,7 @@ export function FiscalYearResetDialog({
     return () => {
       cancelled = true
     }
-  }, [periodId, loadFailedMessage, open])
+  }, [periodId, errorLocale, loadFailedMessage, open])
 
   function resetForm() {
     setEligibility(null)
@@ -139,6 +130,8 @@ export function FiscalYearResetDialog({
         return t('fy_reset_blocker_retained_import')
       case 'unfinished_import':
         return t('fy_reset_blocker_unfinished_import')
+      case 'sie_import_in_place':
+        return t('fy_reset_blocker_sie_import_in_place')
       default:
         return t('fy_reset_blocker_other')
     }
@@ -165,7 +158,13 @@ export function FiscalYearResetDialog({
       )
       const body = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(readApiError(body, t('fy_reset_failed_default')))
+        toast({
+          title: t('fy_reset_failed_title'),
+          description: getUserErrorMessage(body, { locale: errorLocale, fallback: t('fy_reset_failed_default') }),
+          variant: 'destructive',
+        })
+        setIsResetting(false)
+        return
       }
 
       const deleted = (body.data as { deleted?: number } | undefined)?.deleted ?? 0
@@ -180,10 +179,7 @@ export function FiscalYearResetDialog({
     } catch (error) {
       toast({
         title: t('fy_reset_failed_title'),
-        description:
-          error instanceof Error
-            ? getUserErrorMessage(error)
-            : t('fy_reset_failed_default'),
+        description: getUserErrorMessage(error, { locale: errorLocale, fallback: t('fy_reset_failed_default') }),
         variant: 'destructive',
       })
       setIsResetting(false)
@@ -192,7 +188,7 @@ export function FiscalYearResetDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('fy_reset_dialog_title', { name: periodName })}</DialogTitle>
           <DialogDescription>{t(retainedHistory ? 'fy_reset_retained_description' : 'fy_reset_dialog_description')}</DialogDescription>
@@ -200,19 +196,19 @@ export function FiscalYearResetDialog({
 
         {isLoading ? (
           <div className="flex min-h-40 items-center justify-center text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <SpinnerIcon className="mr-2 h-4 w-4 animate-spin" />
             {t('fy_reset_checking')}
           </div>
         ) : loadError ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          <div className="bg-destructive/8 rounded-lg p-4 text-sm text-destructive">
             {loadError}
           </div>
         ) : eligibility ? (
           <div className="space-y-5">
             {eligibility.blockers.length > 0 ? (
-              <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <div className="bg-destructive/8 space-y-2 rounded-lg p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-destructive">
-                  <AlertTriangle className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="h-4 w-4" />
                   {t('fy_reset_blocked_title')}
                 </div>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
@@ -293,15 +289,8 @@ export function FiscalYearResetDialog({
             {t('fy_confirm_cancel')}
           </Button>
           {eligibility?.eligible ? (
-            <Button variant="destructive" onClick={handleReset} disabled={!canReset}>
-              {isResetting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('fy_reset_resetting')}
-                </>
-              ) : (
-                t('fy_reset_submit')
-              )}
+            <Button variant="destructive" onClick={handleReset} disabled={!canReset} loading={isResetting}>
+              {isResetting ? t('fy_reset_resetting') : t('fy_reset_submit')}
             </Button>
           ) : null}
         </DialogFooter>

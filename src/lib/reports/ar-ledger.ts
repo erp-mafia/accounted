@@ -1,13 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { roundOre } from '@/lib/money'
-import { fetchPaymentsAsOf, outstandingAsOf, todayIsoDate, type PaymentsAsOf } from './reskontra-payments'
+import { outstandingAsOf, paymentsAsOfFromFacts } from './reskontra-payments'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
   type InvoiceRegisterCoverage,
-} from '@/lib/invoices/invoice-register-coverage'
+} from '@/lib/reports/invoice-register-coverage'
+import {
+  liveReceivableOutstanding,
+  outstandingLessPayouts,
+  skatteverketSettledByInvoice,
+} from '@/lib/bookkeeping/skatteverket-share'
+import { creditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
+import { fetchArLedgerInvoices, type ArLedgerInvoice } from './ar-ledger-invoices'
+import { fetchCreditedInvoiceIds, netCreditedPairs } from './credited-pairs'
+import { daysPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface ARInvoiceDetail {
   invoice_id: string
@@ -64,6 +74,20 @@ export interface ARLedgerReport {
 }
 
 /**
+ * Invoice statuses in the live kundreskontra. 'partially_paid' is as open as
+ * 'sent' and 'overdue': the first partial payment moves an invoice there and
+ * it stays until the rest is paid. 'credited' originals are kept so they net
+ * against their credit notes; migrated credit notes that carry the same
+ * status are left out (isSettledCreditNote). Paid invoices whose ROT/RUT
+ * deduction Skatteverket has yet to pay out join them. The population read
+ * (get_ar_ledger_invoices) spells these statuses out in SQL, and a pg test
+ * holds the two together. The customer drill-down route and the 1510
+ * reconciliation read that same population, so the aggregate and its detail
+ * rows cannot drift apart.
+ */
+export const AR_LEDGER_STATUSES = [...OWED_INVOICE_STATUSES, 'credited'] as const
+
+/**
  * Generate AR ledger (kundreskontra) with aging analysis.
  * BFL 5 kap. 4 §: sidoordnad bokföring: outstanding customer invoices with aging.
  *
@@ -71,46 +95,45 @@ export interface ARLedgerReport {
  * date: invoices dated on or before it (including ones fully paid since) with
  * outstanding amounts recomputed from the payment history (#1020). Without an
  * `asOfDate`, or with today/future, the live open-invoice state is used as-is.
+ *
+ * A failed read answers an empty ledger, which the screens show as "nothing
+ * open". `strict` makes it throw instead: a caller that hands the total on as
+ * a defined figure (lib/measures) must not report a failed read as zero.
  */
 export async function generateARLedger(
   supabase: SupabaseClient,
   companyId: string,
-  asOfDate?: string
+  asOfDate?: string,
+  options?: { strict?: boolean }
 ): Promise<ARLedgerReport> {
-  const refDate = asOfDate ? new Date(asOfDate) : new Date()
+  const today = todayIsoStockholm()
+  const asOf = asOfDate || today
   // Backdated reconstruction only kicks in for genuinely historical dates:
   // for today/future the stored open-invoice state IS the as-of state, and
   // the live view must stay byte-identical to what it always showed.
-  const isHistorical = !!asOfDate && asOfDate < todayIsoDate()
+  const isHistorical = asOf < today
 
-  // Fetch the ledger population. Live view: open invoices only. Historical
-  // view: also invoices paid since the as-of date, restricted to invoice
-  // dates on or before it. Invoices cancelled since are treated as never
-  // having existed (their cancellation is not reliably dated).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let invoices: any[]
-  let payments: PaymentsAsOf | null = null
+  // The ledger population, in one read (ar-ledger-invoices.ts). Live view:
+  // open invoices, plus paid ones still awaiting Skatteverket's share of a
+  // ROT/RUT deduction. Historical view: also invoices paid or written off
+  // (konstaterad kundförlust) since the as-of date, restricted to invoice
+  // dates on or before it, with the payment history; a claim written off by
+  // then had left 1510 and is not returned. Invoices cancelled since are
+  // treated as never having existed (their cancellation is not reliably
+  // dated). The coverage disclosure is read beside it: non-fatal, the
+  // ledger's own numbers do not depend on it, so a failed lookup degrades to
+  // "no marker", never to an error.
+  let invoices: ArLedgerInvoice[]
+  let registerCoverage: InvoiceRegisterCoverage = NO_INVOICE_REGISTER_COVERAGE
   try {
-    invoices = await fetchAllRows(({ from, to }) => {
-      let query = supabase
-        .from('invoices')
-        .select('*, customer:customers(id, name)')
-        .eq('company_id', companyId)
-        // Proformas, delivery notes and quotes are never receivables.
-        .eq('document_type', 'invoice')
-      query = isHistorical
-        ? query.in('status', ['sent', 'overdue', 'credited', 'paid']).lte('invoice_date', asOfDate!)
-        : query.in('status', ['sent', 'overdue', 'credited'])
-      return query
-        // Stable total order for correct paging (see fetch-all.ts).
-        .order('id', { ascending: true })
-        .range(from, to)
-    })
-
-    if (isHistorical) {
-      payments = await fetchPaymentsAsOf(supabase, 'invoice_payments', 'invoice_id', companyId, asOfDate!)
-    }
-  } catch {
+    const [population, coverage] = await Promise.all([
+      fetchArLedgerInvoices(supabase, companyId, { asOfDate: isHistorical ? asOfDate : undefined }),
+      fetchInvoiceRegisterCoverage(supabase, companyId).catch(() => NO_INVOICE_REGISTER_COVERAGE),
+    ])
+    invoices = population
+    registerCoverage = coverage
+  } catch (err) {
+    if (options?.strict) throw err
     return {
       entries: [],
       total_outstanding: 0,
@@ -122,26 +145,50 @@ export async function generateARLedger(
     }
   }
 
-  // Coverage disclosure. Non-fatal: the ledger's own numbers do not depend
-  // on it, so a failed lookup degrades to "no marker", never to an error.
-  let registerCoverage: InvoiceRegisterCoverage = NO_INVOICE_REGISTER_COVERAGE
-  try {
-    registerCoverage = await fetchInvoiceRegisterCoverage(supabase, companyId)
-  } catch {
-    // keep NO_INVOICE_REGISTER_COVERAGE
-  }
+  const payments = isHistorical ? paymentsAsOfFromFacts(invoices) : null
+  // A credit note whose verifikat paid another invoice has used that much
+  // of its credit (credit-note-settlement.ts).
+  const creditUsed = creditNoteCreditUsed(invoices, isHistorical ? asOfDate : undefined)
+  // What Skatteverket has paid out of each ROT/RUT deduction, which no
+  // longer sits on 1513 (skatteverket-share.ts).
+  const settled = skatteverketSettledByInvoice(invoices, isHistorical ? asOfDate : undefined)
 
-  // Group by customer and calculate aging
-  const byCustomer = new Map<string, ARLedgerEntry>()
+  // Each row's open amount in its own currency, then each credit note set
+  // against the invoice it credits (credited-pairs.ts): a fully credited
+  // invoice and its credit note net to zero and neither is open or overdue;
+  // a partial credit leaves the rest on the original. Totals do not move.
+  const ownOutstanding = new Map<string, number>()
+  for (const inv of invoices) {
+    const total = Number(inv.total) || 0
+    const liveOutstanding = roundOre(total - (Number(inv.paid_amount) || 0))
+    ownOutstanding.set(inv.id, outstandingWithCreditUsed(
+      payments
+        ? outstandingLessPayouts(outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!), settled.get(inv.id))
+        : liveReceivableOutstanding(inv, liveOutstanding, settled.get(inv.id)),
+      creditUsed.get(inv.id)
+    ))
+  }
+  const creditNoteIds = invoices.filter(isCreditNoteDocument).map((inv) => inv.id)
+  const creditedInvoiceOf = creditNoteIds.length > 0
+    ? await fetchCreditedInvoiceIds(supabase, companyId, creditNoteIds)
+    : new Map<string, string>()
+  const paired = netCreditedPairs(invoices, ownOutstanding, creditedInvoiceOf)
+
+  // Group by customer and calculate aging. An invoice without a customer
+  // groups under a null customer_id.
+  const byCustomer = new Map<string | null, ARLedgerEntry>()
   let unconvertedFxCount = 0
 
+  // The population leaves settled credit notes out and comes grouped per
+  // customer in first-seen order, so entries are created, and ties sorted
+  // below, as an id-ordered walk of the whole population would.
   for (const inv of invoices) {
     const customerId = inv.customer_id
-    const customerName = inv.customer?.name || 'Okänd kund'
+    const customerName = inv.customer_name || 'Okänd kund'
 
     if (!byCustomer.has(customerId)) {
       byCustomer.set(customerId, {
-        customer_id: customerId,
+        customer_id: customerId as string,
         customer_name: customerName,
         invoices: [],
         current: 0,
@@ -154,19 +201,21 @@ export async function generateARLedger(
     }
 
     const entry = byCustomer.get(customerId)!
-    const dueDate = new Date(inv.due_date)
-    const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+    const daysOverdue = daysPastDue(inv.due_date, asOf)
     const total = Number(inv.total) || 0
-    const liveOutstanding = roundOre(total - (Number(inv.paid_amount) || 0))
-    const outstanding = payments
-      ? outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!)
-      : liveOutstanding
+    const outstanding = paired.outstanding.get(inv.id) ?? 0
     const paidAmount = roundOre(total - outstanding)
 
-    // Historical view: 'paid' invoices are only fetched to catch ones still
-    // open at the as-of date. One already settled by then adds nothing to the
-    // reskontra, so skip its zero row instead of listing it.
-    if (isHistorical && inv.status === 'paid' && outstanding === 0) continue
+    // 'paid' invoices are only fetched to catch ones still open: at the as-of
+    // date, or (live) on a deduction Skatteverket has yet to pay out. One
+    // settled by then adds nothing to the reskontra, so skip its zero row
+    // instead of listing it. The same for a credited invoice with nothing
+    // left on it and a credit note its original used up: settled by credit,
+    // not open, so never listed as overdue.
+    if (
+      outstanding === 0 &&
+      (inv.status === 'paid' || inv.status === 'credited' || paired.settledByCredit.has(inv.id))
+    ) continue
 
     // Aging buckets and totals must be in SEK so they reconcile with account 1510.
     // Foreign-currency invoices without an exchange_rate cannot be converted:
@@ -195,7 +244,7 @@ export async function generateARLedger(
       paid_amount: paidAmount,
       outstanding,
       outstanding_sek: outstandingSek,
-      days_overdue: Math.max(0, daysOverdue),
+      days_overdue: daysOverdue,
       currency: inv.currency || 'SEK',
     })
 

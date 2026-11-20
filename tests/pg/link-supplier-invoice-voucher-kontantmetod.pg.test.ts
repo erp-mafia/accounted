@@ -17,8 +17,8 @@
  *     attach_supplier_invoice_settlement_voucher;
  *   - that the 244x side still answers as before. The byte-for-byte pin of that
  *     side is the existing suites running against this body:
- *     tests/pg/link-voucher-fx-residual.pg.test.ts (replays this migration
- *     last), tests/pg/link-voucher-rpcs-tenant-guard.pg.test.ts and
+ *     tests/pg/link-voucher-fx-residual.pg.test.ts (current applied schema),
+ *     tests/pg/link-voucher-rpcs-tenant-guard.pg.test.ts and
  *     lib/invoices/__tests__/link-voucher-currency.pg.test.ts.
  */
 import { describe, it, expect } from 'vitest'
@@ -31,6 +31,11 @@ import {
   type PostedJournalEntryLine,
 } from './fixtures'
 import { roundOre } from '@/lib/money'
+import {
+  carrySupplierInvoice,
+  insertSupplierInvoice,
+  seedCashCompany,
+} from './kontantmetod-carry-fixtures'
 
 let arrivalSeq = 0
 
@@ -117,7 +122,8 @@ async function seedVoucher(params: {
     voucherNumber: Math.floor(Math.random() * 1_000_000),
     entryDate: params.entryDate ?? '2026-04-28',
     description: 'Betalning leverantör',
-    sourceType: params.sourceType ?? 'bank_transaction',
+    // These are existing vouchers, without a source bank transaction fixture.
+    sourceType: params.sourceType ?? 'manual',
     lines: params.lines,
   })
 }
@@ -142,7 +148,7 @@ async function seedVoucherWithLabelledBankLine(params: {
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
           entry_date, description, source_type, status)
-       VALUES ($1, $2, $3, $4, $5, 'A', '2026-04-28', 'Betalning leverantör', 'bank_transaction', 'draft')`,
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-04-28', 'Betalning leverantör', 'manual', 'draft')`,
       [
         id, params.company.userId, params.company.companyId, params.company.fiscalPeriodId,
         Math.floor(Math.random() * 1_000_000),
@@ -354,11 +360,14 @@ describe('link_supplier_invoice_to_voucher: kontantmetoden, the 19xx credit', ()
   it('refuses a verifikat that does not credit 19xx, naming the bank side', async () => {
     const company = await seedCompanyWithMethod('cash')
     const invoiceId = await seedSupplierInvoice({ company, total: 1250 })
+    // A credit on the owner's private funds (2018, 2893) is a payment since
+    // 20261114070000 (link-supplier-invoice-voucher-owner-paid.pg.test.ts);
+    // a skuld to the supplier is not.
     const noBank = await seedVoucher({
       company,
       lines: [
         { accountNumber: '4010', debitAmount: 1250, creditAmount: 0 },
-        { accountNumber: '2893', debitAmount: 0, creditAmount: 1250 },
+        { accountNumber: '2440', debitAmount: 0, creditAmount: 1250 },
       ],
     })
     // Money coming INTO the bank is not a payment of a supplier invoice.
@@ -708,6 +717,7 @@ describe('link_supplier_invoice_to_voucher: the 244x debit side is unchanged', (
       journal_entry_id: voucherId,
       currency: 'SEK',
       settlement_side: 'ap_debit',
+      voucher_remaining: 0,
       fx_settled_sek: null,
       fx_residual_sek: null,
       fx_journal_entry_id: null,
@@ -753,16 +763,52 @@ describe('link_supplier_invoice_to_voucher: the 244x debit side is unchanged', (
     })
   })
 
-  // Deliberately pinned, not endorsed: the capacity rule is 19xx-only in this
-  // migration so that no existing 244x answer moves. Extending it to the 244x
-  // side is a follow-up (bulk reconcile already enforces it for unattended links).
-  it('faktureringsmetoden: a second invoice can still link the same 244x verifikat', async () => {
+  // The one 244x answer that did move, in 20261011153000 (the follow-up this
+  // test used to name): the capacity rule now holds on the 244x side too. Up
+  // to then a second invoice could link the same verifikat at its full debit
+  // and be marked paid by money that had already paid the first one. The rest
+  // of that rule is in link-supplier-invoice-voucher-share.pg.test.ts.
+  it('faktureringsmetoden: a 244x verifikat one invoice has used in full cannot pay a second one', async () => {
     const company = await seedCompanyWithMethod('accrual')
     const a = await seedSupplierInvoice({ company, total: 1250 })
     const b = await seedSupplierInvoice({ company, total: 1250 })
     const voucherId = await seedVoucher({ company, lines: accrualPaymentLines(1250) })
 
     expect((await link({ company, invoiceId: a, voucherId })).ok).toBe(true)
-    expect((await link({ company, invoiceId: b, voucherId })).ok).toBe(true)
+    expect(await link({ company, invoiceId: b, voucherId })).toEqual({
+      ok: false,
+      code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
+      details: { ap_debit: 1250, already_linked: 1250 },
+    })
+    expect((await invoiceState(b)).status).toBe('registered')
+  })
+})
+
+describe('a supplier invoice carried over the kontantmetod year end (#3440)', () => {
+  it('reads the 244x debit and links a Dr 2440 / Cr 1930 payout in the new year', async () => {
+    // The per-invoice carry (20261018131100) links the invoice through
+    // registration_journal_entry_id, which is exactly what this side rule
+    // reads: the payout clears the skuld the carry booked, with no moms.
+    const carried = await seedCashCompany()
+    const invoiceId = await insertSupplierInvoice(carried)
+    await carrySupplierInvoice(carried, invoiceId)
+
+    expect(await side(carried.companyId, invoiceId)).toEqual([
+      { settlement_side: 'ap_debit', account_prefix: '244', entry_side: 'debit' },
+    ])
+
+    const voucherId = await insertPostedJournalEntry({
+      userId: carried.userId,
+      companyId: carried.companyId,
+      fiscalPeriodId: carried.nextPeriodId,
+      voucherNumber: Math.floor(Math.random() * 1_000_000),
+      entryDate: '2027-02-10',
+      description: 'Betalning leverantör',
+      lines: accrualPaymentLines(500),
+    })
+    const { rows } = await getPool().query<{ result: LinkResult }>(LINK, [
+      invoiceId, voucherId, carried.userId, carried.companyId,
+    ])
+    expect(rows[0].result).toMatchObject({ ok: true, settlement_side: 'ap_debit' })
   })
 })

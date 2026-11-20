@@ -4,7 +4,6 @@ import { useEffect, useMemo } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { format } from 'date-fns'
 import { isSaneDateString } from '@/lib/utils'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -12,17 +11,19 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2 } from 'lucide-react'
 import { CURRENCIES, type CreateTransactionInput, type Currency } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface TransactionFormProps {
   onSubmit: (data: CreateTransactionInput) => Promise<void>
   isLoading: boolean
+  /** Set by a host that owns the primary (a drawer's fixed footer): the form takes this id and renders no submit row of its own; the host's button submits it through the `form` attribute. */
+  formId?: string
 }
 
 const currencies: readonly Currency[] = CURRENCIES
 
-export default function TransactionForm({ onSubmit, isLoading }: TransactionFormProps) {
+export default function TransactionForm({ onSubmit, isLoading, formId }: TransactionFormProps) {
   const t = useTranslations('tx_form')
   const schema = useMemo(
     () =>
@@ -62,7 +63,7 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
 
   // Set date default on client only to avoid hydration mismatch
   useEffect(() => {
-    setValue('date', format(new Date(), 'yyyy-MM-dd'))
+    setValue('date', todayIsoStockholm())
   }, [])
 
   const onFormSubmit = (data: FormData) => {
@@ -76,7 +77,7 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
   }
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-4">
+    <form id={formId} onSubmit={handleSubmit(onFormSubmit)} className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label htmlFor="date">{t('date_label')}</Label>
@@ -138,7 +139,7 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="notes">{t('notes_label')}</Label>
+        <Label htmlFor="notes" optional>{t('notes_label')}</Label>
         <Textarea
           id="notes"
           placeholder={t('notes_placeholder')}
@@ -146,16 +147,11 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
         />
       </div>
 
-      <Button type="submit" className="w-full" disabled={isLoading}>
-        {isLoading ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            {t('saving')}
-          </>
-        ) : (
-          t('save')
-        )}
-      </Button>
+      {!formId && (
+        <Button type="submit" className="w-full" loading={isLoading}>
+          {isLoading ? t('saving') : t('save')}
+        </Button>
+      )}
     </form>
   )
 }

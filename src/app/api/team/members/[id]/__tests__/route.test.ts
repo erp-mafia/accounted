@@ -169,6 +169,109 @@ describe('PATCH /api/team/members/[id]', () => {
   })
 })
 
+describe('PATCH /api/team/members/[id] with companyIds', () => {
+  const companyA = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const companyB = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+  const companiesReq = (companyIds: unknown) =>
+    createMockRequest('/api/team/members/tm-target', { method: 'PATCH', body: { companyIds } })
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: serviceSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const res = await PATCH(companiesReq([companyA]), routeParams)
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 400 for an empty choice or a non-uuid id', async () => {
+    expect((await PATCH(companiesReq([]), routeParams)).status).toBe(400)
+    expect((await PATCH(companiesReq(['not-a-uuid']), routeParams)).status).toBe(400)
+  })
+
+  it('returns 404 when the membership row does not exist', async () => {
+    enqueue({ data: null })
+    const res = await PATCH(companiesReq([companyA]), routeParams)
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 403 when the caller is a plain team member', async () => {
+    enqueue({ data: targetRow() })
+    enqueue({ data: { role: 'member' } })
+    const res = await PATCH(companiesReq([companyA]), routeParams)
+    expect(res.status).toBe(403)
+    expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when the target is an admin: managers have every company', async () => {
+    enqueue({ data: targetRow({ role: 'admin' }) })
+    enqueue({ data: { role: 'owner' } })
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await PATCH(companiesReq([companyA]), routeParams),
+    )
+    expect(status).toBe(400)
+    expect(body.error).toBe('Ägare och administratörer når alltid alla bolag.')
+    expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when a chosen company is not a client of the team', async () => {
+    enqueue({ data: targetRow() })
+    enqueue({ data: { role: 'admin' } })
+    enqueue({ data: [{ id: companyA }] }) // companyB is not on the team
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await PATCH(companiesReq([companyA, companyB]), routeParams),
+    )
+    expect(status).toBe(400)
+    expect(body.error).toBe('Ett eller flera bolag hör inte till byrån.')
+    expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('limits a member to the chosen companies', async () => {
+    enqueue({ data: targetRow() })
+    enqueue({ data: { role: 'admin' } })
+    enqueue({ data: [{ id: companyA }, { id: companyB }] })
+    enqueue({}) // set_team_member_companies
+
+    const { status, body } = await parseJsonResponse<{
+      data: { all_companies: boolean; company_ids: string[] }
+    }>(await PATCH(companiesReq([companyA, companyB]), routeParams))
+
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ all_companies: false, company_ids: [companyA, companyB] })
+    expect(serviceSupabase.rpc).toHaveBeenCalledWith('set_team_member_companies', {
+      p_team_member_id: 'tm-target',
+      p_company_ids: [companyA, companyB],
+    })
+    expect(findCalls('companies', 'eq')).toContainEqual(['team_id', 'team-b'])
+  })
+
+  it('null gives the member every company again, for an admin target too', async () => {
+    enqueue({ data: targetRow({ role: 'admin' }) })
+    enqueue({ data: { role: 'owner' } })
+    enqueue({}) // set_team_member_companies
+
+    const { status, body } = await parseJsonResponse<{ data: { all_companies: boolean } }>(
+      await PATCH(companiesReq(null), routeParams),
+    )
+    expect(status).toBe(200)
+    expect(body.data.all_companies).toBe(true)
+    expect(serviceSupabase.rpc).toHaveBeenCalledWith('set_team_member_companies', {
+      p_team_member_id: 'tm-target',
+      p_company_ids: null,
+    })
+  })
+
+  it('returns 500 when the write fails', async () => {
+    enqueue({ data: targetRow() })
+    enqueue({ data: { role: 'admin' } })
+    enqueue({ data: [{ id: companyA }] })
+    enqueue({ error: { message: 'boom' } })
+    const res = await PATCH(companiesReq([companyA]), routeParams)
+    expect(res.status).toBe(500)
+  })
+})
+
 describe('DELETE /api/team/members/[id]', () => {
   it('returns 401 when not authenticated', async () => {
     requireAuthMock.mockResolvedValue({

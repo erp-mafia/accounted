@@ -26,7 +26,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck } from '../server'
+import { computeVatCloseCheck } from '@/lib/reports/vat-close-check'
 
 interface RecordedCall {
   table: string
@@ -97,7 +97,9 @@ const BROKEN_FY_SETTINGS = {
 describe('gnubok_vat_close_check: ignored transactions', () => {
   it('excludes transactions ignored on purpose from the uncategorized blocker', async () => {
     // Ignored rows have journal_entry_id NULL by CHECK constraint, so the
-    // "no journal entry" predicate alone counted them as work to do.
+    // "no journal entry" predicate alone counted them as work to do. The
+    // count reads open_bank_rows, which leaves them out
+    // (tests/pg/bank-row-open-read.pg.test.ts).
     const { supabase, findCalls } = mockSupabase({})
 
     const result = await computeVatCloseCheck(
@@ -106,8 +108,14 @@ describe('gnubok_vat_close_check: ignored transactions', () => {
       supabase,
     )
 
-    expect(findCalls('transactions', 'is')).toEqual([['journal_entry_id', null]])
-    expect(findCalls('transactions', 'eq')).toContainEqual(['is_ignored', false])
+    // Both legs of the shared predicate (lib/transactions/unbooked.ts): the
+    // untriaged head count and the business head count.
+    expect(findCalls('open_bank_rows', 'select')).toEqual([
+      ['id', { count: 'exact', head: true }],
+      ['id', { count: 'exact', head: true }],
+    ])
+    expect(findCalls('open_bank_rows', 'is')).toEqual([['is_business', null]])
+    expect(findCalls('open_bank_rows', 'eq')).toContainEqual(['is_business', true])
     expect(result.blockers).not.toContainEqual(expect.objectContaining({
       kind: 'uncategorized_transactions',
     }))

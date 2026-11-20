@@ -33,6 +33,18 @@ vi.mock('@/lib/bookkeeping/rot-rut-entries', () => ({
   createRotRutPayoutEntry: (...args: unknown[]) => mockCreatePayoutEntry(...args),
 }))
 
+// The 1513 receivable lookup has its own tests (rot-rut-receivable.test.ts).
+const mockGetPayoutOreRounding = vi.fn()
+vi.mock('@/lib/invoices/rot-rut-receivable', () => ({
+  getPayoutOreRounding: (...args: unknown[]) => mockGetPayoutOreRounding(...args),
+}))
+
+// Kontantmetoden's second step has its own tests (rot-rut-payout-recognition.test.ts):
+// here no invoice takes it, so the payout clears 1513 as before.
+vi.mock('@/lib/invoices/rot-rut-payout-recognition', () => ({
+  getPayoutRecognition: vi.fn().mockResolvedValue({ ok: true, recognition: null }),
+}))
+
 import { GET as eligibleGET } from '../eligible/route'
 import { POST as payoutFilePOST } from '../payout-file/route'
 import { GET as requestsGET } from '../payout-requests/route'
@@ -108,6 +120,7 @@ beforeEach(() => {
   reset()
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+  mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0, invoiceCount: 0 })
 })
 
 describe('GET /api/rot-rut/eligible', () => {
@@ -404,6 +417,20 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
     expect(response.status).toBe(404)
   })
 
+  it('refuses a date ahead of today', async () => {
+    const response = await settlePOST(
+      createMockRequest(`/api/rot-rut/payout-requests/${REQUEST_ID}/settle`, {
+        method: 'POST',
+        body: { payment_date: '2099-01-01' },
+      }),
+      routeParams,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PAYMENT_DATE_IN_FUTURE')
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
+  })
+
   it('refuses an already settled request', async () => {
     enqueue({
       data: makePayoutRequestRow({
@@ -425,6 +452,7 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
 
   it('books the payout and completes the request as paid', async () => {
     mockCreatePayoutEntry.mockResolvedValue({ id: 'je-1' })
+    mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0.4, invoiceCount: 1 })
     enqueue({ data: makePayoutRequestRow({ status: 'submitted' }) })
     enqueue({
       data: makePayoutRequestRow({
@@ -454,7 +482,9 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ amount: 3000, paymentDate: '2026-07-10' }),
+      // The öre the invoices carry beyond the requested kronor clears too.
+      expect.objectContaining({ amount: 3000, paymentDate: '2026-07-10', oreRounding: 0.4 }),
+      expect.any(Function),
     )
   })
 
@@ -477,6 +507,7 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ bankAccount: '1920' }),
+      expect.any(Function),
     )
   })
 

@@ -1,0 +1,281 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Skatteverket's public test personnummer, shaped as a 12-digit redovisare.
+// For an enskild firma the redovisare and the AGI arbetsgivare ARE the owner's
+// personnummer, so neither may reach a log line.
+const PERSONNUMMER = '191212121212'
+// A distinctive amount: if it shows up in a log line, the momsuppgift leaked.
+const PAYLOAD_MARKER = 987654
+
+const mockSkvRequest = vi.fn()
+const mockAgiPostUnderlag = vi.fn()
+const mockAgiGetKontrollresultat = vi.fn()
+
+vi.mock('../lib/api-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api-client')>()
+  return {
+    ...actual,
+    skvRequest: (...args: unknown[]) => mockSkvRequest(...args),
+  }
+})
+
+vi.mock('../lib/agi-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/agi-client')>()
+  return {
+    ...actual,
+    agiPostUnderlag: (...args: unknown[]) => mockAgiPostUnderlag(...args),
+    agiGetKontrollresultat: (...args: unknown[]) => mockAgiGetKontrollresultat(...args),
+  }
+})
+
+vi.mock('../lib/declaration-prep', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/declaration-prep')>()
+  const { COMPLETE_VAT_DECLARATION } = await import('./vat-declaration-fixture')
+  return {
+    ...actual,
+    buildMomsuppgift: vi.fn(async () => ({
+      declaration: COMPLETE_VAT_DECLARATION,
+      redovisare: PERSONNUMMER,
+      redovisningsperiod: '202606',
+      momsuppgift: { momspliktigForsaljning: PAYLOAD_MARKER, momsUtgHog: PAYLOAD_MARKER },
+    })),
+    buildAgiUnderlag: vi.fn(async () => ({
+      arbetsgivare: PERSONNUMMER,
+      period: '202606',
+      salaryRunId: 'run-1',
+      xml: `<Arbetsgivare><AgRegistreradId>${PERSONNUMMER}</AgRegistreradId></Arbetsgivare>`,
+      periodYear: 2026,
+      periodMonth: 6,
+    })),
+  }
+})
+
+// The completeness verdict runs over the declaration above; its per-verifikat
+// ledger scan is stubbed.
+vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
+
+vi.mock('../lib/audit', () => ({
+  writeSkatteverketAudit: vi.fn(),
+}))
+
+vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
+  return {
+    ...actual,
+    requireCapability: vi.fn().mockResolvedValue(null),
+  }
+})
+
+import type { ExtensionContext } from '@/lib/extensions/types'
+import { skatteverketExtension } from '../index'
+import { asSkvUnavailable } from '../lib/api-client'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { NO_ANSWER } from './skv-no-answer-fixture'
+
+/** The write-role gate reads company_members; this caller is a member. */
+function memberSupabase() {
+  const membership = {
+    eq: () => membership,
+    maybeSingle: async () => ({ data: { role: 'member' }, error: null }),
+  }
+  return { from: () => ({ select: () => membership }) }
+}
+
+function makeContext(): ExtensionContext {
+  return {
+    userId: 'user-1',
+    companyId: 'company-1',
+    extensionId: 'skatteverket',
+    requestId: 'req-payload-logging',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase: memberSupabase() as any,
+    emit: vi.fn().mockResolvedValue(undefined),
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    settings: {
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any
+}
+
+function route(method: string, path: string) {
+  const found = skatteverketExtension.apiRoutes?.find(
+    (candidate) => candidate.method === method && candidate.path === path,
+  )
+  expect(found).toBeDefined()
+  return found!
+}
+
+function postJson(path: string, body: unknown): Request {
+  return new Request(`https://test.local/api/extensions/ext/skatteverket${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+const consoleMethods = ['log', 'info', 'warn', 'error', 'debug'] as const
+let consoleSpies: Array<ReturnType<typeof vi.spyOn>> = []
+
+/** Every argument any console method and the extension logger received, as text. */
+function everythingLogged(ctx: ExtensionContext): string {
+  const calls: unknown[][] = [
+    ...consoleSpies.flatMap((spy) => spy.mock.calls as unknown[][]),
+    ...Object.values(ctx.log).flatMap((fn) => vi.mocked(fn).mock.calls),
+  ]
+  return calls.map((args) => args.map(asLoggedText).join(' ')).join('\n')
+}
+
+/** JSON.stringify(new Error(...)) is "{}", so an Error is spelled out or a leak through it goes unseen. */
+function asLoggedText(arg: unknown): string {
+  if (typeof arg === 'string') return arg
+  if (arg instanceof Error) return `${arg.message}\n${arg.stack ?? ''}`
+  return JSON.stringify(arg)
+}
+
+function expectNoPayloadLogged(ctx: ExtensionContext) {
+  const logged = everythingLogged(ctx)
+  expect(logged).not.toContain(PERSONNUMMER)
+  expect(logged).not.toContain(String(PAYLOAD_MARKER))
+}
+
+describe('Skatteverket routes never log the declaration payload or the redovisare', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    consoleSpies = consoleMethods.map((method) => vi.spyOn(console, method).mockImplementation(() => {}))
+  })
+
+  afterEach(() => {
+    for (const spy of consoleSpies) spy.mockRestore()
+  })
+
+  const vatBody = { periodType: 'monthly', year: 2026, period: 6 }
+
+  it.each(['/declaration/validate', '/declaration/draft'])('%s logs nothing personal on success', async (path) => {
+    mockSkvRequest.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ kontrollresultat: { resultat: [] } }),
+    })
+    const ctx = makeContext()
+
+    const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
+
+    expect(response.status).toBe(200)
+    expect(mockSkvRequest).toHaveBeenCalledTimes(1)
+    expectNoPayloadLogged(ctx)
+  })
+
+  it.each(['/declaration/validate', '/declaration/draft'])(
+    '%s logs only the status when Skatteverket refuses, even if the body echoes the redovisare',
+    async (path) => {
+      mockSkvRequest.mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: async () => `Felaktig redovisare ${PERSONNUMMER}, belopp ${PAYLOAD_MARKER}`,
+      })
+      const ctx = makeContext()
+
+      const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
+
+      expect(response.status).toBe(400)
+      expect(ctx.log.error).toHaveBeenCalledWith(expect.any(String), {
+        redovisningsperiod: '202606',
+        status: 400,
+      })
+      expectNoPayloadLogged(ctx)
+      // The answer quotes what Skatteverket said, with the personnummer in it masked.
+      const answer = await response.json()
+      expect(answer.error).toContain('Skatteverkets svar: "Felaktig redovisare 19121212-XXXX')
+      expect(answer.skv).toMatchObject({ skv_status: 400 })
+      expect(JSON.stringify(answer)).not.toContain(PERSONNUMMER)
+    },
+  )
+
+  it.each(['/declaration/validate', '/declaration/draft'])(
+    '%s sends an unexpected error through the redacting module logger, even when it carries the redovisare',
+    async (path) => {
+      mockSkvRequest.mockRejectedValue(
+        new Error(`request to /kontrollera/${PERSONNUMMER}/202606 failed, belopp ${PAYLOAD_MARKER}`),
+      )
+      const ctx = makeContext()
+
+      const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
+
+      expect(response.status).toBe(500)
+      // The thrown text is for the log line only: the person reads a sentence
+      // (crm#1944), so neither the redovisare nor the amount reaches the page.
+      expect(await response.json()).toEqual({
+        error: 'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.',
+      })
+      // handleSkvError has no request context, so it writes through the module
+      // logger (createLogger('skatteverket')), the same redacting writer ctx.log wraps.
+      expect(everythingLogged(ctx)).toContain('[skatteverket] ERROR API error')
+      expectNoPayloadLogged(ctx)
+    },
+  )
+
+  // The dashboard door answers no answer from Skatteverket with the one
+  // answer (skvUnavailableAnswer): its code and status, never logged as our
+  // own error.
+  it.each(['/declaration/validate', '/declaration/draft'].flatMap((path) => NO_ANSWER.map(([label, platform]) => [path, label, platform] as const)))(
+    '%s, no answer (%s): SKATTEVERKET_UNAVAILABLE 503 in Swedish, not logged as our error',
+    async (path, _label, platform) => {
+      mockSkvRequest.mockRejectedValue(asSkvUnavailable(platform()))
+      const ctx = makeContext()
+
+      const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
+
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({
+        error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
+        code: 'SKATTEVERKET_UNAVAILABLE',
+      })
+      expect(getErrorEntry('SKATTEVERKET_UNAVAILABLE')?.retryable).toBe(true)
+      expect(everythingLogged(ctx)).not.toContain('ERROR API error')
+    },
+  )
+
+  it('/declaration/validate keeps a thrown sentence that was written in Swedish for the person', async () => {
+    mockSkvRequest.mockRejectedValue(new Error('Organisationsnummer saknas för företaget.'))
+    const ctx = makeContext()
+
+    const response = await route('POST', '/declaration/validate').handler(postJson('/declaration/validate', vatBody), ctx)
+
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'Organisationsnummer saknas för företaget.' })
+  })
+
+  it('/agi/submit logs nothing personal on success', async () => {
+    mockAgiPostUnderlag.mockResolvedValue({ ok: true, data: { inlamningId: 7 } })
+    mockAgiGetKontrollresultat.mockResolvedValue({ ok: true, data: { status: 'DONE_SUCCESS' } })
+    const ctx = makeContext()
+
+    const response = await route('POST', '/agi/submit').handler(postJson('/agi/submit', { salaryRunId: 'run-1' }), ctx)
+
+    expect(response.status).toBe(200)
+    expect(mockAgiPostUnderlag).toHaveBeenCalledTimes(1)
+    expectNoPayloadLogged(ctx)
+  })
+
+  it('/agi/submit logs only the status and kod when Skatteverket refuses', async () => {
+    mockAgiPostUnderlag.mockResolvedValue({
+      ok: false,
+      status: 400,
+      error: `Ogiltig arbetsgivare ${PERSONNUMMER}`,
+      body: { kod: 'FEL_01' },
+    })
+    const ctx = makeContext()
+
+    const response = await route('POST', '/agi/submit').handler(postJson('/agi/submit', { salaryRunId: 'run-1' }), ctx)
+
+    expect(response.status).toBe(400)
+    expect(ctx.log.error).toHaveBeenCalledWith(expect.any(String), {
+      status: 400,
+      kod: 'FEL_01',
+    })
+    expectNoPayloadLogged(ctx)
+  })
+})

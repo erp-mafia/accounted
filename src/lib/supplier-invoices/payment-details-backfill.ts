@@ -1,54 +1,29 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { formatBankgiroNumber, formatPlusgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
-import { normalizeIban } from '@/lib/cash-accounts/service'
-
-/**
- * The payment details a scanned or Peppol-delivered invoice carries for its
- * supplier. The extraction reads them together with everything else on the
- * invoice; until now they were only used when a NEW supplier was created
- * from the document, so an existing supplier without a bankgiro stayed
- * without one and its invoices could never go into a betalfil.
- */
-export interface SupplierPaymentDetails {
-  bankgiro?: string | null
-  plusgiro?: string | null
-  iban?: string | null
-  bic?: string | null
-}
+import { cleanSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/payments/payment-details'
 
 export type SupplierPaymentColumns = Pick<SupplierPaymentDetails, 'bankgiro' | 'plusgiro' | 'iban' | 'bic'>
 
-/** ISO 7064 mod 97-10 over the rearranged IBAN; the cheap check that rejects a misread digit. */
-export function isValidIban(raw: string | null | undefined): boolean {
-  const iban = normalizeIban(raw)
-  if (!iban || !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false
-  const rearranged = iban.slice(4) + iban.slice(0, 4)
-  let remainder = 0
-  for (const ch of rearranged) {
-    const value = ch >= 'A' ? String(ch.charCodeAt(0) - 55) : ch
-    for (const digit of value) remainder = (remainder * 10 + Number(digit)) % 97
-  }
-  return remainder === 1
-}
-
-export function isValidBic(raw: string | null | undefined): boolean {
-  const bic = (raw ?? '').replace(/\s+/g, '').toUpperCase()
-  return /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(bic)
-}
-
 /**
- * The details worth writing: each one validated on its own, so a misread
- * bankgiro never blocks a correct IBAN, and nothing invalid is ever stored.
+ * What an inbox item's extraction (the scan, or Peppol's PaymentMeans) says
+ * the invoice is paid to. The one reading for every door that registers a
+ * supplier invoice from an inbox item: the dashboard and v1 convert, the
+ * privately paid create and the MCP approval, so no door can keep less of it
+ * than another. Unvalidated: statedPayeeColumns and the backfill validate.
  */
-export function cleanSupplierPaymentDetails(details: SupplierPaymentDetails | null | undefined): SupplierPaymentColumns {
-  const out: SupplierPaymentColumns = {}
-  const bg = (details?.bankgiro ?? '').trim()
-  if (bg && validateBankgiroNumber(bg)) out.bankgiro = formatBankgiroNumber(bg)
-  const pg = (details?.plusgiro ?? '').trim()
-  if (pg && validatePlusgiroNumber(pg)) out.plusgiro = formatPlusgiroNumber(pg)
-  if (isValidIban(details?.iban)) out.iban = normalizeIban(details?.iban) as string
-  if (isValidBic(details?.bic)) out.bic = (details?.bic ?? '').replace(/\s+/g, '').toUpperCase()
-  return out
+export function inboxStatedPaymentDetails(extractedData: unknown): SupplierPaymentDetails | null {
+  const supplier = (extractedData as { supplier?: unknown } | null | undefined)?.supplier
+  if (!supplier || typeof supplier !== 'object') return null
+  const read = (key: keyof SupplierPaymentDetails): string | null => {
+    const value = (supplier as Record<string, unknown>)[key]
+    return typeof value === 'string' && value.trim() ? value : null
+  }
+  const details: SupplierPaymentDetails = {
+    bankgiro: read('bankgiro'),
+    plusgiro: read('plusgiro'),
+    iban: read('iban'),
+    bic: read('bic'),
+  }
+  return Object.values(details).some((value) => value !== null) ? details : null
 }
 
 /**

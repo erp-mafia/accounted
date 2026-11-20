@@ -63,6 +63,60 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(body.token_endpoint_auth_method).toBe('none')
   })
 
+  it('accepts registration with the Squidler callbacks, production and dev', async () => {
+    const redirectUris = [
+      'https://squidler.io/api/oauth/callback/accounted',
+      'https://dev.squidler.io/api/oauth/callback/accounted',
+    ]
+    const response = await POST(createRequest({
+      client_name: 'Squidler',
+      redirect_uris: redirectUris,
+      token_endpoint_auth_method: 'none',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual(redirectUris)
+  })
+
+  it('rejects other squidler.io paths and subdomains', async () => {
+    for (const uri of [
+      'https://squidler.io/api/oauth/callback/other',
+      'https://www.squidler.io/api/oauth/callback/accounted',
+    ]) {
+      const response = await POST(createRequest({
+        redirect_uris: [uri],
+        token_endpoint_auth_method: 'none',
+      }))
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it('accepts registration with a callback under celemine.com/upstream/', async () => {
+    const redirectUris = ['https://celemine.com/upstream/accounted/callback']
+    const response = await POST(createRequest({
+      client_name: 'Celemine',
+      redirect_uris: redirectUris,
+      token_endpoint_auth_method: 'none',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual(redirectUris)
+  })
+
+  it('rejects celemine.com callbacks that leave /upstream/ or the bare host', async () => {
+    for (const uri of [
+      'https://celemine.com/upstream/../evil',
+      'https://celemine.com/other/callback',
+      'https://app.celemine.com/upstream/callback',
+    ]) {
+      const response = await POST(createRequest({
+        redirect_uris: [uri],
+        token_endpoint_auth_method: 'none',
+      }))
+      expect(response.status).toBe(400)
+    }
+  })
+
   it('accepts the three redirect_uris Cursor registers in one request', async () => {
     // Cursor sends the legacy deeplink, the Cloud Agents web fallback and the
     // RFC 8252 loopback together; one unknown URI used to fail the whole set.
@@ -95,6 +149,34 @@ describe('POST /api/mcp-oauth/register', () => {
   it('rejects other grok.com paths', async () => {
     const response = await POST(createRequest({
       redirect_uris: ['https://grok.com/oauth/callback'],
+    }))
+    expect(response.status).toBe(400)
+  })
+
+  it('registers Gemini as a public client although it asks for a client secret', async () => {
+    // The body Gemini custom apps send (github.com/a91453/mml-tools pull 136):
+    // a confidential-client request on Google's relay. The answer is the same
+    // public PKCE client every caller gets, with no secret to hold.
+    const redirect = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se'
+    const response = await POST(createRequest({
+      client_name: 'Gemini',
+      redirect_uris: [redirect],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'client_secret_basic',
+      scope: 'mcp offline_access',
+      application_type: 'web',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual([redirect])
+    expect(body.token_endpoint_auth_method).toBe('none')
+    expect(body.client_secret).toBeUndefined()
+  })
+
+  it('rejects a Google relay callback that is not a Gemini custom app', async () => {
+    const response = await POST(createRequest({
+      redirect_uris: ['https://oauth-redirect.googleusercontent.com/r/some-cloud-project'],
     }))
     expect(response.status).toBe(400)
   })

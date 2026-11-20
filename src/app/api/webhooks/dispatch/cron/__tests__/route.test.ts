@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { __TESTING__ } from '@/lib/webhooks/dispatcher'
+import { __TESTING__ as VERIFICATION_TESTING } from '@/lib/webhooks/verification'
 
 vi.mock('@/lib/auth/cron', () => ({
   verifyCronSecret: vi.fn(() => null),
@@ -32,11 +33,17 @@ vi.mock('@/lib/webhooks/dispatcher', async (importOriginal) => {
   }
 })
 
-import { GET, maxDuration } from '../route'
+const runDueVerifications = vi.fn()
+vi.mock('@/lib/webhooks/verification', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/webhooks/verification')>()
+  return {
+    ...actual,
+    runDueVerifications: (...args: unknown[]) => runDueVerifications(...args),
+  }
+})
 
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/webhooks/dispatch/cron')
-}
+import { GET, maxDuration } from '../route'
+import { createCronRequest } from '@/tests/helpers'
 
 const SUMMARY = {
   picked: 3,
@@ -45,14 +52,18 @@ const SUMMARY = {
   dead: 1,
   skipped: 0,
   released: 0,
+  withheld: 0,
   recovered: 2,
   recoveredDead: 1,
 }
+
+const VERIFICATION = { picked: 2, verified: 1, failed: 1, skipped: 0 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(verifyCronSecret).mockReturnValue(null)
   dispatchDueDeliveries.mockResolvedValue(SUMMARY)
+  runDueVerifications.mockResolvedValue(VERIFICATION)
 })
 
 describe('GET /api/webhooks/dispatch/cron', () => {
@@ -68,6 +79,14 @@ describe('GET /api/webhooks/dispatch/cron', () => {
         __TESTING__.REQUEST_TIMEOUT_MS +
         __TESTING__.STUCK_RECOVERY_SLACK_MS,
     )
+    // The verification handshakes run before the cycle, in parallel, each
+    // bounded by one receiver timeout: they must fit alongside it.
+    expect(maxDuration * 1000).toBeGreaterThan(
+      VERIFICATION_TESTING.REQUEST_TIMEOUT_MS +
+        __TESTING__.CYCLE_BUDGET_MS +
+        __TESTING__.REQUEST_TIMEOUT_MS +
+        __TESTING__.STUCK_RECOVERY_SLACK_MS,
+    )
   })
 
   it('returns 401 and dispatches nothing when the cron secret is invalid', async () => {
@@ -75,20 +94,37 @@ describe('GET /api/webhooks/dispatch/cron', () => {
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/webhooks/dispatch/cron'))
 
     expect(response.status).toBe(401)
     expect(dispatchDueDeliveries).not.toHaveBeenCalled()
+    expect(runDueVerifications).not.toHaveBeenCalled()
   })
 
   it('returns the full dispatch summary, including the sweep outcome', async () => {
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/webhooks/dispatch/cron'))
     expect(response.status).toBe(200)
 
     const body = (await response.json()) as { data: typeof SUMMARY }
     // recovered / recoveredDead are the counts an operator needs to see that a
     // tick took deliveries to the terminal, immutable 'dead' state.
-    expect(body.data).toEqual(SUMMARY)
+    expect(body.data).toEqual({ ...SUMMARY, verification: VERIFICATION })
     expect(dispatchDueDeliveries).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs the due verification handshakes before the dispatch cycle', async () => {
+    const order: string[] = []
+    runDueVerifications.mockImplementationOnce(async () => {
+      order.push('verify')
+      return VERIFICATION
+    })
+    dispatchDueDeliveries.mockImplementationOnce(async () => {
+      order.push('dispatch')
+      return SUMMARY
+    })
+
+    await GET(createCronRequest('/api/webhooks/dispatch/cron'))
+
+    expect(order).toEqual(['verify', 'dispatch'])
   })
 })

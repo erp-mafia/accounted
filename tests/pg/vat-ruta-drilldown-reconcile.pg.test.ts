@@ -5,10 +5,12 @@
  * posted closing entries, source_type 'vat_settlement', the two kontantmetod
  * year-end reversals, and any entry shaped like a momsredovisning (a line on a
  * ruta account AND a line on 2650/1650, or since 20260920182259 a pure 26xx
- * movement against the skattekonto 1630). `get_vat_ruta_source_lines` filtered
+ * movement against the skattekonto 1630). Since crm#1333 an opening balance
+ * dated on the period's first day, with its stornos and rättelser, is dropped
+ * too. `get_vat_ruta_source_lines` filtered
  * on company, status and date only, so expanding a ruta listed verifikat that
- * were not in the number it claims to explain. 322 posted/reversed entries
- * across 214 companies sat in those classes on production (2026-08-28).
+ * were not in the number it claims to explain. Posted/reversed entries
+ * sat in those classes in real ledgers (2026-08-28).
  *
  * A momsdeklaration is räkenskapsinformation (BFL 5 kap.) and this drill-down
  * is what substantiates a filed figure, so the headline test here is a single
@@ -25,6 +27,11 @@ import {
   insertFiscalPeriod,
   insertPostedJournalEntry,
 } from './fixtures'
+import {
+  carryCustomerInvoice,
+  insertCustomerInvoice,
+  stornoEntry,
+} from './kontantmetod-carry-fixtures'
 
 // Mirrors the TS call site: a representative slice of ACCOUNT_RUTA. The full
 // list is a parameter, never baked into the SQL.
@@ -81,6 +88,7 @@ async function insertEntry(params: {
   sourceType?: string
   sourceId?: string
   description?: string
+  entryDate?: string
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
   return insertPostedJournalEntry({
@@ -88,7 +96,7 @@ async function insertEntry(params: {
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
     voucherNumber: params.voucherNumber,
-    entryDate: '2026-03-15',
+    entryDate: params.entryDate ?? '2026-03-15',
     description: params.description ?? 'drilldown test',
     sourceType: params.sourceType ?? 'manual',
     sourceId: params.sourceId ?? null,
@@ -120,6 +128,7 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
   let companyId: string
   let fiscalPeriodId: string
   let plainEntryId: string
+  let carryEntryId: string
 
   beforeAll(async () => {
     userId = await insertAuthUser()
@@ -188,15 +197,24 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
       journalEntryId: legacyReversalId,
     })
 
-    // 5. An opening balance. Deliberately NOT excluded: the figure exempts
-    //    opening_balance from `shaped`, which keeps its lines in the totals.
-    //    Dropping it here would break the equality in the other direction.
+    // 5. Two opening balances (crm#1333). One dated inside the period (a
+    //    mid-year migration) counts in the figure, so the drill-down lists it;
+    //    one dated on the period's first day carries only earlier periods, so
+    //    neither the figure nor the drill-down has it.
     await insertEntry({
       userId, companyId, fiscalPeriodId, voucherNumber: 5,
       sourceType: 'opening_balance', description: 'Ingående balans',
       lines: [
         { account: '2641', debit: 75, credit: 0 },
         { account: BALANCING_ACCOUNT, debit: 0, credit: 75 },
+      ],
+    })
+    await insertEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 55, entryDate: '2026-01-01',
+      sourceType: 'opening_balance', description: 'Ingående balans vid årets början',
+      lines: [
+        { account: '2641', debit: 33, credit: 0 },
+        { account: BALANCING_ACCOUNT, debit: 0, credit: 33 },
       ],
     })
 
@@ -267,6 +285,17 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
         { account: '1630', debit: 0, credit: 60 },
       ],
     })
+
+    // 8. A per-invoice kontantmetod carry (#3440, 20261018131100), and a
+    //    second one stornoed on its own date. Nothing in a per-invoice marker
+    //    is excluded: both carries and the storno count in the figure and in
+    //    the drill-down alike, so the stornoed pair nets to zero.
+    const carryCompany = { userId, companyId, fiscalPeriodId, nextPeriodId: fiscalPeriodId }
+    const carriedInvoice = await insertCustomerInvoice(carryCompany)
+    carryEntryId = await carryCustomerInvoice(carryCompany, carriedInvoice)
+    const stornoedInvoice = await insertCustomerInvoice(carryCompany)
+    const stornoedCarry = await carryCustomerInvoice(carryCompany, stornoedInvoice)
+    await stornoEntry(carryCompany, stornoedCarry)
   }, 60_000)
 
   it('sums identically to the figure, for every account', async () => {
@@ -298,7 +327,8 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
     const lines = await drillDown(companyId, ['2611'])
     expect(lines.length).toBeGreaterThan(0)
     expect(lines.map((l) => l.journal_entry_id)).toContain(plainEntryId)
-    expect(sumOf(lines).credit).toBe(200)
+    // The sale's own lines: the per-invoice carries (8.) also credit 2611.
+    expect(sumOf(lines.filter((l) => l.journal_entry_id === plainEntryId)).credit).toBe(200)
   }, 30_000)
 
   it('excludes tagged settlements, shaped settlements, marked kontantmetod reversals and closing entries', async () => {
@@ -315,6 +345,11 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
     expect(descriptions).toContain('Omformulerad avgränsning 2026')
   }, 30_000)
 
+  it('counts a per-invoice carry, which no marker kind excludes', async () => {
+    const lines = await drillDown(companyId, ['2611'])
+    expect(lines.map((l) => l.journal_entry_id)).toContain(carryEntryId)
+  }, 30_000)
+
   it('keeps an unmarked entry that merely carries the old vändning wording', async () => {
     // Asserted against the ledger, not against the other function: a filter
     // keyed on text would drop this line from a figure it belongs in.
@@ -322,12 +357,10 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
     expect(descriptions).toContain('Vändning kundfordringar bokslut (kontantmetoden)')
   }, 30_000)
 
-  it('keeps opening-balance lines, which the figure also counts', async () => {
-    // The subtle one. `shaped` exempts opening_balance, so its 26xx lines stay
-    // in the totals; excluding them from the drill-down would be a new bug in
-    // the opposite direction.
-    const lines = await drillDown(companyId, ['2641'])
-    expect(lines.map((l) => l.description)).toContain('Ingående balans')
+  it('lists an opening balance dated inside the period and not one on its first day, as the figure counts them (crm#1333)', async () => {
+    const descriptions = (await drillDown(companyId, ['2641'])).map((l) => l.description)
+    expect(descriptions).toContain('Ingående balans')
+    expect(descriptions).not.toContain('Ingående balans vid årets början')
   }, 30_000)
 
   it('grants EXECUTE to authenticated and service_role but not anon', async () => {

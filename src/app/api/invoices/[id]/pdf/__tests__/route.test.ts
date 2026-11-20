@@ -29,7 +29,6 @@ vi.mock('@react-pdf/renderer', () => ({
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue('mock-pdf-element'),
   brandingFromCompanySettings: vi.fn().mockReturnValue({}),
-  SHOW_SWISH_ON_INVOICE: false,
 }))
 
 import { GET } from '../route'
@@ -38,7 +37,7 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 describe('GET /api/invoices/[id]/pdf', () => {
   const user = { id: 'user-1', email: 'owner@example.test' }
   const customer = makeCustomer({ name: 'Kund ÅÄÖ AB' })
-  const company = makeCompanySettings({ company_name: 'Oppy Sverige', bankgiro: '123-4567' })
+  const company = makeCompanySettings({ company_name: 'Exempelbolaget Sverige', bankgiro: '123-4567' })
   const invoice = makeInvoice({
     id: 'invoice-1',
     invoice_number: '2621',
@@ -92,7 +91,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
 
     expect(response.status).toBe(200)
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-      .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+      .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
@@ -124,7 +123,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
     // The filename still travels with it, so the browser viewer's own save
     // action produces the same name as the download button would.
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-      .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+      .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
     expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff')
   })
 
@@ -192,6 +191,23 @@ describe('GET /api/invoices/[id]/pdf', () => {
       expect(response.status).toBe(400)
       expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
       expect(body.error.details.currency).toBe('EUR')
+      expect(renderToBufferMock).not.toHaveBeenCalled()
+    })
+
+    it('refuses an invoice whose customer was deleted, so the preview shows why (crm#263)', async () => {
+      enqueue({ data: { ...invoice, status: 'draft', customer_id: null, customer: null }, error: null })
+
+      const response = await GET(
+        createMockRequest('/api/invoices/invoice-1/pdf', {
+          searchParams: { disposition: 'inline', probe: '1' },
+        }),
+        createMockRouteParams({ id: 'invoice-1' }),
+      )
+      const body = await response.json()
+
+      expect(response.status).toBe(409)
+      expect(body.error.code).toBe('INVOICE_CUSTOMER_MISSING')
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store')
       expect(renderToBufferMock).not.toHaveBeenCalled()
     })
 
@@ -312,7 +328,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
 
       expect(response.status).toBe(200)
       expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-        .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+        .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
     })
   })
 

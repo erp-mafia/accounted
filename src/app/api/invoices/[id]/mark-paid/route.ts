@@ -1,17 +1,95 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { carriedSekOf, paidOfClearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { deriveCustomerSettlementAmount } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
-import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
-import { roundOre } from '@/lib/money'
-import type { EntityType, Invoice } from '@/types'
+import { resolveInvoicePaymentAccount } from '@/lib/invoices/invoice-payee'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { refundCreditNote, type RefundCreditNoteRow, type RefundCustomLine } from '@/lib/invoices/refund-credit-note'
+import type { RouteContext } from '@/lib/api/with-route-context'
+import type { Logger } from '@/lib/logger'
+import type { Invoice } from '@/types'
 
-ensureInitialized()
+/**
+ * The refund of a kreditfaktura (follow-up of crm#1435): the body is the
+ * mark-paid body, payment_date being the refund's date and lines the
+ * person's own rows (Dr 1510 / Cr the bank). Without lines the whole amount
+ * owed goes out of the account the customer paid to (the credit note's
+ * payee, the primary bank account when none was chosen). The credit note keeps its status: the
+ * response says so with refund: true.
+ */
+async function creditNoteRefundResponse(
+  request: Request,
+  ctx: RouteContext,
+  creditNote: RefundCreditNoteRow,
+  opLog: Logger,
+): Promise<Response> {
+  const { user, supabase, companyId, requestId } = ctx
+  let rawBody: unknown
+  try {
+    const text = await request.text()
+    if (text) rawBody = JSON.parse(text)
+  } catch {
+    // Empty / invalid body: the whole refund, today.
+  }
+  let body: { payment_date?: string; lines?: RefundCustomLine[]; force?: boolean; payment_account?: string } = {}
+  if (rawBody) {
+    const parsed = MarkInvoicePaidSchema.safeParse(rawBody)
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Ogiltig förfrågan', details: parsed.error.flatten() }, { status: 400 })
+    }
+    // A refund is in kronor (planCreditNoteRefund refuses another currency),
+    // so it never carries an exchange difference.
+    if (parsed.data.exchange_rate_difference) {
+      return errorResponseFromCode('CREDIT_NOTE_REFUND_UNSUPPORTED', opLog, {
+        requestId,
+        details: { reason: 'foreign_currency' },
+      })
+    }
+    body = parsed.data
+  }
+
+  // The account the refund leaves: the one the caller names, else the credit
+  // note's payee, else the primary bank account.
+  const refundAccount = await resolveInvoicePaymentAccount(supabase, companyId, creditNote, body.payment_account)
+  if (!refundAccount.ok) {
+    return errorResponseFromCode(refundAccount.code, opLog, { requestId, details: refundAccount.details })
+  }
+  const result = await refundCreditNote(supabase, companyId, user.id, {
+    creditNote,
+    refundDate: body.payment_date || todayIsoStockholm(),
+    settlementAccountNumber: refundAccount.account,
+    customLines: body.lines,
+    force: body.force === true,
+  })
+  if (!result.ok) {
+    if (result.code === 'BOOKKEEPING_ERROR' || result.code === 'DB_ERROR') {
+      return errorResponse(result.error, opLog, { requestId })
+    }
+    return errorResponseFromCode(result.code, opLog, {
+      requestId,
+      ...('details' in result ? { details: result.details } : {}),
+    })
+  }
+  return NextResponse.json({
+    success: true,
+    refund: true,
+    status: creditNote.status,
+    paid_at: result.refundedAt,
+    paid_amount: result.paidAmount,
+    refunded_amount: result.amount,
+    owed_after: result.owedAfter,
+    journal_entry_id: result.journalEntryId,
+  })
+}
 
 /**
  * POST /api/invoices/[id]/mark-paid
@@ -21,9 +99,14 @@ ensureInitialized()
  * Faktureringsmetoden (accrual): Debit 1930, Credit 1510 (clearing entry)
  * Kontantmetoden (cash):         Debit 1930, Credit 30xx, Credit 26xx
  *
+ * A company that books invoices in a separate step (defer_invoice_booking)
+ * gets an unbooked invoice's sale booked first, by the Bokför step on its
+ * invoice date, then the clearing (lib/invoices/sale-first.ts); a refusal
+ * there refuses the payment with nothing written.
+ *
  * The booking + status transition live in settleInvoicePayment (shared with
- * the Stripe payment sync); this route owns request parsing, the payable
- * guard, and the duplicate-payment advisory.
+ * the Stripe payment sync); this route owns request parsing and the
+ * duplicate-payment advisory.
  */
 export const POST = withRouteContext(
   'invoice.mark_paid',
@@ -34,7 +117,7 @@ export const POST = withRouteContext(
 
     const { data: invoice, error: invoiceError } = await supabase
       .from('invoices')
-      .select('*, customer:customers(*), items:invoice_items(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
+      .select('*, customer:customers(*), items:invoice_items(*)')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -43,45 +126,10 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_PAID_NOT_FOUND', opLog, { requestId })
     }
 
+    // A kreditfaktura is not paid by the customer: the company pays its
+    // credit back. The same door records that refund (Dr 1510 / Cr bank).
     if (invoice.credited_invoice_id) {
-      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
-        requestId,
-        details: { reason: 'credit_note' },
-      })
-    }
-
-    const activeCreditNotes = ((invoice as { credit_notes?: Array<{
-      status: string
-      creation_complete?: boolean
-    }> }).credit_notes ?? []).filter(
-      (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
-    )
-    if (activeCreditNotes.length > 0) {
-      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
-        requestId,
-        details: { reason: 'active_credit_note' },
-      })
-    }
-
-    // partially_paid is payable (#1717): an invoice stuck with a sub-krona
-    // remaining (öresavrundning) or an ordinary open partial is completed
-    // here. settleInvoicePayment's plan math and CAS guard already handle
-    // the state; only this route-level gate excluded it.
-    // A quote is an offer, not a claim: nothing is owed until it has been
-    // converted to a faktura.
-    if (invoice.document_type === 'quote') {
-      return errorResponseFromCode('INVOICE_QUOTE_NOT_PAYABLE', opLog, { requestId })
-    }
-
-    if (
-      invoice.status !== 'sent' &&
-      invoice.status !== 'overdue' &&
-      invoice.status !== 'partially_paid'
-    ) {
-      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
-        requestId,
-        details: { currentStatus: invoice.status },
-      })
+      return creditNoteRefundResponse(request, ctx, invoice as RefundCreditNoteRow, opLog)
     }
 
     // Optional body. Backwards-compat: callers may POST with no body.
@@ -89,6 +137,7 @@ export const POST = withRouteContext(
     let bodyPaymentDate: string | undefined
     let customLines: { account_number: string; debit_amount: number; credit_amount: number; line_description?: string }[] | undefined
     let force = false
+    let paymentAccount: string | undefined
     let rawBody: unknown
     try {
       const text = await request.text()
@@ -112,10 +161,19 @@ export const POST = withRouteContext(
       bodyPaymentDate = parsed.data.payment_date
       customLines = parsed.data.lines
       force = parsed.data.force === true
+      paymentAccount = parsed.data.payment_account
     }
 
-    const now = new Date().toISOString()
-    const paymentDate = bodyPaymentDate || now.split('T')[0]
+    // The Swedish calendar day, as on the v1 and agent doors: near midnight
+    // the UTC date is still yesterday (possibly last month or a closed period).
+    const paymentDate = bodyPaymentDate || todayIsoStockholm()
+
+    // Before the duplicate guard: a document that cannot be paid hears that,
+    // not a warning about a bank row (settleInvoicePayment asks again).
+    const notPayable = await invoicePayableRefusal(supabase, companyId!, invoice, paymentDate)
+    if (notPayable) {
+      return errorResponseFromCode(notPayable.code, opLog, { requestId, details: notPayable.details })
+    }
 
     // Duplicate-payment guard: surface a likely-matching unlinked inbound bank
     // transaction before booking. Skipped on partial payments (explicit,
@@ -178,18 +236,24 @@ export const POST = withRouteContext(
       : (invoice as { deduction_total?: number | null }).deduction_total ?? 0
     const deductionCapSek =
       deductionTotal > 0 && needsFxConversion
-        ? roundOre(deductionTotal * fxRate!)
+        ? sekOfForeign(deductionTotal, fxRate!)
         : deductionTotal
     const paymentAmount = customLines
       ? deriveCustomerSettlementAmount(customLines, deductionCapSek)
       : remainingAmount
     const paymentAmountInInvoiceCurrency = needsFxConversion
-      ? roundOre(paymentAmount / fxRate!)
+      ? paidOfClearedSek({
+          sek: paymentAmount,
+          remaining: remainingAmount,
+          carried: await carriedSekOf(supabase, companyId!, 'customer', invoice),
+          rate: fxRate!,
+        })
       : paymentAmount
 
     const paidRounded = Math.round(paymentAmountInInvoiceCurrency * 100) / 100
     const remainingRounded = Math.round(remainingAmount * 100) / 100
-    if (!force && paidRounded >= remainingRounded) {
+    const guardApplies = paidRounded >= remainingRounded
+    if (!force && guardApplies) {
       const customerName = (invoice as Invoice & { customer?: { name?: string } }).customer?.name
       if (!customerName) {
         opLog.warn('duplicate-payment guard skipped', {
@@ -232,21 +296,29 @@ export const POST = withRouteContext(
       })
     }
 
-    const { data: settings } = await supabase
+    const settingsRead = await supabase
       .from('company_settings')
       .select('accounting_method, entity_type')
       .eq('company_id', companyId)
       .single()
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+    // Fail closed (accounted#58): an unreadable method refuses, never books
+    // a kontantmetod invoice's payment as a 1510 clearing.
+    const accountingMethod = requireAccountingMethod(settingsRead)
+    const entityType = await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type)
 
     // paymentAmountInInvoiceCurrency was resolved above, before the
     // duplicate-payment guard, so the guard comparison and the ledger math run
     // in the same unit as remaining_amount.
     // The generated debit lands on the bank account the invoice asked to be
-    // paid to (1930 when none was chosen). Custom lines carry their own.
-    const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId!, invoice as Invoice)
+    // paid to (the primary bank account when none was chosen), or on the
+    // account the caller says the money landed on (payment_account, crm#1823).
+    // Custom lines carry their own.
+    const settlementAccount = await resolveInvoicePaymentAccount(supabase, companyId!, invoice as Invoice, paymentAccount)
+    if (!settlementAccount.ok) {
+      return errorResponseFromCode(settlementAccount.code, opLog, { requestId, details: settlementAccount.details })
+    }
+    const settlementAccountNumber = settlementAccount.account
     const result = await settleInvoicePayment(supabase, companyId!, user.id, {
       invoice: invoice as Invoice & { customer?: { name?: string | null } | null },
       paymentAmountInInvoiceCurrency,
@@ -256,10 +328,16 @@ export const POST = withRouteContext(
       exchangeRateDifference,
       customLines,
       settlementAccountNumber,
+      paymentSource: 'manual',
+      // force on a partial overrides nothing: the guard never runs there.
+      ...(force && guardApplies ? { duplicateGuardBypass: { user_id: user.id, actor_type: 'user' as const } } : {}),
     })
 
     if (!result.ok) {
       switch (result.code) {
+        case 'SALE_FIRST_REFUSED':
+          // The Bokför step's own code, details.sale_first: nothing was written.
+          return sessionFailureResponse(result.refusal, opLog, requestId)
         case 'BOOKKEEPING_ERROR':
           return errorResponse(result.error, opLog, { requestId })
         case 'UPDATE_FAILED':
@@ -290,6 +368,11 @@ export const POST = withRouteContext(
       paid_amount: result.newPaidAmount,
       remaining_amount: result.newRemaining,
       journal_entry_id: result.journalEntryId,
+      // The sale verifikat this payment booked first (defer_invoice_booking).
+      ...(result.saleJournalEntryId ? { sale_journal_entry_id: result.saleJournalEntryId } : {}),
+      ...(result.warnings.length > 0
+        ? { warnings: result.warnings.map((w) => ({ code: w.code, message: w.message_sv })) }
+        : {}),
     })
   },
   { requireWrite: true },

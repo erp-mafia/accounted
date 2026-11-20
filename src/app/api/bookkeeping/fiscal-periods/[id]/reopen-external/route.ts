@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server'
-import { reopenExternallyClosedPeriod } from '@/lib/core/bookkeeping/period-service'
+import { reopenExternallyClosedFiscalPeriod } from '@/lib/core/bookkeeping/fiscal-year-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 // Undo "klarmarkera": reopen a period that was marked as closed in a previous
-// bookkeeping system. Structured envelope like the sibling lock/unlock routes
-// (FiscalYearsManager surfaces error.message verbatim).
+// bookkeeping system. The refusal codes (PERIOD_NOT_FOUND,
+// PERIOD_REOPEN_NOT_CLOSED, PERIOD_REOPEN_NOT_EXTERNAL) come from
+// lib/core/bookkeeping/fiscal-year-service.ts, shared with the v1 operation
+// fiscal-periods.reopen-external (FiscalYearsManager surfaces error.message).
 export const POST = withRouteContext(
   'period.reopen_external',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
@@ -13,26 +15,13 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
 
-    try {
-      const period = await reopenExternallyClosedPeriod(supabase, companyId!, user.id, id)
-      return NextResponse.json({ data: period })
-    } catch (err) {
-      opLog.error('failed to reopen externally closed period', err as Error)
-      // reopenExternallyClosedPeriod() throws plain Error: "Fiscal period not
-      // found", "Period is not closed", "Period was closed with a year-end
-      // run ...". Translate to envelope codes, mirroring the unlock route.
-      const message = err instanceof Error ? err.message : ''
-      if (/not found/i.test(message)) {
-        return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
-      }
-      if (/not closed/i.test(message)) {
-        return errorResponseFromCode('PERIOD_REOPEN_NOT_CLOSED', opLog, { requestId })
-      }
-      if (/year-end run/i.test(message)) {
-        return errorResponseFromCode('PERIOD_REOPEN_NOT_EXTERNAL', opLog, { requestId })
-      }
-      return errorResponse(err, opLog, { requestId })
-    }
+    const outcome = await reopenExternallyClosedFiscalPeriod(
+      { supabase, companyId, userId: user.id, log: opLog },
+      id,
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, opLog, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 export function Section({ title, help, children, className }: { title: string; help?: string; children: ReactNode; className?: string }) {
   return (
     <section className={cn('min-w-0 space-y-2', className)}>
-      <div className="flex items-center gap-2 border-b border-border pb-2">
+      <div className="flex items-center gap-2 border-b-hairline pb-2">
         <h2 className="text-sm font-medium">{title}</h2>
         {help ? <HelpPopover>{help}</HelpPopover> : null}
       </div>
@@ -25,10 +25,10 @@ export function DefList({ children, className }: { children: ReactNode; classNam
 
 export function DefRow({ label, children, source, muted, labelWidth = 150 }: { label: ReactNode; children: ReactNode; source?: ReactNode; muted?: boolean; labelWidth?: number }) {
   return (
-    <div className="grid items-baseline gap-x-4 border-b border-border py-2 last:border-b-0" style={{ gridTemplateColumns: `${labelWidth}px minmax(0, 1fr)` }}>
-      <dt className="text-[12.5px] text-muted-foreground">{label}</dt>
+    <div className="grid items-baseline gap-x-4 border-b-hairline py-2 last:border-b-0" style={{ gridTemplateColumns: `${labelWidth}px minmax(0, 1fr)` }}>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="m-0 flex items-baseline justify-between gap-3">
-        <span className={cn('min-w-0 tabular-nums', muted && 'text-muted-foreground')}>{children}</span>
+        <span className={cn('min-w-0 break-words tabular-nums', muted && 'text-muted-foreground')}>{children}</span>
         {source}
       </dd>
     </div>
@@ -37,7 +37,7 @@ export function DefRow({ label, children, source, muted, labelWidth = 150 }: { l
 
 /** "Hyresavtal, s. 4": the page a value was read from, opening the file there. */
 export function SourceLink({ href, label }: { href: string | null; label: string }) {
-  const className = 'whitespace-nowrap text-[11px] text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground'
+  const className = 'whitespace-nowrap text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground'
   if (!href) return <span className={className.replace(' underline', '')}>{label}</span>
   return (
     <a href={href} target="_blank" rel="noreferrer" className={className}>

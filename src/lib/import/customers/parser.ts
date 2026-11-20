@@ -1,6 +1,7 @@
 import type { CustomerType } from '@/types'
-import { detectCustomerColumns } from './column-detector'
-import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
+import { PRIVATE_PERSON_FLAG_KEYWORDS, detectCustomerColumns } from './column-detector'
+import { cellOrNull, matchesKeywords, parsePaymentTerms } from '../shared/column-utils'
+import { columnName, unmapColumnsTheDataContradicts, type ColumnShapeCheck } from '../shared/column-checks'
 import { classifyCustomer } from '../shared/classify'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
@@ -9,10 +10,15 @@ import {
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
 import { readBestSheet } from '../shared/workbook-reader'
+import { isOrgNumberRefusedOnIndividual } from '@/lib/invariants/personal-number-shape'
+import { swedishNumberKind } from '@/lib/invariants/org-number'
 import type {
   DetectedCustomerColumns,
   ParsedCustomerRow,
 } from './types'
+
+const INDIVIDUAL_ORG_NUMBER_ERROR =
+  'En privatperson har inget organisationsnummer: ange personnumret eller välj ett företag som kundtyp'
 
 const VALID_CUSTOMER_TYPES: CustomerType[] = [
   'individual',
@@ -22,6 +28,42 @@ const VALID_CUSTOMER_TYPES: CustomerType[] = [
 ]
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+const ORG_NUMBER_RE = /^[\d\s\-]{6,20}$/
+
+/**
+ * A Swedish company row whose number reads as neither a company's nor a
+ * person's: a typo, or a VAT number in the org number column. Stored, it would
+ * pass for an identity no filing or provider can use.
+ */
+function isUnreadableSwedishNumber(customerType: CustomerType, orgNumber: string): boolean {
+  return customerType === 'swedish_business'
+    && /^\d{10}(\d{2})?$/.test(orgNumber.replace(/[\s-]/g, ''))
+    && swedishNumberKind(orgNumber) === 'none'
+}
+
+/** Same cap as the customer form and the MCP tools. */
+const CUSTOMER_NUMBER_MAX_LENGTH = 32
+
+/** The detected columns the file's own data can overrule (lib/import/shared/column-checks.ts). */
+const SHAPE_CHECKS: ColumnShapeCheck<keyof DetectedCustomerColumns & string>[] = [
+  { key: 'email_col', field: 'E-post', accepts: (v) => EMAIL_RE.test(v) },
+  { key: 'org_number_col', field: 'Org-/personnummer', accepts: (v) => ORG_NUMBER_RE.test(v) },
+  { key: 'country_col', field: 'Land', accepts: (v) => normalizeCountryCode(v) !== null },
+]
+
+/**
+ * A yes/no cell of a private-person flag column: true for a private person,
+ * false for a business, null when the cell is not a yes/no at all. Covers
+ * True/False as Spiris writes it and SANT/FALSKT as Swedish Excel re-saves it.
+ */
+function parsePrivatePersonFlag(value: string | null): boolean | null {
+  if (!value) return null
+  const lower = value.toLowerCase().trim()
+  if (['true', 'sant', 'ja', 'yes', '1', 'x'].includes(lower)) return true
+  if (['false', 'falskt', 'nej', 'no', '0'].includes(lower)) return false
+  return null
+}
 
 function normalizeCustomerType(value: string | null): CustomerType | null {
   if (!value) return null
@@ -50,11 +92,11 @@ function normalizeCustomerType(value: string | null): CustomerType | null {
  * @param filename - Original filename
  * @param columnOverrides - Optional manual column mapping
  */
-export function parseCustomersFile(
+export async function parseCustomersFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedCustomerColumns,
-): {
+): Promise<{
   filename: string
   sheet_name: string
   total_rows: number
@@ -63,12 +105,13 @@ export function parseCustomersFile(
   preview_rows: string[][]
   rows: ParsedCustomerRow[]
   warnings: string[]
-} {
-  const { sheetName, rawData } = readBestSheet(buffer, filename)
+}> {
+  const { sheetName, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedCustomerColumns = columnOverrides ?? {
       name_col: 0,
+      customer_number_col: null,
       org_number_col: null,
       customer_type_col: null,
       email_col: null,
@@ -97,7 +140,13 @@ export function parseCustomersFile(
 
   const headers = rawData[0].map((h) => String(h))
   const dataRows = rawData.slice(1)
-  const columns = columnOverrides || detectCustomerColumns(headers)
+  const checked = columnOverrides
+    ? { columns: columnOverrides, warnings: [] }
+    : unmapColumnsTheDataContradicts(detectCustomerColumns(headers), headers, dataRows, SHAPE_CHECKS)
+  const columns = checked.columns
+  const header = (index: number | null) => (index === null ? '' : columnName(headers, index))
+  const typeColumnIsFlag = columns.customer_type_col != null
+    && matchesKeywords(headers[columns.customer_type_col] ?? '', PRIVATE_PERSON_FLAG_KEYWORDS)
 
   // Detection leaves name_col at -1 when no header looked like a name. Read the
   // first column so the preview still has rows and the mapping step (confidence
@@ -106,13 +155,18 @@ export function parseCustomersFile(
   const nameCol = columns.name_col >= 0 ? columns.name_col : 0
 
   const rows: ParsedCustomerRow[] = []
-  const warnings: string[] = []
+  const warnings: string[] = [...checked.warnings]
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i]
     const name = cellOrNull(row[nameCol])
     if (!name) continue // skip empty rows silently
 
+    // Loose check: column_overrides from a wizard opened before this field
+    // existed has no customer_number_col key at all.
+    const customerNumber = columns.customer_number_col != null
+      ? cellOrNull(row[columns.customer_number_col])
+      : null
     const orgNumber = columns.org_number_col !== null
       ? cellOrNull(row[columns.org_number_col])
       : null
@@ -147,15 +201,22 @@ export function parseCustomersFile(
       ? cellOrNull(row[columns.notes_col])
       : null
 
-    const explicitType = columns.customer_type_col !== null
-      ? normalizeCustomerType(cellOrNull(row[columns.customer_type_col]))
+    const typeRaw = columns.customer_type_col !== null
+      ? cellOrNull(row[columns.customer_type_col])
       : null
+    const privatePerson = typeColumnIsFlag ? parsePrivatePersonFlag(typeRaw) : null
+    const explicitType = privatePerson === true
+      ? 'individual'
+      : privatePerson === false ? null : normalizeCustomerType(typeRaw)
+    const classified = explicitType ?? classifyCustomer({
+      org_number: orgNumber,
+      vat_number: vatNumber,
+      country: countryRaw,
+    })
+    // Not a private person: a personnummer-shaped number is a sole trader's
+    // org number (enskild firma), so the customer is a business.
     const customerType: CustomerType =
-      explicitType ?? classifyCustomer({
-        org_number: orgNumber,
-        vat_number: vatNumber,
-        country: countryRaw,
-      })
+      privatePerson === false && classified === 'individual' ? 'swedish_business' : classified
 
     // ISO 3166-1 alpha-2 (customers.country is a code). A name the register
     // cannot map is kept as typed so the preview can show it and the row is
@@ -166,26 +227,41 @@ export function parseCustomersFile(
       ? (normalizeCountryCode(countryRaw) ?? countryRaw.trim())
       : (derivedCountry ?? 'SE')
 
+    // Each error names the file's column and the value, so a wrong column
+    // reads as one ("Ogiltig e-postadress \"123 45\" i kolumnen ...").
     const validationErrors: string[] = []
     if (email && !EMAIL_RE.test(email)) {
-      validationErrors.push('Ogiltig e-postadress')
+      validationErrors.push(`Ogiltig e-postadress "${email}" i kolumnen "${header(columns.email_col)}"`)
     }
     if (countryRaw && !normalizeCountryCode(countryRaw)) {
-      validationErrors.push(`Okänt land: ${countryRaw.trim()} (ange landskod, t.ex. SE eller DE)`)
+      validationErrors.push(
+        `Okänt land "${countryRaw.trim()}" i kolumnen "${header(columns.country_col)}" (ange landskod, t.ex. SE eller DE)`,
+      )
     } else if (!countryRaw && !derivedCountry) {
       validationErrors.push('Land saknas (ange landskod, t.ex. NO eller US)')
     } else {
       const countryIssue = checkCountryConsistency({ partyType: customerType, country, vatNumber })
       if (countryIssue) validationErrors.push(COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv)
     }
-    if (orgNumber && !/^[\d\s\-]{6,20}$/.test(orgNumber)) {
-      validationErrors.push('Ogiltigt org-/personnummer')
+    if (customerNumber && customerNumber.length > CUSTOMER_NUMBER_MAX_LENGTH) {
+      validationErrors.push(
+        `Kundnumret i kolumnen "${header(columns.customer_number_col)}" får vara högst ${CUSTOMER_NUMBER_MAX_LENGTH} tecken`,
+      )
+    }
+    if (orgNumber && (!ORG_NUMBER_RE.test(orgNumber) || isUnreadableSwedishNumber(customerType, orgNumber))) {
+      validationErrors.push(`Ogiltigt org-/personnummer "${orgNumber}" i kolumnen "${header(columns.org_number_col)}"`)
+    }
+    // A privatperson's personnummer is stored as its personnummer; any other
+    // number means the row is a business or the number is wrong.
+    if (isOrgNumberRefusedOnIndividual(customerType, orgNumber)) {
+      validationErrors.push(INDIVIDUAL_ORG_NUMBER_ERROR)
     }
 
     rows.push({
       row_index: i + 2, // 1-based + header
       name,
       customer_type: customerType,
+      customer_number: customerNumber,
       org_number: orgNumber,
       email,
       phone,
@@ -195,7 +271,7 @@ export function parseCustomersFile(
       city,
       country,
       vat_number: vatNumber,
-      default_payment_terms: parsePaymentTerms(paymentTermsRaw, 30),
+      default_payment_terms: parsePaymentTerms(paymentTermsRaw),
       notes,
       is_valid: validationErrors.length === 0,
       validation_errors: validationErrors,

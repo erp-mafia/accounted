@@ -16,7 +16,8 @@ const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const getSaldoMock = vi.fn()
 const getTransaktionerMock = vi.fn()
-vi.mock('../lib/skattekonto-client', () => ({
+vi.mock('../lib/skattekonto-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/skattekonto-client')>()),
   getSaldo: (...args: unknown[]) => getSaldoMock(...args),
   getTransaktioner: (...args: unknown[]) => getTransaktionerMock(...args),
 }))
@@ -48,6 +49,7 @@ function makeCtx(): ExtensionContext {
     settings: {
       get: vi.fn().mockResolvedValue(null),
       set: settingsSetMock,
+      clear: vi.fn().mockResolvedValue(undefined),
     },
     emit: vi.fn().mockResolvedValue(undefined),
   } as unknown as ExtensionContext

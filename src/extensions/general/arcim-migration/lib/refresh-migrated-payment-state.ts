@@ -12,7 +12,7 @@
  * That is what this pass does. It does NOT guess: a one-shot UPDATE marking
  * the 365 rows paid would fabricate payments, and some of them are genuinely
  * open. Bokio knows which, so Bokio is asked, and the answer is read by the
- * same rule the import uses (resolveSupplierSettlement), so the repair cannot
+ * same rule the import uses (resolveInvoiceSettlement), so the repair cannot
  * contradict the import it repairs.
  *
  * Guarantees:
@@ -38,9 +38,10 @@ import { createLogger } from '@/lib/logger'
 import type { ProviderName } from '@/lib/providers/types'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { fetchSupplierInvoicesDirect } from '@/lib/providers/provider-data-fetcher'
+import { resolveInvoiceSettlement } from '@/lib/providers/settlement'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { resolveSupplierSettlement } from './entity-mapper'
 import { joinKey, uniqueByKey } from './relink-registration-vouchers'
+import { listedMatchNumber, storedMatchNumber } from './supplier-invoice-identity'
 import type { BokioSupplierSnapshot } from './complete-bokio-supplier-invoices'
 
 const log = createLogger('extensions/arcim-migration/refresh-payment-state')
@@ -80,6 +81,7 @@ export interface RefreshMigratedSupplierPaymentStateResult {
 interface OpenSupplierRow {
   id: string
   supplier_invoice_number: string | null
+  fortnox_number: string | null
   invoice_date: string
   total: number | null
 }
@@ -101,7 +103,7 @@ export async function refreshMigratedSupplierPaymentState(
   const openRows = await fetchAllRows<OpenSupplierRow>(({ from, to }) =>
     queryInExecutionBudget(supabase
       .from('supplier_invoices')
-      .select('id, supplier_invoice_number, invoice_date, total')
+      .select('id, supplier_invoice_number, fortnox_number, invoice_date, total')
       .eq('company_id', companyId)
       .is('registration_journal_entry_id', null)
       .is('payment_journal_entry_id', null)
@@ -115,8 +117,9 @@ export async function refreshMigratedSupplierPaymentState(
   const excluded = new Set(options.excludeInvoiceIds)
   const openByKey = uniqueByKey(openRows.filter(row => !excluded.has(row.id)
     && (!options.eligibleInvoiceIds || options.eligibleInvoiceIds.has(row.id))),
-    (row) => joinKey(row.supplier_invoice_number, row.invoice_date))
-  const providerByKey = uniqueByKey(providerInvoices, (dto) => joinKey(dto.invoiceNumber, dto.issueDate))
+    (row) => joinKey(storedMatchNumber(provider, row), row.invoice_date))
+  // A Fortnox record matches by its löpnummer, never the supplier's number.
+  const providerByKey = uniqueByKey(providerInvoices, (dto) => joinKey(listedMatchNumber(provider, dto), dto.issueDate))
 
   let matched = 0
   let updated = 0
@@ -136,14 +139,14 @@ export async function refreshMigratedSupplierPaymentState(
       continue
     }
 
-    const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
+    const settlement = resolveInvoiceSettlement(dto.paymentStatus, dto.status, total)
     if (settlement.status !== 'paid' && settlement.status !== 'partially_paid') {
       unchanged++
       continue
     }
 
     if (!dryRun) {
-      const { data, error } = await queryInExecutionBudget(supabase
+      let update = supabase
         .from('supplier_invoices')
         .update({
           status: settlement.status,
@@ -161,10 +164,12 @@ export async function refreshMigratedSupplierPaymentState(
         .eq('is_credit_note', false)
         .in('status', [...OPEN_STATUSES])
         .eq('total', total)
-        .eq('supplier_invoice_number', row.supplier_invoice_number)
         .eq('invoice_date', row.invoice_date)
-        .select('id')
-        .maybeSingle())
+      update = row.supplier_invoice_number == null
+        ? update.is('supplier_invoice_number', null)
+        : update.eq('supplier_invoice_number', row.supplier_invoice_number)
+      if (row.fortnox_number) update = update.eq('fortnox_number', row.fortnox_number)
+      const { data, error } = await queryInExecutionBudget(update.select('id').maybeSingle())
 
       if (error) {
         log.error('supplier invoice payment-state update failed', new Error(error.message), {

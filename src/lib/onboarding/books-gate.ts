@@ -1,9 +1,9 @@
 /**
  * The first-session books gate (issue #2438).
  *
- * After the journey creates a company, the dashboard is withheld until the
- * user has walked act two (/onboarding/books: source pick + import, bank,
- * Skatteverket) or deliberately skipped it. The gate is a cookie carrying
+ * After the journey creates a user's first company, the dashboard is withheld
+ * until the user has walked act two (/onboarding/books: source pick + import,
+ * bank, Skatteverket) or deliberately skipped it. The gate is a cookie carrying
  * the company id: middleware redirects dashboard paths to the books act
  * while it matches the active company, and the exit route clears it. No
  * database column: the cookie's own lifetime IS the "first session" scope,
@@ -22,6 +22,29 @@ export const BOOKS_PATH = '/onboarding/books'
 
 export function booksGateEnabled(): boolean {
   return !flagEnabled(process.env.NEXT_PUBLIC_ONBOARDING_BOOKS_GATE_OFF)
+}
+
+/**
+ * Whether creating a company arms the gate. The server decides from the
+ * user's own rows, never from which page the client rendered: only a first
+ * company does, meaning the user had no live (non-archived) membership
+ * before this create. Someone who already has a company knows the app, and
+ * gating them took away the way back to that company. A client company the
+ * caller creates under a byrå team never arms it: the consultant's home is
+ * the cockpit.
+ * An unknown membership state (the read failed) does not arm it either: no
+ * gate only means Hem opens with the checklist.
+ */
+export function shouldArmBooksGate(input: {
+  teamKind: string | null | undefined
+  /** null when the membership read failed. */
+  hasLiveCompany: boolean | null
+  enabled?: boolean
+}): boolean {
+  const enabled = input.enabled ?? booksGateEnabled()
+  if (!enabled) return false
+  if (input.teamKind === 'byra') return false
+  return input.hasLiveCompany === false
 }
 
 /**

@@ -1,27 +1,35 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, holdEscapeWhileUnsaved, useDashShellInert, useEditedSinceOpen } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowUpRight, ArrowDownRight, FileText, Inbox, X } from 'lucide-react'
+import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
+import { Button } from '@/components/ui/button'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { InboxIcon } from '@/components/icons'
 import JournalEntryForm from '@/components/bookkeeping/JournalEntryForm'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
+import type { UploadedFilesUpdate } from '@/components/bookkeeping/upload-list'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { linkDocuments } from '@/lib/documents/link-documents'
+import { heldUnderlag, removedUpload, underlagLinkTargets } from './review-underlag'
+import { useTransactionUnderlag } from './use-transaction-underlag'
+import UnderlagFileRow from './UnderlagFileRow'
 import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { bankSideOf, templateBankLeg } from '@/lib/bookkeeping/bank-leg'
 import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type { BookingTemplateLibrary } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
+import { roundOre, formatAmountInput } from '@/lib/money'
 
 interface TransactionBookingDialogProps {
   open: boolean
@@ -50,6 +58,8 @@ interface TransactionBookingDialogProps {
    *  set when the user picked an account from the template picker's "Konton"
    *  search results. Ignored when a preselectedTemplate is present. */
   preselectedAccount?: string | null
+  /** The row's own underlag was pinned here, or taken off (null): the page keeps its rows in step. */
+  onUnderlagChange?: (transactionId: string, documentId: string | null) => void
 }
 
 function buildInitialLines(
@@ -58,13 +68,13 @@ function buildInitialLines(
   bankAccount: string = '1930',
   counterAccount?: string | null,
 ): FormLine[] {
-  const sekAmount = Math.round(Math.abs(resolveSekAmount(
+  const sekAmount = roundOre(Math.abs(resolveSekAmount(
     transaction.amount,
     transaction.amount_sek,
     transaction.currency,
     transaction.exchange_rate
-  )) * 100) / 100
-  const amountStr = sekAmount.toFixed(2)
+  )))
+  const amountStr = formatAmountInput(sekAmount, '.')
   const isExpense = transaction.amount < 0
 
   const isForeign = !!transaction.currency && transaction.currency !== 'SEK'
@@ -116,12 +126,17 @@ function buildInitialLinesFromTemplate(
       )
     : {}
 
+  // The mall books the accounts it was saved with; only its bank line moves
+  // to the bank this transaction came from (templateBankLeg). The FX
+  // metadata goes on that line.
+  const bankLeg = templateBankLeg(template.lines, bankSideOf(transaction.amount), bankAccount)
   return lines.map((line, i) => {
-    const raw = template.lines[i]
-    if (raw?.type === 'settlement') {
-      return { ...line, ...(isForeign ? currencyMeta : {}), account_number: bankAccount }
+    if (i !== bankLeg?.index) return line
+    return {
+      ...line,
+      ...(isForeign ? currencyMeta : {}),
+      ...(bankLeg.moves ? { account_number: bankAccount } : {}),
     }
-    return line
   })
 }
 
@@ -134,14 +149,30 @@ export default function TransactionBookingDialog({
   proposalLines,
   proposalLineDescription,
   preselectedAccount,
+  onUnderlagChange,
 }: TransactionBookingDialogProps) {
   const t = useTranslations('tx_booking_dialog')
+  const tUnderlag = useTranslations('tx_booking_underlag')
+  const tDetach = useTranslations('tx_detach')
   const { toast } = useToast()
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   // The whole dialog takes a dropped file, not only the dashed box.
   const dropSurfaceRef = useRef<HTMLDivElement>(null)
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
+  // The transaction's own underlag, as in the Bokför review (one hook for
+  // both): the first document attached here is pinned to the row at once,
+  // so closing the dialog keeps it (crm#1101).
+  const underlag = useTransactionUnderlag({
+    transactionId: transaction?.id ?? null,
+    rowDocumentId: transaction?.document_id ?? null,
+    open,
+    onChange: onUnderlagChange,
+  })
+  const { claim: claimUnderlag, withdraw: withdrawUnderlag, settled: underlagSettled } = underlag
+  const claimUpload = useCallback((file: UploadedFile) => {
+    if (file.id) void claimUnderlag(file.id, file.fileName)
+  }, [claimUnderlag])
   // Settlement account for the bank line: resolved from the session-cached
   // cash accounts (seeded by the dashboard layout), so the form below mounts
   // on the first paint instead of after a /api/cash-accounts round trip on
@@ -166,66 +197,45 @@ export default function TransactionBookingDialog({
   // Non-modal dialog (see below): page modality is restored by hand so the
   // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
   useDashShellInert(open)
+  // The form opens filled with the bank row's lines, so "has content" is
+  // always true: Escape follows "changed since open" instead.
+  const { edited, editProps } = useEditedSinceOpen()
 
   if (!transaction) return null
 
   const isIncome = transaction.amount > 0
+  // What only this dialog holds beyond the row's own underlag.
+  const held = heldUnderlag({ files: uploadedFiles, inboxDocs: pickedInboxDocs }, underlag.documentId)
 
   const handleBooked = async (transactionId: string, journalEntryId: string, matched = false) => {
-    // Link any attached documents to the new journal entry: freshly uploaded
-    // files, and existing inbox documents picked via InboxDocumentPicker. For
-    // picked docs, inbox_item_id stamps the inbox item as consumed so it drops
-    // out of the active inbox: see app/api/documents/[id]/link/route.ts.
-    // transaction_id additionally pins the doc to the transaction row so the
-    // /transactions list shows the underlag indicator (first linked doc wins).
-    const filesToLink = uploadedFiles.filter((f) => f.status === 'uploaded' && f.id)
-    let linkFailCount = 0
-    let firstLinkedDocId: string | null = null
-    for (const file of filesToLink) {
-      try {
-        const res = await fetch(`/api/documents/${file.id}/link`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            journal_entry_id: journalEntryId,
-            transaction_id: transactionId,
-          }),
-        })
-        if (!res.ok) linkFailCount++
-        else firstLinkedDocId ??= file.id ?? null
-      } catch {
-        linkFailCount++
-      }
-    }
-    for (const doc of pickedInboxDocs) {
-      try {
-        const res = await fetch(`/api/documents/${doc.document_id}/link`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            journal_entry_id: journalEntryId,
-            inbox_item_id: doc.inbox_item_id,
-            transaction_id: transactionId,
-          }),
-        })
-        if (!res.ok) linkFailCount++
-        else firstLinkedDocId ??= doc.document_id
-      } catch {
-        linkFailCount++
-      }
-    }
-    if (linkFailCount > 0) {
+    // Everything attached here goes onto the verifikat: the new one, or the
+    // existing one the duplicate guard's match linked the row to. The
+    // document pinned to the row is among it although the booking and the
+    // match anchor the row's pin themselves: linking it again changes
+    // nothing, and reports an anchor that failed. Inbox documents picked via
+    // InboxDocumentPicker carry their inbox_item_id, which stamps the inbox
+    // item as consumed so it drops out of the active inbox (see
+    // app/api/documents/[id]/link/route.ts); transaction_id pins the first of
+    // them to a row without underlag so the list shows the indicator. A pin
+    // or a take-off still on its way lands first, and a document the person
+    // removed here is left out.
+    const ownUnderlag = await underlagSettled()
+    const targets = underlagLinkTargets({ files: uploadedFiles, inboxDocs: pickedInboxDocs }, transactionId).filter(
+      (target) => !underlag.isLetGo(target.documentId),
+    )
+    const { failed, firstLinkedId } = await linkDocuments(targets, journalEntryId)
+    if (failed.length > 0) {
       toast({
         title: t('doc_link_failed_title'),
-        description: t('doc_link_failed_description', { count: linkFailCount }),
+        description: t('doc_link_failed_description', { count: failed.length }),
         variant: 'destructive',
       })
     }
 
     // The server pins only when the tx has no document_id yet (first linked
     // doc wins): mirror that here so the optimistic state never claims a
-    // pin the server refused to swap.
-    const pinnedDocId = transaction.document_id ? null : firstLinkedDocId
+    // pin the server refused to swap. An inkorg match is not a pin.
+    const pinnedDocId = ownUnderlag && underlag.source !== 'matched' ? null : firstLinkedId
     if (pinnedDocId) {
       // Same event AgentChat dispatches after uploads: flips the inbox card's
       // paperclip optimistically without a refetch.
@@ -241,18 +251,74 @@ export default function TransactionBookingDialog({
     onBooked(transactionId, journalEntryId, pinnedDocId, matched)
   }
 
-  // The receipt to show beside the form. A transaction may arrive with a
-  // pre-linked document; otherwise the user attaches one in-dialog (upload or
-  // inbox pick) and it appears here as soon as it's available.
-  const uploadedDoc = uploadedFiles.find((f) => f.status === 'uploaded' && f.id)
-  const pickedDoc = pickedInboxDocs[0]
-  const preexistingDocId = transaction.document_id ?? null
-  const inDialogDocId = uploadedDoc?.id ?? pickedDoc?.document_id ?? null
-  const currentDocId = preexistingDocId ?? inDialogDocId
-  const currentDocMime = preexistingDocId ? null : uploadedDoc?.file.type ?? null
-  const currentDocName = preexistingDocId
-    ? null
-    : uploadedDoc?.fileName ?? pickedDoc?.file_name ?? null
+  // The receipt to show beside the form: the row's own underlag (from before
+  // this dialog, or the first document attached in it), else the first one
+  // held here, as soon as it is available.
+  const heldUpload = held.files.find((f) => f.status === 'uploaded' && f.id)
+  const heldPick = held.inboxDocs[0]
+  const viewerDocId = underlag.documentId ?? heldUpload?.id ?? heldPick?.document_id ?? null
+  // A file uploaded here still knows its type and name: no metadata round trip.
+  const viewerFile = uploadedFiles.find((f) => f.id === viewerDocId)
+  const viewerMime = viewerFile?.file.type || null
+  const viewerName =
+    viewerFile?.fileName ?? pickedInboxDocs.find((d) => d.document_id === viewerDocId)?.file_name ?? underlag.fileName
+  // The row's underlag from before this dialog is in neither list: it gets a
+  // row (and an x) of its own.
+  const ownFromBefore = !!underlag.documentId && underlag.documentId !== underlag.attachedHere
+
+  // The x on a document attached here lets it go: off the row when the row
+  // holds it or a pin for it is on its way (the file stays in the archive),
+  // then out of the lists. Listed until the row has let it go: a refused
+  // take-off keeps it, as does attaching it again meanwhile.
+  async function letGo(docId: string) {
+    if (!(await withdrawUnderlag(docId))) return
+    setUploadedFiles((prev) => prev.filter((f) => f.id !== docId))
+    setPickedInboxDocs((prev) => prev.filter((d) => d.document_id !== docId))
+  }
+
+  // Every change from the upload zones is an update of the list as it is
+  // when it lands, so an upload finishing after another drop or a removal
+  // keeps both, also when the zone it started in gave way to the viewer.
+  // The x on a finished upload is the one change the dialog takes over:
+  // the document goes through letGo above.
+  function handleFilesChange(update: UploadedFilesUpdate) {
+    const removed = removedUpload(uploadedFiles, update(uploadedFiles))
+    if (removed?.id) {
+      void letGo(removed.id)
+      return
+    }
+    setUploadedFiles(update)
+  }
+
+  // The underlag the row had before this dialog is confirmed off, as the
+  // row's own "Ta bort underlag" is: it may be a match someone else made.
+  const detachEarlierUnderlag = async () => {
+    const released = await underlag.detachEarlier({
+      description: transaction.description,
+      amount: formatCurrency(transaction.amount, transaction.currency),
+    })
+    if (!released) return
+    setUploadedFiles((prev) => prev.filter((f) => f.id !== released))
+    setPickedInboxDocs((prev) => prev.filter((d) => d.document_id !== released))
+  }
+
+  // Secondary intake path beside the upload zone: underlag already in the
+  // inkorg, picked instead of uploaded again.
+  const pickFromInbox = (
+    <Button variant="ghost" className="-ml-2.5 self-start" onClick={() => setInboxPickerOpen(true)}>
+      <InboxIcon className="h-4 w-4" />
+      {t('doc_pick_inbox')}
+    </Button>
+  )
+
+  // The header's context line (Stil v3): the row, its date and its amount.
+  const contextLine = [
+    transaction.description,
+    formatDate(transaction.date),
+    `${isIncome ? '+' : ''}${formatCurrency(transaction.amount, transaction.currency)}`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   return (
     <Dialog open={open} onOpenChange={(o) => {
@@ -271,156 +337,115 @@ export default function TransactionBookingDialog({
         // stray drop from navigating the tab to the file.
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => e.preventDefault()}
-        // Width caps at the space left of a docked agent sheet so the form's
-        // right edge, and the Granska button, never end up unreachable under
-        // the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so with
-        // the sheet closed this is exactly the old max-w-6xl.
-        className="max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto"
+        // Stil v3 widths: wide (720px) holds the kontering lines on their
+        // own; with a document to read beside them the dialog takes the
+        // document size, since a page and a four-column line editor do not
+        // fit 720px. The primitive centres every size in the space left of a
+        // docked agent sheet, but its document width does not subtract the
+        // sheet: capped here so the form's right edge, and the Granska
+        // button, never end up unreachable under the sheet (z-60 over z-50).
+        // --agent-sheet-w is docked-only, so with the sheet closed this is
+        // the primitive's own width.
+        size={viewerDocId ? 'document' : 'wide'}
+        className={cn(viewerDocId && 'sm:max-w-[min(1120px,calc(100vw-var(--agent-sheet-w,0px)-4rem))]')}
         // Non-modal so the agent sheet (fixed z-[60], portaled outside this
         // dialog) stays interactive beside a booking in progress; a click in
-        // its text field must not count as outside-dismissal. A half-booked
-        // transaction must also survive a stray Escape or backdrop click.
-        // Closing is explicit: the header X. Same convention as
-        // NewInvoiceDialog (which pairs non-modality with the inert effect
-        // above).
-        onEscapeKeyDown={(e) => e.preventDefault()}
+        // its text field must not count as outside-dismissal. Same convention
+        // as NewInvoiceDialog (which pairs non-modality with the inert effect
+        // above). Escape closes the dialog while nothing has changed since it
+        // opened; a half-booked transaction, or underlag held here that only
+        // the booking links, survives a stray Escape: then closing is
+        // explicit, the header X. A backdrop click never closes it.
+        onEscapeKeyDown={(e) =>
+          holdEscapeWhileUnsaved(e, edited() || held.files.length > 0 || held.inboxDocs.length > 0)
+        }
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription className="sr-only">
-            {t('description')}
-          </DialogDescription>
+          {/* The row's own text and amount: user data in session replays. */}
+          <DialogDescription data-ph-mask="">{contextLine}</DialogDescription>
         </DialogHeader>
 
-        {/* Transaction summary */}
-        <div className="flex items-center gap-3 rounded-lg border p-3">
-          <div
-            className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${
-              isIncome
-                ? 'text-success'
-                : 'text-destructive'
-            }`}
-          >
-            {isIncome ? (
-              <ArrowUpRight className="h-4 w-4" />
-            ) : (
-              <ArrowDownRight className="h-4 w-4" />
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm truncate">{transaction.description}</p>
-            <p className="text-xs text-muted-foreground">{formatDate(transaction.date)}</p>
-          </div>
-          <p className={`font-medium text-sm flex-shrink-0 ${isIncome ? 'text-success' : ''}`}>
-            {isIncome ? '+' : ''}
-            {formatCurrency(transaction.amount, transaction.currency)}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          {/* Underlag column: one coherent surface. Empty state sizes to its
-              content (dropzone + attached inbox-picker row) and top-aligns;
-              once a document exists the column takes the fixed viewer height
-              and stays sticky on desktop while the form scrolls. Stacks above
-              the form on smaller screens. */}
+        <div
+          className={
+            viewerDocId
+              ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]'
+              : 'flex flex-col gap-5'
+          }
+        >
+          {/* The underlag: a section above the form while there is none (the
+              upload zone and the inkorg pick, the whole dialog takes a drop),
+              and once a document exists its own column beside the form: the
+              viewer takes a fixed height and the column stays sticky on
+              desktop while the form scrolls, stacked above the form on
+              smaller screens. Same underlag as the Bokför review: the first
+              document attached is the row's own at once (closing keeps it),
+              every one has its x, more can be added. */}
           <div
             className={
-              currentDocId
-                ? 'flex h-[45vh] flex-col gap-3 lg:sticky lg:top-0 lg:h-[72vh] lg:self-start'
-                : 'flex flex-col gap-2 lg:sticky lg:top-0 lg:self-start'
+              viewerDocId
+                ? 'flex flex-col gap-3 lg:sticky lg:top-0 lg:h-[min(72vh,calc(100dvh-15rem))] lg:self-start'
+                : 'flex flex-col gap-2'
             }
           >
-            {currentDocId ? (
+            {viewerDocId ? (
+              // The one object in the dialog: the raised surface.
               <DocumentViewerPane
-                documentId={currentDocId}
-                mime={currentDocMime}
-                fileName={currentDocName}
-                className="min-h-0 flex-1"
+                documentId={viewerDocId}
+                mime={viewerMime}
+                fileName={viewerName}
+                className="h-[45vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1"
               />
             ) : (
-              <DocumentUploadZone
-                files={uploadedFiles}
-                onFilesChange={setUploadedFiles}
-                dropSurfaceRef={dropSurfaceRef}
-              />
+              <>
+                <h3 className="text-[12px] font-medium leading-4 text-muted-foreground">{t('doc_label')}</h3>
+                <DocumentUploadZone
+                  files={uploadedFiles}
+                  onFilesChange={handleFilesChange}
+                  onUploaded={claimUpload}
+                  compact
+                  dropSurfaceRef={dropSurfaceRef}
+                />
+              </>
             )}
 
-            {/* Attach controls: only when the transaction has no pre-linked
-                document (a pre-linked one is already the verifikat's underlag). */}
-            {!preexistingDocId && (
-              currentDocId ? (
-                <div className="shrink-0 space-y-2">
-                  {pickedInboxDocs.length > 0 && (
-                    <div className="space-y-1">
-                      {pickedInboxDocs.map((doc) => (
-                        <div
-                          key={doc.document_id}
-                          className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50"
-                        >
-                          <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                          <span className="truncate flex-1">
-                            {doc.supplier_name ?? doc.file_name}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 w-6 p-0 shrink-0"
-                            aria-label={t('doc_picked_remove')}
-                            onClick={() =>
-                              setPickedInboxDocs((prev) =>
-                                prev.filter((d) => d.document_id !== doc.document_id),
-                              )
-                            }
-                          >
-                            <X className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setInboxPickerOpen(true)}
-                    >
-                      <Inbox className="h-4 w-4 mr-2" />
-                      {t('doc_pick_existing')}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setUploadedFiles([])
-                        setPickedInboxDocs([])
-                      }}
-                    >
-                      <X className="h-3.5 w-3.5 mr-1.5" />
-                      {t('doc_clear')}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                /* Secondary intake path, rendered as the dropzone's footer so
-                   "drop a file" and "pick from the inbox" read as one surface. */
-                <button
-                  type="button"
-                  onClick={() => setInboxPickerOpen(true)}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground"
-                >
-                  <Inbox className="h-4 w-4" />
-                  <span>{t('doc_pick_existing_inline')}</span>
-                </button>
-              )
+            {viewerDocId ? (
+              <div className="flex shrink-0 flex-col gap-2">
+                {ownFromBefore && (
+                  <UnderlagFileRow
+                    name={underlag.fileName ?? tUnderlag('file_fallback')}
+                    removeLabel={tDetach('menu_item')}
+                    disabled={underlag.busy}
+                    onRemove={() => void detachEarlierUnderlag()}
+                  />
+                )}
+                <DocumentUploadZone
+                  files={uploadedFiles}
+                  onFilesChange={handleFilesChange}
+                  onUploaded={claimUpload}
+                  compact
+                  dropSurfaceRef={dropSurfaceRef}
+                />
+                {pickedInboxDocs.map((doc) => (
+                  <UnderlagFileRow
+                    key={doc.document_id}
+                    name={doc.supplier_name ?? doc.file_name}
+                    removeLabel={t('doc_picked_remove')}
+                    onRemove={() => void letGo(doc.document_id)}
+                  />
+                ))}
+                {pickFromInbox}
+              </div>
+            ) : (
+              pickFromInbox
             )}
           </div>
 
-          {/* Booking form */}
-          <div className="space-y-4">
+          {/* Booking form: its kontering lines and its own Granska step,
+              which states the outcome before anything is booked. */}
+          <div className="space-y-4" {...editProps}>
             {bankAccount !== null && (
               <JournalEntryForm
                 key={`${transaction.id}-${proposalLines && proposalLines.length > 0 ? 'proposal' : preselectedTemplate?.id ?? 'default'}-${preselectedAccount ?? 'none'}-${bankAccount}`}
@@ -462,15 +487,21 @@ export default function TransactionBookingDialog({
           </div>
         </div>
 
+        {/* A pick becomes the row's underlag when it has none (the attach
+            route marks the inbox item matched, and the booking consumes it);
+            either way handleBooked links it to the verifikat. */}
         <InboxDocumentPicker
           open={inboxPickerOpen}
           onClose={() => setInboxPickerOpen(false)}
-          onSelect={(doc) =>
+          onSelect={(doc) => {
+            if (pickedInboxDocs.some((d) => d.document_id === doc.document_id)) return
             setPickedInboxDocs((prev) =>
               prev.some((d) => d.document_id === doc.document_id) ? prev : [...prev, doc],
             )
-          }
+            void claimUnderlag(doc.document_id, doc.supplier_name ?? doc.file_name)
+          }}
         />
+        <DestructiveConfirmDialog {...underlag.confirmProps} />
       </DialogContent>
     </Dialog>
   )

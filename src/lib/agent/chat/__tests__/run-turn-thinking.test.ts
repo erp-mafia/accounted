@@ -19,12 +19,11 @@ vi.mock('@/lib/agent/composer/client', () => ({
     },
   }),
   SONNET_MODEL: 'claude-sonnet-5',
-  MAX_TOKENS_NO_THINKING: 5400,
+  OPUS_MODEL: 'claude-sonnet-5',
   MAX_TOKENS_STANDARD: 16000,
   MAX_TOKENS_DEEP: 24000,
 }))
 
-const MAX_TOKENS_NO_THINKING = 5400
 const MAX_TOKENS_STANDARD = 16000
 const MAX_TOKENS_DEEP = 24000
 
@@ -125,11 +124,20 @@ describe('runChatTurn: extended thinking wiring', () => {
     const args = await runWith(baseIntent())
     expect(args.thinking).toBeUndefined()
     expect(args.output_config).toBeUndefined()
-    // A non-thinking intent keeps its own reply-sized ceiling: max_tokens now
-    // covers thinking too, so inheriting the reasoning tier's 16000 would let a
-    // plain answer run several times longer than it ever did before.
-    expect(args.max_tokens).toBe(MAX_TOKENS_NO_THINKING)
-    expect(args.max_tokens).toBeLessThan(MAX_TOKENS_STANDARD)
+    // Omitting `thinking` does not turn it off: Sonnet 5 then thinks at its
+    // default effort (high), hidden. max_tokens caps that thinking too, so the
+    // ceiling is the standard one, never a reply-sized cap.
+    expect(args.max_tokens).toBe(MAX_TOKENS_STANDARD)
+  })
+
+  it('gives bokslut.step room to think before it answers (crm#1697)', async () => {
+    // The year-end assistant has no thinking config. With the old 5400 cap a
+    // turn over several fiscal years spent the whole budget on hidden
+    // thinking and ended with "fick slut på utrymme" and no text.
+    const { bokslutStep } = await import('@/lib/agent/intents/bokslut-step')
+    const args = await runWith(bokslutStep as unknown as AgentIntent)
+    expect(args.thinking).toBeUndefined()
+    expect(args.max_tokens).toBe(MAX_TOKENS_STANDARD)
   })
 })
 

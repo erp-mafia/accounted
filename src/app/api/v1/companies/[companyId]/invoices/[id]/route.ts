@@ -32,13 +32,21 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
-import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
-import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { CreateInvoiceItemSchema, InvoiceQrModeSchema, InvoiceVatOverrideShape } from '@/lib/api/schemas'
+import { InvoiceDeliveryAddressSchema } from '@/lib/invoices/delivery-address'
+import { buildInvoiceWriteData, type InvoiceWriteItemInput } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
+import { effectiveInvoiceStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
+import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
+import {
+  PAYMENT_REFERENCE_PITFALL,
+  withPaymentReference,
+  type PaymentReferenceRow,
+} from '@/lib/invoices/payment-reference-fields'
 import type { Currency, InvoiceDocumentType } from '@/types'
 
 // Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
@@ -55,6 +63,8 @@ const V1PatchDraftInvoiceSchema = z.object({
   your_reference: z.union([z.string(), z.null()]).optional(),
   our_reference: z.union([z.string(), z.null()]).optional(),
   notes: z.union([z.string(), z.null()]).optional(),
+  // Leveransadress (crm#1547); null or {} clears it.
+  delivery_address: InvoiceDeliveryAddressSchema.nullable().optional(),
   // Project/cost-centre tagging ({"6":"P001"}): replaces the whole bag.
   // Send {} to clear all tags. Codes are validated against the dimension
   // registry when the invoice posts at :send, not here.
@@ -63,6 +73,14 @@ const V1PatchDraftInvoiceSchema = z.object({
   // pay to. null = back to the per-currency default. Must be one of the
   // company's payee accounts, usable for the invoice currency.
   payment_cash_account_id: z.union([z.string().uuid(), z.null()]).optional(),
+  // The one payment QR code this invoice prints, overriding the company's
+  // invoice_qr_mode; null = back to the company default.
+  qr_mode: InvoiceQrModeSchema.nullable().optional(),
+  // Per-invoice VAT treatment (#2906), same fields and rules as POST
+  // /invoices. A pair: sending either replaces both; omitting both keeps the
+  // draft's. Changing it re-decides the VAT of the current lines (rebuilt
+  // through the same builder) even when items is omitted.
+  ...InvoiceVatOverrideShape,
   // FULL REPLACE when present. Same item shape as POST /invoices (article
   // linkage, ROT/RUT lines, accrual periods, per-line dimensions included).
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required').optional(),
@@ -74,6 +92,9 @@ const V1PatchDraftInvoiceSchema = z.object({
 const InvoiceDetail = z.object({
   id: z.string().uuid(),
   invoice_number: z.string().nullable(),
+  // Self-billed sales: the customer's number; invoice_number stays null.
+  external_invoice_number: z.string().nullable().optional(),
+  is_self_billed: z.boolean().optional(),
   customer_id: z.string().uuid(),
   invoice_date: z.string(),
   due_date: z.string(),
@@ -87,7 +108,22 @@ const InvoiceDetail = z.object({
   quote_decided_at: z.string().nullable().optional(),
   currency: z.string(),
   total: z.number(),
+  // The invoice's own "Att betala" (crm#1487): total after öresavrundning and
+  // any ROT/RUT deduction, as its PDF prints it. Negative on a credit note.
+  amount_to_pay: z.number(),
+  // The öresavrundning row the PDF prints, 0 when none (SEK only).
+  ore_rounding_amount: z.number(),
+  // The invoice's rounding choice. Frozen when it is issued; null only on a
+  // draft (it follows the company setting until issued).
+  ore_rounding: z.boolean().nullable().optional(),
   remaining_amount: z.number(),
+  // The reference the invoice asks the payer to quote, as its PDF prints it
+  // (crm#1886): ocr = the digits of invoice_number plus a Luhn check digit,
+  // invoice_number = the number as it is. Both null on a document that asks
+  // for no payment under a reference. On GET; the draft update leaves them
+  // out (a draft has no number to build one from).
+  payment_reference: z.string().nullable().optional(),
+  payment_reference_type: z.enum(['ocr', 'invoice_number']).nullable().optional(),
   paid_at: z.string().nullable(),
   created_at: z.string(),
 })
@@ -99,7 +135,7 @@ const ALLOWED_EXPAND = ['items', 'payments'] as const
 const INVOICE_DETAIL_COLUMNS = INVOICE_FULL_COLUMNS
 
 const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, address_state, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const INVOICE_ITEM_COLUMNS = INVOICE_ITEM_FULL_COLUMNS
 
@@ -122,6 +158,8 @@ registerEndpoint({
   pitfalls: [
     'Returns 404 if the invoice does not belong to the company in the URL: does not leak existence across companies.',
     'paid_at and remaining_amount can lag behind the latest payment by a few seconds during high-volume reconciliation.',
+    'total is the exact invoice total the books carry; amount_to_pay is what the invoice asks the customer for: total after öresavrundning (ore_rounding_amount), minus any ROT/RUT deduction. Reconcile payments against amount_to_pay. A credit note carries the credited invoice\'s rounding choice, so a whole credit has the same ore_rounding_amount with the opposite sign. An issued invoice keeps the rounding it was issued with: a later change of the company setting changes neither field.',
+    PAYMENT_REFERENCE_PITFALL,
   ],
   example: {
     response: {
@@ -134,7 +172,11 @@ registerEndpoint({
         due_date: '2026-05-31',
         status: 'sent',
         total: 12500,
+        amount_to_pay: 12500,
+        ore_rounding_amount: 0,
         remaining_amount: 12500,
+        payment_reference: '202600425',
+        payment_reference_type: 'ocr',
         paid_at: null,
         created_at: '2026-05-01T09:14:33Z',
       },
@@ -209,11 +251,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     // Quotes: report the effective decision (expired is derived from
     // valid_until, never stored). Null for every other document type.
+    // Overdue is derived the same way (lib/invoices/overdue.ts): a sent
+    // invoice past its due date with an open remainder reports 'overdue',
+    // as the list endpoint does.
     const row = data as unknown as Record<string, unknown> & {
       quote_status?: string | null
       valid_until?: string | null
-    }
-    return ok({ ...row, quote_status: effectiveQuoteStatus(row) }, { requestId: ctx.requestId })
+    } & OverdueInvoiceInput & AmountToPayRow & PaymentReferenceRow
+    const [withAmounts] = await withAmountToPay(ctx.supabase, ctx.companyId!, [row])
+    // crm#1886: the reference its PDF prints, from the projection the list
+    // and the MCP reads use.
+    const [withReference] = await withPaymentReference(ctx.supabase, ctx.companyId!, [withAmounts])
+    return ok(
+      { ...withReference, status: effectiveInvoiceStatus(row), quote_status: effectiveQuoteStatus(row) },
+      { requestId: ctx.requestId },
+    )
   },
 )
 
@@ -227,7 +279,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id',
   summary: 'Update a draft invoice (metadata fields, optionally replacing line items).',
   description:
-    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag), and an optional items array. When items is present, it fully REPLACES the draft\'s line items and subtotal / VAT / total are recomputed against the invoice\'s existing customer (same validation as POST /invoices); when omitted, items and totals are unchanged. customer_id, currency, and document_type are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
+    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag), vat_treatment + delivery_country (the per-invoice VAT treatment, same rules as POST /invoices), and an optional items array. When items is present, it fully REPLACES the draft\'s line items and subtotal / VAT / total are recomputed against the invoice\'s existing customer (same validation as POST /invoices); when omitted, items and totals are unchanged. customer_id, currency, and document_type are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
   useWhen:
     'You need to correct a typo, push the due date, update a customer reference, or rewrite the line items on a draft you have not sent yet. The invoice number stays null until the first :send action.',
   doNotUseFor:
@@ -237,6 +289,7 @@ registerEndpoint({
     'A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The DELETE handler on this path uses its own code, INVOICE_DELETE_NOT_DRAFT.',
     'items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.',
     'items are always built against the invoice\'s EXISTING customer: customer_id cannot change on PATCH.',
+    'vat_treatment and delivery_country are a pair: sending either replaces both (null clears), omitting both keeps the draft\'s. Changing them re-decides the VAT of the lines even without items: the current lines are rebuilt, so a draft whose lines carry 25 % cannot become an export of goods until its lines are 0 % (send items with vat_rate 0 or omitted). A draft that states its own treatment keeps it across edits that do not mention it, and falls back to the customer\'s treatment (the statement cleared) if a later customer change no longer supports it.',
     'default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.',
     'When items are replaced, the VAT treatment is decided again from the customer\'s current row (customer_type, vat_number validation, country), so it can differ from the draft\'s stored one: an eu_business whose country is SE gets Swedish VAT, never reverse charge. The 200 may carry meta.warnings about the treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, SWEDISH_VAT_TO_EXPORT_CUSTOMER). The update succeeded; the warning says why the rates are what they are.',
   ],
@@ -252,7 +305,9 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'invoices:write',
+  // Drafts only (isEditableInvoiceDraft below, and the update's status
+  // guard): invoices:draft, which invoices:write includes.
+  scope: 'invoices:draft',
   risk: 'low',
   idempotent: true,
   reversible: true,
@@ -293,12 +348,20 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'your_reference',
       'our_reference',
       'notes',
+      'delivery_address',
       'default_dimensions',
+      'qr_mode',
     ] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]
     }
 
-    if (Object.keys(updateData).length === 0 && body.payment_cash_account_id === undefined && !body.items) {
+    const vatOverrideSent = body.vat_treatment !== undefined || body.delivery_country !== undefined
+    if (
+      Object.keys(updateData).length === 0 &&
+      body.payment_cash_account_id === undefined &&
+      !body.items &&
+      !vatOverrideSent
+    ) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'body', message: 'At least one field must be supplied for update.' },
@@ -361,16 +424,42 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // ── Items replacement path ────────────────────────────────────────
     // Full replace + recompute via the shared write-builder (the same one
     // POST /invoices and the cookie PATCH route use), built against the
-    // invoice's EXISTING customer: customer_id is immutable on PATCH.
-    if (body.items) {
+    // invoice's EXISTING customer: customer_id is immutable on PATCH. A new
+    // VAT treatment (#2906) takes the same path: it changes what the lines
+    // may carry and what the header says, so the current lines are fed back
+    // through the builder when the body brings none.
+    if (body.items || vatOverrideSent) {
       const cur = current as Record<string, unknown>
+
+      let itemsInput: InvoiceWriteItemInput[]
+      if (body.items) {
+        itemsInput = body.items
+      } else {
+        const { data: itemRows, error: itemsFetchErr } = await ctx.supabase
+          .from('invoice_items')
+          .select(
+            'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+          )
+          .eq('invoice_id', invoiceId)
+          .order('sort_order', { ascending: true })
+        if (itemsFetchErr) {
+          return v1ErrorResponse(itemsFetchErr, ctx.log, { requestId: ctx.requestId })
+        }
+        itemsInput = (itemRows ?? []) as InvoiceWriteItemInput[]
+        if (itemsInput.length === 0) {
+          return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+            requestId: ctx.requestId,
+            details: { field: 'items', message: 'The draft has no lines: send items together with vat_treatment.' },
+          })
+        }
+      }
 
       // Internal-only columns for the rebuild. Fetched separately so the
       // response/preview projection (INVOICE_PATCH_RESPONSE_COLUMNS) can
       // never leak the encrypted personnummer blob.
       const { data: internal, error: internalErr } = await ctx.supabase
         .from('invoices')
-        .select('ore_rounding, deduction_personnummer_encrypted, deduction_personnummer_last4')
+        .select('ore_rounding, deduction_personnummer_encrypted, deduction_personnummer_last4, vat_treatment_override, delivery_country')
         .eq('company_id', ctx.companyId!)
         .eq('id', invoiceId)
         .maybeSingle()
@@ -387,6 +476,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         ore_rounding: boolean | null
         deduction_personnummer_encrypted: string | null
         deduction_personnummer_last4: string | null
+        vat_treatment_override: 'standard' | 'export' | 'reverse_charge' | null
+        delivery_country: string | null
       }
 
       // Narrow projection keeps customer PII out of this path. Every column
@@ -412,7 +503,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       // ROT/RUT claim info lives per line, not on the header: surface the
       // first deduction line's values as the invoice-level inputs the
       // builder's presence checks expect (per-line values win regardless).
-      const firstDeduction = body.items.find((item) => item.deduction_type)
+      const firstDeduction = itemsInput.find((item) => item.deduction_type)
 
       const build = await buildInvoiceWriteData({
         supabase: ctx.supabase,
@@ -438,7 +529,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
             undefined,
           notes: (body.notes !== undefined ? body.notes : (cur.notes as string | null)) ?? undefined,
           // Not editable on this surface: fed back so the builder echoes the
-          // stored values instead of clearing them.
+          // stored values instead of clearing them. invoice_marking too: a
+          // treatment-only PATCH (#2906) rebuilds without the caller sending
+          // any header, and the builder writes a concrete null otherwise.
+          invoice_marking: (cur.invoice_marking as string | null) ?? undefined,
           payment_link_url: (cur.payment_link_url as string | null) ?? undefined,
           payment_link_auto: (cur.payment_link_auto as boolean | null) ?? undefined,
           ore_rounding: internalCols.ore_rounding ?? undefined,
@@ -448,7 +542,9 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           default_dimensions:
             body.default_dimensions ??
             ((cur.default_dimensions as Record<string, string> | null) ?? {}),
-          items: body.items,
+          vat_treatment: body.vat_treatment,
+          delivery_country: body.delivery_country,
+          items: itemsInput,
         },
         // The stored personnummer exists only as ciphertext: a replace that
         // still carries deduction lines keeps the stored value.
@@ -458,6 +554,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
               last4: internalCols.deduction_personnummer_last4,
             }
           : null,
+        existingVatOverride: {
+          vat_treatment: internalCols.vat_treatment_override ?? null,
+          delivery_country: internalCols.delivery_country ?? null,
+        },
       })
       if (!build.ok) {
         if ('dbError' in build) {
@@ -544,10 +644,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           invoiceId,
           pgCode: (refetchErr as { code?: string } | null)?.code,
         })
-        return ok(updatedRow, { requestId: ctx.requestId, warnings: build.warnings })
+        const [header] = await withAmountToPay(ctx.supabase, ctx.companyId!, [updatedRow as unknown as AmountToPayRow])
+        return ok(header, { requestId: ctx.requestId, warnings: build.warnings })
       }
 
-      return ok(complete, { requestId: ctx.requestId, warnings: build.warnings })
+      const [withItems] = await withAmountToPay(ctx.supabase, ctx.companyId!, [complete as unknown as AmountToPayRow])
+      return ok(withItems, { requestId: ctx.requestId, warnings: build.warnings })
     }
 
     if (ctx.dryRun) {
@@ -576,7 +678,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     }
 
     // Metadata-only update: no line changed, so no rate to explain.
-    return ok(data, { requestId: ctx.requestId })
+    const [updated] = await withAmountToPay(ctx.supabase, ctx.companyId!, [data as unknown as AmountToPayRow])
+    return ok(updated, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )
@@ -620,7 +723,7 @@ registerEndpoint({
   // 'high', matching the delete_draft_invoice pending-op tier: both outcomes
   // are irreversible (row gone, or the F-series number permanently consumed).
   risk: 'high',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: true,
   response: { success: dataEnvelope(InvoiceDeleteResult) },

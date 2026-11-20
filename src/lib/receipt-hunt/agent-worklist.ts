@@ -11,17 +11,29 @@
  *  - posted verifikat without underlag (the verifikat_without_documents RPC,
  *    the same truth as the Att göra row), enriched with the supplier invoice
  *    or bank transaction behind the verifikat so there is a name to search on;
- *  - unbooked purchases without a receipt (the built-in hunt's own candidate
- *    predicate, so the two engines never disagree about what is missing).
+ *  - unbooked purchases without a receipt: every outflow the Underlag page
+ *    lists (purchases-without-underlag.ts), whatever its amount or currency,
+ *    so the agent and the page never disagree about what is missing. Not the
+ *    built-in hunt's candidates: the hunt reads the same view behind a 100 kr
+ *    floor, a cost bound on Accounted's own mail search and model call. An
+ *    agent searches through its own connector, so the floor only hid work,
+ *    and it compared kronor with a USD or EUR row's own amount, which dropped
+ *    nearly every card row on a foreign-currency account (crm#1785).
  *
  * A supplier invoice without a document is not a third source: it surfaces as
  * its registration verifikat, which is where its underlag has to land.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchCandidateTransactions } from './hunt'
-import { lookupPortal } from './portal-directory'
+import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
+import { booksPurchase, type PlausibilityLine } from '@/lib/bookkeeping/voucher-plausibility'
+import { resolveInboxAddress } from '@/lib/documents/inbox-address'
+import { resolvePortal, type CompanyPortal } from './company-portals'
+import { fetchPurchasesWithoutUnderlag } from './purchases-without-underlag'
+import { readCompanyPortals } from './company-portals-read'
 import { FETCH_DATE_WINDOW_DAYS, canHaveEmailReceipt } from './select'
+import { resolveUnderlagElsewhere, type UnderlagElsewhere } from './underlag-elsewhere'
 
 export type AgentWorklistKind = 'verifikat' | 'transaction'
 
@@ -46,7 +58,9 @@ export interface AgentWorklistItem {
   search_from: string
   search_to: string
   /**
-   * False for rows that never have a mailed receipt (salary, tax, bank fees):
+   * False for rows that never have a mailed receipt (salary, tax, bank fees),
+   * for verifikat that bought nothing (money in, a transfer between the
+   * company's own accounts) and for verifikat imported from earlier books:
    * the agent skips the mail search and reports them as needing a human.
    */
   mail_searchable: boolean
@@ -67,6 +81,13 @@ export interface AgentWorklistItem {
    * what was tried.
    */
   next_step: string
+  /**
+   * Set when the verifikat pays an invoice whose underlag is already on the
+   * invoice's own verifikat: stage `document_id` on this one with copy: true
+   * instead of searching mail. A mail search only finds the same invoice
+   * again (crm#1584). Null otherwise, and always for a transaction.
+   */
+  underlag_on: UnderlagElsewhere | null
 }
 
 export interface AgentWorklist {
@@ -74,6 +95,8 @@ export interface AgentWorklist {
   total_count: number
   /** The company's inbox address: mail forwarded here becomes an inbox document. Null when not provisioned. */
   inbox_address: string | null
+  /** Pass as `offset` for the next page. Absent on the last page. */
+  next_offset?: number
 }
 
 /** Verifikat already carrying a staged or settled link are not asked about twice. */
@@ -85,6 +108,16 @@ const LINK_OPERATION_TYPES = [
 ] as const
 const LOOKUP_CHUNK = 150
 const MAX_ITEMS = 100
+/** verifikat_without_documents returns at most this many rows per call. */
+const VERIFIKAT_PAGE = 100
+/**
+ * How many verifikat (most recent first, the RPC's order) the list is ranked
+ * over. Fixed, never derived from `offset`: a window that grew with the page
+ * would re-rank, and page two would repeat or skip items of page one. It used
+ * to be one RPC page, so a second round of the hunt could only re-request the
+ * same top 100 (agent feedback seq 957595).
+ */
+const VERIFIKAT_WINDOW = 500
 
 /**
  * How far back an invoice settled by bankgiro, plusgiro or OCR is worth
@@ -114,6 +147,21 @@ const KIVRA_DESCRIPTOR =
 const IN_PERSON_DESCRIPTOR =
   /parkering|easypark|parkster|circle k|preem|okq8|\bshell\b|\bst1\b|\btaxi\b|uber|pressbyrån|7-eleven|zettle|izettle/i
 
+/**
+ * A payment provider's own rows on its statement, which bought nothing: Wise
+ * books its charge for a card payment, transfer or conversion as a row of its
+ * own ("FEE-CARD-... Wise Charges for: CARD-..."), and a move between the
+ * company's currency balances as another ("BALANCE-... Converted 100.00 EUR
+ * to 1,100.00 SEK"). The underlag is the provider's statement. Read on the
+ * bank row's own description: a fee on a transfer carries the payee of the
+ * transfer as its merchant name. With no amount floor these small rows reach
+ * the worklist, and a mail search for them can only come back empty.
+ */
+const PROVIDER_OWN_ROW = /^(?:FEE-(?:CARD|TRANSFER|BALANCE)-\d+|BALANCE-\d+\s+Converted\b)/i
+
+/** As much of a posted verifikat's line as the classifier reads. */
+export type BookedLine = Pick<PlausibilityLine, 'account_number' | 'debit_amount'>
+
 interface VerifikatRow {
   journal_entry_id: string
   voucher_series: string | null
@@ -131,35 +179,77 @@ function shiftDate(isoDate: string, days: number): string {
 }
 
 /**
- * Which errand a missing underlag actually needs, from its descriptor alone.
+ * Which errand a missing underlag actually needs, from its descriptor and,
+ * for a posted verifikat, the accounts it books on.
  *
  * Ordered by how a receipt reaches a Swedish company: a vendor that withholds
  * its invoice behind a login, a chain that sends to Kivra, a counter purchase
- * that only exists on paper, and otherwise the mailbox.
+ * that only exists on paper, and otherwise the mailbox. Before all of them,
+ * what has no receipt at all: salary and tax, and a verifikat that bought
+ * nothing. First of all, a verifikat imported from earlier books: its
+ * underlag is where those books were kept (the previous system, the byrå or
+ * paper), so the errand is to confirm that, not to search (crm#1582).
  *
  * Exported because this is derived, never stored: the app can classify the
  * rows it already has without an agent having run, and the agent's sentence
  * and the app's summary then say the same thing by construction.
  */
-export type NextStepKind = 'not_mail' | 'portal' | 'kivra' | 'paper' | 'mail'
+export type NextStepKind = 'imported' | 'not_mail' | 'no_purchase' | 'portal' | 'kivra' | 'paper' | 'mail'
 
-export function nextStepKind(descriptor: string | null): NextStepKind {
+/**
+ * `companyPortals` are the company's own (public.company_portals); without
+ * them only the portal directory says where an invoice waits behind a login.
+ *
+ * `lines` are a posted verifikat's; absent for an unbooked bank row, which has
+ * only its words. They catch what no word does: a verifikat that bought
+ * nothing (booksPurchase), such as a share issue, a transfer between the
+ * company's own accounts or a sales samlingsverifikat. In a trial run
+ * (2026-10-28) those, sorted largest first, filled the whole first page of a
+ * mail search. The words go first: a tax payment says so, and the sentence
+ * for it names the skattekonto.
+ *
+ * `sourceType` is a posted verifikat's journal_entries.source_type: 'import'
+ * (SIE) wins over every word, since even an imported salary verifikat has its
+ * lönespecifikation in the earlier books, not in a mailbox.
+ */
+export function nextStepKind(
+  descriptor: string | null,
+  companyPortals: readonly CompanyPortal[] = [],
+  lines?: readonly BookedLine[],
+  sourceType?: string | null,
+): NextStepKind {
+  if (sourceType === 'import') return 'imported'
   if (!canHaveEmailReceipt(descriptor)) return 'not_mail'
-  if (lookupPortal(descriptor)) return 'portal'
+  if (lines && !booksPurchase(lines)) return 'no_purchase'
+  if (resolvePortal(companyPortals, descriptor)) return 'portal'
   if (KIVRA_DESCRIPTOR.test(descriptor ?? '')) return 'kivra'
   if (TIP_DESCRIPTOR.test(descriptor ?? '') || IN_PERSON_DESCRIPTOR.test(descriptor ?? '')) return 'paper'
   return 'mail'
 }
 
 /**
+ * The "Inget underlag krävs" reason for an imported verifikat whose underlag
+ * stays where the earlier books were kept. BFL 7 kap asks that the underlag is
+ * kept, readable and producible for seven years, not that it moves into the
+ * system the books moved to.
+ */
+export const UNDERLAG_ARCHIVED_ELSEWHERE_REASON = 'Underlag arkiverat utanför Accounted (tidigare system eller papper)'
+
+/**
  * What to tell the person when the agent cannot fetch this one: one sentence,
  * one place, one action. Never mentions searching, agents or what failed. By
  * the time this is read, the reader only wants the errand.
  */
-function nextStep(descriptor: string | null, portal: AgentWorklistItem['portal']): string {
-  switch (nextStepKind(descriptor)) {
+function nextStep(kind: NextStepKind, portal: AgentWorklistItem['portal']): string {
+  switch (kind) {
+    case 'imported':
+      // The reason is the one the waiver dialogs suggest
+      // (journal_list.no_doc_required_suggestion_archived_elsewhere).
+      return `Importerat verifikat: underlaget finns där bokföringen fördes tidigare. Ligger det kvar där, markera det Inget underlag krävs med orsaken "${UNDERLAG_ARCHIVED_ELSEWHERE_REASON}".`
     case 'not_mail':
       return 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.'
+    case 'no_purchase':
+      return 'Inget inköp, så inget kvitto: underlaget är kontoutdraget eller betalleverantörens rapport.'
     case 'portal':
       return `Logga in på ${portal?.vendor ?? 'leverantören'} och ladda ner fakturan: ${portal?.url ?? ''}`.trim()
     case 'kivra':
@@ -174,28 +264,52 @@ function nextStep(descriptor: string | null, portal: AgentWorklistItem['portal']
 function withSearchHints(
   base: Omit<
     AgentWorklistItem,
-    'search_from' | 'search_to' | 'mail_searchable' | 'portal' | 'tip_possible' | 'next_step'
+    'search_from' | 'search_to' | 'mail_searchable' | 'portal' | 'tip_possible' | 'next_step' | 'underlag_on'
   >,
+  companyPortals: readonly CompanyPortal[],
+  lines?: readonly BookedLine[],
+  underlagOn: UnderlagElsewhere | null = null,
+  sourceType?: string | null,
 ): AgentWorklistItem {
   const descriptor = base.counterparty ?? base.description
-  const portal = lookupPortal(descriptor)
-  const mailSearchable = canHaveEmailReceipt(descriptor)
   // A payment that settles an invoice opens the window earlier: the invoice was
   // mailed when it was issued, the payment happens on the due date. The window
   // never closes later, because a document dated well after the charge belongs
   // to the next period, not this purchase.
   const settlesInvoice = Boolean(base.invoice_number) || INVOICE_DESCRIPTOR.test(descriptor ?? '')
-  const portalHint = portal
-    ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null }
-    : null
-  return {
-    ...base,
+  const searchWindow = {
     search_from: shiftDate(base.date, -(settlesInvoice ? INVOICE_DAYS_BEFORE : FETCH_DATE_WINDOW_DAYS)),
     search_to: shiftDate(base.date, FETCH_DATE_WINDOW_DAYS),
+  }
+  // The invoice is already in the books: the errand is a copy, not a search.
+  if (underlagOn) {
+    return {
+      ...base,
+      ...searchWindow,
+      mail_searchable: false,
+      portal: null,
+      tip_possible: false,
+      next_step: `Fakturan finns redan på ${underlagOn.voucher} (${underlagOn.entry_date}): koppla en kopia av den till det här verifikatet.`,
+      underlag_on: underlagOn,
+    }
+  }
+  // An unbooked bank row has no lines to say it bought nothing, only its words.
+  const kind =
+    base.kind === 'transaction' && PROVIDER_OWN_ROW.test(base.description ?? '')
+      ? 'no_purchase'
+      : nextStepKind(descriptor, companyPortals, lines, sourceType)
+  const mailSearchable = kind !== 'imported' && kind !== 'not_mail' && kind !== 'no_purchase'
+  // The company's own portal for the supplier first, then the directory's.
+  const portal = mailSearchable ? resolvePortal(companyPortals, descriptor) : null
+  const portalHint = portal ? { vendor: portal.vendor, url: portal.url, note: portal.note } : null
+  return {
+    ...base,
+    ...searchWindow,
     mail_searchable: mailSearchable,
     portal: portalHint,
     tip_possible: TIP_DESCRIPTOR.test(descriptor ?? ''),
-    next_step: nextStep(descriptor, portalHint),
+    next_step: nextStep(kind, portalHint),
+    underlag_on: null,
   }
 }
 
@@ -227,19 +341,6 @@ async function fetchClaimedTargets(supabase: SupabaseClient, companyId: string) 
     }
   }
   return { journalEntryIds, transactionIds }
-}
-
-async function fetchInboxAddress(supabase: SupabaseClient, companyId: string): Promise<string | null> {
-  const domain = process.env.RESEND_INBOUND_DOMAIN
-  if (!domain) return null
-  const { data, error } = await supabase
-    .from('company_inboxes')
-    .select('local_part')
-    .eq('company_id', companyId)
-    .eq('status', 'active')
-    .maybeSingle()
-  if (error || !data) return null
-  return `${(data as { local_part: string }).local_part}@${domain}`
 }
 
 interface VerifikatContext {
@@ -307,49 +408,86 @@ async function fetchVerifikatContext(
 }
 
 /**
- * The agent's worklist, largest amount first: the biggest gaps in the
- * räkenskapsinformation are the ones worth a mail search first, and the
- * built-in hunt drains its queue in the same order.
+ * The agent's worklist: unbooked bank purchases first, then posted verifikat,
+ * largest amount first within each. A receipt found before booking lets the
+ * purchase be booked from it; a posted verifikat only gains a link. Within a
+ * kind the biggest gaps in the räkenskapsinformation are worth a mail search
+ * first, the order the built-in hunt drains its queue in.
  */
-export async function resolveAgentWorklist(
+const kindRank = (kind: AgentWorklistKind) => (kind === 'transaction' ? 0 : 1)
+
+/** The ranking window of verifikat without underlag, paged through the RPC's own cap. */
+async function fetchVerifikatWindow(
   supabase: SupabaseClient,
   companyId: string,
-  opts: { limit?: number; since?: string | null } = {},
-): Promise<AgentWorklist> {
-  const limit = Math.min(Math.max(1, opts.limit ?? 25), MAX_ITEMS)
-  const since = opts.since ?? null
-
-  const [verifikatRes, transactions, claimed, inboxAddress] = await Promise.all([
-    supabase.rpc('verifikat_without_documents', {
+  since: string | null,
+): Promise<{ rows: VerifikatRow[]; total: number }> {
+  const rows: VerifikatRow[] = []
+  let total = 0
+  for (let offset = 0; offset < VERIFIKAT_WINDOW; offset += VERIFIKAT_PAGE) {
+    const { data, error } = await supabase.rpc('verifikat_without_documents', {
       p_company_id: companyId,
       p_since: since,
       p_min_amount: 0,
-      p_limit: MAX_ITEMS,
-      p_offset: 0,
-    }),
-    fetchCandidateTransactions(supabase, companyId),
-    fetchClaimedTargets(supabase, companyId),
-    fetchInboxAddress(supabase, companyId),
-  ])
-  if (verifikatRes.error) throw new Error(`verifikat_without_documents failed: ${verifikatRes.error.message}`)
-  const verifikatResult = verifikatRes.data as {
-    ok?: boolean
-    code?: string
-    total_count?: number
-    verifikat?: VerifikatRow[]
-  } | null
-  if (!verifikatResult?.ok) {
-    throw new Error(`verifikat_without_documents failed: ${verifikatResult?.code ?? 'unknown error'}`)
+      p_limit: VERIFIKAT_PAGE,
+      p_offset: offset,
+    })
+    if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
+    const result = data as {
+      ok?: boolean
+      code?: string
+      total_count?: number
+      verifikat?: VerifikatRow[]
+    } | null
+    if (!result?.ok) {
+      throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
+    }
+    total = result.total_count ?? 0
+    const page = result.verifikat ?? []
+    rows.push(...page)
+    if (page.length < VERIFIKAT_PAGE || rows.length >= total) break
   }
+  return { rows, total }
+}
 
-  const verifikat = (verifikatResult.verifikat ?? []).filter(
+export async function resolveAgentWorklist(
+  supabase: SupabaseClient,
+  companyId: string,
+  opts: { limit?: number; offset?: number; since?: string | null } = {},
+): Promise<AgentWorklist> {
+  const limit = Math.min(Math.max(1, opts.limit ?? 25), MAX_ITEMS)
+  const offset = Math.max(0, Math.floor(opts.offset ?? 0))
+  const since = opts.since ?? null
+
+  const [verifikatWindow, transactions, claimed, inboxAddress, companyPortals] = await Promise.all([
+    fetchVerifikatWindow(supabase, companyId, since),
+    fetchPurchasesWithoutUnderlag(supabase, companyId),
+    fetchClaimedTargets(supabase, companyId),
+    resolveInboxAddress(supabase, companyId),
+    readCompanyPortals(supabase, companyId),
+  ])
+
+  const verifikat = verifikatWindow.rows.filter(
     (v) => !claimed.journalEntryIds.has(v.journal_entry_id),
   )
-  const context = await fetchVerifikatContext(
-    supabase,
-    companyId,
-    verifikat.map((v) => v.journal_entry_id),
-  )
+  const verifikatIds = verifikat.map((v) => v.journal_entry_id)
+  const [context, lines] = await Promise.all([
+    fetchVerifikatContext(supabase, companyId, verifikatIds),
+    // What each verifikat booked: whether it bought anything at all, and
+    // whether it pays an invoice (the credit side of kundfordringar).
+    fetchLinesByEntryIds<PlausibilityLine & { id: string; journal_entry_id: string }>(
+      supabase,
+      verifikatIds,
+      'account_number, debit_amount, credit_amount',
+    ),
+  ])
+  const linesByEntry = new Map<string, PlausibilityLine[]>()
+  for (const line of lines) {
+    const entryLines = linesByEntry.get(line.journal_entry_id)
+    if (entryLines) entryLines.push(line)
+    else linesByEntry.set(line.journal_entry_id, [line])
+  }
+  const underlagElsewhere = await resolveUnderlagElsewhere(supabase, companyId, verifikat, linesByEntry)
 
   // Ranked on the SEK value: `amount` is in the row's own currency, and a
   // USD 90 subscription must not sort under a 100 kr parking receipt.
@@ -362,14 +500,14 @@ export async function resolveAgentWorklist(
         kind: 'verifikat',
         journal_entry_id: v.journal_entry_id,
         transaction_id: null,
-        voucher: v.voucher_series ? `${v.voucher_series}${v.voucher_number}` : String(v.voucher_number),
+        voucher: v.voucher_series ? formatVoucher(v) : String(v.voucher_number),
         date: v.entry_date,
         amount: ctx?.amount ?? v.gross_amount,
         currency: ctx?.currency ?? 'SEK',
         counterparty: ctx?.counterparty ?? null,
         description: v.description,
         invoice_number: ctx?.invoice_number ?? null,
-      }),
+      }, companyPortals, linesByEntry.get(v.journal_entry_id), underlagElsewhere.get(v.journal_entry_id) ?? null, v.source_type),
     })
   }
   for (const tx of transactions) {
@@ -389,20 +527,22 @@ export async function resolveAgentWorklist(
         counterparty: tx.merchant_name ?? null,
         description: tx.description ?? null,
         invoice_number: null,
-      }),
+      }, companyPortals),
     })
   }
 
-  ranked.sort((a, b) => b.sek - a.sek)
+  ranked.sort((a, b) => kindRank(a.item.kind) - kindRank(b.item.kind) || b.sek - a.sek)
+  const end = offset + limit
   return {
-    items: ranked.slice(0, limit).map((r) => r.item),
-    // The verifikat total comes from the RPC (it may exceed the page fetched
-    // here); claimed rows inside that page are subtracted so the number
-    // matches what the agent can actually work on.
+    items: ranked.slice(offset, end).map((r) => r.item),
+    // The verifikat total comes from the RPC (it may exceed the window
+    // fetched here); claimed rows inside the window are subtracted so the
+    // number matches what the agent can actually work on.
     total_count:
-      (verifikatResult.total_count ?? 0) -
-      ((verifikatResult.verifikat ?? []).length - verifikat.length) +
+      verifikatWindow.total -
+      (verifikatWindow.rows.length - verifikat.length) +
       ranked.filter((r) => r.item.kind === 'transaction').length,
     inbox_address: inboxAddress,
+    ...(end < ranked.length ? { next_offset: end } : {}),
   }
 }

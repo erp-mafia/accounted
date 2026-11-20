@@ -4,7 +4,7 @@ import { atomLabel } from '@/lib/agent-context/atom-labels'
 
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { Pin, ArrowUpRight } from 'lucide-react'
+import { ArrowUpRightIcon, BookmarkIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsRows'
@@ -15,7 +15,7 @@ import type { AgentCompetence, AtomTier, FactKind, FactSource } from '@/lib/agen
  * learned facts, for the "Vad din agent vet" overview. Each renders as a flat
  * settings group (Fönster language) with its description behind the group
  * "?" help. Full editable management lives on the Minne and Kompetens
- * views of /agent-knowledge (and in /settings/assistant); each
+ * views of /wiki (and in /settings/assistant); each
  * links there.
  */
 
@@ -61,7 +61,7 @@ export function CompetenceCard({ competence }: { competence: AgentCompetence }) 
           })}
           <div className="flex items-center justify-between gap-4 px-1 pt-3 text-xs text-muted-foreground">
             <span className="tabular-nums">{t('comp_count', { total: atoms.length, active: activeAtoms })}</span>
-            <ManageLink href="/agent-knowledge?view=skills" label={t('comp_manage')} />
+            <ManageLink href="/wiki?view=skills" label={t('comp_manage')} />
           </div>
         </>
       )}
@@ -87,15 +87,15 @@ export function FactsCard({ competence }: { competence: AgentCompetence }) {
               inline as muted text; the pin marks the exception. */}
           <ul>
             {facts.map((f) => (
-              <li key={f.id} className="flex items-start gap-2 border-b border-border px-1 py-3">
+              <li key={f.id} className="flex items-start gap-2 border-b-hairline px-1 py-3">
                 {f.is_pinned ? (
-                  <Pin role="img" className="mt-1 h-3.5 w-3.5 shrink-0 fill-current text-muted-foreground" aria-label={t('facts_pinned')} />
+                  <BookmarkIcon role="img" className="mt-1 h-3.5 w-3.5 shrink-0 fill-current text-muted-foreground" aria-label={t('facts_pinned')} />
                 ) : (
                   <span className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden />
                 )}
                 <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
                   <span className="text-sm text-foreground">{f.content}</span>
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-xs text-muted-foreground">
                     {kindLabel(f.kind)} · {sourceLabel(f.source)}
                   </span>
                 </div>
@@ -106,7 +106,7 @@ export function FactsCard({ competence }: { competence: AgentCompetence }) {
             <span className="tabular-nums">
               {factsActiveTotal > facts.length ? t('facts_more', { n: factsActiveTotal - facts.length }) : ''}
             </span>
-            <ManageLink href="/agent-knowledge?view=memory" label={t('facts_manage')} />
+            <ManageLink href="/wiki?view=memory" label={t('facts_manage')} />
           </div>
         </>
       )}
@@ -116,10 +116,10 @@ export function FactsCard({ competence }: { competence: AgentCompetence }) {
 
 function ManageLink({ href, label }: { href: string; label: string }) {
   return (
-    <Button asChild variant="outline" size="sm">
+    <Button asChild variant="outline">
       <Link href={href}>
         {label}
-        <ArrowUpRight className="ml-1 h-3 w-3" />
+        <ArrowUpRightIcon className="ml-1 h-3 w-3" />
       </Link>
     </Button>
   )

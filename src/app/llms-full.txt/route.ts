@@ -7,8 +7,8 @@
  * /docs/api/*.md page individually.
  *
  * Concatenates: landing → versioning → webhooks concept → errors →
- * reference overview → every per-resource reference → quickstart cookbook
- * → webhooks cookbook → changelog. Section separators are `---` so a
+ * reference overview → every per-resource reference → every cookbook
+ * recipe once → changelog. Section separators are `---` so a
  * downstream Markdown parser sees them as horizontal rules.
  */
 
@@ -39,8 +39,14 @@ function build(): string {
     sections.push(page.markdown)
   }
 
+  // Two cookbook slugs are aliases that serve another recipe's text
+  // (send-first-invoice, set-up-webhooks-and-verify-signatures): each recipe
+  // goes in once, or the quickstart and the webhooks recipe are ingested twice.
+  const seenRecipes = new Set<string>()
   for (const recipe of COOKBOOK) {
-    if (recipe.markdown) sections.push(recipe.markdown)
+    if (!recipe.markdown || seenRecipes.has(recipe.markdown)) continue
+    seenRecipes.add(recipe.markdown)
+    sections.push(recipe.markdown)
   }
 
   sections.push(CHANGELOG_MD)

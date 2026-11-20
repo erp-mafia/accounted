@@ -1,51 +1,196 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
+import type { AccountDimensionRule } from '@/lib/bookkeeping/dimension-rules'
 
 // Capture pattern: mock the engine and assert on the CreateJournalEntryInput
 // each salary sub-entry builder produces (same approach as
-// lib/bookkeeping/__tests__/invoice-entries.test.ts).
+// lib/bookkeeping/__tests__/invoice-entries.test.ts). The run posts through
+// createJournalEntries (kept real): every voucher is drafted first, then
+// committed in order. The fake ledger records what commitEntry posted, and
+// the supabase mock below serves it back to the resume lookup, so a retry
+// test sees exactly what the interrupted attempt left behind.
+const fake = vi.hoisted(() => ({
+  drafts: new Map<string, CreateJournalEntryInput>(),
+  ledger: [] as Array<Record<string, unknown> & { id: string; source_id?: string | null; status: string }>,
+  rules: [] as AccountDimensionRule[],
+  failCommit: null as ((input: CreateJournalEntryInput) => boolean) | null,
+  failDraft: null as ((input: CreateJournalEntryInput) => boolean) | null,
+  seq: 0,
+  voucherSeq: 0,
+  // The company's chart: numbers switched off (is_active false) and numbers
+  // not in it at all. Everything else exists and is active.
+  inactive: new Set<string>(),
+  absent: new Set<string>(),
+  inserted: [] as string[],
+}))
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
-  createJournalEntry: vi.fn(async (_s: unknown, _c: string, _u: string, input: CreateJournalEntryInput) => ({
-    id: `je-${input.description}`,
-    ...input,
-  })),
+  createDraftEntry: vi.fn(async (_s: unknown, _c: string, _u: string, input: CreateJournalEntryInput) => {
+    if (fake.failDraft?.(input)) throw new Error(`draft refused: ${input.description}`)
+    // The engine resolves only active accounts: a deactivated one is refused.
+    const off = input.lines.map((l) => l.account_number).filter((a) => fake.inactive.has(a))
+    if (off.length > 0) throw new Error(`Accounts not enabled in chart of accounts: ${off.join(', ')}`)
+    const id = `je-${++fake.seq}`
+    fake.drafts.set(id, input)
+    return { id, status: 'draft', voucher_number: 0, ...input }
+  }),
+  commitEntry: vi.fn(async (_s: unknown, _c: string, _u: string, id: string) => {
+    const input = fake.drafts.get(id)
+    if (!input) throw new Error(`no draft ${id}`)
+    if (fake.failCommit?.(input)) throw new Error(`commit failed: ${input.description}`)
+    const row = { ...input, id, status: 'posted', voucher_number: ++fake.voucherSeq }
+    fake.ledger.push(row)
+    return row
+  }),
+  cancelDraftEntry: vi.fn(async (_s: unknown, _c: string, _u: string, id: string) => ({ id, status: 'cancelled' })),
   findFiscalPeriod: vi.fn(async () => 'fp-1'),
 }))
 
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+vi.mock('@/lib/bookkeeping/dimension-rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/dimension-rules')>()),
+  fetchActiveDimensionRules: vi.fn(async () => fake.rules),
+}))
+
+// The semesterlöneskuld remeasurement reads the ledger and the payroll; its
+// plan is pinned here, so a test asserts what the booking does with it.
+const remeasure = vi.hoisted(() => ({
+  plan: vi.fn(),
+  upsert: vi.fn(async () => undefined),
+  link: vi.fn(async () => null),
+}))
+vi.mock('../vacation-liability-remeasure', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../vacation-liability-remeasure')>()),
+  planVacationLiabilityRemeasure: remeasure.plan,
+  upsertRunRemeasurement: remeasure.upsert,
+  linkRunRemeasurement: remeasure.link,
+}))
+
+import { cancelDraftEntry, commitEntry, createDraftEntry } from '@/lib/bookkeeping/engine'
+import { MandatoryDimensionMissingError } from '@/lib/bookkeeping/dimension-errors'
 import {
   buildSalaryRunEntryLines,
   createSalaryRunEntries,
+  SalaryRunPartiallyBookedError,
   salaryRunDataFromRows,
 } from '../salary-entries'
+import { BENEFIT_ITEM_TYPES } from '../benefit-payments'
+import { roundOre } from '@/lib/money'
 
-const mockedCreateEntry = vi.mocked(createJournalEntry)
+const mockedCreateEntry = vi.mocked(createDraftEntry)
+const mockedCommit = vi.mocked(commitEntry)
+const mockedCancel = vi.mocked(cancelDraftEntry)
 
-// Supabase mock only needs the chart_of_accounts existence check in
-// ensureSalaryAccountsExist: pretend every account already exists.
-function makeSupabase() {
+interface CashAccountFixture {
+  ledger_account: string
+  enabled: boolean
+  currency: string
+}
+
+/** A seeded company: 1930 Företagskonto, enabled SEK, primary. */
+const PRIMARY_1930: CashAccountFixture = { ledger_account: '1930', enabled: true, currency: 'SEK' }
+
+/**
+ * Supabase mock for the reads createSalaryRunEntries makes:
+ *   - cash_accounts (resolvePrimaryBankAccount): the primary row, then, when
+ *     the primary cannot carry the payment, the enabled SEK candidates;
+ *   - chart_of_accounts (activateSalaryAccounts via activateAccounts): every
+ *     account exists and is active unless listed in fake.inactive or
+ *     fake.absent; the numbers asked for are recorded in `ensured`, a
+ *     reactivation clears fake.inactive and an insert lands in fake.inserted;
+ *   - journal_entries (the resume lookup): the fake ledger's posted rows for
+ *     the asked source_id, or a read error when `ledgerError` is set.
+ * The default is a company whose bank account IS 1930, so every test written
+ * before issue #3097 keeps asserting the 1930 leg.
+ */
+function makeSupabase(
+  cash: { primary?: CashAccountFixture | null; enabledSek?: string[] } = { primary: PRIMARY_1930 },
+  ensured: string[] = [],
+  { ledgerError = false }: { ledgerError?: boolean } = {},
+) {
+  const cashChain = () => {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      maybeSingle: async () => ({ data: cash.primary ?? null, error: null }),
+      limit: async () => ({
+        data: (cash.enabledSek ?? []).map((ledger_account) => ({ ledger_account })),
+        error: null,
+      }),
+    }
+    return chain
+  }
+  const ledgerChain = () => {
+    const filters: Record<string, unknown> = {}
+    const chain = {
+      select: () => chain,
+      eq: (column: string, value: unknown) => {
+        filters[column] = value
+        return chain
+      },
+      order: async () =>
+        ledgerError
+          ? { data: null, error: { message: 'connection reset' } }
+          : {
+              data: fake.ledger.filter(
+                (row) => row.source_id === filters.source_id && row.status === filters.status,
+              ),
+              error: null,
+            },
+    }
+    return chain
+  }
   return {
-    from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          in: vi.fn(async (_col: string, accounts: string[]) => ({
-            data: accounts.map((account_number) => ({ account_number })),
-            error: null,
+    from: vi.fn((table: string) => {
+      if (table === 'cash_accounts') return cashChain()
+      if (table === 'journal_entries') return ledgerChain()
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            in: vi.fn(async (_col: string, accounts: string[]) => {
+              ensured.push(...accounts)
+              return {
+                data: accounts
+                  .filter((account_number) => !fake.absent.has(account_number))
+                  .map((account_number) => ({ account_number, is_active: !fake.inactive.has(account_number) })),
+                error: null,
+              }
+            }),
           })),
         })),
-      })),
-    })),
+        update: vi.fn((patch: { is_active: boolean }) => ({
+          eq: vi.fn(() => ({
+            in: vi.fn((_col: string, accounts: string[]) => ({
+              select: vi.fn(async () => {
+                if (patch.is_active) for (const a of accounts) fake.inactive.delete(a)
+                return { data: accounts.map((account_number) => ({ account_number })), error: null }
+              }),
+            })),
+          })),
+        })),
+        insert: vi.fn((rows: Array<{ account_number: string }>) => ({
+          select: vi.fn(async () => {
+            for (const r of rows) {
+              fake.absent.delete(r.account_number)
+              fake.inserted.push(r.account_number)
+            }
+            return { data: rows.map((r) => ({ account_number: r.account_number })), error: null }
+          }),
+        })),
+      }
+    }),
   } as never
 }
 
 interface EmployeeOverrides {
   employee_id?: string
   employment_type?: string
+  personnel_category?: string | null
   gross_salary?: number
   tax_withheld?: number
   net_salary?: number
   avgifter_amount?: number
   avgifter_basis?: number
+  avgifter_rate?: number
   avgifter_category?: string | null
   avgifter_amount_overridden?: boolean
   vacation_accrual?: number
@@ -59,6 +204,7 @@ interface EmployeeOverrides {
     account_number: string | null
     is_net_deduction: boolean
     is_gross_deduction: boolean
+    benefit_type?: string | null
   }>
 }
 
@@ -115,6 +261,18 @@ function linesOn(input: CreateJournalEntryInput, account: string): CreateJournal
 
 beforeEach(() => {
   mockedCreateEntry.mockClear()
+  mockedCommit.mockClear()
+  mockedCancel.mockClear()
+  fake.drafts.clear()
+  fake.ledger.length = 0
+  fake.rules = []
+  fake.failCommit = null
+  fake.failDraft = null
+  fake.seq = 0
+  fake.voucherSeq = 0
+  fake.inactive.clear()
+  fake.absent.clear()
+  fake.inserted.length = 0
 })
 
 describe('salary entries: net deductions', () => {
@@ -240,6 +398,37 @@ describe('salary entries: net deductions', () => {
     expect(linesOn(salary, '2710')[0].credit_amount).toBe(10050)
     expect(linesOn(salary, '1930')[0].credit_amount).toBe(31286)
     // 48 000 = 6 664 + 10 050 + 31 286
+    assertBalanced(salary)
+  })
+
+  it('a payment that names its benefit credits that benefit\'s account: bostad 7381, not 7385 (crm#1492)', async () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 48000,
+        tax_withheld: 10050,
+        net_salary: 33950,
+        avgifter_basis: 48000,
+        avgifter_amount: 15081.6,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 48000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'benefit_housing', amount: 4000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          {
+            item_type: 'net_deduction_benefit_payment',
+            amount: -4000,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+            benefit_type: 'housing',
+          },
+        ],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '7381')[0].credit_amount).toBe(4000)
+    expect(linesOn(salary, '7385')).toHaveLength(0)
     assertBalanced(salary)
   })
 
@@ -397,7 +586,10 @@ describe('salary entries: dimensions propagation (PR8)', () => {
     expect(salaryLines[0].debit_amount).toBe(60000)
     expect(salaryLines[0].dimensions).toEqual({ '1': 'KS01' })
 
+    // A separate booking of a separate run: start from an empty ledger, or
+    // the resume lookup would (rightly) refuse the first booking's vouchers.
     mockedCreateEntry.mockClear()
+    fake.ledger.length = 0
     const bagless = makeRun([makeEmployee({ employee_id: 'a' }), makeEmployee({ employee_id: 'b' })])
     await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', bagless)
     const legacy = entryByDescription('Lön 2026-06')
@@ -589,16 +781,71 @@ describe('salary entries: dimensions propagation (PR8)', () => {
     assertBalanced(avgifter)
   })
 
-  it('keeps the legacy zero-avgifter shape (single untagged debit)', async () => {
+  it('a run without avgifter builds and posts no avgifter voucher (the engine refuses an all-zero one)', async () => {
     const run = makeRun([
       makeEmployee({ employee_id: 'a', avgifter_amount: 0, gross_salary: 1000, tax_withheld: 0, net_salary: 1000 }),
     ])
-    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    expect(buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930').avgifterLines).toEqual([])
+
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+
+    expect(mockedCreateEntry.mock.calls.map((call) => call[3].description)).toEqual(['Lön 2026-06'])
+    expect(result.avgifterEntry).toBeNull()
+    expect(result.salaryEntry?.id).toBe(fake.ledger[0].id)
+  })
+
+  // crm#1596: a board member whose only pay is a förmån. Nothing is paid,
+  // withheld or expensed, so the salary voucher has no lines; it used to be
+  // posted anyway and the engine refused it as 0 = 0, so the avgifter on the
+  // benefit were never booked.
+  it('a run whose only amount is a förmånsvärde posts just its avgifter voucher', async () => {
+    const run = makeRun([
+      makeEmployee({
+        employment_type: 'board_member',
+        gross_salary: 0,
+        tax_withheld: 0,
+        net_salary: 0,
+        avgifter_amount: 93.95,
+        avgifter_basis: 299,
+        line_items: [
+          { item_type: 'benefit_other', amount: 299, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    expect(buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930').salaryLines).toEqual([])
+
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+
+    expect(mockedCreateEntry.mock.calls.map((call) => call[3].description)).toEqual(['Lön 2026-06: Arbetsgivaravgifter'])
+    expect(result.salaryEntry).toBeNull()
+    expect(result.avgifterEntry?.id).toBe(fake.ledger[0].id)
     const avgifter = entryByDescription('Arbetsgivaravgifter')
-    const expense = linesOn(avgifter, '7510')
-    expect(expense).toHaveLength(1)
-    expect(expense[0].debit_amount).toBe(0)
-    expect(expense[0].dimensions).toBeUndefined()
+    expect(avgifter.lines.reduce((s, l) => s + l.debit_amount, 0)).toBeGreaterThan(0)
+    assertBalanced(avgifter)
+  })
+
+  it('refuses a run with no voucher to post instead of booking it without a verifikat', async () => {
+    const run = makeRun([
+      makeEmployee({ gross_salary: 0, tax_withheld: 0, net_salary: 0, avgifter_amount: 0, avgifter_basis: 0 }),
+    ])
+
+    await expect(createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)).rejects.toThrow(
+      'inga rader att bokföra',
+    )
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('opposite-signed avgifter buckets that net to zero still book, without a 0/0 liability line', async () => {
+    const run = makeRun([
+      makeEmployee({ employee_id: 'a', avgifter_amount: 500, default_dimensions: { '1': 'KS01' } }),
+      makeEmployee({ employee_id: 'b', avgifter_amount: -500, default_dimensions: { '1': 'KS02' } }),
+    ])
+    const { avgifterLines } = buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930')
+
+    expect(avgifterLines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['7510', 500, 0],
+      ['7510', 0, 500],
+    ])
   })
 
   it('splits vacation accrual + its avgifter per bag; liabilities stay aggregated', async () => {
@@ -789,6 +1036,34 @@ describe('salary entries: kostnadsersättning (#2331)', () => {
     assertBalanced(salary)
   })
 
+  it('books utlandstraktamente on 7323 on top of gross and its taxable excess on 7324 inside gross (crm#1468)', async () => {
+    // The dialog writes the foreign rows as traktamente rows with their own
+    // account (manual-payslip-lines.ts): 3 days at a 600 kr normalbelopp
+    // tax-free, 200 kr above it taxable.
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 30200,
+        net_salary: 30200 - 7000 + 1800,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 30000, account_number: '7210', is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'traktamente_taxfree', amount: 1800, account_number: '7323', is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'traktamente_taxable', amount: 200, account_number: '7324', is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7323')).toEqual([
+      expect.objectContaining({ debit_amount: 1800, line_description: 'Lön 2026-06: Traktamenten skattefria, utlandet' }),
+    ])
+    expect(linesOn(salary, '7324')).toEqual([
+      expect.objectContaining({ debit_amount: 200, line_description: 'Lön 2026-06: Traktamenten skattepliktiga, utlandet' }),
+    ])
+    expect(linesOn(salary, '1930')[0].credit_amount).toBe(25000)
+    assertBalanced(salary)
+  })
+
   it('books a run that only repays utlägg as 2820 D / 1930 K', async () => {
     const run = makeRun([
       makeEmployee({
@@ -800,12 +1075,59 @@ describe('salary entries: kostnadsersättning (#2331)', () => {
         line_items: [claimLine(800)],
       }),
     ])
-    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
     const salary = entryByDescription('Lön 2026-06')
     expect(salary.lines).toEqual([
       expect.objectContaining({ account_number: '2820', debit_amount: 800, credit_amount: 0 }),
       expect.objectContaining({ account_number: '1930', debit_amount: 0, credit_amount: 800 }),
     ])
+    // No avgifter anywhere: the utlägg run posts only its salary voucher.
+    expect(fake.ledger.map((row) => row.description)).toEqual(['Lön 2026-06'])
+    expect(result.avgifterEntry).toBeNull()
+  })
+})
+
+describe('salary entries: pay derived from vacation days (#85)', () => {
+  it('books the semesterlön on 7285 and takes the semesterlöneavdrag off the salary account; the voucher balances', () => {
+    // Procentregeln, 5 days: 40 000 - 9 523,80 + 11 520 = 41 996,20 kr gross.
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 41996.2,
+        tax_withheld: 12000,
+        net_salary: 29996.2,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 40000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          // The operator's days, 0 kr.
+          { item_type: 'vacation', amount: 0, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'vacation', amount: -9523.8, account_number: null, is_net_deduction: false, is_gross_deduction: true },
+          { item_type: 'vacation', amount: 11520, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    const { salaryLines } = buildSalaryRunEntryLines(run, 'Lön 2026-07', '1930')
+    expect(salaryLines.find((l) => l.account_number === '7285')?.debit_amount).toBe(11520)
+    // 40 000 - 9 523,80: the days the semesterlön replaces leave the salary account.
+    expect(salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(30476.2)
+    const debit = salaryLines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = salaryLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(roundOre(debit - credit)).toBe(0)
+  })
+
+  it('books a sammalöneregeln semestertillägg on 7285 next to the full salary on 7210', () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 40860,
+        tax_withheld: 12000,
+        net_salary: 28860,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 40000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'vacation', amount: 860, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    const { salaryLines } = buildSalaryRunEntryLines(run, 'Lön 2026-07', '1930')
+    expect(salaryLines.find((l) => l.account_number === '7285')?.debit_amount).toBe(860)
+    expect(salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(40000)
   })
 })
 
@@ -827,7 +1149,7 @@ describe('salary entries: one line builder for booking and preview (feedback seq
         ],
       }),
     ])
-    const { salaryLines } = buildSalaryRunEntryLines(run, 'Lön 2026-06')
+    const { salaryLines } = buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930')
     // The bilförmån raises the tax base, not the cost: no 7385 line, and no
     // orphan debit for the preview to be off by.
     expect(salaryLines.some((l) => l.account_number === '7385')).toBe(false)
@@ -837,11 +1159,48 @@ describe('salary entries: one line builder for booking and preview (feedback seq
     expect(Math.round((debit - credit) * 100) / 100).toBe(0)
   })
 
+  // crm#1354: a förmånsvärde is no cost and no payment, so the verifikat gets
+  // no 73xx line for it, for every benefit type and whether the row was
+  // derived from the employee or entered on the payslip. It reaches the
+  // books through the tax withheld (2710) and the avgifter, which the
+  // calculation already took on cash pay plus the benefit (avgifter_basis).
+  it.each(BENEFIT_ITEM_TYPES)('%s books no line of its own; the voucher balances and the avgifter carry the benefit', (itemType) => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 30000,
+        tax_withheld: 7300,
+        net_salary: 22700,
+        // 31 116 = 30 000 + a 1 116 benefit; 31 116 x 31,42 % = 9 776,65
+        avgifter_basis: 31116,
+        avgifter_amount: 9776.65,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 30000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          // An old account on the row changes nothing: the benefit still books no line.
+          { item_type: itemType, amount: 1116, account_number: '7385', is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    const { salaryLines, avgifterLines } = buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930')
+
+    expect(salaryLines.filter((l) => l.account_number.startsWith('73'))).toEqual([])
+    expect(salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(30000)
+    expect(salaryLines.find((l) => l.account_number === '2710')?.credit_amount).toBe(7300)
+    expect(salaryLines.find((l) => l.account_number === '1930')?.credit_amount).toBe(22700)
+    const salaryDebit = salaryLines.reduce((s, l) => s + l.debit_amount, 0)
+    const salaryCredit = salaryLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(roundOre(salaryDebit - salaryCredit)).toBe(0)
+
+    expect(avgifterLines.find((l) => l.account_number === '7510')?.debit_amount).toBe(9776.65)
+    const avgifterDebit = avgifterLines.reduce((s, l) => s + l.debit_amount, 0)
+    const avgifterCredit = avgifterLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(roundOre(avgifterDebit - avgifterCredit)).toBe(0)
+  })
+
   it('books exactly the lines the builder returns, so a preview built from it cannot diverge', async () => {
     const run = makeRun([
       makeEmployee({ line_items: [benefitCar], vacation_accrual: 1200, vacation_accrual_avgifter: 377.04 }),
     ])
-    const built = buildSalaryRunEntryLines(run, 'Lön 2026-06')
+    const built = buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930')
     await createSalaryRunEntries(makeSupabase(), 'co-1', 'user-1', run)
     expect(mockedCreateEntry.mock.calls.map((c) => c[3].lines)).toEqual([
       built.salaryLines,
@@ -915,3 +1274,784 @@ describe('salary entries: one line builder for booking and preview (feedback seq
     })
   })
 })
+
+// Issue #3097: the net pay left the company's real bank account (1931, the
+// primary) while the verifikat credited 1930, so the bank row could never be
+// matched and the voucher needed a storno.
+describe('salary entries: accounts the run posts to are activated first', () => {
+  const bonusOn = (account: string) =>
+    makeRun([
+      makeEmployee({
+        gross_salary: 35000,
+        tax_withheld: 8000,
+        net_salary: 27000,
+        line_items: [
+          { item_type: 'bonus', amount: 5000, account_number: account, is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+
+  it('reactivates a deactivated 7010 and 7210 and posts the run', async () => {
+    fake.inactive.add('7010')
+    fake.inactive.add('7210')
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', bonusOn('7010'))
+
+    expect(fake.inactive.size).toBe(0)
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7010')[0].debit_amount).toBe(5000)
+    expect(linesOn(salary, '7210')).toHaveLength(1)
+    assertBalanced(salary)
+    expect(fake.ledger.map((row) => row.description)).toContain('Lön 2026-06')
+  })
+
+  it('creates a standard BAS account the chart lacks', async () => {
+    fake.absent.add('2940')
+
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([makeEmployee({ vacation_accrual: 3600, vacation_accrual_avgifter: 1131.12 })]),
+    )
+
+    expect(fake.inserted).toEqual(['2940'])
+  })
+
+  it('activates exactly the accounts the built lines post to', async () => {
+    // No vacation accrual and no pension: 2940 and 7410 post nothing, so a
+    // chart without them gets neither (the activation set is read off the
+    // lines, not off the account map).
+    fake.absent.add('2940')
+    fake.absent.add('7410')
+    fake.absent.add('7010')
+
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([makeEmployee({ personnel_category: 'arbetare' })]),
+    )
+
+    expect(fake.inserted).toEqual(['7010'])
+  })
+
+  it('refuses a line account that is neither in the chart nor in BAS, drafting nothing', async () => {
+    fake.absent.add('7777')
+
+    await expect(
+      createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', bonusOn('7777')),
+    ).rejects.toMatchObject({ code: 'ACCOUNTS_NOT_IN_CHART', accountNumbers: ['7777'] })
+
+    expect(fake.inserted).not.toContain('7777')
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(fake.ledger).toHaveLength(0)
+  })
+})
+
+describe("salary entries: net pay on the company's own bank account", () => {
+  const run = () => makeRun([makeEmployee()])
+
+  it('credits the net pay on the primary cash account when it is not 1930', async () => {
+    const ensured: string[] = []
+    await createSalaryRunEntries(
+      makeSupabase({ primary: { ledger_account: '1931', enabled: true, currency: 'SEK' } }, ensured),
+      'company-1',
+      'user-1',
+      run(),
+    )
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '1931')).toEqual([
+      expect.objectContaining({ debit_amount: 0, credit_amount: 23000, line_description: 'Lön 2026-06: Nettolön' }),
+    ])
+    expect(linesOn(salary, '1930')).toEqual([])
+    assertBalanced(salary)
+    // The chart check covers the account actually booked, not a constant 1930.
+    expect(ensured).toContain('1931')
+    expect(ensured).not.toContain('1930')
+    // No other entry of the run touches a bank account.
+    for (const call of mockedCreateEntry.mock.calls) {
+      if (call[3].description === 'Lön 2026-06') continue
+      expect(call[3].lines.some((l) => /^19/.test(l.account_number))).toBe(false)
+    }
+  })
+
+  it('never credits a disabled 1930: the only enabled SEK account carries the net pay', async () => {
+    // The reported shape: 1930 under "Avstängda bankkonton" and still flagged
+    // primary, the PSD2 account on 1931 enabled.
+    await createSalaryRunEntries(
+      makeSupabase({ primary: { ledger_account: '1930', enabled: false, currency: 'SEK' }, enabledSek: ['1931'] }),
+      'company-1',
+      'user-1',
+      run(),
+    )
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '1931')[0].credit_amount).toBe(23000)
+    expect(linesOn(salary, '1930')).toEqual([])
+  })
+
+  it('keeps 1930 for a legacy company with no cash accounts at all', async () => {
+    await createSalaryRunEntries(makeSupabase({ primary: null, enabledSek: [] }), 'company-1', 'user-1', run())
+    expect(linesOn(entryByDescription('Lön 2026-06'), '1930')[0].credit_amount).toBe(23000)
+  })
+
+  it('the builder books the net pay on whatever account the caller resolved', () => {
+    const { salaryLines } = buildSalaryRunEntryLines(run(), 'Lön 2026-06', '1931')
+    expect(salaryLines.filter((l) => /^19/.test(l.account_number))).toEqual([
+      expect.objectContaining({ account_number: '1931', debit_amount: 0, credit_amount: 23000 }),
+    ])
+  })
+})
+
+describe('salary entries: all vouchers or none, and a retry never posts one twice', () => {
+  const PROJECT_REQUIRED_ON = (account: string): AccountDimensionRule => ({
+    account_number: account,
+    rule_type: 'required',
+    sie_dim_no: '6',
+    dimension_name: 'Projekt',
+    value_code: null,
+  })
+
+  /** Salary + avgifter + vacation: three vouchers, so "partway" has a middle. */
+  const threeVoucherRun = () =>
+    makeRun([makeEmployee({ vacation_accrual: 1200, vacation_accrual_avgifter: 377.04 })])
+
+  const postedDescriptions = () => fake.ledger.map((row) => row.description)
+
+  it('drafts every voucher before committing the first, then posts each once', async () => {
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun())
+
+    expect(Math.max(...mockedCreateEntry.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...mockedCommit.mock.invocationCallOrder),
+    )
+    expect(postedDescriptions()).toEqual([
+      'Lön 2026-06',
+      'Lön 2026-06: Arbetsgivaravgifter',
+      'Lön 2026-06: Semesteravsättning',
+    ])
+    expect(result.salaryEntry?.id).toBe(fake.ledger[0].id)
+    expect(result.avgifterEntry?.id).toBe(fake.ledger[1].id)
+    expect(result.vacationEntry?.id).toBe(fake.ledger[2].id)
+    expect(result.pensionEntry).toBeNull()
+    expect(mockedCancel).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['7510, the avgifter voucher (a P&L account the employee bag should tag)', '7510'],
+    ['2731, a balance account salary never tags', '2731'],
+    ['2920, the vacation liability of the third voucher', '2920'],
+  ])('a required dimension on %s refuses the run before any voucher is drafted or posted', async (_label, account) => {
+    fake.rules = [PROJECT_REQUIRED_ON(account)]
+
+    await expect(
+      createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun()),
+    ).rejects.toBeInstanceOf(MandatoryDimensionMissingError)
+
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(mockedCommit).not.toHaveBeenCalled()
+    expect(fake.ledger).toHaveLength(0)
+  })
+
+  it('names every missing value of the whole run in one refusal', async () => {
+    fake.rules = [PROJECT_REQUIRED_ON('7210'), PROJECT_REQUIRED_ON('7510')]
+
+    const error = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun()).catch(
+      (err: unknown) => err,
+    )
+
+    expect(error).toBeInstanceOf(MandatoryDimensionMissingError)
+    expect((error as MandatoryDimensionMissingError).violations.map((v) => v.account_number).sort()).toEqual([
+      '7210',
+      '7510',
+    ])
+  })
+
+  it('an engine refusal of voucher 2 at draft time posts nothing and cancels voucher 1\'s draft', async () => {
+    // Stands in for every draft-time check of the engine: an archived
+    // dimension value, a deactivated account, an unbalanced voucher.
+    fake.failDraft = (input) => input.description.endsWith('Arbetsgivaravgifter')
+
+    await expect(
+      createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun()),
+    ).rejects.toThrow('draft refused')
+
+    expect(mockedCommit).not.toHaveBeenCalled()
+    expect(fake.ledger).toHaveLength(0)
+    expect(mockedCancel.mock.calls.map((call) => call[3])).toEqual(['je-1'])
+  })
+
+  it('a commit failure after voucher 1 cancels the remaining drafts; the retry posts only what is missing', async () => {
+    fake.failCommit = (input) => input.description.endsWith('Arbetsgivaravgifter')
+    await expect(
+      createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun()),
+    ).rejects.toThrow('commit failed')
+
+    // The interrupted state: voucher 1 is in the ledger, the rest are not.
+    expect(postedDescriptions()).toEqual(['Lön 2026-06'])
+    expect(mockedCancel).toHaveBeenCalledTimes(2)
+    const firstSalaryId = fake.ledger[0].id
+
+    mockedCreateEntry.mockClear()
+    mockedCommit.mockClear()
+    fake.failCommit = null
+    const retry = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun())
+
+    // Voucher 1 is adopted, not posted again: one voucher per slot.
+    expect(postedDescriptions()).toEqual([
+      'Lön 2026-06',
+      'Lön 2026-06: Arbetsgivaravgifter',
+      'Lön 2026-06: Semesteravsättning',
+    ])
+    expect(mockedCreateEntry.mock.calls.map((call) => call[3].description)).toEqual([
+      'Lön 2026-06: Arbetsgivaravgifter',
+      'Lön 2026-06: Semesteravsättning',
+    ])
+    expect(retry.salaryEntry?.id).toBe(firstSalaryId)
+    expect(retry.avgifterEntry?.id).toBe(fake.ledger[1].id)
+    expect(retry.vacationEntry?.id).toBe(fake.ledger[2].id)
+  })
+
+  it('a retry after every voucher posted (the run flip failed) adopts them all and posts nothing', async () => {
+    const first = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun())
+    mockedCreateEntry.mockClear()
+    mockedCommit.mockClear()
+
+    const again = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun())
+
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(mockedCommit).not.toHaveBeenCalled()
+    expect(fake.ledger).toHaveLength(3)
+    expect([again.salaryEntry?.id, again.avgifterEntry?.id, again.vacationEntry?.id]).toEqual([
+      first.salaryEntry?.id,
+      first.avgifterEntry?.id,
+      first.vacationEntry?.id,
+    ])
+  })
+
+  it('refuses by voucher number a posted voucher of the run that this booking would not post', async () => {
+    fake.ledger.push({
+      id: 'je-stale',
+      source_id: 'run-1',
+      status: 'posted',
+      voucher_series: 'L',
+      voucher_number: 7,
+      entry_date: '2026-06-25',
+      description: 'Lön 2026-06',
+      // Booked before the run changed: different amounts than the run now.
+      lines: [
+        { account_number: '7210', debit_amount: 29000, credit_amount: 0 },
+        { account_number: '2710', debit_amount: 0, credit_amount: 7000 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 22000 },
+      ],
+    })
+
+    const error = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', threeVoucherRun()).catch(
+      (err: unknown) => err,
+    )
+
+    expect(error).toBeInstanceOf(SalaryRunPartiallyBookedError)
+    expect((error as SalaryRunPartiallyBookedError).details).toEqual({
+      voucher_numbers: ['L7'],
+      entry_ids: ['je-stale'],
+    })
+    expect((error as Error).message).toContain('(L7)')
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(mockedCommit).not.toHaveBeenCalled()
+  })
+
+  it('never adopts a voucher with the right lines on another date', async () => {
+    const run = threeVoucherRun()
+    const built = buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930')
+    fake.ledger.push({
+      id: 'je-other-date',
+      source_id: 'run-1',
+      status: 'posted',
+      voucher_series: 'L',
+      voucher_number: 3,
+      entry_date: '2026-06-24',
+      description: 'Lön 2026-06',
+      lines: built.salaryLines,
+    })
+
+    await expect(createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)).rejects.toBeInstanceOf(
+      SalaryRunPartiallyBookedError,
+    )
+    expect(mockedCommit).not.toHaveBeenCalled()
+  })
+
+  it('a duplicate left by the old retry is named; the first copy is the one kept', async () => {
+    const run = threeVoucherRun()
+    const built = buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930')
+    for (const [id, voucher_number] of [['je-first', 3], ['je-duplicate', 4]] as const) {
+      fake.ledger.push({
+        id,
+        source_id: 'run-1',
+        status: 'posted',
+        voucher_series: 'L',
+        voucher_number,
+        entry_date: '2026-06-25',
+        description: 'Lön 2026-06',
+        lines: built.salaryLines,
+      })
+    }
+
+    const error = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run).catch(
+      (err: unknown) => err,
+    )
+
+    expect(error).toBeInstanceOf(SalaryRunPartiallyBookedError)
+    expect((error as SalaryRunPartiallyBookedError).details.voucher_numbers).toEqual(['L4'])
+    expect(mockedCommit).not.toHaveBeenCalled()
+  })
+
+  it('ignores a voucher the user already reversed (status reversed) and books the run in full', async () => {
+    const run = threeVoucherRun()
+    fake.ledger.push({
+      id: 'je-reversed',
+      source_id: 'run-1',
+      status: 'reversed',
+      voucher_series: 'L',
+      voucher_number: 3,
+      entry_date: '2026-06-25',
+      description: 'Lön 2026-06',
+      lines: [{ account_number: '7210', debit_amount: 1, credit_amount: 0 }],
+    })
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+
+    expect(mockedCommit).toHaveBeenCalledTimes(3)
+  })
+
+  it('a run without avgifter books its other vouchers, and a retry treats the avgifter voucher as absent', async () => {
+    // F-skatt-only style run: pay and a vacation accrual, no avgifter at all.
+    const run = () =>
+      makeRun([
+        makeEmployee({ avgifter_amount: 0, avgifter_basis: 0, vacation_accrual: 1200, vacation_accrual_avgifter: 0 }),
+      ])
+    fake.failCommit = (input) => input.description.endsWith('Semesteravsättning')
+    await expect(createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run())).rejects.toThrow(
+      'commit failed',
+    )
+    expect(postedDescriptions()).toEqual(['Lön 2026-06'])
+
+    fake.failCommit = null
+    mockedCreateEntry.mockClear()
+    const retry = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run())
+
+    expect(mockedCreateEntry.mock.calls.map((call) => call[3].description)).toEqual([
+      'Lön 2026-06: Semesteravsättning',
+    ])
+    expect(postedDescriptions()).toEqual(['Lön 2026-06', 'Lön 2026-06: Semesteravsättning'])
+    expect(retry.avgifterEntry).toBeNull()
+    expect(retry.vacationEntry?.id).toBe(fake.ledger[1].id)
+  })
+
+  it('fails closed: when the lookup of already-posted vouchers fails, nothing is posted', async () => {
+    await expect(
+      createSalaryRunEntries(makeSupabase(undefined, [], { ledgerError: true }), 'company-1', 'user-1', threeVoucherRun()),
+    ).rejects.toThrow('Kunde inte kontrollera lönekörningens tidigare bokförda verifikationer')
+
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(mockedCommit).not.toHaveBeenCalled()
+  })
+})
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts): words on the payslip,
+// amount 0, no account, every flag false. They never reach the booking.
+describe('salary entries: text rows book nothing', () => {
+  const textRow = (account_number: string | null = null) => ({
+    item_type: 'text',
+    amount: 0,
+    account_number,
+    is_net_deduction: false,
+    is_gross_deduction: false,
+  })
+
+  // 42 000 Grundlön + 5 000 bonus, a 3 000 löneväxling, a 450 union fee.
+  const moneyRows = [
+    { item_type: 'monthly_salary', amount: 42000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+    { item_type: 'bonus', amount: 5000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+    { item_type: 'gross_deduction_pension', amount: -3000, account_number: '7412', is_net_deduction: false, is_gross_deduction: true },
+    { item_type: 'net_deduction_union', amount: -450, account_number: null, is_net_deduction: true, is_gross_deduction: false },
+  ]
+
+  const run = (lineItems: EmployeeOverrides['line_items']) =>
+    makeRun([
+      makeEmployee({
+        gross_salary: 44000,
+        tax_withheld: 11000,
+        net_salary: 32550,
+        avgifter_basis: 44000,
+        avgifter_amount: 13824.8,
+        vacation_accrual: 4800,
+        vacation_accrual_avgifter: 1508.16,
+        default_dimensions: { '1': 'KS01' },
+        line_items: lineItems,
+      }),
+    ])
+
+  const allLines = (built: ReturnType<typeof buildSalaryRunEntryLines>) => [
+    ...built.salaryLines,
+    ...built.avgifterLines,
+    ...built.vacationLines,
+    ...built.pensionLines,
+  ]
+
+  it('builds the same journal lines with and without text rows on the payslip', () => {
+    const plain = buildSalaryRunEntryLines(run(moneyRows), 'Lön 2026-06', '1930')
+    const withText = buildSalaryRunEntryLines(
+      run([textRow(), ...moneyRows.slice(0, 2), textRow(), ...moneyRows.slice(2)]),
+      'Lön 2026-06',
+      '1930',
+    )
+
+    expect(withText).toEqual(plain)
+    // The comparison is not vacuous: every voucher has lines.
+    expect(plain.salaryLines.length).toBeGreaterThan(0)
+    expect(plain.avgifterLines.length).toBeGreaterThan(0)
+    expect(plain.vacationLines.length).toBeGreaterThan(0)
+    expect(plain.pensionLines.length).toBeGreaterThan(0)
+  })
+
+  it('posts identical, balanced vouchers and never a line with neither a debit nor a credit', async () => {
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run(moneyRows))
+    const plain = mockedCreateEntry.mock.calls.map((c) => c[3].lines)
+    mockedCreateEntry.mockClear()
+    fake.ledger.length = 0
+    fake.drafts.clear()
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run([...moneyRows, textRow(), textRow()]))
+    const withText = mockedCreateEntry.mock.calls.map((c) => c[3].lines)
+
+    expect(withText).toEqual(plain)
+    expect(withText).toHaveLength(4)
+    for (const call of mockedCreateEntry.mock.calls) assertBalanced(call[3])
+    for (const l of withText.flat()) {
+      expect(l.debit_amount === 0 && l.credit_amount === 0, `${l.account_number} has a 0,00 line`).toBe(false)
+      expect(l.account_number).toEqual(expect.stringMatching(/^\d{4}$/))
+    }
+  })
+
+  it('books a run whose only rows are text rows like a run with no rows at all', () => {
+    const plain = buildSalaryRunEntryLines(run([]), 'Lön 2026-06', '1930')
+    const textOnly = buildSalaryRunEntryLines(run([textRow(), textRow()]), 'Lön 2026-06', '1930')
+    expect(textOnly).toEqual(plain)
+    expect(allLines(textOnly).every((l) => l.debit_amount > 0 || l.credit_amount > 0)).toBe(true)
+  })
+
+  it('posts no line for an expense bucket whose rows cancel to 0 kr (0,1 + 0,2 - 0,3 on an account override)', () => {
+    // In floating point 0.1 + 0.2 - 0.3 is 5.55e-17, not 0: judged on the
+    // unrounded sum the bucket posted a 0,00 debit on 7699.
+    const correction = (amount: number) => ({
+      item_type: 'correction',
+      amount,
+      account_number: '7699',
+      is_net_deduction: false,
+      is_gross_deduction: false,
+    })
+    const built = buildSalaryRunEntryLines(
+      makeRun([
+        makeEmployee({
+          line_items: [correction(0.1), correction(0.2), correction(-0.3)],
+        }),
+      ]),
+      'Lön 2026-06',
+      '1930',
+    )
+
+    expect(built.salaryLines.some((l) => l.account_number === '7699')).toBe(false)
+    expect(built.salaryLines.every((l) => l.debit_amount > 0 || l.credit_amount > 0)).toBe(true)
+    // The base remainder still carries the whole gross.
+    expect(built.salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(30000)
+    const debit = built.salaryLines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = built.salaryLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.abs(debit - credit)).toBeLessThan(0.005)
+  })
+
+  it('activates the same accounts with and without text rows, and never asks for an empty account', async () => {
+    const plainAccounts: string[] = []
+    await createSalaryRunEntries(makeSupabase(undefined, plainAccounts), 'company-1', 'user-1', run(moneyRows))
+    mockedCreateEntry.mockClear()
+    fake.ledger.length = 0
+    fake.drafts.clear()
+
+    const textAccounts: string[] = []
+    await createSalaryRunEntries(
+      makeSupabase(undefined, textAccounts),
+      'company-1',
+      'user-1',
+      run([textRow(), ...moneyRows, textRow()]),
+    )
+
+    expect([...textAccounts].sort()).toEqual([...plainAccounts].sort())
+    expect(textAccounts.length).toBeGreaterThan(0)
+    for (const account of textAccounts) expect(account).toEqual(expect.stringMatching(/^\d{4}$/))
+  })
+})
+
+// Plan 1: a payslip line's account is an override only; without one the line
+// books on the account resolved for the employee (owner, board member,
+// arbetare or tjänsteman), and the vacation accrual's förändring account
+// follows the same category.
+describe('salary entries: wage accounts per employee', () => {
+  const line = (item_type: string, amount: number, account_number: string | null = null) => ({
+    item_type,
+    amount,
+    account_number,
+    is_net_deduction: false,
+    is_gross_deduction: false,
+  })
+
+  it("books an owner's hourly pay on 7220, not 7210", async () => {
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([makeEmployee({ employment_type: 'company_owner', line_items: [line('hourly_salary', 30000)] })]),
+    )
+
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7220')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7210')).toHaveLength(0)
+    assertBalanced(salary)
+  })
+
+  it('books arbetare on 7010, their vacation pay on 7082 and their accrual on 7090', async () => {
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([
+        makeEmployee({
+          personnel_category: 'arbetare',
+          gross_salary: 32000,
+          net_salary: 25000,
+          vacation_accrual: 3840,
+          vacation_accrual_avgifter: 1206.53,
+          line_items: [line('monthly_salary', 30000), line('vacation', 2000)],
+        }),
+      ]),
+    )
+
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7010')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7082')[0].debit_amount).toBe(2000)
+    expect(linesOn(salary, '7210')).toHaveLength(0)
+    assertBalanced(salary)
+    const vacation = entryByDescription('Semesteravsättning')
+    expect(linesOn(vacation, '7090')[0].debit_amount).toBe(3840)
+    expect(linesOn(vacation, '7290')).toHaveLength(0)
+    expect(linesOn(vacation, '2920')[0].credit_amount).toBe(3840)
+    assertBalanced(vacation)
+  })
+
+  it('splits a mixed roster per series and keeps one 2920 credit', async () => {
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([
+        makeEmployee({ employee_id: 'e-arb', personnel_category: 'arbetare', vacation_accrual: 3600 }),
+        makeEmployee({ employee_id: 'e-tj', personnel_category: 'tjansteman', vacation_accrual: 4800 }),
+        makeEmployee({ employee_id: 'e-own', employment_type: 'company_owner', personnel_category: 'arbetare', vacation_accrual: 1200 }),
+      ]),
+    )
+
+    const salary = entryByDescription('Lön 2026-06')
+    // makeEmployee carries no lines: the whole gross is the base remainder.
+    expect(linesOn(salary, '7010')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7220')[0].debit_amount).toBe(30000)
+    assertBalanced(salary)
+    const vacation = entryByDescription('Semesteravsättning')
+    expect(linesOn(vacation, '7090')[0].debit_amount).toBe(3600)
+    // The owner's accrual books with the tjänstemän: the category is ignored.
+    expect(linesOn(vacation, '7290')[0].debit_amount).toBe(6000)
+    expect(linesOn(vacation, '2920')).toEqual([expect.objectContaining({ credit_amount: 9600 })])
+    assertBalanced(vacation)
+  })
+
+  it('lets an explicit line account win over the resolved default', async () => {
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([
+        makeEmployee({
+          personnel_category: 'arbetare',
+          gross_salary: 35000,
+          net_salary: 28000,
+          line_items: [line('monthly_salary', 30000), line('bonus', 5000, '7210')],
+        }),
+      ]),
+    )
+
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7010')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(5000)
+    assertBalanced(salary)
+  })
+})
+
+describe('salary entries: regionalt stöd avdrag (PH 208)', () => {
+  const regional = (employees: ReturnType<typeof makeEmployee>[]) => ({
+    ...makeRun(employees),
+    calculation_params: { slpRate: 0.2426, avgifterTotal: 0.3142, salary_regional_support: true },
+  })
+
+  it('credits the FK476 avdrag on 7510 and books 2731 at the FK487 the AGI files', async () => {
+    // 30 000 × 31,42 % = 9 426; avdrag 10 % of 30 000 = 3 000.
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', regional([makeEmployee()]))
+    const avgifter = entryByDescription('Arbetsgivaravgifter')
+    const expense = linesOn(avgifter, '7510')
+    expect(expense).toEqual([
+      expect.objectContaining({ debit_amount: 9426, credit_amount: 0 }),
+      expect.objectContaining({ debit_amount: 0, credit_amount: 3000, line_description: 'Lön 2026-06: Avdrag regionalt stöd' }),
+    ])
+    expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 6426 })])
+    assertBalanced(avgifter)
+  })
+
+  it('caps the avdrag at 7 100 kr and keeps the öre utjämning on 3740', async () => {
+    // 4 × 30 000,99: exact avgift 4 × 9 426,31 = 37 705,24, declared
+    // trunc(120 000 × 0,3142) = 37 704; 10 % of 120 000 = 12 000, capped.
+    const employees = ['a', 'b', 'c', 'd'].map((id) =>
+      makeEmployee({ employee_id: id, gross_salary: 30000.99, avgifter_basis: 30000.99, avgifter_amount: 9426.31 }),
+    )
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', regional(employees))
+    const avgifter = entryByDescription('Arbetsgivaravgifter')
+    expect(linesOn(avgifter, '7510')).toContainEqual(expect.objectContaining({ credit_amount: 7100 }))
+    expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 37704 - 7100 })])
+    expect(linesOn(avgifter, '3740')).toEqual([expect.objectContaining({ credit_amount: 1.24 })])
+    assertBalanced(avgifter)
+  })
+
+  it('books no avdrag without the snapshot flag or on rows that form no underlag', async () => {
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', makeRun([makeEmployee()]))
+    let avgifter = entryByDescription('Arbetsgivaravgifter')
+    expect(linesOn(avgifter, '7510')).toHaveLength(1)
+    expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 9426 })])
+
+    mockedCreateEntry.mockClear()
+    fake.ledger.length = 0
+    // 67+ at the start of the year: only ålderspensionsavgift, no avdrag.
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      regional([makeEmployee({ avgifter_rate: 0.1021, avgifter_amount: 3063, avgifter_category: 'reduced_65plus' })]),
+    )
+    avgifter = entryByDescription('Arbetsgivaravgifter')
+    expect(linesOn(avgifter, '7510')).toHaveLength(1)
+    expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 3063 })])
+  })
+})
+
+describe('salary entries under the remeasure method (semesterlöneskuld at its computed value)', () => {
+  const REMEASURE_LINES = [
+    { account_number: '7290', debit_amount: 2500, credit_amount: 0, line_description: 'Semesterlöneskuld, förändring' },
+    { account_number: '2920', debit_amount: 0, credit_amount: 2500, line_description: 'Semesterlöneskuld, förändring' },
+    { account_number: '7519', debit_amount: 785.5, credit_amount: 0, line_description: 'Sociala avgifter på semesterlöneskuld, förändring' },
+    { account_number: '2940', debit_amount: 0, credit_amount: 785.5, line_description: 'Sociala avgifter på semesterlöneskuld, förändring' },
+  ]
+  const plan = (lines = REMEASURE_LINES) => ({
+    ok: true,
+    data: {
+      as_of_date: '2026-06-25',
+      basis: 'calendar',
+      day_value_policy: 'daily_divisor',
+      settlement_year: 2026,
+      booked_2920: 10000,
+      booked_2940: 3142,
+      computed_liability: 12500,
+      computed_avgifter: 3927.5,
+      difference_2920: 2500,
+      difference_2940: 785.5,
+      rows: [],
+      lines,
+    },
+  })
+  const remeasureRun = () => ({
+    ...makeRun([makeEmployee({ vacation_accrual: 1200, vacation_accrual_avgifter: 377.04 })]),
+    calculation_params: { slpRate: 0.2426, salary_vacation_liability_method: 'remeasure' },
+  })
+
+  beforeEach(() => {
+    remeasure.plan.mockReset()
+    remeasure.upsert.mockClear()
+    remeasure.link.mockClear()
+    remeasure.plan.mockResolvedValue(plan())
+  })
+
+  it('an accrual run books exactly the accrual and never reads the remeasurement', async () => {
+    const accrualRun = makeRun([makeEmployee({ vacation_accrual: 1200, vacation_accrual_avgifter: 377.04 })])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', accrualRun)
+
+    expect(remeasure.plan).not.toHaveBeenCalled()
+    expect(remeasure.upsert).not.toHaveBeenCalled()
+    const vacation = entryByDescription('Semesteravsättning')
+    expect(vacation.lines).toEqual(buildSalaryRunEntryLines(accrualRun, 'Lön 2026-06', '1930').vacationLines)
+    expect(linesOn(vacation, '2920')[0]).toMatchObject({ credit_amount: 1200 })
+  })
+
+  it('a remeasure run posts the difference to the computed liability as of its payment date, counting itself', async () => {
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())
+
+    expect(remeasure.plan).toHaveBeenCalledWith(expect.anything(), 'company-1', '2026-06-25', { inFlightRunId: 'run-1' })
+    const vacation = entryByDescription('Lön 2026-06: Semesterlöneskuld')
+    expect(vacation.lines).toEqual(REMEASURE_LINES)
+    expect(vacation.entry_date).toBe('2026-06-25')
+    assertBalanced(vacation)
+    // The run's own accrual (1 200) is not booked: the remeasurement replaces it.
+    expect(fake.ledger.some((row) => row.description === 'Lön 2026-06: Semesteravsättning')).toBe(false)
+    // The underlag is stored before anything posts, then linked to the verifikat.
+    expect(Math.max(...remeasure.upsert.mock.invocationCallOrder)).toBeLessThan(Math.min(...mockedCommit.mock.invocationCallOrder))
+    expect(remeasure.link).toHaveBeenCalledWith(expect.anything(), {
+      companyId: 'company-1',
+      salaryRunId: 'run-1',
+      journalEntryId: result.vacationEntry?.id,
+    })
+  })
+
+  it('nothing beyond a krona to move: no vacation verifikat, the calculation is still stored', async () => {
+    remeasure.plan.mockResolvedValue(plan([]))
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())
+    expect(result.vacationEntry).toBeNull()
+    expect(remeasure.upsert).toHaveBeenCalledTimes(1)
+    expect(remeasure.link).not.toHaveBeenCalled()
+  })
+
+  it('a retry after an interruption adopts the posted remeasurement instead of posting it again', async () => {
+    // First attempt: salary and avgifter post, then the vacation commit fails.
+    fake.failCommit = (input) => input.description.endsWith('Semesterlöneskuld')
+    await expect(createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())).rejects.toThrow('commit failed')
+    expect(fake.ledger.map((row) => row.description)).toEqual(['Lön 2026-06', 'Lön 2026-06: Arbetsgivaravgifter'])
+
+    // Second attempt posts the vacation verifikat; a third (the run flip
+    // failed) adopts all three. The plan is computed without the run's own
+    // vouchers, so it is the same each time (planVacationLiabilityRemeasure).
+    fake.failCommit = null
+    const second = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())
+    mockedCreateEntry.mockClear()
+    const third = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())
+
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(fake.ledger.filter((row) => row.description === 'Lön 2026-06: Semesterlöneskuld')).toHaveLength(1)
+    expect(third.vacationEntry?.id).toBe(second.vacationEntry?.id)
+    expect(remeasure.link).toHaveBeenLastCalledWith(expect.anything(), {
+      companyId: 'company-1',
+      salaryRunId: 'run-1',
+      journalEntryId: second.vacationEntry?.id,
+    })
+  })
+
+  it('a remeasurement that cannot be computed refuses the booking before anything posts', async () => {
+    remeasure.plan.mockResolvedValue({ ok: false, code: 'VALIDATION_ERROR' })
+    await expect(createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())).rejects.toThrow(
+      'Ingen räkenskapsperiod täcker 2026-06-25',
+    )
+    expect(fake.ledger).toHaveLength(0)
+  })
+})
+

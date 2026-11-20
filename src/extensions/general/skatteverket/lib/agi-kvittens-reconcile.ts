@@ -1,13 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
-import { parseEntityType } from '@/lib/company/entity-type'
+import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
+import { companyRedovisare } from '@/lib/company/org-number'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { agiGetKvittenser } from './agi-client'
 import { isApigwClientRefusal } from './api-client'
+import { auditUserIdFor } from './audit'
 import { skatteverketConnectorMode } from './connector-mode'
-import { resolveReadAuth } from './resolve-auth'
+import { resolveUserReadAuth } from './resolve-auth'
 import { sendKvittensNotification } from './kvittens-notification'
+import { recordAgiKvittenser } from './agi-kvittens-history'
 import type { SkatteverketAGIKvittens } from '../types'
 
 /**
@@ -63,7 +65,13 @@ export type AgiReconcileOutcome =
    * caller already knew and the call was not made.
    */
   | { status: 'gateway_refused'; route: SkvGatewayRoute; asked: boolean }
-  | { status: 'error'; error: string }
+  /**
+   * `error` is for the person who asked: for a read Skatteverket refused it is
+   * Skatteverket's own message or body, which for an enskild firma can carry
+   * the arbetsgivare's personnummer, so a log takes `httpStatus` (set when
+   * the error is that refusal) and not the text.
+   */
+  | { status: 'error'; error: string; httpStatus?: number }
 
 /**
  * Which APIGW client a read goes out with: this installation's own, or the
@@ -89,6 +97,93 @@ export type AgiPromotionOutcome = Extract<
  */
 const KVITTENS_NOTIFICATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
+/** A kvittens' signeradTid in epoch ms, or null when absent or unparseable. */
+function signedAtMs(kvittens: SkatteverketAGIKvittens): number | null {
+  if (!kvittens.signeradTid) return null
+  const ms = Date.parse(kvittens.signeradTid)
+  return Number.isNaN(ms) ? null : ms
+}
+
+/**
+ * The newest kvittens in a period's list: the latest signeradTid, or the
+ * first listed when none carries one. The list holds every filing of the
+ * redovisningsperiod (the original's and each correction's); nothing here
+ * relies on the order Skatteverket returns it in.
+ */
+export function newestAgiKvittens(
+  kvittenser: readonly SkatteverketAGIKvittens[] | null | undefined,
+): SkatteverketAGIKvittens | null {
+  let newest: SkatteverketAGIKvittens | null = null
+  let newestMs: number | null = null
+  for (const kvittens of kvittenser ?? []) {
+    if (!kvittens?.uuidKvittens) continue
+    const ms = signedAtMs(kvittens)
+    if (newest === null || (ms !== null && (newestMs === null || ms > newestMs))) {
+      newest = kvittens
+      newestMs = ms
+    }
+  }
+  return newest
+}
+
+export type DeclarationKvittensResult =
+  | { ok: true; kvittens: SkatteverketAGIKvittens | null }
+  | { ok: false; error: string }
+
+/**
+ * The kvittens the period's declaration may be promoted on, or null while its
+ * own filing has none yet.
+ *
+ * A correction is a complete replacement declaration for the same
+ * redovisningsperiod (same specifikationsnummer per IU) and gets its own
+ * kvittens, but the list Skatteverket returns also holds the earlier
+ * filing's. The candidate is the newest kvittens. When another run of the
+ * same payroll month is already filed (the run the declaration's run
+ * corrects: its agi_submitted_at is stamped from its own kvittens'
+ * signeradTid), the candidate must be signed after that filing; otherwise the
+ * list holds only earlier receipts, the correction is not signed yet, and
+ * promoting it would show it as filed with the original's kvittens. A month
+ * without another filing takes the newest kvittens, as it always has.
+ */
+export async function declarationKvittens(
+  supabase: SupabaseClient,
+  companyId: string,
+  salaryRunId: string | null,
+  kvittenser: readonly SkatteverketAGIKvittens[] | null | undefined,
+): Promise<DeclarationKvittensResult> {
+  const newest = newestAgiKvittens(kvittenser)
+  if (!newest || !salaryRunId) return { ok: true, kvittens: newest }
+
+  const { data: run, error: runError } = await supabase
+    .from('salary_runs')
+    .select('period_year, period_month')
+    .eq('id', salaryRunId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (runError) return { ok: false, error: `Kunde inte läsa lönekörningen: ${runError.message}` }
+  if (!run) return { ok: true, kvittens: newest }
+
+  const { data: filedRuns, error: filedError } = await supabase
+    .from('salary_runs')
+    .select('agi_submitted_at')
+    .eq('company_id', companyId)
+    .eq('period_year', run.period_year)
+    .eq('period_month', run.period_month)
+    .neq('id', salaryRunId)
+    .not('agi_submitted_at', 'is', null)
+  if (filedError) return { ok: false, error: `Kunde inte läsa månadens tidigare inlämningar: ${filedError.message}` }
+
+  let earlierFiling: number | null = null
+  for (const row of (filedRuns ?? []) as Array<{ agi_submitted_at: string | null }>) {
+    const ms = row.agi_submitted_at ? Date.parse(row.agi_submitted_at) : NaN
+    if (!Number.isNaN(ms) && (earlierFiling === null || ms > earlierFiling)) earlierFiling = ms
+  }
+  if (earlierFiling === null) return { ok: true, kvittens: newest }
+
+  const signed = signedAtMs(newest)
+  return { ok: true, kvittens: signed !== null && signed > earlierFiling ? newest : null }
+}
+
 export async function reconcileAgiDeclaration(
   supabase: SupabaseClient,
   decl: PendingAgiDeclaration,
@@ -102,15 +197,11 @@ export async function reconcileAgiDeclaration(
   const companyId = decl.company_id
   const period = formatRedovisningsperiod('monthly', decl.period_year, decl.period_month)
 
-  // Auth resolution prefers system credentials (verified lasombud grant)
-  // and falls back to the company's user token: kvittens polling is the
-  // canonical case for the hybrid model, since the user signed at SKV
-  // and their 65-minute session is usually long dead by the time the
-  // kvittens exists.
-  const resolved = await resolveReadAuth(supabase, companyId, {
-    requires: 'lasombud',
-    userId: opts.userId,
-  })
+  // Always a member's own token, never Accounted's ombud credentials: the
+  // AGI hantera API needs "Registreringsombud arbetsgivardeklaration", a
+  // role Accounted does not ask for yet. The lasombud grant covers
+  // Skattekonto only (see resolveUserReadAuth).
+  const resolved = await resolveUserReadAuth(supabase, companyId, { userId: opts.userId })
   if (!resolved.ok) {
     if (resolved.reason === 'needs_reconsent') {
       // A connection flagged needs_reconsent cannot heal on its own
@@ -121,20 +212,10 @@ export async function reconcileAgiDeclaration(
     return { status: 'no_token' }
   }
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('org_number, entity_type')
-    .eq('company_id', companyId)
-    .single()
-
-  if (!settings?.org_number) {
+  const arbetsgivare = await companyRedovisare(supabase, companyId)
+  if (!arbetsgivare) {
     return { status: 'no_company_settings' }
   }
-
-  const arbetsgivare = formatRedovisare(
-    settings.org_number as string,
-    parseEntityType(settings.entity_type),
-  )
 
   // Decided here, from the credential that was actually resolved, so the
   // caller's breaker can never disagree with the request about the route.
@@ -146,17 +227,39 @@ export async function reconcileAgiDeclaration(
 
   let kvittRes: Awaited<ReturnType<typeof agiGetKvittenser>>
   try {
-    kvittRes = await agiGetKvittenser(resolved.auth, arbetsgivare, period)
+    kvittRes = await agiGetKvittenser(resolved.auth, arbetsgivare, period, {
+      companyId,
+      userId: opts.userId ?? auditUserIdFor(resolved.auth),
+    })
   } catch (err) {
     if (isApigwClientRefusal(err)) return { status: 'gateway_refused', route, asked: true }
     throw err
   }
   if (!kvittRes.ok) {
-    return { status: 'error', error: kvittRes.error }
+    return { status: 'error', error: kvittRes.error, httpStatus: kvittRes.status }
   }
 
-  const kvittens = kvittRes.data.kvittenser?.[0]
-  if (!kvittens?.uuidKvittens) {
+  // Every receipt Skatteverket lists for the period is kept before the
+  // declaration moves on (agi-kvittens-history.ts). A failed write leaves the
+  // declaration pending, so the next run records and promotes it together.
+  const recorded = await recordAgiKvittenser(
+    supabase,
+    companyId,
+    { year: decl.period_year, month: decl.period_month },
+    kvittRes.data.kvittenser,
+    opts.reconciledBy,
+  )
+  if (!recorded.ok) {
+    return { status: 'error', error: `Kunde inte spara kvittensen: ${recorded.error}` }
+  }
+
+  // The declaration's own receipt, never an earlier filing's of the month.
+  const own = await declarationKvittens(supabase, companyId, decl.salary_run_id, kvittRes.data.kvittenser)
+  if (!own.ok) {
+    return { status: 'error', error: own.error }
+  }
+  const kvittens = own.kvittens
+  if (!kvittens) {
     return { status: 'still_pending' }
   }
 
@@ -270,10 +373,12 @@ export async function promoteAgiDeclaration(
       .eq('id', decl.salary_run_id)
       .eq('company_id', companyId)
     if (runError) {
-      // The declaration is already promoted and cannot be unwound here; a
-      // missing agi_submitted_at stamp must stay investigable (BFNAR 2013:2
-      // kap 8 behandlingshistorik) without aborting the remaining steps.
-      log.warn('salary_runs agi_submitted_at stamp failed after claim', {
+      // The declaration is already promoted and cannot be unwound here, and
+      // no run revisits a submitted declaration, so the stamp stays missing
+      // until someone sets it: an error, so it reaches error tracking
+      // (BFNAR 2013:2 kap 8 behandlingshistorik, accounted#115). The
+      // remaining steps still run.
+      log.error('salary_runs agi_submitted_at stamp failed after claim', {
         declarationId, companyId, period,
         message: runError.message,
       })
@@ -310,7 +415,8 @@ export async function promoteAgiDeclaration(
       'confirmed'
     )
   } catch (deadlineErr) {
-    log.warn('completeTaxDeadline failed after successful filing', {
+    // Never retried (the declaration is submitted now): an error.
+    log.error('completeTaxDeadline failed after successful filing', {
       declarationId, companyId, period,
       message: deadlineErr instanceof Error ? deadlineErr.message : 'Unknown error',
     })

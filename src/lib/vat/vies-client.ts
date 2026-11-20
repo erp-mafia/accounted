@@ -1,44 +1,12 @@
 import { createLogger } from '@/lib/logger'
 import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
+// The national part per VIES prefix: one table with the readers of a seller's VAT number (crm#1411).
+import { VAT_FORMAT_PATTERNS } from '@/lib/invariants/vat-number'
 import type { VatValidationResult } from '@/types'
 
 const log = createLogger('vies-client')
 
 const VIES_TIMEOUT_MS = 10_000
-
-/**
- * VAT format patterns per VIES country prefix.
- * Greece uses 'EL' as its VIES prefix (not 'GR').
- */
-const VAT_FORMAT_PATTERNS: Record<string, RegExp> = {
-  AT: /^U\d{8}$/,
-  BE: /^0\d{9}$/,
-  BG: /^\d{9,10}$/,
-  CY: /^\d{8}[A-Z]$/,
-  CZ: /^\d{8,10}$/,
-  DE: /^\d{9}$/,
-  DK: /^\d{8}$/,
-  EE: /^\d{9}$/,
-  EL: /^\d{9}$/,
-  ES: /^[A-Z0-9]\d{7}[A-Z0-9]$/,
-  FI: /^\d{8}$/,
-  FR: /^[A-Z0-9]{2}\d{9}$/,
-  HR: /^\d{11}$/,
-  HU: /^\d{8}$/,
-  IE: /^[0-9A-Z]{8,9}$/,
-  IT: /^\d{11}$/,
-  LT: /^\d{9,12}$/,
-  LU: /^\d{8}$/,
-  LV: /^\d{11}$/,
-  MT: /^\d{8}$/,
-  NL: /^\d{9}B\d{2}$/,
-  PL: /^\d{10}$/,
-  PT: /^\d{9}$/,
-  RO: /^\d{2,10}$/,
-  SE: /^\d{12}$/,
-  SI: /^\d{8}$/,
-  SK: /^\d{10}$/,
-}
 
 /** Valid VIES prefixes (derived from EU_COUNTRIES vatPrefix values) */
 const VALID_VIES_PREFIXES = new Set(EU_COUNTRIES.map(c => c.vatPrefix))

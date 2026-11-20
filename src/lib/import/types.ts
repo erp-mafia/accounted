@@ -73,7 +73,42 @@ export interface SIEBalance {
   account: string
   amount: number
   quantity?: number
-  objectId?: string
+}
+
+/**
+ * Balance per object from #OIB (opening) or #OUB (closing), SIE type 3+:
+ * `#OIB yearIndex account {dimNo "code"} amount [quantity]`. One object per
+ * row per spec, so the object list is kept as its single pair.
+ */
+export interface SIEObjectBalance {
+  yearIndex: number
+  account: string
+  /** Canonical SIE dimension number as a string ('06' parses to '6'). */
+  dimNo: string
+  code: string
+  amount: number
+  quantity?: number
+}
+
+/**
+ * Budget per period from #PBUDGET (SIE types 2 and 3, optional in 4E):
+ * `#PBUDGET yearIndex period account {objects} amount [quantity]`. The
+ * period is a month (YYYYMM), the amount that month's budgeted change in the
+ * SIE sign (debit positive), the year the #RAR with the same index. Not part
+ * of the bookkeeping: the ledger import leaves these rows alone and the
+ * budget import reads them (lib/import/budget/read-file.ts).
+ */
+export interface SIEPeriodBudget {
+  yearIndex: number
+  /** 'YYYY-MM' */
+  month: string
+  account: string
+  /** SIE dimension number to object code; absent for an empty list ({}). */
+  dimensions?: Record<string, string>
+  amount: number
+  quantity?: number
+  /** The file line, for the import preview's messages. */
+  line: number
 }
 
 /**
@@ -134,6 +169,8 @@ export interface SIEVoucher {
   series: string                   // Voucher series (A, B, etc.). Empty in SIE4I files.
   number: number                   // Voucher number; placeholder 0 when numberOmitted
   numberOmitted?: boolean          // SIE4I: receiver assigns; never a source key
+  /** An earlier #VER of the file has the same series and number: never a source key (crm#1653). */
+  numberRepeated?: boolean
   date: Date
   description: string
   registrationDate?: Date
@@ -171,6 +208,13 @@ export interface ParsedSIEFile {
   openingBalances: SIEBalance[]    // #IB
   closingBalances: SIEBalance[]    // #UB
   resultBalances: SIEBalance[]     // #RES
+  // Per-object balances (#OIB / #OUB). Optional: ParsedSIEFile-shaped
+  // objects built before they were parsed (serialized previews, resumed
+  // import jobs, test fixtures) lack them, so readers use `?? []`.
+  objectOpeningBalances?: SIEObjectBalance[]   // #OIB
+  objectClosingBalances?: SIEObjectBalance[]   // #OUB
+  // Budget per month (#PBUDGET). Optional for the same reason.
+  periodBudgets?: SIEPeriodBudget[]
 
   // Transactions (SIE4 only)
   vouchers: SIEVoucher[]
@@ -199,6 +243,40 @@ export interface ValidationResult {
   valid: boolean
   errors: string[]
   warnings: string[]
+}
+
+/** One set of basis legs a file's vouchers book beside a cost account. */
+export interface RcBasisPairShape {
+  /** The basis legs, ascending: 44xx/45xx accounts opposite the offset. */
+  legs: string[]
+  /** The offsets they balance, ascending: 4598, or a chart's own 4599. */
+  offsets: string[]
+  /** How many vouchers book the account beside these legs. */
+  vouchers: number
+  /** The latest of those vouchers' dates, in epoch milliseconds. */
+  lastAt: number
+  /**
+   * The latest date among those that also book reverse-charge output VAT
+   * (2614/2624/2634), absent when none does. Where the legs report nothing in
+   * ruta 20-24, such a purchase is reported by the account's momskod alone.
+   */
+  lastSelfAssessedAt?: number
+}
+
+/**
+ * How a file's vouchers book the reverse-charge basis beside one cost account,
+ * read by rcBasisPairsByAccount (rc-basis-pairs.ts). Raw: whether a pair
+ * reports ruta 20-24 at all depends on the momskod its legs get, which only
+ * the mapping set knows (rcBasisPairFinding). See AccountMapping.rcBasisPair.
+ */
+export interface RcBasisPairEvidence {
+  pairs: RcBasisPairShape[]
+  /**
+   * The latest date of a voucher that reports the basis on the account itself
+   * (reverse-charge output VAT, no pair at all), in epoch milliseconds; absent
+   * when none does.
+   */
+  ownBasisLastAt?: number
 }
 
 /**
@@ -232,6 +310,14 @@ export interface AccountMapping {
    * not lose it.
    */
   providerVatTreatment?: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
+  /**
+   * The file's vouchers book this account beside a separate basis pair (a
+   * 44xx/45xx basis leg and its 4598/4599 offset). Where the legs report ruta
+   * 20-24, a reverse-charge momskod on this account would report those
+   * purchases a second time (crm#1096). A fact about the source account, set
+   * by prepareSIEPreviewMappings from the file and absent when there is none.
+   */
+  rcBasisPair?: RcBasisPairEvidence
 }
 
 /**
@@ -258,6 +344,8 @@ export interface SIEImport {
   migration_documentation: MigrationDocumentation | null
   file_storage_path: string | null
   replaced_at: string | null
+  /** The import this batch appends to (issue #108); null for every import. */
+  base_import_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -330,7 +418,14 @@ export interface ImportResultDetails {
   openingBalanceSkipped?: 'prior_activity'
 
   /**
-   * Non-latest fiscal years whose P&L doesn't net to zero — their result
+   * With openingBalanceSkipped: the accounts where the carried-forward
+   * balance differs from the file's #IB, so the books now open on another
+   * amount than the source system (crm#1099). Absent when they agree.
+   */
+  openingBalanceDifferences?: OpeningBalanceDifference[]
+
+  /**
+   * Non-latest fiscal years whose P&L doesn't net to zero - their result
    * was never transferred to equity (omföring av årets resultat saknas).
    * Each corrupts every later derived opening balance by exactly pl_net,
    * which surfaces as a balansräkning differens. Structurally identical to
@@ -342,6 +437,20 @@ export interface ImportResultDetails {
     /** Class 3-8 net (credit-positive = profit), rounded to öre. */
     pl_net: number
   }>
+
+  /**
+   * An append to the year's import (issue #108): the import it adds to and
+   * what became of the file's vouchers. Absent for every other import.
+   */
+  append?: {
+    baseImportId: string
+    /** Already in the books with the same content: skipped. */
+    present: number
+    /** Same date and lines as a posted entry: skipped unless included. */
+    possibleDuplicatesSkipped: number
+    possibleDuplicatesIncluded: number
+    added: number
+  }
 
   /** Number of batches that needed retries (0 = clean run) */
   retriedBatches: number
@@ -410,10 +519,11 @@ export interface ImportResult {
   // closed, or no existing IB), the human-readable reason.
   nextPeriodIBResyncSkipped?: { reason: string; nextPeriodName: string } | null
   // Durable imports leave adjacent-year balances unchanged and request review.
+  // openingBalanceEntryId is null when an undo took away a derived IB.
   nextPeriodOpeningBalanceReview?: {
     nextPeriodId: string
     nextPeriodName: string
-    openingBalanceEntryId: string
+    openingBalanceEntryId: string | null
     importId: string
     reviewToken: string
     reason: 'import' | 'undo'
@@ -436,9 +546,21 @@ export interface ImportResult {
 export interface ImportPreview {
   /** Unused source definitions retained in the archive, not created as ledger accounts. */
   archivedOnlyAccounts?: SIEAccount[]
+  /** Mapped BAS definitions the file does not use (#63): with the import's
+   *  "only the accounts the file uses" option they are not created. */
+  unusedAccounts?: SIEAccount[]
+  /** Mapped definitions outside BAS the file does not use: the company's own
+   *  accounts, created with or without that option. */
+  unusedOwnAccounts?: SIEAccount[]
   // Company info from file
   companyName: string | null
   orgNumber: string | null
+
+  // The file's orgNumber against the company's, by the comparison the
+  // submit gate uses (compareSourceOrgNumber). A mismatch needs the user's
+  // confirmation before the import starts. Set by the parse route only.
+  orgNumberMismatch?: boolean
+  companyOrgNumber?: string | null
 
   // Fiscal year
   fiscalYearStart: string | null   // "YYYY-MM-DD"
@@ -483,11 +605,18 @@ export interface ImportPreview {
   // mapped target account (planChartChanges in chart-plan.ts). Optional:
   // previews built before this field existed lack it.
   chart?: ChartPlan
+  /** `chart` with the "only the accounts the file uses" option on (#63). */
+  chartUsedOnly?: ChartPlan
 
   // How the file's räkenskapsår relates to the company's existing fiscal
   // periods, from the same precheck the import runs (precheckFiscalPeriod).
   // Absent when the file carries no #RAR 0 dates.
   fiscalYear?: FiscalYearPrecheck
+
+  // The file's #IB against what the year will open on in the books, missing
+  // years next to it and an empty ended year (crm#1099). Set by the parse
+  // route only; absent when the check could not run.
+  openingBalanceContinuity?: OpeningBalanceContinuity
 
   // Issues to review
   issues: ParseIssue[]
@@ -525,6 +654,63 @@ export type FiscalYearPrecheck =
       // The Swedish refusal text the import raises, verbatim.
       message: string
     }
+
+/** A balance-sheet account where the books open on another amount than the file states. Debit-positive. */
+export interface OpeningBalanceDifference {
+  account: string
+  /** The file's #IB 0, mapped to the company's account. */
+  file: number
+  /** The balance the books carry forward to the year's first day. */
+  books: number
+  /** books minus file. */
+  difference: number
+}
+
+/** An account where the file's own #IB 0 differs from its #UB -1: the source changed the opening balance without a voucher. */
+export interface SourceOpeningBalanceEdit {
+  account: string
+  /** #UB -1: the previous year's closing balance as the file states it. */
+  previousClosing: number
+  /** #IB 0. */
+  opening: number
+  /** opening minus previousClosing. */
+  difference: number
+}
+
+/** The posted IB verifikat a fiscal year opens on (fiscal_periods.opening_balance_entry_id). */
+export interface BookedOpeningBalance {
+  entryId: string
+  /** Series and number, e.g. "A1". */
+  voucher: string
+}
+
+/** IB/UB continuity between a SIE file and the books (lib/import/sie-continuity.ts, crm#1099). */
+export interface OpeningBalanceContinuity {
+  /**
+   * The import will not book the file's #IB: the books already have activity
+   * up to the year's end, so the year opens on the carried-forward balance,
+   * or the year already has its own IB verifikat (bookedOpeningBalance).
+   */
+  carriedForward: boolean
+  /**
+   * The year's posted IB verifikat, when it has one: the year opens on it, and
+   * an import never books the file's IB on top of it (crm#1272).
+   */
+  bookedOpeningBalance?: BookedOpeningBalance
+  /** Only when carriedForward: the accounts where the books will differ from the file. */
+  differences: OpeningBalanceDifference[]
+  /**
+   * The books open on the file's own #UB -1 on every account, so the file's
+   * #IB is the side that is off (booksMatchFilePreviousYear). Absent: no.
+   */
+  fileOpeningOff?: boolean
+  /** The file's #IB 0 against its own #UB -1, in source account numbers. */
+  sourceEdits: SourceOpeningBalanceEdit[]
+  /** Fiscal years missing between the company's years and the file's year. */
+  missingYears: Array<{ from: string; to: string }>
+  /** The file's year has ended but the file holds no vouchers. */
+  noVouchers: boolean
+}
 
 /**
  * Structured systemdokumentation per BFNAR 2013:2 Chapter 9.

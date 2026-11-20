@@ -2,8 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { cookies } from 'next/headers'
 import type { EntityType } from '@/types'
-import { CompanyContextError, getActiveCompanyId } from '@/lib/company/active-company'
+import { CompanyContextError, getActiveCompanyId, type ActiveCompanyFacts } from '@/lib/company/active-company'
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
+import { httpOnlyCookieOptions } from '@/lib/supabase/cookie-options'
 
 // The resolver and its error class live in active-company.ts (no
 // `next/headers` there) so the API-key path can use them; re-exported here so
@@ -55,11 +56,12 @@ export async function getCompanyEntityType(
  * Resolve a company's current display name.
  *
  * `company_settings.company_name` is the read-primary source (what the user
- * edits in Settings and what the invoice PDF renders), with the canonical
- * `companies.name` as the fallback. `companies.name` is written once at
- * onboarding (via create_company_with_owner) and never updated afterwards, so
- * reading it directly shows a stale name after a rename (e.g. a lagerbolag
- * renamed post-signup). Mirrors getCompanyEntityType and the invoice surfaces.
+ * edits in Settings and what the invoice PDF renders), with `companies.name`
+ * as the fallback for a company whose settings name is blank. Every non-blank
+ * settings name is mirrored onto `companies.name` by a trigger (migration
+ * 20261015201209, crm#1209), so the two agree; before it, a rename left
+ * `companies.name` at the onboarding name. Mirrors getCompanyEntityType and
+ * the invoice surfaces.
  *
  * Returns null only if the company can't be resolved from either table.
  */
@@ -106,7 +108,8 @@ export async function getUserCompanies(
           org_number,
           entity_type,
           archived_at,
-          created_at
+          created_at,
+          team_id
         )
       `)
       .eq('user_id', userId)
@@ -191,21 +194,10 @@ export async function setActiveCompany(
   // pattern in lib/supabase/server.ts.
   try {
     const cookieStore = await cookies()
-    cookieStore.set(COMPANY_COOKIE, companyId, {
-      path: '/',
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 365, // 1 year
-    })
+    cookieStore.set(COMPANY_COOKIE, companyId, httpOnlyCookieOptions(60 * 60 * 24 * 365))
     // Explicit-choice marker (see COMPANY_PICKED_COOKIE). No maxAge: a session
     // cookie, gone when the browser closes.
-    cookieStore.set(COMPANY_PICKED_COOKIE, '1', {
-      path: '/',
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-    })
+    cookieStore.set(COMPANY_PICKED_COOKIE, '1', httpOnlyCookieOptions())
   } catch {
     // Sealed cookie store (render phase): the DB write is what matters.
   }
@@ -213,13 +205,15 @@ export async function setActiveCompany(
 
 /**
  * Get the active company ID for API routes.
- * Throws if no company context can be resolved.
+ * Throws if no company context can be resolved. `facts`, when given, is
+ * filled with what the resolution reported (the caller's role).
  */
 export async function requireCompanyId(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  facts?: ActiveCompanyFacts
 ): Promise<string> {
-  const companyId = await getActiveCompanyId(supabase, userId)
+  const companyId = await getActiveCompanyId(supabase, userId, facts)
   if (!companyId) {
     throw new Error('No company context')
   }

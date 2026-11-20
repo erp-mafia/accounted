@@ -1,0 +1,276 @@
+{
+  "createJournalEntry": [
+    {
+      "name": "owner claim in SEK with ingående moms (aktiebolag)",
+      "calls": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-09-01",
+            "description": "Utlägg: USB-hubb (Joakim Hansson)",
+            "source_type": "expense_claim",
+            "source_id": "00000000-0000-4000-8000-000000000001",
+            "lines": [
+              {
+                "account_number": "5410",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "line_description": "Utlägg: USB-hubb (Joakim Hansson)"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 100,
+                "credit_amount": 0,
+                "line_description": "Ingående moms, Utlägg: USB-hubb (Joakim Hansson)"
+              },
+              {
+                "account_number": "2893",
+                "debit_amount": 0,
+                "credit_amount": 500,
+                "line_description": "Utlägg: USB-hubb (Joakim Hansson)"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "name": "owner claim of an enskild firma (egen insättning)",
+      "calls": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-09-02",
+            "description": "Utlägg: Pärmar (Ägaren)",
+            "source_type": "expense_claim",
+            "source_id": "00000000-0000-4000-8000-000000000002",
+            "lines": [
+              {
+                "account_number": "6110",
+                "debit_amount": 100,
+                "credit_amount": 0,
+                "line_description": "Utlägg: Pärmar (Ägaren)"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 25,
+                "credit_amount": 0,
+                "line_description": "Ingående moms, Utlägg: Pärmar (Ägaren)"
+              },
+              {
+                "account_number": "2018",
+                "debit_amount": 0,
+                "credit_amount": 125,
+                "line_description": "Utlägg: Pärmar (Ägaren)"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "name": "employee claim with a project tag, underlag and inbox item",
+      "calls": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-09-03",
+            "description": "Utlägg: Tågbiljett (Sofie Persson)",
+            "source_type": "expense_claim",
+            "source_id": "00000000-0000-4000-8000-000000000003",
+            "lines": [
+              {
+                "account_number": "5810",
+                "debit_amount": 250,
+                "credit_amount": 0,
+                "line_description": "Utlägg: Tågbiljett (Sofie Persson)",
+                "dimensions": {
+                  "6": "P100"
+                }
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 15,
+                "credit_amount": 0,
+                "line_description": "Ingående moms, Utlägg: Tågbiljett (Sofie Persson)"
+              },
+              {
+                "account_number": "2820",
+                "debit_amount": 0,
+                "credit_amount": 265,
+                "line_description": "Utlägg: Tågbiljett (Sofie Persson)"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "name": "foreign currency claim at an explicit rate",
+      "calls": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-09-04",
+            "description": "Utlägg: Konferensavgift (Joakim Hansson)",
+            "source_type": "expense_claim",
+            "source_id": "00000000-0000-4000-8000-000000000004",
+            "lines": [
+              {
+                "account_number": "6990",
+                "debit_amount": 1125,
+                "credit_amount": 0,
+                "line_description": "Utlägg: Konferensavgift (Joakim Hansson)",
+                "currency": "EUR",
+                "amount_in_currency": 100,
+                "exchange_rate": 11.25
+              },
+              {
+                "account_number": "2893",
+                "debit_amount": 0,
+                "credit_amount": 1125,
+                "line_description": "Utlägg: Konferensavgift (Joakim Hansson)"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "name": "service bought abroad under reverse charge",
+      "calls": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-09-05",
+            "description": "Utlägg: Molntjänst (Joakim Hansson)",
+            "source_type": "expense_claim",
+            "source_id": "00000000-0000-4000-8000-000000000005",
+            "lines": [
+              {
+                "account_number": "6540",
+                "debit_amount": 800,
+                "credit_amount": 0,
+                "line_description": "Utlägg: Molntjänst (Joakim Hansson)"
+              },
+              {
+                "account_number": "2645",
+                "debit_amount": 200,
+                "credit_amount": 0,
+                "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)"
+              },
+              {
+                "account_number": "2614",
+                "debit_amount": 0,
+                "credit_amount": 200,
+                "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)"
+              },
+              {
+                "account_number": "4535",
+                "debit_amount": 800,
+                "credit_amount": 0,
+                "line_description": "Inköp tjänster annat EU-land 25% (basbelopp omvänd skattskyldighet)"
+              },
+              {
+                "account_number": "4598",
+                "debit_amount": 0,
+                "credit_amount": 800,
+                "line_description": "Motkonto beräknad omvänd moms 25%"
+              },
+              {
+                "account_number": "2893",
+                "debit_amount": 0,
+                "credit_amount": 800,
+                "line_description": "Utlägg: Molntjänst (Joakim Hansson)"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "name": "custom lines from the advanced booking step",
+      "calls": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-09-06",
+            "description": "Utlägg: Lunch med kund (Joakim Hansson)",
+            "source_type": "expense_claim",
+            "source_id": "00000000-0000-4000-8000-000000000006",
+            "lines": [
+              {
+                "account_number": "6071",
+                "debit_amount": 500,
+                "credit_amount": 0,
+                "line_description": "Representation"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 60,
+                "credit_amount": 0,
+                "line_description": "Moms"
+              },
+              {
+                "account_number": "2893",
+                "debit_amount": 0,
+                "credit_amount": 560,
+                "line_description": "Utlägg: Lunch med kund (Joakim Hansson)"
+              }
+            ]
+          }
+        ]
+      ]
+    }
+  ],
+  "reverseEntry": [
+    {
+      "name": "registered claim with its back-link: storno of its verifikat",
+      "calls": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000fe001"
+        ]
+      ]
+    },
+    {
+      "name": "registered claim whose back-link write failed: storno of the verifikat naming it",
+      "calls": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000fe002"
+        ]
+      ]
+    }
+  ]
+}

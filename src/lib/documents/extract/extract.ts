@@ -14,7 +14,7 @@ import { jsonSchemaFor, readingsFromAnswer, type ExtractionSchemaDef } from './s
  */
 
 /** Recorded as the software agent of every model extraction; bump when prompts or merge rules change. */
-export const EXTRACTOR = { name: 'arkiv.extract', version: '1' } as const
+export const EXTRACTOR = { name: 'arkiv.extract', version: '2' } as const
 
 /** Characters of page text sent per reading. A longer document sends its opening, its last page and its most relevant pages. */
 const PAGE_BUDGET = 60_000
@@ -85,8 +85,8 @@ export async function readFields(input: { def: ExtractionSchemaDef; company: Com
 
   const ai = getAiService()
   const [a, b] = await Promise.all([
-    ai.generateStructured({ tier: 'extraction', system, prompt: prompts[0], maxTokens: MAX_TOKENS, schema }),
-    ai.generateStructured({ tier: 'cheap', system, prompt: prompts[1], maxTokens: MAX_TOKENS, schema }),
+    ai.generateStructured({ tier: 'extraction', meter: { feature: 'arkiv_extract' }, system, prompt: prompts[0], maxTokens: MAX_TOKENS, schema }),
+    ai.generateStructured({ tier: 'cheap', meter: { feature: 'arkiv_extract' }, system, prompt: prompts[1], maxTokens: MAX_TOKENS, schema }),
   ])
 
   const merged = mergeReadings(def, readingsFromAnswer(def, a.value), readingsFromAnswer(def, b.value))

@@ -10,6 +10,9 @@ import {
   type MultiUserGrantRow,
 } from './multi-user-state'
 import { isUuid } from '@/lib/invariants/uuid'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('entitlements')
 
 /**
  * Entitlement gate: the single primitive behind the paywall ("non-payer loses
@@ -114,6 +117,21 @@ function grantIsActive(expiresAt: string | null, now: number): boolean {
 }
 
 /**
+ * Which grants count. `excludeTrial` leaves out the 30-day trial every company
+ * is seeded with (source = 'trial'), so only a paid grant answers: Stripe
+ * (including a card entered during the trial, which Stripe keeps 'trialing'),
+ * or a manual, comp or team agreement. For services that cost Accounted per
+ * company, such as an Open Payments bank consent.
+ */
+export interface CapabilityGrantOptions {
+  excludeTrial?: boolean
+}
+
+function grantCounts(source: string | null | undefined, options: CapabilityGrantOptions): boolean {
+  return !(options.excludeTrial && source === 'trial')
+}
+
+/**
  * Resolve a cron or batch work list before applying its processing limit.
  *
  * This is the bulk counterpart to hasCapability(): company grants and firm
@@ -121,21 +139,29 @@ function grantIsActive(expiresAt: string | null, now: number): boolean {
  * disable wins. Queries are chunked to keep PostgREST URLs bounded. Any query
  * failure throws so background jobs report a failed run instead of silently
  * treating every paying company as ineligible.
+ *
+ * A deleted company (archived_at set) is entitled to nothing, bypass
+ * included: the bank-sync, Open Payments and skattekonto crons take this list
+ * as their work list, and a trial or a byrå team grant outlives the delete
+ * (accounted#198). A restored company (archived_at back to null) is entitled
+ * again with no other step.
  */
 export async function getCompanyIdsWithCapability(
   supabase: SupabaseClient,
   companyIds: readonly string[],
   key: CapabilityKey,
+  options: CapabilityGrantOptions = {},
 ): Promise<Set<string>> {
   const validCompanyIds = [...new Set(companyIds.filter(isUuid))]
   if (validCompanyIds.length === 0) return new Set()
-  if (isBypassedFor(key)) return new Set(validCompanyIds)
+  const bypassed = isBypassedFor(key)
 
   type CompanyScope = { id: string; team_id: string | null }
   type GrantScope = {
     company_id: string | null
     team_id: string | null
     expires_at: string | null
+    source: string | null
   }
   type DisabledConfig = { company_id: string }
 
@@ -145,13 +171,15 @@ export async function getCompanyIdsWithCapability(
   for (const chunk of chunksOf(validCompanyIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
     const [{ data: companyRows, error: companiesError }, { data: configRows, error: configError }] =
       await Promise.all([
-        supabase.from('companies').select('id, team_id').in('id', chunk),
-        supabase
-          .from('company_capability_config')
-          .select('company_id')
-          .eq('capability_key', key)
-          .eq('enabled', false)
-          .in('company_id', chunk),
+        supabase.from('companies').select('id, team_id').in('id', chunk).is('archived_at', null),
+        bypassed
+          ? Promise.resolve({ data: [], error: null })
+          : supabase
+              .from('company_capability_config')
+              .select('company_id')
+              .eq('capability_key', key)
+              .eq('enabled', false)
+              .in('company_id', chunk),
       ])
 
     if (companiesError) throw new Error(`Failed to resolve capability company scopes: ${companiesError.message}`)
@@ -159,6 +187,7 @@ export async function getCompanyIdsWithCapability(
     companies.push(...((companyRows ?? []) as CompanyScope[]))
     disabledConfigs.push(...((configRows ?? []) as DisabledConfig[]))
   }
+  if (bypassed) return new Set(companies.map(company => company.id))
 
   const teamIds = [...new Set(companies.map(company => company.team_id).filter((id): id is string => !!id))]
   const grants: GrantScope[] = []
@@ -167,7 +196,7 @@ export async function getCompanyIdsWithCapability(
   for (const chunk of chunksOf(validCompanyIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
     let companyGrantsQuery = supabase
       .from('capability_grants')
-      .select('company_id, team_id, expires_at')
+      .select('company_id, team_id, expires_at, source')
       .eq('capability_key', key)
       .in('company_id', chunk)
     if (onlyConnectorGrants) companyGrantsQuery = companyGrantsQuery.eq('source', 'connector')
@@ -179,7 +208,7 @@ export async function getCompanyIdsWithCapability(
   for (const chunk of chunksOf(teamIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
     let firmGrantsQuery = supabase
       .from('capability_grants')
-      .select('company_id, team_id, expires_at')
+      .select('company_id, team_id, expires_at, source')
       .eq('capability_key', key)
       .in('team_id', chunk)
     if (onlyConnectorGrants) firmGrantsQuery = firmGrantsQuery.eq('source', 'connector')
@@ -193,6 +222,7 @@ export async function getCompanyIdsWithCapability(
   const activeTeamGrants = new Set<string>()
   for (const grant of grants) {
     if (!grantIsActive(grant.expires_at, now)) continue
+    if (!grantCounts(grant.source, options)) continue
     if (grant.company_id) activeCompanyGrants.add(grant.company_id)
     if (grant.team_id) activeTeamGrants.add(grant.team_id)
   }
@@ -213,36 +243,31 @@ export async function hasCapability(
   supabase: SupabaseClient,
   companyId: string,
   key: CapabilityKey,
+  options: CapabilityGrantOptions = {},
 ): Promise<boolean> {
   if (isBypassedFor(key)) return true
   if (!isUuid(companyId)) return false // fail-closed: never interpolate a non-UUID
 
-  // Resolve the company's firm/team (firm-scoped grants cascade to clients).
-  const { data: company } = await supabase
-    .from('companies')
-    .select('team_id')
-    .eq('id', companyId)
-    .maybeSingle()
-  const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
-  const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
-
   // ENTITLEMENT axis: any unexpired grant on the company or its team.
-  const scopeFilter = teamId
-    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
-    : `company_id.eq.${companyId}`
-  let grantsQuery = supabase
-    .from('capability_grants')
-    .select('expires_at')
-    .eq('capability_key', key)
-    .or(scopeFilter)
-  if (connectorGrantsOnly()) grantsQuery = grantsQuery.eq('source', 'connector')
-  const { data: grants, error: grantsError } = await grantsQuery
+  const { data: grants, error: grantsError } = await readGrants(supabase, companyId, [key])
 
-  if (grantsError) return false // fail-closed on any read error
+  if (grantsError) {
+    // Fail closed, but say so: callers (the webshop/Stripe runner, the AGI and
+    // VAT receipt crons) read false as "not entitled" and silently skip the
+    // company (accounted#115).
+    const err = grantsError as { code?: string; message?: string }
+    log.error('capability grants read failed; failing closed', {
+      companyId,
+      capability: key,
+      code: err.code ?? null,
+      reason: err.message ?? String(grantsError),
+    })
+    return false
+  }
   const now = Date.now()
   const entitled = (grants ?? []).some((g) => {
-    const exp = (g as { expires_at: string | null }).expires_at
-    return grantIsActive(exp, now)
+    const row = g as { expires_at: string | null; source?: string | null }
+    return grantIsActive(row.expires_at, now) && grantCounts(row.source, options)
   })
   if (!entitled) return false
 
@@ -256,6 +281,95 @@ export async function hasCapability(
   if ((config as { enabled: boolean } | null)?.enabled === false) return false
 
   return true
+}
+
+/**
+ * The two axes hasCapability() ANDs together, kept apart: which keys the
+ * company is ENTITLED to (an unexpired grant on the company or its team, or a
+ * bypass, decided exactly as hasCapability decides it) and which it has
+ * DISABLED (a company_capability_config row with enabled = false).
+ */
+export interface CapabilityAxes {
+  entitled: ReadonlySet<CapabilityKey>
+  disabled: ReadonlySet<CapabilityKey>
+  /**
+   * Of the extra `configKeys` (readCapabilityAxes options), the ones a
+   * company_capability_config row turns off: read in the same config query,
+   * never looked up as grants. Empty when none were asked for.
+   */
+  disabledConfigKeys: ReadonlySet<string>
+  /**
+   * Of the extra `configKeys`, the ones a row explicitly turns on (enabled =
+   * true): a package switched on wins over a profile that leaves it off.
+   */
+  enabledConfigKeys: ReadonlySet<string>
+}
+
+export interface CapabilityAxesOptions {
+  /**
+   * Config keys that are not capability keys, read on the enablement axis
+   * only: the package switches (lib/modules/packages.ts) share the table.
+   */
+  configKeys?: readonly string[]
+}
+
+/**
+ * Both axes for several keys in one grant read and one config read, run in
+ * parallel. For a caller that has to say WHY a capability is unavailable, not
+ * only whether it is: the capabilities report (lib/modules/capabilities.ts).
+ *
+ * Unlike the gate, a failed read throws instead of failing closed: a report
+ * that says "needs a plan" because a query failed would tell the company to
+ * pay for something it may already have.
+ */
+export async function readCapabilityAxes(
+  supabase: SupabaseClient,
+  companyId: string,
+  keys: readonly CapabilityKey[],
+  options: CapabilityAxesOptions = {},
+): Promise<CapabilityAxes> {
+  if (!isUuid(companyId)) throw new Error('readCapabilityAxes: companyId is not a uuid')
+  const unique = [...new Set(keys)]
+  const configOnly = [...new Set(options.configKeys ?? [])].filter((key) => !(unique as string[]).includes(key))
+  if (unique.length === 0 && configOnly.length === 0) {
+    return { entitled: new Set(), disabled: new Set(), disabledConfigKeys: new Set(), enabledConfigKeys: new Set() }
+  }
+  const queried = unique.filter((key) => !isBypassedFor(key))
+
+  const [grants, configs] = await Promise.all([
+    queried.length > 0
+      ? readGrants(supabase, companyId, queried)
+      : Promise.resolve({ data: [] as GrantRow[], error: null }),
+    // Every row of these keys, on or off: a row that is not enabled = true
+    // turns its key off; a config-only key turned on is a package switch.
+    supabase
+      .from('company_capability_config')
+      .select('capability_key, enabled')
+      .eq('company_id', companyId)
+      .in('capability_key', [...unique, ...configOnly]),
+  ])
+  if (grants.error) {
+    const message = (grants.error as { message?: string }).message ?? String(grants.error)
+    throw new Error(`Failed to read capability grants: ${message}`)
+  }
+  if (configs.error) throw new Error(`Failed to read capability config: ${configs.error.message}`)
+
+  const now = Date.now()
+  const entitled = new Set<CapabilityKey>(unique.filter((key) => isBypassedFor(key)))
+  for (const row of grants.data ?? []) {
+    if (grantIsActive(row.expires_at, now)) entitled.add(row.capability_key as CapabilityKey)
+  }
+  const configOnlySet = new Set(configOnly)
+  const rows = (configs.data ?? []) as Array<{ capability_key: string; enabled?: boolean | null }>
+  const disabledKeys = rows.filter((row) => row.enabled !== true).map((row) => row.capability_key)
+  const disabled = new Set<CapabilityKey>(
+    disabledKeys.filter((key) => !configOnlySet.has(key)).map((key) => key as CapabilityKey),
+  )
+  const disabledConfigKeys = new Set(disabledKeys.filter((key) => configOnlySet.has(key)))
+  const enabledConfigKeys = new Set(
+    rows.filter((row) => row.enabled === true && configOnlySet.has(row.capability_key)).map((row) => row.capability_key),
+  )
+  return { entitled, disabled, disabledConfigKeys, enabledConfigKeys }
 }
 
 /** Bilingual paywall copy, shared by every transport (HTTP route, MCP tool, commit executor). */
@@ -303,6 +417,24 @@ export interface CapabilityBlockedError {
   capability: CapabilityKey
   message_sv: string
   message_en: string
+  /** The same call is refused until the plan (or the self-host's setup) changes. */
+  retryable: false
+  /** Who lifts the block and where, for an agent to tell the user. */
+  remediation: { description: string }
+}
+
+/**
+ * What lifts the block. An agent told only that a plan is needed has no next
+ * step: a person upgrades
+ * under Inställningar → Abonnemang, or on a self-host the operator adds the
+ * connector key, and the call waits for that.
+ */
+function blockedRemediation(key: CapabilityKey): { description: string } {
+  return {
+    description: isSelfHosted()
+      ? `This installation has no connector key or own API credentials for ${key}. Tell the user: the operator sets GNUBOK_CONNECTOR_KEY or the service's own credentials. Do not retry until they confirm.`
+      : `The company's plan does not include ${key}. Tell the user: a person upgrades in Accounted under Inställningar → Abonnemang (/settings/billing). Do not retry until they confirm the upgrade.`,
+  }
 }
 
 /**
@@ -318,7 +450,20 @@ export function capabilityBlockedError(key: CapabilityKey): CapabilityBlockedErr
     capability: key,
     message_sv: blockedMessageSv(),
     message_en: blockedMessageEn(),
+    retryable: false,
+    remediation: blockedRemediation(key),
   }
+}
+
+/**
+ * capabilityBlockedError as a thrown value, for a tool that refuses by
+ * throwing (a cross-company inner call, a feed backfill). The MCP toToolError
+ * answers it with the envelope the dispatcher's gate answers: its lowercase
+ * code is no registry code, so it read as UNKNOWN_ERROR before.
+ */
+export function capabilityBlockedRefusal(key: CapabilityKey): Error & CapabilityBlockedError {
+  const blocked = capabilityBlockedError(key)
+  return Object.assign(new Error(blocked.message_en), blocked)
 }
 
 /**
@@ -400,6 +545,25 @@ export interface CompanyEntitlements {
   multiUser: MultiUserAccess
   /** Null unless the company is covered by something other than the trial. */
   coverage: EntitlementCoverage | null
+  /**
+   * The paid capabilities the company is entitled to before the enablement
+   * axis applies: `capabilities` plus the ones company_capability_config
+   * turns off. The capabilities resolver (lib/modules/capabilities.ts) needs
+   * the two apart to say why a module is unavailable.
+   */
+  entitledCapabilities: CapabilityKey[]
+  /**
+   * Every company_capability_config key with enabled = false, as read:
+   * capability keys and package switches (lib/modules/packages.ts) alike.
+   * Empty when the paywall is bypassed, which reads no config.
+   */
+  disabledConfigKeys: string[]
+  /**
+   * Every company_capability_config key with enabled = true: for the
+   * capabilities resolver, where a package switched on wins over a profile
+   * that leaves it off. Empty when the paywall is bypassed.
+   */
+  enabledConfigKeys: string[]
 }
 
 /** company_subscriptions.status values that count as a live subscription. */
@@ -409,37 +573,71 @@ function normalizeTeamId(raw: string | null | undefined): string | null {
   return raw && isUuid(raw) ? raw : null
 }
 
+type GrantRow = {
+  capability_key: string
+  expires_at: string | null
+  source: string | null
+  team_id: string | null
+}
+
 /**
- * The grants read behind getCompanyEntitlements. `keys` is the paid-key list
- * the caller wants resolved from grants (every paid key on hosted; only the
- * connector keys on a self-host, where the local ones are held outright).
- * On a self-host only the connector sync's own rows count; see
- * connectorGrantsOnly().
+ * Every grant row that applies to a company (its own and its firm/team's),
+ * narrowed to `keys` and, on a self-host, to the connector sync's own rows
+ * (see connectorGrantsOnly()). Shared by hasCapability and
+ * getCompanyEntitlements.
+ *
+ * Read through company_capability_grant_rows (SECURITY DEFINER, answers
+ * members of the company only): the capability_grants SELECT
+ * policy shows team rows only to TEAM members, so a byrå client company read
+ * through its own user's client never saw the team grant that covers it.
+ * The direct read below runs only when the function does not exist yet
+ * (PGRST202: deploy race, self-host mid-migration) and behaves as before.
+ * `teamId` feeds that fallback; undefined means look it up.
  */
-function readGrants(
+async function readGrants(
   supabase: SupabaseClient,
   companyId: string,
-  teamId: string | null,
   keys: readonly CapabilityKey[],
-) {
-  const scopeFilter = teamId
-    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
+  teamId?: string | null,
+): Promise<{ data: GrantRow[] | null; error: unknown }> {
+  const onlyConnectorGrants = connectorGrantsOnly()
+  const { data, error } = await supabase.rpc('company_capability_grant_rows', {
+    p_company_id: companyId,
+    p_capability_keys: keys,
+    p_connector_only: onlyConnectorGrants,
+  })
+  if ((error as { code?: string } | null)?.code !== 'PGRST202') {
+    return { data: (data as GrantRow[] | null) ?? null, error }
+  }
+
+  let resolvedTeamId = teamId
+  if (resolvedTeamId === undefined) {
+    const { data: company } = await supabase
+      .from('companies')
+      .select('team_id')
+      .eq('id', companyId)
+      .maybeSingle()
+    resolvedTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
+  }
+  const validTeamId = normalizeTeamId(resolvedTeamId)
+  const scopeFilter = validTeamId
+    ? `company_id.eq.${companyId},team_id.eq.${validTeamId}`
     : `company_id.eq.${companyId}`
   let grantsQuery = supabase
     .from('capability_grants')
     .select('capability_key, expires_at, source, team_id')
     .in('capability_key', keys as unknown as string[])
     .or(scopeFilter)
-  if (connectorGrantsOnly()) grantsQuery = grantsQuery.eq('source', 'connector')
-  return grantsQuery
+  if (onlyConnectorGrants) grantsQuery = grantsQuery.eq('source', 'connector')
+  const fallback = await grantsQuery
+  return { data: (fallback.data as GrantRow[] | null) ?? null, error: fallback.error }
 }
 
 export interface GetCompanyEntitlementsOptions {
   /**
    * The company's team_id when the caller already has it (the dashboard
-   * layout reads it off the membership join): skips the companies lookup and
-   * lets the grants read run in the same wave as the other two, one round
-   * trip instead of two on the layout's critical path. Pass null for a
+   * layout reads it off the membership join). Only the direct-read fallback
+   * in readGrants uses it, to skip its companies lookup. Pass null for a
    * company without a team.
    */
   teamId?: string | null
@@ -466,6 +664,9 @@ export async function getCompanyEntitlements(
       trialExpiredAt: null,
       multiUser: { state: 'entitled', graceEndsAt: null },
       coverage: null,
+      entitledCapabilities: [...PAID_CAPABILITIES],
+      disabledConfigKeys: [],
+      enabledConfigKeys: [],
     }
   }
   // Fail-closed: never interpolate a non-UUID.
@@ -477,6 +678,9 @@ export async function getCompanyEntitlements(
       trialExpiredAt: null,
       multiUser: { state: 'frozen', graceEndsAt: null },
       coverage: null,
+      entitledCapabilities: [],
+      disabledConfigKeys: [],
+      enabledConfigKeys: [],
     }
   }
   // Self-hosted: every local capability is held outright; only the connector
@@ -491,43 +695,31 @@ export async function getCompanyEntitlements(
   const localPaid = selfHosted ? PAID_CAPABILITIES.filter(selfHostLocal) : []
   const queriedKeys = selfHosted ? PAID_CAPABILITIES.filter((k) => !selfHostLocal(k)) : PAID_CAPABILITIES
 
-  // The disabled-config subtraction and the subscription-status read only
-  // need companyId, so they run in parallel with the team lookup: this
+  // All three reads need only companyId, so they run in one wave: this
   // function sits on the dashboard layout's critical path, where each
   // serialized round-trip is latency. The subscription row (members-readable
   // per RLS) distinguishes a churned payer from an expired trial: cancelled
   // subscriptions have their stripe grants deleted, so the grants alone
   // cannot tell the two apart.
-  const knownTeam = options.teamId !== undefined
-  const [{ data: company }, { data: configs }, { data: subscription }, earlyGrants] = await Promise.all([
-    knownTeam
-      ? Promise.resolve({ data: { team_id: options.teamId } })
-      : supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
+  const [{ data: configRows }, { data: subscription }, { data: grants }] = await Promise.all([
+    // Every config row, on or off (a handful per company at most): the rows
+    // turned off subtract below, the rows turned on reach the capabilities
+    // resolver as package switches.
     supabase
       .from('company_capability_config')
       .select('capability_key, enabled')
-      .eq('company_id', companyId)
-      .eq('enabled', false),
+      .eq('company_id', companyId),
     supabase
       .from('company_subscriptions')
       .select('status')
       .eq('company_id', companyId)
       .maybeSingle(),
-    // With the team known up front the grants read joins this wave. A
-    // self-host serving every connector upstream from its own credentials has
-    // nothing to read from grants: skip the query (`in.()` on an empty list
-    // is not a valid PostgREST filter).
-    knownTeam && queriedKeys.length > 0
-      ? readGrants(supabase, companyId, normalizeTeamId(options.teamId), queriedKeys)
-      : Promise.resolve(null),
+    // A self-host serving every connector upstream from its own credentials
+    // has nothing to read from grants: skip the read.
+    queriedKeys.length > 0
+      ? readGrants(supabase, companyId, queriedKeys, options.teamId)
+      : Promise.resolve({ data: [] as GrantRow[] }),
   ])
-  const teamId = normalizeTeamId((company as { team_id: string | null } | null)?.team_id ?? null)
-
-  const { data: grants } =
-    earlyGrants ??
-    (queriedKeys.length > 0
-      ? await readGrants(supabase, companyId, teamId, queriedKeys)
-      : { data: [] })
 
   const now = Date.now()
   const entitled = new Set<string>(localPaid)
@@ -585,11 +777,19 @@ export async function getCompanyEntitlements(
     }
   }
 
+  // A row that is not enabled = true turns its key off, as the
+  // enabled = false filter this read had before decided.
+  const allConfigs = (configRows ?? []) as Array<{ capability_key: string; enabled?: boolean | null }>
+  const configs = allConfigs.filter((c) => c.enabled !== true)
+  const disabledConfigKeys = configs.map((c) => c.capability_key)
+  const enabledConfigKeys = allConfigs.filter((c) => c.enabled === true).map((c) => c.capability_key)
+  const entitledCapabilities = PAID_CAPABILITIES.filter((k) => entitled.has(k))
+
   if (selfHosted) {
     // No trial on a self-host: 'paid' while a connector grant is active,
     // 'none' otherwise (never the hosted trial copy). Explicit disables still
     // apply.
-    for (const c of configs ?? []) {
+    for (const c of configs) {
       entitled.delete((c as { capability_key: string }).capability_key)
     }
     return {
@@ -600,6 +800,9 @@ export async function getCompanyEntitlements(
       // multi_user is a local capability: a self-host is never seat-gated.
       multiUser: { state: 'entitled', graceEndsAt: null },
       coverage: null,
+      entitledCapabilities,
+      disabledConfigKeys,
+      enabledConfigKeys,
     }
   }
   // Paying/comped companies are not "on trial" even if the seeded trial rows
@@ -642,14 +845,24 @@ export async function getCompanyEntitlements(
   }
 
   if (entitled.size === 0) {
-    return { capabilities: [], trialEndsAt: null, entitlementState, trialExpiredAt, multiUser, coverage }
+    return {
+      capabilities: [],
+      trialEndsAt: null,
+      entitlementState,
+      trialExpiredAt,
+      multiUser,
+      coverage,
+      entitledCapabilities,
+      disabledConfigKeys,
+      enabledConfigKeys,
+    }
   }
 
   // Subtract any explicitly-disabled (enablement axis). multi_user is exempt
   // from the config axis by design (see lib/entitlements/multi-user-state.ts),
   // but it is also never written to company_capability_config, so the plain
   // subtraction stays correct for the capabilities list.
-  for (const c of configs ?? []) {
+  for (const c of configs) {
     entitled.delete((c as { capability_key: string }).capability_key)
   }
 
@@ -660,5 +873,8 @@ export async function getCompanyEntitlements(
     trialExpiredAt,
     multiUser,
     coverage,
+    entitledCapabilities,
+    disabledConfigKeys,
+    enabledConfigKeys,
   }
 }

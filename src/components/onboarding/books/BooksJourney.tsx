@@ -6,8 +6,11 @@ import { useTranslations } from 'next-intl'
 import type { BooksFindings } from '@/lib/onboarding/findings'
 import { singleFlight } from '@/lib/onboarding/single-flight'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
+import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import { reconcileBooksDraft } from '@/lib/onboarding-books/resume'
-import { booksReducer, initialState, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
+import { booksSkip } from '@/lib/onboarding-books/skip'
+import { useBranding } from '@/lib/branding/brand-context'
+import { booksReducer, hasStepBehind, initialState, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
 import JourneyOrb, { type OrbState } from '@/components/onboarding/journey/JourneyOrb'
 import JourneyTrack from '@/components/onboarding/journey/JourneyTrack'
 import '@/components/onboarding/journey/journey.css'
@@ -21,6 +24,8 @@ import { InsightStep } from './steps/InsightStep'
 import { BankStep } from './steps/BankStep'
 import { SkvStep } from './steps/SkvStep'
 import { DoneStep } from './steps/DoneStep'
+import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 const STATION_FRACS = [0.07, 0.36, 0.64, 0.93]
 
@@ -42,6 +47,8 @@ interface BooksJourneyProps {
   hasMigration: boolean
   hasBanking: boolean
   hasSkatteverket: boolean
+  /** See BooksFlags.skvOmbud. */
+  skvOmbud?: boolean
 }
 
 /**
@@ -50,14 +57,23 @@ interface BooksJourneyProps {
  * and the Skatteverket consent happen inside this chrome, each ending on
  * a verdict computed from the company's own data. Bank and Skatteverket
  * are recommended, never mandatory. Leaving the act clears the
- * first-session gate and opens Hem.
+ * first-session gate and opens Hem. "Hoppa över tills vidare" leaves from
+ * any step but Klart, also while an import runs (lib/onboarding-books/skip).
+ * Tillbaka only ever goes one step back: the first step has none behind it
+ * and shows no Tillbaka (hasStepBehind), it never opens the skip confirm.
  */
 export default function BooksJourney(props: BooksJourneyProps) {
   const t = useTranslations('books')
   const router = useRouter()
+  const { appName } = useBranding()
   const flags = useMemo<BooksFlags>(
-    () => ({ hasMigration: props.hasMigration, hasBanking: props.hasBanking, hasSkatteverket: props.hasSkatteverket }),
-    [props.hasMigration, props.hasBanking, props.hasSkatteverket],
+    () => ({
+      hasMigration: props.hasMigration,
+      hasBanking: props.hasBanking,
+      hasSkatteverket: props.hasSkatteverket,
+      skvOmbud: props.skvOmbud ?? false,
+    }),
+    [props.hasMigration, props.hasBanking, props.hasSkatteverket, props.skvOmbud],
   )
   const entry = useMemo<BooksEntry>(
     () => ({
@@ -76,6 +92,9 @@ export default function BooksJourney(props: BooksJourneyProps) {
   const [loadingFindings, setLoadingFindings] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [leaveError, setLeaveError] = useState(false)
+  const [skipOpen, setSkipOpen] = useState(false)
+  // Read by the import loops mid-await, where the leaving state is stale.
+  const leavingRef = useRef(false)
   const station = stationOf(state.step)
   const navigation = useOnboardingNavigation({
     scope: props.draftScope,
@@ -115,11 +134,20 @@ export default function BooksJourney(props: BooksJourneyProps) {
     if (navigation.ready && state.step !== 'sie' && state.step !== 'provider') void loadFindings()
   }, [navigation.ready, state.step, loadFindings])
 
+  useOnboardingStepEvent({
+    journey: 'books',
+    step: state.step === 'bank' && state.bankPhase === 'authed' ? 'bank-accounts' : state.step,
+    ready: navigation.ready,
+    path: state.path,
+    provider: state.provider,
+  })
+
   /* ── leaving the act ─────────────────────────────────────────────── */
   const leave = useCallback(
-    async (outcome: 'done' | 'skipped', href = '/') => {
+    async (outcome: 'done' | 'skipped', href = '/', hardNavigation = false) => {
       if (leaving) return
       setLeaving(true)
+      leavingRef.current = true
       setLeaveError(false)
       try {
         const response = await fetch('/api/onboarding/books/exit', {
@@ -131,9 +159,14 @@ export default function BooksJourney(props: BooksJourneyProps) {
       } catch {
         setLeaveError(true)
         setLeaving(false)
+        leavingRef.current = false
         return
       }
       clearDraft()
+      if (hardNavigation) {
+        window.location.assign(href)
+        return
+      }
       router.push(href)
       router.refresh()
     },
@@ -172,10 +205,25 @@ export default function BooksJourney(props: BooksJourneyProps) {
     ]
   }, [findings, state.path, state.bankSkipped, state.skvSkipped, station, t])
 
-  const ctx: BooksCtx = { state, dispatch, flags, findings, loadingFindings, loadFindings, landedError: props.landedError }
+  const skip = booksSkip(state, (findings?.books.entries ?? 0) > 0)
+
+  const ctx: BooksCtx = {
+    state,
+    dispatch,
+    flags,
+    findings,
+    loadingFindings,
+    loadFindings,
+    landedError: props.landedError,
+    isLeaving: () => leavingRef.current,
+  }
 
   // Keep navigation in view, including during work when leaving is disabled.
+  // The first step keeps the row's place and shows no Tillbaka: the skip
+  // beside it stays where it is on every step.
+  const backShown = hasStepBehind(state.step)
   const canGoBack =
+    backShown &&
     !state.working &&
     !leaving &&
     !(state.step === 'bank' && (state.bankPhase === 'connecting' || state.bankPhase === 'fetching')) &&
@@ -210,15 +258,38 @@ export default function BooksJourney(props: BooksJourneyProps) {
           <JourneyOrb state={orbState} targetX={STATION_FRACS[station]} />
         </JourneyTrack>
         <div className="bks-backrow">
-            <button type="button" className="jny-btn-quiet bks-back" disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => state.step === 'source' ? void leave('skipped') : dispatch({ type: 'GO_BACK', flags }))}>
-              ‹ {t('back')}
-            </button>
+          <Button variant="ghost" className={backShown ? 'text-muted-foreground' : 'invisible'} disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => navigation.stepBack(() => dispatch({ type: 'GO_BACK', flags })))}>
+            ‹ {t('back')}
+          </Button>
+          {/* Never disabled by running work: an import is the server's job, so
+              the act must not hold anyone (lib/onboarding-books/skip). */}
+          {state.step !== 'done' && (
+            <Button variant="ghost" className="text-muted-foreground" disabled={leaving || !navigation.ready} onClick={() => setSkipOpen(true)}>
+              {t('skip_all')}
+            </Button>
+          )}
         </div>
         <div className="bks-qarea" ref={areaRef} key={state.step}>
           {navigation.ready ? renderStep() : null}
           {leaveError && <p className="mt-4 text-center text-sm text-destructive" role="alert">{t('exit_failed')}</p>}
         </div>
       </div>
+      <ConfirmDialog
+        open={skipOpen}
+        onOpenChange={setSkipOpen}
+        title={t('skip_title')}
+        description={
+          skip.notice === 'running'
+            ? t('skip_running')
+            : skip.notice === 'resume'
+              ? t('skip_resume')
+              : skip.notice === 'empty'
+                ? t('skip_all_cost', { appName })
+                : undefined
+        }
+        confirmLabel={t('skip_all_confirm')}
+        onConfirm={() => leave('skipped', skip.href, skip.hardNavigation)}
+      />
     </div>
   )
 }

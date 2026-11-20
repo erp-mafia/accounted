@@ -10,9 +10,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetConnection = vi.fn()
+const mockKeepRowsOnCurrentOrgNumber = vi.fn()
 vi.mock('../lib/connection-store', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
-  return { ...actual, getConnection: (...a: unknown[]) => mockGetConnection(...a) }
+  return {
+    ...actual,
+    getConnection: (...a: unknown[]) => mockGetConnection(...a),
+    keepRowsOnCurrentOrgNumber: (...a: unknown[]) => mockKeepRowsOnCurrentOrgNumber(...a),
+  }
 })
 
 const mockMode = vi.fn()
@@ -26,7 +31,13 @@ vi.mock('../lib/system-auth/config', async (importOriginal) => {
   }
 })
 
-import { resolveReadAuth, hasVerifiedGrant, findCompanyTokenUser } from '../lib/resolve-auth'
+import {
+  resolveReadAuth,
+  resolveUserReadAuth,
+  hasVerifiedGrant,
+  hasOmbudReadAccess,
+  findCompanyTokenUser,
+} from '../lib/resolve-auth'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 type TokenRow = { user_id: string; status: string; created_at?: string }
@@ -69,6 +80,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockMode.mockReturnValue('off')
   mockConfigured.mockReturnValue(false)
+  // The company still answers for the row's org number unless a test says otherwise.
+  mockKeepRowsOnCurrentOrgNumber.mockImplementation(async (rows: unknown[]) => rows)
 })
 
 describe('resolveReadAuth', () => {
@@ -157,6 +170,30 @@ describe('resolveReadAuth', () => {
     const supabase = makeSupabase({ user_id: 'user-1', status: 'needs_reconsent' })
     const result = await resolveReadAuth(supabase, 'company-1', { requires: 'lasombud' })
     expect(result).toEqual({ ok: false, reason: 'needs_reconsent' })
+  })
+})
+
+describe('resolveUserReadAuth', () => {
+  it('ignores a verified ombud grant: reads no role covers stay on the member token', async () => {
+    mockMode.mockReturnValue('on')
+    mockConfigured.mockReturnValue(true)
+    mockGetConnection.mockResolvedValue(GRANTED_CONNECTION)
+
+    const supabase = makeSupabase({ user_id: 'user-1', status: 'active' })
+    const result = await resolveUserReadAuth(supabase, 'company-1', { userId: 'user-1' })
+
+    expect(result).toMatchObject({ ok: true, source: 'user', tokenUserId: 'user-1' })
+    if (result.ok) expect(result.auth).toMatchObject({ mode: 'user', userId: 'user-1', companyId: 'company-1' })
+    expect(mockGetConnection).not.toHaveBeenCalled()
+  })
+
+  it('no token row -> no_token, even with a verified ombud grant', async () => {
+    mockMode.mockReturnValue('on')
+    mockConfigured.mockReturnValue(true)
+    mockGetConnection.mockResolvedValue(GRANTED_CONNECTION)
+
+    const result = await resolveUserReadAuth(makeSupabase(null), 'company-1')
+    expect(result).toEqual({ ok: false, reason: 'no_token' })
   })
 })
 
@@ -293,5 +330,31 @@ describe('hasVerifiedGrant', () => {
   it('returns false when no connection row exists', async () => {
     mockGetConnection.mockResolvedValue(null)
     expect(await hasVerifiedGrant('company-1', 'lasombud')).toBe(false)
+  })
+
+  it('returns false once the company answers for another org number than the grant was verified on', async () => {
+    mockGetConnection.mockResolvedValue({ ...GRANTED_CONNECTION, org_number: '165560000000' })
+    mockKeepRowsOnCurrentOrgNumber.mockResolvedValue([])
+    expect(await hasVerifiedGrant('company-1', 'lasombud')).toBe(false)
+    expect(mockKeepRowsOnCurrentOrgNumber).toHaveBeenCalledWith([
+      expect.objectContaining({ org_number: '165560000000' }),
+    ])
+  })
+})
+
+describe('hasOmbudReadAccess', () => {
+  it('needs mode on, a configured flow and a verified läsombud grant', async () => {
+    mockGetConnection.mockResolvedValue(GRANTED_CONNECTION)
+    expect(await hasOmbudReadAccess('company-1')).toBe(false) // mode off
+
+    mockMode.mockReturnValue('shadow')
+    mockConfigured.mockReturnValue(true)
+    expect(await hasOmbudReadAccess('company-1')).toBe(false) // shadow reads stay on BankID
+
+    mockMode.mockReturnValue('on')
+    expect(await hasOmbudReadAccess('company-1')).toBe(true)
+
+    mockGetConnection.mockResolvedValue({ ...GRANTED_CONNECTION, lasombud_status: 'denied', status: 'partial' })
+    expect(await hasOmbudReadAccess('company-1')).toBe(false)
   })
 })

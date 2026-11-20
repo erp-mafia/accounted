@@ -2,15 +2,21 @@ import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from '../../../../tests/pg/setup'
 import { seedCompany, insertAuthUser, insertCompany } from '../../../../tests/pg/fixtures'
-import { PAID_CAPABILITIES } from '../keys'
+import { TRIAL_CAPABILITIES } from '../keys'
 
 // pg-real coverage for migrations 20260628140000 (capability_grants /
-// company_capability_config / metered_events + company_has_capability RPC +
-// RLS) and 20260629120000 (trial-grant trigger). Required by
-// .claude/rules/database.md for any RPC/RLS/trigger change.
+// company_capability_config + RLS), 20260629120000
+// (trial-grant trigger) and 20260925081321 (company_capability_grant_rows).
+// Required (CLAUDE.md, Definition of Done) for any RPC/RLS/trigger change.
+//
+// The capability gate (lib/entitlements/has-capability.ts) reads grant rows
+// through company_capability_grant_rows and decides expiry and enablement in
+// TypeScript, so that function is what these tests assert through. (The SQL
+// resolver company_has_capability had no caller and was dropped in
+// 20261012100300.)
 //
 // NOTE: as of 20260629120000 an AFTER INSERT trigger auto-seeds a trial grant
-// on the PAID keys for every new company. The resolver tests therefore call
+// on the PAID keys for every new company. The entitlement tests therefore call
 // clearGrants() first to assert against a controlled grant state.
 
 const future = () => new Date(Date.now() + 86_400_000).toISOString()
@@ -35,40 +41,56 @@ async function clearGrants(companyId: string): Promise<void> {
   await getPool().query(`DELETE FROM public.capability_grants WHERE company_id = $1`, [companyId])
 }
 
-async function rpc(companyId: string, key: string): Promise<boolean> {
-  const { rows } = await getPool().query<{ ok: boolean }>(
-    `SELECT public.company_has_capability($1, $2) AS ok`,
-    [companyId, key],
-  )
-  return rows[0].ok
+interface GrantRow {
+  capability_key: string
+  expires_at: Date | null
+  source: string
+  team_id: string | null
 }
 
-describe('company_has_capability (entitlement axis)', () => {
-  it('is false when no grant exists (fail-closed)', async () => {
+// Direct pool access carries no JWT role, so the tenant guard is bypassed the
+// way it is for the service-role doors.
+async function grantRows(companyId: string, keys: string[]): Promise<GrantRow[]> {
+  const { rows } = await getPool().query<GrantRow>(
+    `SELECT * FROM public.company_capability_grant_rows($1, $2::text[], false)
+     ORDER BY capability_key, source`,
+    [companyId, keys],
+  )
+  return rows
+}
+
+describe('company_capability_grant_rows (entitlement axis)', () => {
+  it('returns nothing when no grant exists (fail-closed)', async () => {
     const { companyId } = await seedCompany()
     await clearGrants(companyId)
-    expect(await rpc(companyId, 'ai')).toBe(false)
+    expect(await grantRows(companyId, ['ai'])).toEqual([])
   })
 
-  it('is true for an unexpired company-scoped grant', async () => {
+  it('returns an unexpired company-scoped grant with its expiry', async () => {
     const { companyId } = await seedCompany()
     await clearGrants(companyId)
     await insertGrant({ companyId, key: 'ai', expiresAt: future() })
-    expect(await rpc(companyId, 'ai')).toBe(true)
+    const rows = await grantRows(companyId, ['ai'])
+    expect(rows).toEqual([expect.objectContaining({ capability_key: 'ai', source: 'manual', team_id: null })])
+    expect(rows[0].expires_at!.getTime()).toBeGreaterThan(Date.now())
   })
 
-  it('treats a null expiry as never-expiring', async () => {
+  it('returns a null expiry as is (never-expiring)', async () => {
     const { companyId } = await seedCompany()
     await clearGrants(companyId)
     await insertGrant({ companyId, key: 'ai', source: 'comp', expiresAt: null })
-    expect(await rpc(companyId, 'ai')).toBe(true)
+    expect(await grantRows(companyId, ['ai'])).toEqual([
+      expect.objectContaining({ capability_key: 'ai', source: 'comp', expires_at: null }),
+    ])
   })
 
-  it('is false once the grant has expired', async () => {
+  it('returns an expired grant too, for the caller to judge', async () => {
     const { companyId } = await seedCompany()
     await clearGrants(companyId)
     await insertGrant({ companyId, key: 'ai', source: 'trial', expiresAt: past() })
-    expect(await rpc(companyId, 'ai')).toBe(false)
+    const rows = await grantRows(companyId, ['ai'])
+    expect(rows).toHaveLength(1)
+    expect(rows[0].expires_at!.getTime()).toBeLessThan(Date.now())
   })
 
   it('cascades a firm/team-scoped grant to the client company', async () => {
@@ -84,46 +106,42 @@ describe('company_has_capability (entitlement axis)', () => {
       companyId,
     ])
     await insertGrant({ teamId, key: 'skatteverket', expiresAt: future() })
-    expect(await rpc(companyId, 'skatteverket')).toBe(true)
+    expect(await grantRows(companyId, ['skatteverket'])).toEqual([
+      expect.objectContaining({ capability_key: 'skatteverket', team_id: teamId }),
+    ])
   })
 })
 
-describe('company_has_capability (enablement axis)', () => {
-  it('is false when entitled but explicitly disabled', async () => {
-    const { companyId } = await seedCompany()
-    await clearGrants(companyId)
-    await insertGrant({ companyId, key: 'ai', expiresAt: null })
+describe('company_capability_config (enablement axis)', () => {
+  it("shows a member the company's explicit disable, which the gate reads on the user's client", async () => {
+    const { userId, companyId } = await seedCompany()
     await getPool().query(
       `INSERT INTO public.company_capability_config (company_id, capability_key, enabled)
        VALUES ($1, 'ai', false)`,
       [companyId],
     )
-    expect(await rpc(companyId, 'ai')).toBe(false)
+    const rows = await withUserContext(userId, async (client) => {
+      const r = await client.query<{ enabled: boolean }>(
+        `SELECT enabled FROM public.company_capability_config WHERE company_id = $1 AND capability_key = 'ai'`,
+        [companyId],
+      )
+      return r.rows
+    })
+    expect(rows).toEqual([{ enabled: false }])
   })
 })
 
-describe('company_has_capability tenant guard', () => {
-  it('raises 42501 when a non-member asks about a company (authenticated ctx)', async () => {
-    const { companyId } = await seedCompany()
-    const outsider = await insertAuthUser()
-    await expect(
-      withUserContext(outsider, async (client) => {
-        await client.query(`SELECT public.company_has_capability($1, 'ai')`, [companyId])
-      }),
-    ).rejects.toThrow(/unauthorized/)
-  })
-
-  it('lets a member resolve their own company under authenticated ctx', async () => {
+describe('company_capability_grant_rows for a member', () => {
+  it('returns the auto-seeded trial row to a member under authenticated ctx', async () => {
     const { userId, companyId } = await seedCompany()
-    const ok = await withUserContext(userId, async (client) => {
-      const r = await client.query<{ ok: boolean }>(
-        `SELECT public.company_has_capability($1, 'ai') AS ok`,
+    const rows = await withUserContext(userId, async (client) => {
+      const r = await client.query<{ capability_key: string; source: string }>(
+        `SELECT capability_key, source FROM public.company_capability_grant_rows($1, ARRAY['ai'], false)`,
         [companyId],
       )
-      return r.rows[0].ok
+      return r.rows
     })
-    // entitled via the auto-seeded trial grant
-    expect(ok).toBe(true)
+    expect(rows).toEqual([{ capability_key: 'ai', source: 'trial' }])
   })
 })
 
@@ -200,19 +218,106 @@ describe('trial grant seeding trigger (20260629120000, widened 20260818170000)',
        WHERE company_id = $1 ORDER BY capability_key`,
       [companyId],
     )
-    // Every PAID key, compared against the constant itself so the trigger's
-    // hardcoded list (20260629120000, widened 20260818170000) can never drift
-    // from PAID_CAPABILITIES again without this test failing.
-    expect(rows.map((r) => r.capability_key)).toEqual([...PAID_CAPABILITIES].sort())
+    // Every trial key, compared against the constant itself so the trigger's
+    // hardcoded list (20260629120000, widened 20260818170000 and since) can never drift
+    // from TRIAL_CAPABILITIES (PAID_CAPABILITIES minus the paid-plan-only
+    // keys) again without this test failing.
+    expect(rows.map((r) => r.capability_key)).toEqual([...TRIAL_CAPABILITIES].sort())
     expect(rows.every((r) => r.source === 'trial')).toBe(true)
     expect(rows.every((r) => r.expires_at !== null)).toBe(true)
-    expect(await rpc(companyId, 'ai')).toBe(true)
+    // ...and the gate's read returns it as live.
+    const ai = await grantRows(companyId, ['ai'])
+    expect(ai).toEqual([expect.objectContaining({ capability_key: 'ai', source: 'trial', team_id: null })])
+    expect(ai[0].expires_at!.getTime()).toBeGreaterThan(Date.now())
   })
 
   it('does not seed free keys (only the PAID set is granted)', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
-    expect(await rpc(companyId, 'cloud_backup')).toBe(false)
-    expect(await rpc(companyId, 'org_lookup')).toBe(false)
+    expect(await grantRows(companyId, ['cloud_backup', 'org_lookup'])).toEqual([])
+  })
+})
+
+// Migration 20260925081321: the capability gate reads its grant rows through
+// company_capability_grant_rows, because the SELECT policy above hides a
+// team's rows from a client company's users who are not on the team.
+describe('company_capability_grant_rows', () => {
+  async function byraClient(): Promise<{ userId: string; companyId: string; teamId: string }> {
+    const { userId, companyId } = await seedCompany()
+    await clearGrants(companyId)
+    const firmOwner = await insertAuthUser()
+    const teamId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.teams (id, name, created_by) VALUES ($1, 'Firm', $2)`,
+      [teamId, firmOwner],
+    )
+    await getPool().query(`UPDATE public.companies SET team_id = $1 WHERE id = $2`, [teamId, companyId])
+    // The client company's user is a company member only, never a team member.
+    await getPool().query(`DELETE FROM public.team_members WHERE team_id = $1 AND user_id = $2`, [
+      teamId,
+      userId,
+    ])
+    await getPool().query(`DELETE FROM public.capability_grants WHERE team_id = $1`, [teamId])
+    return { userId, companyId, teamId }
+  }
+
+  it("returns the team's grant to a company member outside the team, which the RLS read hides", async () => {
+    const { userId, companyId, teamId } = await byraClient()
+    await insertGrant({ teamId, key: 'ai', expiresAt: null })
+
+    const { direct, viaRpc } = await withUserContext(userId, async (client) => {
+      const d = await client.query(`SELECT id FROM public.capability_grants WHERE team_id = $1`, [teamId])
+      const r = await client.query<{ capability_key: string; team_id: string; source: string }>(
+        `SELECT * FROM public.company_capability_grant_rows($1, ARRAY['ai'], false)`,
+        [companyId],
+      )
+      return { direct: d.rowCount, viaRpc: r.rows }
+    })
+    expect(direct).toBe(0)
+    expect(viaRpc).toEqual([
+      expect.objectContaining({ capability_key: 'ai', team_id: teamId, source: 'manual' }),
+    ])
+  })
+
+  it('returns company and team rows, narrowed to the requested keys', async () => {
+    const { userId, companyId, teamId } = await byraClient()
+    await insertGrant({ companyId, key: 'ai', source: 'trial', expiresAt: future() })
+    await insertGrant({ teamId, key: 'bank_sync', expiresAt: null })
+    await insertGrant({ teamId, key: 'skatteverket', expiresAt: past() })
+
+    const keys = await withUserContext(userId, async (client) => {
+      const r = await client.query<{ capability_key: string }>(
+        `SELECT capability_key FROM public.company_capability_grant_rows($1, ARRAY['ai', 'skatteverket'], false)
+         ORDER BY capability_key`,
+        [companyId],
+      )
+      return r.rows.map((row) => row.capability_key)
+    })
+    // Expired rows come back too: the caller derives trial and grace state from them.
+    expect(keys).toEqual(['ai', 'skatteverket'])
+  })
+
+  it('returns only connector-sourced rows when p_connector_only is set', async () => {
+    const { companyId } = await byraClient()
+    await insertGrant({ companyId, key: 'bank_sync', source: 'trial', expiresAt: future() })
+    await insertGrant({ companyId, key: 'bank_sync', source: 'connector', expiresAt: future() })
+
+    const { rows } = await getPool().query<{ source: string }>(
+      `SELECT source FROM public.company_capability_grant_rows($1, ARRAY['bank_sync'], true)`,
+      [companyId],
+    )
+    expect(rows.map((r) => r.source)).toEqual(['connector'])
+  })
+
+  it('raises 42501 when a non-member asks about a company (authenticated ctx)', async () => {
+    const { companyId } = await byraClient()
+    const outsider = await insertAuthUser()
+    await expect(
+      withUserContext(outsider, async (client) => {
+        await client.query(`SELECT * FROM public.company_capability_grant_rows($1, ARRAY['ai'], false)`, [
+          companyId,
+        ])
+      }),
+    ).rejects.toThrow(/unauthorized/)
   })
 })

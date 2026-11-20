@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
@@ -11,8 +10,6 @@ import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import type { InvoiceDocumentType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized() // Module-level: wires the audit-log handler for invoice.draft_deleted.
 
 /**
  * DELETE /api/invoices/[id]
@@ -93,7 +90,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // received self-billing document) may be edited.
     const { data: existing, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, document_type, quote_status, deduction_personnummer_encrypted, deduction_personnummer_last4')
+      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, document_type, quote_status, deduction_personnummer_encrypted, deduction_personnummer_last4, vat_treatment_override, delivery_country')
       .eq('id', id)
       .eq('company_id', companyId!)
       .single()
@@ -118,9 +115,15 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     // Quotes and delivery notes are numbered at insert from their own series,
     // so their type is fixed: turning OF-007 into a faktura would carry a
-    // quote number into the F-series (and vice versa).
+    // quote number into the F-series (and vice versa). Since 20261012161600 a
+    // proforma has its own PF- series too, so a numbered draft keeps its type:
+    // F042 becoming a proforma (or PF-003 a faktura) would carry its number
+    // into the other series. An unnumbered draft still switches freely.
     const seriesLocked = (t: InvoiceDocumentType) => t === 'quote' || t === 'delivery_note'
-    if (existingType !== documentType && (seriesLocked(existingType) || seriesLocked(documentType))) {
+    if (
+      existingType !== documentType &&
+      (seriesLocked(existingType) || seriesLocked(documentType) || Boolean(existing.invoice_number))
+    ) {
       return errorResponseFromCode('INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED', ctxLog, {
         requestId,
         details: { from: existingType, to: documentType },
@@ -157,6 +160,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
             last4: existing.deduction_personnummer_last4 ?? null,
           }
         : null,
+      // The editor never sends vat_treatment / delivery_country, so a draft
+      // that stated its own treatment over the API (#2906) keeps it here.
+      existingVatOverride: {
+        vat_treatment: existing.vat_treatment_override ?? null,
+        delivery_country: existing.delivery_country ?? null,
+      },
     })
     if (!build.ok) {
       if ('dbError' in build) {

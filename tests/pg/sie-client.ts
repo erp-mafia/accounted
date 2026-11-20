@@ -26,6 +26,8 @@ export function stagingSIEClient(client:PoolClient,source:string):SupabaseClient
       gte(column:string,value:unknown) {return filter(column,'>=',value)},
       lte(column:string,value:unknown) {return filter(column,'<=',value)},
       lt(column:string,value:unknown) {return filter(column,'<',value)},
+      in(column:string,list:unknown[]) {
+        values.push(list);where.push(`${identifier(column)} = ANY($${values.length})`);return builder},
       is(column:string,value:null) {
         if (value !== null) throw new Error('The test client supports is(column,null) only')
         where.push(`${identifier(column)} IS NULL`);return builder},

@@ -3,11 +3,11 @@ import { matchSeedText } from './resolver/directory'
 
 /**
  * Pre-classifier for counterparty keys: routes a key before entity
- * resolution. Deterministic rules only; scored against the founder-labelled
+ * resolution. Deterministic rules only; scored against a hand-labelled
  * golden set on 2026-09-02 at 0.965 agreement (party recall 0.99, non-party
- * recall 0.93) on 180 held-out keys, see scripts/parties/README.md.
+ * recall 0.93) on 180 held-out keys.
  *
- * Label vocabulary (settled with the founder 2026-09-02):
+ * Label vocabulary:
  * - party: a real counterpart. AP prefixes always mean party. A marketplace or
  *   processor the company actually pays is a party; a card-platform line
  *   with an employee's name is a party; insurance premiums are parties.
@@ -29,7 +29,7 @@ const STOP = new Set([
 
 // Generic words voucher text uses for a category without a counterpart.
 // Geographic tokens are deliberately absent: "taxi stockholm" reads as a party
-// to the founder, "taxiresor och parkering" does not.
+// to the operator, "taxiresor och parkering" does not.
 export const GENERIC_WORDS = [
   'inköp', 'inkp', 'kvitto', 'kvitton', 'fika', 'diesel', 'bensin', 'bränsle', 'försäkring', 'telefon', 'mobil', 'hyra',
   'lokalhyra', 'frakt', 'hosting', 'julklapp', 'frimärken', 'utlägg', 'hotell', 'resa', 'resor', 'resekostnader',

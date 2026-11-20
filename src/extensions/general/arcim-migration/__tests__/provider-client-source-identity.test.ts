@@ -17,6 +17,13 @@ vi.mock('@/lib/providers/provider-data-fetcher', async (importOriginal) => ({
 
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: vi.fn() }))
 
+// The module's structured logger: the real one is silent at warn in tests.
+const { logWarn } = vi.hoisted(() => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/logger', () => {
+  const logger = { info: vi.fn(), warn: logWarn, error: vi.fn(), child: (): unknown => logger }
+  return { createLogger: () => logger }
+})
+
 let serviceClient: ReturnType<typeof createQueuedMockSupabase>
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -27,6 +34,7 @@ vi.mock('@/lib/supabase/server', () => ({
 import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from '../lib/provider-client'
 import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
+import { VismaApiError } from '@/lib/providers/visma/client'
 
 // Both pass normalizeOrgNumber's Luhn check.
 const TARGET_ORG = '5560160680'
@@ -126,6 +134,41 @@ describe('ensureConsentSourceIdentity', () => {
 
     await expect(ensureConsentSourceIdentity('company-1', 'consent-1')).resolves.toBe('unavailable')
     expect(db.findCall('provider_consents', 'update')).toBeUndefined()
+  })
+
+  // 2026-11-05: a Visma company whose plan had no active API module started
+  // its register fetch and read "Importen kunde inte fortsätta" (the RPC's
+  // bare MIGRATION_SOURCE_IDENTITY_MISSING); twenty minutes later the preview
+  // named the module. The subscription refusal now stops the fetch itself.
+  it('throws a subscription refusal on, so the register fetch answers with it', async () => {
+    useDb([
+      { data: { provider: 'visma', org_number: null } },
+      { data: { provider_company_id: null } },
+    ])
+    const refusal = new VismaApiError('Visma API error: 403 Forbidden', 403,
+      '{"ErrorCode":4002,"DeveloperErrorMessage":"ForbiddenRequestException - No access to module: api_standard"}')
+    ;(fetchCompanyInfoDirect as Mock).mockRejectedValue(refusal)
+
+    await expect(ensureConsentSourceIdentity('company-1', 'consent-1')).rejects.toBe(refusal)
+  })
+
+  it('reports an opaque refusal as unavailable, with the provider status and body in the log', async () => {
+    const db = useDb([
+      { data: { provider: 'visma', org_number: null } },
+      { data: { provider_company_id: null } },
+    ])
+    ;(fetchCompanyInfoDirect as Mock).mockRejectedValue(
+      new VismaApiError('Visma API error: 403 Forbidden', 403, '{"ErrorCode":4001,"DeveloperErrorMessage":"Forbidden"}'))
+
+    await expect(ensureConsentSourceIdentity('company-1', 'consent-1')).resolves.toBe('unavailable')
+    expect(db.findCall('provider_consents', 'update')).toBeUndefined()
+    expect(logWarn).toHaveBeenCalledWith('provider company information unavailable; source identity not filled', {
+      provider: 'visma',
+      consentId: 'consent-1',
+      reason: 'Visma API error: 403 Forbidden',
+      status: 403,
+      body: '{"ErrorCode":4001,"DeveloperErrorMessage":"Forbidden"}',
+    })
   })
 
   it('does nothing for a consent that is not this company\'s or has no tokens', async () => {

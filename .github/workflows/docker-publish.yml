@@ -82,6 +82,7 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
+          file: docker/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -170,6 +171,23 @@ jobs:
             echo "::error::An in-place comparison is constant-folded away, leaving the flag stuck off."
             exit 1
           fi
+
+      - name: Boot the image under docker-compose.yml
+        # Starts the freshly built image with the repo's docker-compose.yml
+        # (read-only root, cap_drop ALL, mem_limit, the /app/.next volume) and
+        # dummy env, and fails unless the entrypoint completes and Next.js
+        # reports Ready on a first start and again after a restart. #3164
+        # shipped because nothing did this: the bundle outgrew the 400 MB tmpfs
+        # /app/.next used to be, and every self-hosted install restart-looped on
+        # "No space left on device" while this workflow stayed green.
+        #
+        # Per platform and before `merge` for the same reasons as the sentinel
+        # check above: each architecture boots on its own hardware, and a
+        # failure here stops `latest` from moving onto an image that cannot
+        # start.
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: bash scripts/self-host/smoke-boot.sh "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
 
       # Digests reach `merge` as artifact filenames: the file content is
       # irrelevant, only the name carries information.

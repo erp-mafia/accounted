@@ -1,3 +1,7 @@
+---
+areas: [lon]
+---
+
 # Cross-border payroll for IT consultants
 
 ## URA gäller INTE privat sektor

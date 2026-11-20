@@ -1,0 +1,361 @@
+import { describe, it, expect } from 'vitest'
+import {
+  invalidRowsNoticeParams,
+  columnsToMapping,
+  countMatchedRows,
+  mappingToOverrides,
+  needsColumnMapping,
+  registerImportEndpoint,
+  registerSteps,
+  rowsForExecute,
+  executeBatches,
+  mergeExecuteResults,
+  reviewRowsToRender,
+  stoppedImportParams,
+  MERGED_ERRORS_SHOWN,
+  REGISTER_IMPORT_MAX_FILE_SIZE,
+  registerParseMaxFileBytes,
+} from '../register-import-flow'
+import { HOSTED_MAX_UPLOAD_BYTES } from '@/lib/documents/upload-size'
+import type { DetectedCustomerColumns } from '../customers/types'
+import type { DetectedSupplierColumns } from '../suppliers/types'
+import type { DetectedArticleColumns } from '../articles/types'
+
+/*
+ * Parity with the three hand-written flows the import page had per register
+ * (CustomersFlow, SuppliersFlow, ArticlesFlow): each built its overrides key
+ * by key and stripped the same review fields before execute. The legacy
+ * builders below are those bodies, verbatim.
+ */
+type Mapping<C> = Record<Exclude<keyof C, 'confidence'>, number | null>
+
+function legacyCustomerOverrides(mapping: Mapping<DetectedCustomerColumns>): DetectedCustomerColumns {
+  return {
+    name_col: mapping.name_col ?? 0,
+    customer_number_col: mapping.customer_number_col,
+    org_number_col: mapping.org_number_col,
+    customer_type_col: mapping.customer_type_col,
+    email_col: mapping.email_col,
+    phone_col: mapping.phone_col,
+    address_line1_col: mapping.address_line1_col,
+    address_line2_col: mapping.address_line2_col,
+    postal_code_col: mapping.postal_code_col,
+    city_col: mapping.city_col,
+    country_col: mapping.country_col,
+    vat_number_col: mapping.vat_number_col,
+    payment_terms_col: mapping.payment_terms_col,
+    notes_col: mapping.notes_col,
+    confidence: 1,
+  }
+}
+
+function legacySupplierOverrides(mapping: Mapping<DetectedSupplierColumns>): DetectedSupplierColumns {
+  return {
+    name_col: mapping.name_col ?? 0,
+    org_number_col: mapping.org_number_col,
+    supplier_type_col: mapping.supplier_type_col,
+    email_col: mapping.email_col,
+    phone_col: mapping.phone_col,
+    address_line1_col: mapping.address_line1_col,
+    address_line2_col: mapping.address_line2_col,
+    postal_code_col: mapping.postal_code_col,
+    city_col: mapping.city_col,
+    country_col: mapping.country_col,
+    vat_number_col: mapping.vat_number_col,
+    bankgiro_col: mapping.bankgiro_col,
+    plusgiro_col: mapping.plusgiro_col,
+    bank_account_col: mapping.bank_account_col,
+    iban_col: mapping.iban_col,
+    bic_col: mapping.bic_col,
+    payment_terms_col: mapping.payment_terms_col,
+    default_currency_col: mapping.default_currency_col,
+    notes_col: mapping.notes_col,
+    confidence: 1,
+  }
+}
+
+function legacyArticleOverrides(mapping: Mapping<DetectedArticleColumns>): DetectedArticleColumns {
+  return {
+    name_col: mapping.name_col ?? 0,
+    article_number_col: mapping.article_number_col,
+    name_en_col: mapping.name_en_col,
+    type_col: mapping.type_col,
+    unit_col: mapping.unit_col,
+    price_col: mapping.price_col,
+    currency_col: mapping.currency_col,
+    vat_rate_col: mapping.vat_rate_col,
+    revenue_account_col: mapping.revenue_account_col,
+    cost_price_col: mapping.cost_price_col,
+    ean_col: mapping.ean_col,
+    housework_type_col: mapping.housework_type_col,
+    notes_col: mapping.notes_col,
+    confidence: 1,
+  }
+}
+
+const CUSTOMER_KEYS = [
+  'name_col', 'customer_number_col', 'org_number_col', 'customer_type_col', 'email_col', 'phone_col',
+  'address_line1_col', 'address_line2_col', 'postal_code_col', 'city_col', 'country_col',
+  'vat_number_col', 'payment_terms_col', 'notes_col',
+] as const
+const SUPPLIER_KEYS = [
+  'name_col', 'org_number_col', 'supplier_type_col', 'email_col', 'phone_col', 'address_line1_col',
+  'address_line2_col', 'postal_code_col', 'city_col', 'country_col', 'vat_number_col', 'bankgiro_col',
+  'plusgiro_col', 'bank_account_col', 'iban_col', 'bic_col', 'payment_terms_col',
+  'default_currency_col', 'notes_col',
+] as const
+const ARTICLE_KEYS = [
+  'name_col', 'article_number_col', 'type_col', 'unit_col', 'price_col', 'currency_col', 'vat_rate_col',
+  'revenue_account_col', 'cost_price_col', 'ean_col', 'housework_type_col', 'name_en_col', 'notes_col',
+] as const
+
+/** A mapping with every key set: odd keys mapped, even keys left empty, name unmapped or not. */
+function sampleMapping<K extends string>(keys: readonly K[], nameMapped: boolean): Record<K, number | null> {
+  const out = {} as Record<K, number | null>
+  keys.forEach((k, i) => {
+    out[k] = i % 2 === 1 ? i : null
+  })
+  ;(out as Record<string, number | null>).name_col = nameMapped ? 4 : null
+  return out
+}
+
+describe('mappingToOverrides', () => {
+  for (const nameMapped of [true, false]) {
+    it(`matches the customer flow's overrides (name ${nameMapped ? 'mapped' : 'unmapped'})`, () => {
+      const mapping = sampleMapping(CUSTOMER_KEYS, nameMapped)
+      expect(mappingToOverrides(mapping)).toEqual(legacyCustomerOverrides(mapping))
+    })
+    it(`matches the supplier flow's overrides (name ${nameMapped ? 'mapped' : 'unmapped'})`, () => {
+      const mapping = sampleMapping(SUPPLIER_KEYS, nameMapped)
+      expect(mappingToOverrides(mapping)).toEqual(legacySupplierOverrides(mapping))
+    })
+    it(`matches the article flow's overrides (name ${nameMapped ? 'mapped' : 'unmapped'})`, () => {
+      const mapping = sampleMapping(ARTICLE_KEYS, nameMapped)
+      expect(mappingToOverrides(mapping)).toEqual(legacyArticleOverrides(mapping))
+    })
+  }
+})
+
+describe('columnsToMapping', () => {
+  it('keeps numeric columns, nulls the rest and ignores keys outside the list', () => {
+    expect(
+      columnsToMapping({ name_col: 0, email_col: null, phone_col: 'x', confidence: 0.5 }, [
+        'name_col',
+        'email_col',
+        'phone_col',
+        'city_col',
+      ]),
+    ).toEqual({ name_col: 0, email_col: null, phone_col: null, city_col: null })
+  })
+})
+
+describe('rowsForExecute', () => {
+  const row = {
+    row_index: 2,
+    name: 'Acme',
+    duplicate_match: null,
+    is_valid: true,
+    validation_errors: [],
+    possible_duplicate: null,
+    confirmed_duplicate_of: 'c1',
+    vat_rate_adjusted: true,
+  }
+
+  it('drops what the customer and supplier flows dropped, and keeps the user\'s duplicate choice', () => {
+    const { duplicate_match: _d, is_valid: _v, validation_errors: _ve, ...legacy } = row
+    expect(rowsForExecute([row])).toEqual([legacy])
+  })
+
+  it('also drops vat_rate_adjusted for articles, as the article flow did', () => {
+    const { duplicate_match: _d, is_valid: _v, validation_errors: _ve, vat_rate_adjusted: _vra, ...legacy } = row
+    expect(rowsForExecute([row], ['vat_rate_adjusted'])).toEqual([legacy])
+  })
+})
+
+describe('steps and endpoints', () => {
+  it('asks for column mapping below 0.8 confidence only', () => {
+    expect(needsColumnMapping({ confidence: 0.79 })).toBe(true)
+    expect(needsColumnMapping({ confidence: 0.8 })).toBe(false)
+  })
+
+  it('shows the mapping step only when mapping is needed', () => {
+    expect(registerSteps(true)).toEqual(['upload', 'column_mapping', 'edit', 'result'])
+    expect(registerSteps(false)).toEqual(['upload', 'edit', 'result'])
+  })
+
+  it('posts to the register\'s own parse and execute routes', () => {
+    expect(registerImportEndpoint('customers', 'parse')).toBe('/api/import/customers/parse')
+    expect(registerImportEndpoint('suppliers', 'execute')).toBe('/api/import/suppliers/execute')
+    expect(registerImportEndpoint('articles', 'parse')).toBe('/api/import/articles/parse')
+  })
+})
+
+describe('countMatchedRows', () => {
+  it('counts detected matches and rows the user confirmed as the same record', () => {
+    expect(
+      countMatchedRows([
+        { duplicate_match: { id: 'x' } },
+        { duplicate_match: null, confirmed_duplicate_of: 'c1' },
+        { duplicate_match: null, confirmed_duplicate_of: null },
+        { duplicate_match: null },
+      ]),
+    ).toBe(2)
+  })
+})
+
+// PH 204: every row was red and the reason sat behind a hover per row.
+describe('invalidRowsNoticeParams', () => {
+  it('counts the invalid rows and names the first one with its file line and error', () => {
+    const rows = [
+      { is_valid: true, validation_errors: [], row_index: 2 },
+      { is_valid: false, validation_errors: ['Ogiltig e-postadress "123 45" i kolumnen "X"'], row_index: 3 },
+      { is_valid: false, validation_errors: ['Ogiltig e-postadress "411 01" i kolumnen "X"'], row_index: 4 },
+    ]
+    expect(invalidRowsNoticeParams(rows)).toEqual({
+      count: 2,
+      row: 3,
+      error: 'Ogiltig e-postadress "123 45" i kolumnen "X"',
+    })
+  })
+
+  it('is null when every row can be imported', () => {
+    expect(invalidRowsNoticeParams([{ is_valid: true, validation_errors: [] }])).toBeNull()
+  })
+
+  it('falls back to the position when a row carries no file line', () => {
+    const rows = [
+      { is_valid: true, validation_errors: [] },
+      { is_valid: false, validation_errors: ['Fel'] },
+    ]
+    expect(invalidRowsNoticeParams(rows)?.row).toBe(3)
+  })
+})
+
+describe('registerParseMaxFileBytes', () => {
+  it('caps a posted file under the hosted body limit on hosted, and at the route cap self-hosted', () => {
+    expect(registerParseMaxFileBytes(true)).toBe(HOSTED_MAX_UPLOAD_BYTES)
+    expect(registerParseMaxFileBytes(true)).toBeLessThan(4.5 * 1024 * 1024)
+    expect(registerParseMaxFileBytes(false)).toBe(REGISTER_IMPORT_MAX_FILE_SIZE)
+  })
+})
+
+describe('executeBatches (crm#1383)', () => {
+  it('sends a file that fits one request as one batch, unchanged', () => {
+    const rows = [{ name: 'A' }, { name: 'B' }]
+    expect(executeBatches(rows)).toEqual([rows])
+  })
+
+  it('splits by row count, in file order', () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({ i }))
+    const batches = executeBatches(rows, 10)
+    expect(batches.map((b) => b.length)).toEqual([10, 10, 5])
+    expect(batches.flat()).toEqual(rows)
+  })
+
+  it('splits by encoded size, counting å/ä/ö as the two bytes they are', () => {
+    const row = { name: 'Åäö'.repeat(10) }
+    // {"name":"..."} is 11 bytes of frame + 60 bytes of text, +1 for the comma.
+    const size = 11 + 60 + 1
+    const batches = executeBatches([row, row, row], 100, size * 2)
+    expect(batches.map((b) => b.length)).toEqual([2, 1])
+  })
+
+  it('a 165 000-row price list goes in batches under the hosted body limit', () => {
+    const rows = Array.from({ length: 165_000 }, (_, i) => ({
+      row_index: i + 2,
+      name: `Kopparrör 15 mm, längd ${i}`,
+      name_en: null,
+      article_number: `AH-${1_000_000 + i}`,
+      type: 'vara',
+      unit: 'st',
+      price_excl_vat: 123.45,
+      currency: null,
+      vat_rate: 25,
+      revenue_account: null,
+      cost_price: 98.7,
+      ean: '7310000000000',
+      housework_type: null,
+      notes: null,
+    }))
+    const batches = executeBatches(rows)
+    expect(batches.flat()).toHaveLength(165_000)
+    for (const b of batches) {
+      expect(new TextEncoder().encode(JSON.stringify({ rows: b, update_duplicates: false })).length).toBeLessThan(4.5 * 1024 * 1024)
+    }
+  })
+})
+
+describe('mergeExecuteResults', () => {
+  const result = (over: Partial<Parameters<typeof mergeExecuteResults>[0][number]> = {}) => ({
+    success: true,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    errors: [] as { row_index: number; name: string; reason: string }[],
+    warnings: [] as string[],
+    notices: [] as unknown[],
+    ...over,
+  })
+
+  it('adds up the counts and keeps a failure', () => {
+    const merged = mergeExecuteResults([
+      result({ created: 3, skipped: 1 }),
+      result({ created: 2, updated: 4, failed: 1, success: false, errors: [{ row_index: 9, name: 'X', reason: 'r' }] }),
+    ])
+    expect(merged).toMatchObject({ created: 5, updated: 4, skipped: 1, failed: 1, success: false })
+    expect(merged.errors).toEqual([{ row_index: 9, name: 'X', reason: 'r' }])
+  })
+
+  it('shows a warning or notice every batch repeats once', () => {
+    const notice = { key: 'articles_account_invalid', tone: 'notice', params: { account: '3999' } }
+    const merged = mergeExecuteResults([
+      result({ warnings: ['Konto 3999'], notices: [notice] }),
+      result({ warnings: ['Konto 3999'], notices: [{ ...notice }] }),
+    ])
+    expect(merged.warnings).toEqual(['Konto 3999'])
+    expect(merged.notices).toHaveLength(1)
+  })
+
+  it('keeps the failed count exact but the error list readable', () => {
+    const errors = Array.from({ length: 300 }, (_, i) => ({ row_index: i, name: 'X', reason: 'r' }))
+    const merged = mergeExecuteResults([result({ failed: 300, errors }), result({ failed: 1, errors: [errors[0]] })])
+    expect(merged.failed).toBe(301)
+    expect(merged.errors).toHaveLength(MERGED_ERRORS_SHOWN)
+  })
+})
+
+describe('stoppedImportParams (#187)', () => {
+  const ok = (failed = 0) => ({ success: failed === 0, created: 10 - failed, updated: 0, skipped: 0, failed, errors: [] })
+
+  it('names the file line the import stopped at and the earlier batches\' own failures', () => {
+    const stoppedBatch = [{ row_index: 20_003, name: 'Skruv' }, { row_index: 20_004, name: 'Mutter' }]
+    expect(stoppedImportParams([ok(), ok(2)], stoppedBatch, 20_000, 165_000)).toEqual({
+      row: 20_003,
+      done: 20_000,
+      total: 165_000,
+      failed: 2,
+    })
+  })
+
+  it('reports no earlier failures when every earlier row went in', () => {
+    expect(stoppedImportParams([ok()], [{ row_index: 12 }], 10, 30).failed).toBe(0)
+  })
+
+  it('falls back to the position when a row carries no file line', () => {
+    expect(stoppedImportParams([ok()], [{ name: 'X' }], 10, 30).row).toBe(12)
+  })
+})
+
+describe('reviewRowsToRender', () => {
+  it('draws a normal file whole', () => {
+    const rows = Array.from({ length: 30 }, () => ({ is_valid: true }))
+    expect(reviewRowsToRender(rows, 500)).toBe(rows)
+  })
+
+  it('draws a large file invalid rows first, then the start of the file, up to the limit', () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => ({ i, is_valid: i !== 700 }))
+    const shown = reviewRowsToRender(rows, 5)
+    expect(shown.map((r) => r.i)).toEqual([700, 0, 1, 2, 3])
+  })
+})

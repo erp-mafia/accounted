@@ -13,6 +13,14 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
 const mockCreateJE = vi.fn()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: (...args: unknown[]) => mockCreateJE(...args),
 }))
@@ -33,6 +41,20 @@ vi.mock('@/lib/transactions/link-journal-entry', () => ({
 }))
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
+}))
+
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
 }))
 
 import { categorizeMatchedTransaction } from '../categorize-core'
@@ -67,6 +89,7 @@ describe('categorizeMatchedTransaction: single-account currency fallback (#1722)
   it('books the bank leg on the single enabled cash account, not the hardcoded 1930', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // company_settings
     // The company's ONLY enabled SEK cash account books on 1920.
     enqueue({ data: [{ ledger_account: '1920' }] }) // resolveSettlementAccount currency fallback
@@ -97,6 +120,7 @@ describe('categorizeMatchedTransaction: single-account currency fallback (#1722)
   it('keeps 1930 when the company has several enabled accounts in the currency', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     // Two enabled SEK accounts: ambiguous, so no guessing.
     enqueue({ data: [{ ledger_account: '1920' }, { ledger_account: '1930' }] })

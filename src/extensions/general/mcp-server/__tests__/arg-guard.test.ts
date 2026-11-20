@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findUnknownArgKeys, listArgKeys } from '../arg-guard'
+import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys } from '../arg-guard'
 import { tools } from '../server'
 
 describe('findUnknownArgKeys', () => {
@@ -29,6 +29,14 @@ describe('findUnknownArgKeys', () => {
   it('lists the declared keys for the error message', () => {
     expect(listArgKeys(schema)).toEqual(['text', 'limit'])
     expect(listArgKeys({ type: 'object' })).toEqual([])
+  })
+
+  it('lists the required keys for the hint fallback, and nothing for a schema without them', () => {
+    expect(listRequiredArgKeys({ ...schema, required: ['text'] })).toEqual(['text'])
+    expect(listRequiredArgKeys(schema)).toEqual([])
+    expect(listRequiredArgKeys({ type: 'object', required: 'text' })).toEqual([])
+    const getInboxItem = tools.find((t) => t.name === 'gnubok_get_inbox_item')!
+    expect(listRequiredArgKeys(getInboxItem.inputSchema as Record<string, unknown>)).toEqual(['inbox_item_id'])
   })
 
   it('would have caught the reported gnubok_query_journal misspelling', () => {

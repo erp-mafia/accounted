@@ -33,6 +33,7 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listBenefits, POST as createBenefit } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -41,36 +42,6 @@ interface TableResp {
   data?: unknown
   error?: unknown
   count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const tableCalls: string[] = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null, count: null })
-            resolve({ count: null, ...next })
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    tableCalls,
-    from: vi.fn((table: string) => {
-      tableCalls.push(table)
-      return buildChain(table)
-    }),
-  }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -115,7 +86,7 @@ function benefitParams(companyId: string, id: string) {
 }
 
 function ownerMock(extra: Record<string, TableResp | TableResp[]> = {}) {
-  return makeFlexibleSupabase({
+  return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     ...extra,
   })
@@ -139,7 +110,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/benefits', () => {
       ownerMock({
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_benefits: { data: [SAMPLE_ROW], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listBenefits(makeRequest(BASE_URL), benefitParams(COMPANY_ID, EMPLOYEE_ID))
@@ -169,7 +140,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/benefits', () => {
       ownerMock({
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_benefits: { data: [], error: null },
-      }),
+      }).supabase,
     )
     const okRes = await listBenefits(makeRequest(`${BASE_URL}?active=true`), benefitParams(COMPANY_ID, EMPLOYEE_ID))
     expect(okRes.status).toBe(200)
@@ -181,7 +152,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/benefits', () => {
   })
 
   it('returns 404 EMPLOYEE_NOT_FOUND for an unknown employee', async () => {
-    mockServiceClient.mockReturnValue(ownerMock({ employees: { data: null, error: null } }))
+    mockServiceClient.mockReturnValue(ownerMock({ employees: { data: null, error: null } }).supabase)
 
     const res = await listBenefits(makeRequest(BASE_URL), benefitParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(404)
@@ -190,7 +161,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/benefits', () => {
   })
 
   it('rejects a non-UUID employee id with 400', async () => {
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await listBenefits(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/not-a-uuid/benefits`),
       benefitParams(COMPANY_ID, 'not-a-uuid'),
@@ -207,7 +178,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/benefits', () => {
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await listBenefits(makeRequest(BASE_URL), benefitParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(403)
   })
@@ -229,7 +200,7 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
           data: { ...SAMPLE_ROW, benefit_type: 'car', description: carBody.description, monthly_value: 4275, metadata: {} },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await createBenefit(post(carBody), benefitParams(COMPANY_ID, EMPLOYEE_ID))
@@ -243,7 +214,7 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
 
   it('dry-run previews the derived bike value without touching employee_benefits', async () => {
     const supabaseMock = ownerMock({ employees: { data: { id: EMPLOYEE_ID }, error: null } })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await createBenefit(
       post(
@@ -260,11 +231,11 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
     expect(body.data.preview.monthly_value).toBe(1000)
     expect(body.data.preview.annual_market_value).toBe(15000)
     expect(body.data.preview.employee_benefit_id).toBeUndefined()
-    expect(supabaseMock.tableCalls).not.toContain('employee_benefits')
+    expect(supabaseMock.tables()).not.toContain('employee_benefits')
   })
 
   it('requires an Idempotency-Key', async () => {
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await createBenefit(post(carBody, { idempotencyKey: null }), benefitParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(400)
     const body = await res.json()
@@ -273,7 +244,7 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
   })
 
   it('rejects a bike benefit without annual_market_value or monthly_value', async () => {
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await createBenefit(
       post({ benefit_type: 'bike', description: 'Cykelförmån', valid_from: '2026-03-01' }),
       benefitParams(COMPANY_ID, EMPLOYEE_ID),
@@ -285,7 +256,7 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
   })
 
   it('rejects valid_to before valid_from with VALIDATION_ERROR on valid_to', async () => {
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await createBenefit(
       post({ ...carBody, valid_from: '2026-06-01', valid_to: '2026-05-31' }),
       benefitParams(COMPANY_ID, EMPLOYEE_ID),
@@ -296,7 +267,7 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
   })
 
   it('returns 404 EMPLOYEE_NOT_FOUND for an unknown employee', async () => {
-    mockServiceClient.mockReturnValue(ownerMock({ employees: { data: null, error: null } }))
+    mockServiceClient.mockReturnValue(ownerMock({ employees: { data: null, error: null } }).supabase)
     const res = await createBenefit(post(carBody), benefitParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(404)
     const body = await res.json()
@@ -308,7 +279,7 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
       ownerMock({
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_benefits: { data: null, error: { code: '23514', message: 'violates check constraint' } },
-      }),
+      }).supabase,
     )
     const res = await createBenefit(post(carBody), benefitParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(400)
@@ -326,14 +297,14 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
       mode: 'test',
     })
     const supabaseMock = ownerMock({ employees: { data: { id: EMPLOYEE_ID }, error: null } })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await createBenefit(post(carBody), benefitParams(COMPANY_ID, EMPLOYEE_ID))
 
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(res.headers.get('X-Gnubok-Mode')).toBe('test')
-    expect(supabaseMock.tableCalls).not.toContain('employee_benefits')
+    expect(supabaseMock.tables()).not.toContain('employee_benefits')
   })
 
   it('rejects keys without payroll:write scope', async () => {
@@ -345,14 +316,14 @@ describe('POST /api/v1/companies/:companyId/employees/:id/benefits', () => {
       scopes: ['payroll:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(ownerMock())
+    mockServiceClient.mockReturnValue(ownerMock().supabase)
     const res = await createBenefit(post(carBody), benefitParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(403)
   })
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await createBenefit(
       new Request(BASE_URL, { method: 'POST', body: JSON.stringify(carBody), headers: { 'Idempotency-Key': 'idem-1' } }),
       benefitParams(COMPANY_ID, EMPLOYEE_ID),

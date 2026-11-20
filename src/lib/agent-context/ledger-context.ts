@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { mappingPatternNamesCounterparty } from '@/lib/bookkeeping/counterparty-templates'
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
 // MCP resource. Everything here is computed by code from ledger data; the LLM
@@ -12,6 +14,15 @@ import { roundOre } from '@/lib/money'
  */
 const DOMINANT_SHARE_FLOOR = 0.7
 const WINDOW_MONTHS = 12
+
+/**
+ * An imported counterparty needs this many verifikat before it is a pattern.
+ * A bank-row pattern carries a person's or agent's categorization; an
+ * imported one is only the old system's text and lines, and a single
+ * imported verifikat predicts the next one's account clearly worse than two
+ * or more do.
+ */
+const MIN_IMPORTED_VOUCHERS = 2
 
 // Hard caps keeping the serialized payload under its 12 KB budget even on
 // dense tenants (the RPC returns up to 20/25/15; these trim further). Sized
@@ -44,12 +55,24 @@ export interface PatternEvidence {
 export interface CounterpartyPattern {
   counterparty: string
   dominant: {
-    category: string
+    /** Null for imported verifikat: the previous system had no categories. */
+    category: string | null
     account_number: string | null
     vat_treatment: string | null
   }
   evidence: PatternEvidence
-  source: 'history' | 'template'
+  /**
+   * The basis: 'history' bank rows booked in Accounted, 'template' the same
+   * with the learned template's account and VAT, 'imported_vouchers'
+   * verifikat migrated from the previous system (evidence counts verifikat).
+   */
+  source: 'history' | 'template' | 'imported_vouchers'
+  /**
+   * imported_vouchers only: how those verifikat settled. 'payable' or
+   * 'receivable' means the history ran through leverantörs- or kundreskontra,
+   * so a bank payment settles the open invoice instead of booking the account.
+   */
+  settled_via?: 'bank' | 'payable' | 'receivable'
 }
 
 export interface SupplierPattern {
@@ -109,6 +132,18 @@ interface UsageStatsRow {
     dominant_category_count: number
     dominant_account_number: string | null
   }>
+  // Absent until migration 20261109090100 is applied: read as none.
+  imported_counterparty_patterns?: Array<{
+    counterparty: string
+    counterparty_key: string
+    vouchers: number
+    last_booked: string
+    settled_via: 'bank' | 'payable' | 'receivable'
+    dominant_account_number: string | null
+    dominant_account_count: number
+    vat_treatment: string | null
+    vat_treatment_count: number
+  }>
   supplier_patterns: Array<{
     supplier: string
     invoices: number
@@ -121,12 +156,6 @@ interface UsageStatsRow {
   median_booking_lag_days: number | null
 }
 
-function windowFrom(now: Date): string {
-  const from = new Date(now)
-  from.setUTCMonth(from.getUTCMonth() - WINDOW_MONTHS)
-  return from.toISOString().slice(0, 10)
-}
-
 // Not money, but roundOre is the repo's canonical 2dp rounding helper.
 function share(agree: number, seen: number): number {
   return seen > 0 ? roundOre(agree / seen) : 0
@@ -137,8 +166,9 @@ export async function buildLedgerContext(
   companyId: string,
   now: Date = new Date(),
 ): Promise<LedgerContext> {
-  const fromDate = windowFrom(now)
-  const today = now.toISOString().slice(0, 10)
+  // The window ends on the Swedish calendar day and reaches back from it.
+  const today = todayIsoStockholm(now)
+  const fromDate = addMonthsIso(today, -WINDOW_MONTHS)
 
   const [statsRes, settingsRes, rulesRes, templatesRes, entryCountRes, voucherSeriesRes, salaryRes] =
     await Promise.all([
@@ -253,6 +283,48 @@ export async function buildLedgerContext(
     })
   }
 
+  // Imported verifikat fill the slots the bank rows leave: Accounted's own
+  // bookings are the newer practice and keep precedence, and a counterparty
+  // whose bank rows were categorized (even mixed, below the floor) is never
+  // overridden by the previous system's history. Their VAT treatments join
+  // the observed profile.
+  const bankKeys = new Set(
+    (stats.counterparty_patterns ?? []).filter((p) => p.dominant_category).map((p) => p.counterparty_key),
+  )
+  const importedTreatments: string[] = []
+  for (const p of stats.imported_counterparty_patterns ?? []) {
+    if (p.vouchers < MIN_IMPORTED_VOUCHERS || !p.dominant_account_number) continue
+    const patternShare = share(p.dominant_account_count, p.vouchers)
+    if (patternShare < DOMINANT_SHARE_FLOOR) continue
+    const vatTreatment =
+      p.vat_treatment && share(p.vat_treatment_count, p.dominant_account_count) >= DOMINANT_SHARE_FLOOR
+        ? p.vat_treatment
+        : null
+    if (vatTreatment) importedTreatments.push(vatTreatment)
+    if (bankKeys.has(p.counterparty_key) || counterpartyPatterns.length >= MAX_COUNTERPARTY_PATTERNS) continue
+    counterpartyPatterns.push({
+      counterparty: p.counterparty,
+      dominant: {
+        category: null,
+        account_number: p.dominant_account_number,
+        vat_treatment: vatTreatment,
+      },
+      evidence: {
+        seen_12m: p.vouchers,
+        agree: p.dominant_account_count,
+        share: patternShare,
+        last_booked: p.last_booked,
+      },
+      source: 'imported_vouchers',
+      settled_via: p.settled_via,
+    })
+  }
+  const treatmentsUsed = stats.vat_treatments_used ?? []
+  const vatTreatmentsUsed = [
+    ...treatmentsUsed,
+    ...[...new Set(importedTreatments)].filter((t) => !treatmentsUsed.includes(t)).sort(),
+  ]
+
   const supplierPatterns: SupplierPattern[] = []
   for (const s of stats.supplier_patterns ?? []) {
     if (supplierPatterns.length >= MAX_SUPPLIER_PATTERNS) break
@@ -276,6 +348,9 @@ export async function buildLedgerContext(
   }
 
   const explicitRules: ExplicitRule[] = (rulesRes.data ?? [])
+    // A rule on a text that names no one ("INSÄTTNING") is never applied
+    // (mapping-engine matchesRule), so it is no instruction to the agent.
+    .filter((r) => !r.merchant_pattern || mappingPatternNamesCounterparty(r.merchant_pattern))
     .map((r) => ({
       rule_name: r.rule_name,
       match: r.merchant_pattern ?? r.description_pattern ?? '',
@@ -308,7 +383,7 @@ export async function buildLedgerContext(
     vat_profile: {
       registered: settings?.vat_registered ?? false,
       moms_period: settings?.moms_period ?? null,
-      treatments_used_12m: stats.vat_treatments_used ?? [],
+      treatments_used_12m: vatTreatmentsUsed,
     },
     conventions: {
       accounting_method: settings?.accounting_method ?? null,
@@ -317,5 +392,41 @@ export async function buildLedgerContext(
       typical_booking_lag_days:
         stats.median_booking_lag_days === null ? null : Math.round(stats.median_booking_lag_days),
     },
+  }
+}
+
+/**
+ * The ledger_context stanza of the agent briefing: the top patterns with
+ * their basis (source, settled_via) and VAT, so an agent can weigh bank-row
+ * evidence against imported verifikat without reading the full resource.
+ */
+export function buildLedgerDigest(ctx: LedgerContext) {
+  return {
+    resource_uri: 'Accounted://ledger/context',
+    window_from: ctx.meta.window.from,
+    posted_entries_window: ctx.meta.coverage.posted_entries_window,
+    top_counterparty_patterns: ctx.counterparty_patterns.slice(0, 5).map((p) => ({
+      counterparty: p.counterparty,
+      dominant_category: p.dominant.category,
+      dominant_account_number: p.dominant.account_number,
+      vat_treatment: p.dominant.vat_treatment,
+      source: p.source,
+      ...(p.settled_via ? { settled_via: p.settled_via } : {}),
+      evidence: {
+        seen_12m: p.evidence.seen_12m,
+        agree: p.evidence.agree,
+        last_booked: p.evidence.last_booked,
+      },
+    })),
+    top_supplier_patterns: ctx.supplier_patterns.slice(0, 3).map((s) => ({
+      supplier: s.supplier,
+      dominant_account_number: s.dominant.account_number,
+      vat_treatment: s.dominant.vat_treatment,
+      evidence: {
+        seen_12m: s.evidence.seen_12m,
+        agree: s.evidence.agree,
+        last_booked: s.evidence.last_booked,
+      },
+    })),
   }
 }

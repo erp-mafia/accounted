@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { booksReducer, initialState, stationOf, stepAfterBooks, type BooksEntry } from '../reducer'
+import { booksReducer, hasStepBehind, initialState, stationOf, stepAfterBooks, type BooksEntry, type BooksStep } from '../reducer'
 
 const ALL = { hasMigration: true, hasBanking: true, hasSkatteverket: true }
 const NONE = { hasMigration: false, hasBanking: false, hasSkatteverket: false }
@@ -69,6 +69,16 @@ describe('booksReducer', () => {
     expect(booksReducer(s0, { type: 'PICK_PROVIDER', provider: 'fortnox' }).step).toBe('provider')
     expect(booksReducer(s0, { type: 'PICK_PROVIDER', provider: 'bokio' }).step).toBe('sie')
     expect(booksReducer(s0, { type: 'PICK_SIE' }).path).toBe('migration')
+  })
+
+  it('the SIE way out of a provider login lands on the SIE step without the provider', () => {
+    // A customer without the provider's paid API add-on picks SIE on the
+    // login screen: no registers login may follow the file.
+    const atLogin = booksReducer(initialState(entry()), { type: 'PICK_PROVIDER', provider: 'fortnox' })
+    expect(atLogin.step).toBe('provider')
+    const s = booksReducer(atLogin, { type: 'PICK_SIE' })
+    expect(s).toMatchObject({ step: 'sie', path: 'migration', provider: null })
+    expect(booksReducer(s, { type: 'GO_BACK', flags: ALL }).step).toBe('source')
   })
 
   it('a new business skips the books and goes where the flags allow', () => {
@@ -171,5 +181,52 @@ describe('booksReducer', () => {
     const flags = { hasMigration: true, hasBanking: false, hasSkatteverket: false }
     expect(booksReducer({ ...initialState(entry()), step: 'done' }, { type: 'GO_BACK', flags }).step).toBe('source')
     expect(booksReducer({ ...initialState(entry()), step: 'skv', imported: true }, { type: 'GO_BACK', flags }).step).toBe('insight')
+  })
+})
+
+describe('Tillbaka never acts as a skip', () => {
+  const STEPS: BooksStep[] = ['source', 'sie', 'provider', 'resume', 'insight', 'bank', 'skv', 'done']
+  const BANK_PHASES = ['pick', 'connecting', 'authed', 'fetching', 'connected'] as const
+  const FLAG_SETS = [ALL, NONE, { ...ALL, hasBanking: false }, { ...ALL, hasSkatteverket: false }]
+
+  it('offers no Tillbaka on the first step, and one on every step after it', () => {
+    // Nothing lies behind the source question: the company journey before it
+    // ended by creating the company. Tillbaka there opened the skip confirm.
+    expect(hasStepBehind('source')).toBe(false)
+    for (const step of STEPS.filter((s) => s !== 'source')) expect(hasStepBehind(step), step).toBe(true)
+  })
+
+  it('goes back from every step without recording a skip or moving forward along the rail', () => {
+    for (const step of STEPS) {
+      for (const bankPhase of BANK_PHASES) {
+        for (const imported of [false, true]) {
+          for (const flags of FLAG_SETS) {
+            const from = { ...initialState(entry()), step, bankPhase, imported }
+            const to = booksReducer(from, { type: 'GO_BACK', flags })
+            const label = `${step}, bank ${bankPhase}, imported ${imported}`
+            expect(to.bankSkipped, label).toBe(false)
+            expect(to.skvSkipped, label).toBe(false)
+            expect(stationOf(to.step), label).toBeLessThanOrEqual(stationOf(from.step))
+            // A step with one behind it always moves; the first changes nothing.
+            if (hasStepBehind(step)) expect(to.step !== from.step || to.bankPhase !== from.bankPhase, label).toBe(true)
+            else expect(to, label).toBe(from)
+          }
+        }
+      }
+    }
+  })
+
+  it('takes back the skip of the step it leaves', () => {
+    const skippedBoth = { ...initialState(entry()), step: 'skv' as const, bankSkipped: true, skvSkipped: true }
+    const atBank = booksReducer(skippedBoth, { type: 'GO_BACK', flags: ALL })
+    expect(atBank).toMatchObject({ step: 'bank', skvSkipped: false })
+    expect(booksReducer(atBank, { type: 'GO_BACK', flags: ALL })).toMatchObject({ step: 'source', bankSkipped: false })
+  })
+
+  it('reopens a skipped step unskipped when Tillbaka returns to it through the browser entries', () => {
+    const atBank = booksReducer(initialState(entry()), { type: 'PICK_FRESH', flags: ALL })
+    const skipped = booksReducer(atBank, { type: 'BANK_SKIP', flags: ALL })
+    expect(skipped).toMatchObject({ step: 'skv', bankSkipped: true })
+    expect(booksReducer(skipped, { type: 'RESTORE', state: atBank })).toMatchObject({ step: 'bank', bankSkipped: false })
   })
 })

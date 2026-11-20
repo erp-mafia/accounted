@@ -131,6 +131,19 @@ describe('attachSupplierInvoiceSettlementVoucher', () => {
     })
   })
 
+  it('sends the basis only when the door names one', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: okResult(), error: null })
+
+    await attachSupplierInvoiceSettlementVoucher(makeSupabase(rpc), {
+      companyId: COMPANY, userId: USER, supplierInvoiceId: 'si-1', journalEntryId: 'je-342',
+      linkBasis: 'import_carried_over',
+    })
+
+    expect(rpc).toHaveBeenCalledWith('attach_supplier_invoice_settlement_voucher', expect.objectContaining({
+      p_link_basis: 'import_carried_over',
+    }))
+  })
+
   it('hands a refusal back with its code and details', async () => {
     const rpc = vi.fn().mockResolvedValue({
       data: { ok: false, code: 'ATTACH_SI_SETTLEMENT_NO_SETTLEMENT_SIDE', details: { accounting_method: 'cash' } },

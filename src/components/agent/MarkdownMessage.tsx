@@ -13,9 +13,22 @@ import { isInternalHref } from './markdown-links'
  */
 export default function MarkdownMessage({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink, table: MarkdownTable }}>
       {text}
     </ReactMarkdown>
+  )
+}
+
+/**
+ * A table in an answer scrolls inside its own box: a wide one (a trial
+ * balance, a list of transactions) otherwise ran out of the message bubble,
+ * past the docked panel's edge.
+ */
+function MarkdownTable({ children }: { children?: React.ReactNode }) {
+  return (
+    <div className="overflow-x-auto">
+      <table>{children}</table>
+    </div>
   )
 }
 

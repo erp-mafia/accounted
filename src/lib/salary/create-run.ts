@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getLineItemAccount } from './account-mapping'
+import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { eventBus } from '@/lib/events'
+import { createLogger } from '@/lib/logger'
 import { degreeAdjustedMonthlySalary } from './work-schedule'
+import { runMonthlySalaryFor } from './base-salary-line'
+import { baseSalaryLineType, payslipLineFlags } from './line-item-roles'
 import {
   assertNoDeviationOverlap,
   resolveDeviationWindowForNewRun,
@@ -12,6 +16,59 @@ export interface CreateSalaryRunResult {
   employeeCount: number
   /** The avvikelseperiod snapshotted on the run (absence + worked days are read from it). */
   deviationWindow: DateWindow
+}
+
+/**
+ * Thrown when the period already has a non-corrected run. Carries the
+ * existing run's id and status so every caller (dashboard route, MCP
+ * executor) can point the user at it instead of at a bare conflict: the
+ * digest's "already exists but no way to find it" gap.
+ */
+export class SalaryRunExistsError extends Error {
+  readonly existingId: string | null
+  readonly existingStatus: string | null
+
+  constructor(existingId: string | null, existingStatus: string | null) {
+    super(
+      existingId
+        ? `Salary run already exists for this period (id ${existingId}, status ${existingStatus ?? 'unknown'})`
+        : 'Salary run already exists for this period',
+    )
+    this.name = 'SalaryRunExistsError'
+    this.existingId = existingId
+    this.existingStatus = existingStatus
+  }
+}
+
+const log = createLogger('salary/create-run')
+
+/**
+ * The verifikationsserie a new salary run books into: the explicit letter
+ * when the caller sent one, else the company's own salary series
+ * (default_voucher_series_per_source_type.salary_payment, the map the
+ * systemdokumentation publishes; 'A' for a company without one). One rule
+ * for the dashboard, v1 and MCP, so an agent or an integration never books
+ * lön into another series than the company documented. A failed settings
+ * read throws: guessing 'A' would book into the wrong series.
+ */
+export async function resolveSalaryRunSeries(
+  supabase: SupabaseClient,
+  companyId: string,
+  explicit?: string | null,
+): Promise<string> {
+  if (explicit) return explicit
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('default_voucher_series_per_source_type')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) {
+    throw new Error(`Failed to load voucher series settings: ${error.message}`)
+  }
+  return resolveDefaultSeriesForSource(
+    (data ?? null) as Parameters<typeof resolveDefaultSeriesForSource>[0],
+    'salary_payment',
+  )
 }
 
 /**
@@ -28,7 +85,11 @@ export interface CreateSalaryRunResult {
  * creation path (dashboard, MCP, correction) gets the same guard. Throws
  * SalaryDeviationPeriodError for an invalid or overlapping window.
  *
- * Extracted so the MCP tool and any future route share one implementation.
+ * The series follows resolveSalaryRunSeries, and salary_run.created is
+ * emitted here once the run exists, so every door (dashboard, v1, MCP
+ * approval) books into the same series and fires the same event.
+ * seedEmployees false leaves the roster empty: v1 documents an empty run
+ * that the caller fills with POST /salary-runs/{id}/employees.
  */
 export async function createSalaryRunWithEmployees(
   supabase: SupabaseClient,
@@ -38,11 +99,14 @@ export async function createSalaryRunWithEmployees(
     periodYear: number
     periodMonth: number
     paymentDate: string
+    /** Explicit verifikationsserie. Omit to use the company's salary series. */
     voucherSeries?: string
     notes?: string
     /** Explicit avvikelseperiod (both or neither). Omit to use the company setting. */
     deviationPeriodStart?: string | null
     deviationPeriodEnd?: string | null
+    /** Seed a base line per eligible employee (default true). */
+    seedEmployees?: boolean
   },
 ): Promise<CreateSalaryRunResult> {
   const { window: deviationWindow } = await resolveDeviationWindowForNewRun(supabase, companyId, {
@@ -52,6 +116,7 @@ export async function createSalaryRunWithEmployees(
     explicitEnd: params.deviationPeriodEnd,
   })
   await assertNoDeviationOverlap(supabase, companyId, deviationWindow)
+  const voucherSeries = await resolveSalaryRunSeries(supabase, companyId, params.voucherSeries)
 
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
@@ -63,26 +128,40 @@ export async function createSalaryRunWithEmployees(
       payment_date: params.paymentDate,
       deviation_period_start: deviationWindow.start,
       deviation_period_end: deviationWindow.end,
-      // Omitted → DB defaults ('A' / NULL) so the MCP commit path is unchanged.
-      ...(params.voucherSeries ? { voucher_series: params.voucherSeries } : {}),
+      voucher_series: voucherSeries,
       ...(params.notes ? { notes: params.notes } : {}),
     })
     .select()
     .single()
   if (runError || !run) {
-    throw new Error(
-      runError?.code === '23505'
-        ? 'Salary run already exists for this period'
-        : (runError?.message ?? 'Failed to create salary run'),
-    )
+    if (runError?.code === '23505') {
+      // The partial unique index (status != 'corrected') guarantees at most
+      // one live run per period; surface it so the caller can continue with
+      // gnubok_get_salary_run / the run page instead of guessing.
+      const { data: existing } = await supabase
+        .from('salary_runs')
+        .select('id, status')
+        .eq('company_id', companyId)
+        .eq('period_year', params.periodYear)
+        .eq('period_month', params.periodMonth)
+        .neq('status', 'corrected')
+        .limit(1)
+        .maybeSingle()
+      const row = (existing ?? null) as { id: string; status: string } | null
+      throw new SalaryRunExistsError(row?.id ?? null, row?.status ?? null)
+    }
+    throw new Error(runError?.message ?? 'Failed to create salary run')
   }
 
+  let employeeCount = 0
   try {
-    const { data: employees } = await supabase
-      .from('employees')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('is_active', true)
+    const { data: employees } = params.seedEmployees === false
+      ? { data: [] }
+      : await supabase
+          .from('employees')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('is_active', true)
 
     // Pay period bounds (inclusive): used to skip employees whose employment
     // does not overlap the run. employment_start is NOT NULL on employees;
@@ -111,7 +190,7 @@ export async function createSalaryRunWithEmployees(
           employee_id: emp.id,
           company_id: companyId,
           employment_degree: emp.employment_degree,
-          monthly_salary: emp.monthly_salary || 0,
+          monthly_salary: runMonthlySalaryFor(emp),
           salary_type: emp.salary_type,
           tax_table_number: emp.tax_table_number,
           tax_column: emp.tax_column,
@@ -122,33 +201,49 @@ export async function createSalaryRunWithEmployees(
         throw new Error(`Failed to add employee ${emp.id}: ${sreErr?.message ?? 'unknown error'}`)
       }
 
-      const itemType = emp.salary_type === 'monthly' ? 'monthly_salary' : 'hourly_salary'
+      const itemType = baseSalaryLineType(emp.salary_type)
       const { error: liErr } = await supabase.from('salary_line_items').insert({
         salary_run_employee_id: sre.id,
         company_id: companyId,
         item_type: itemType,
         description: emp.salary_type === 'monthly' ? 'Grundlön' : 'Timlön',
         amount: baseAmount,
-        is_taxable: true,
-        is_avgift_basis: true,
-        is_vacation_basis: true,
-        account_number: getLineItemAccount(itemType as never, emp.employment_type),
+        ...payslipLineFlags(itemType),
+        account_number: null,
         sort_order: 0,
       })
       if (liErr) {
         throw new Error(`Failed to add base line for employee ${emp.id}: ${liErr.message}`)
       }
     }
-
-    return {
-      run: run as Record<string, unknown>,
-      employeeCount: eligibleEmployees.length,
-      deviationWindow,
-    }
+    employeeCount = eligibleEmployees.length
   } catch (err) {
     // Compensating delete: never leave a half-populated run. Cascade removes
     // any salary_run_employees / salary_line_items already inserted.
     await supabase.from('salary_runs').delete().eq('id', run.id).eq('company_id', companyId)
     throw err
+  }
+
+  // The run exists: a failed emit must not undo it (the bus logs handler
+  // failures itself; this guards the emit call).
+  try {
+    await eventBus.emit({
+      type: 'salary_run.created',
+      payload: {
+        salaryRunId: run.id as string,
+        periodYear: params.periodYear,
+        periodMonth: params.periodMonth,
+        userId,
+        companyId,
+      },
+    })
+  } catch (err) {
+    log.warn('salary_run.created emit failed', { error: err instanceof Error ? err.message : 'unknown' })
+  }
+
+  return {
+    run: run as Record<string, unknown>,
+    employeeCount,
+    deviationWindow,
   }
 }

@@ -9,9 +9,10 @@
  * provider status stored on the invoice delivery row.
  */
 
-import { Resend } from 'resend'
+import { getResendClient } from '@/lib/email/resend-client'
 import type { WebhookEventPayload } from 'resend'
 import type { InvoiceDeliveryProviderStatus } from '@/types'
+import type { ProviderDeliveryReport } from '@/lib/email/delivery-reports'
 
 export class ResendDeliverySignatureError extends Error {
   constructor(message: string) {
@@ -20,13 +21,8 @@ export class ResendDeliverySignatureError extends Error {
   }
 }
 
-export interface ProviderDeliveryReport {
-  providerMessageId: string
-  status: InvoiceDeliveryProviderStatus
-  occurredAt: string
-  detail: string | null
-  recipients: string[]
-}
+// The provider-neutral report shape lives in core (lib/email/delivery-reports.ts).
+export type { ProviderDeliveryReport }
 
 /**
  * Events that say something about whether the message arrived. `email.sent`
@@ -58,9 +54,6 @@ export function verifyDeliveryWebhook(
   const secret = process.env.RESEND_DELIVERY_WEBHOOK_SECRET
   if (!secret) throw new Error('RESEND_DELIVERY_WEBHOOK_SECRET is required')
 
-  const apiKey = process.env.RESEND_API_KEY
-  if (!apiKey) throw new Error('RESEND_API_KEY is required')
-
   const svixHeaders = {
     id: requestHeaders.get('svix-id') ?? '',
     timestamp: requestHeaders.get('svix-timestamp') ?? '',
@@ -68,7 +61,7 @@ export function verifyDeliveryWebhook(
   }
 
   try {
-    return new Resend(apiKey).webhooks.verify({
+    return getResendClient().webhooks.verify({
       payload: rawBody,
       headers: svixHeaders,
       webhookSecret: secret,

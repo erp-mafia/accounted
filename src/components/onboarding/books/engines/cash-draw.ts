@@ -4,11 +4,11 @@
  * in amber, the biggest inflow in sage, each with its date and signed
  * amount) in a lane above, and a head that rings when the line lands. Starts in a hold: baseline and dates only, the origin
  * pulsing, until setPoints() hands it the real series (the bank request is
- * still running). Ported from the founder-approved prototype.
+ * still running). Ported from the approved prototype.
  */
 
 import type { CashPoint } from '@/lib/onboarding-books/cash-series'
-import { canvasFont, readPalette } from './theater-engine'
+import { canvasFont, readPalette, tokenColor } from './theater-engine'
 
 export interface CashLineConfig {
   locale: string
@@ -44,7 +44,8 @@ function fmtSigned(n: number, locale: string): string {
 export function createCashLine(canvas: HTMLCanvasElement, cfg: CashLineConfig): CashLineApi {
   const C = readPalette(canvas)
   const FONT = canvasFont(canvas)
-  const tint = 'rgba(231, 226, 214, 0.45)'
+  // the area under the line: the warm secondary chip tone, at 45%
+  const tint = tokenColor('--secondary', 'rgb(231 226 214)').replace(/\)$/, ' / 0.45)')
   const ms = cfg.ms ?? 2600
   const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   let pts: CashPoint[] | null = null

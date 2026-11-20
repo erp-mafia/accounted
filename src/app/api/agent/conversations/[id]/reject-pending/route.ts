@@ -5,7 +5,7 @@ import { rejectPendingForConversation } from '@/lib/agent/pending/reject-convers
 // POST /api/agent/conversations/[id]/reject-pending
 //
 // Rejects every still-pending proposal the assistant staged in this
-// conversation — the chat's "clear the proposals I didn't approve" action, so
+// conversation - the chat's "clear the proposals I didn't approve" action, so
 // users don't have to reject leftovers one by one in Granskning.
 
 const notFound = () =>

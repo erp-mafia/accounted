@@ -1,20 +1,21 @@
 import { NextResponse } from 'next/server'
 import {
-  generateFullArchive,
+  streamFullArchive,
   estimateArchiveSize,
   type ArchiveScope,
 } from '@/lib/reports/full-archive-export'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-store'
-import { utcDateStamp } from '@/lib/utils'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fileResponse, streamedBody } from '@/lib/api/file-response'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
-
-const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
+// The ZIP streams as it is written, so its size is bounded by time, not
+// memory: the Pro-plan ceiling with Fluid compute, since years of underlag
+// (gigabytes) take minutes to send.
+export const maxDuration = 800
 
 export const GET = withRouteContext('report.full_archive', async (request, ctx) => {
   const { supabase, companyId, user, log, requestId } = ctx
@@ -91,80 +92,45 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
     }))
   }
 
-  try {
-    const estimate = await estimateArchiveSize(
-      archiveClient,
-      companyId,
-      scope,
-      scope === 'period' ? periodId! : undefined
-    )
-
-    if (estimateOnly) {
-      return NextResponse.json(
-        {
-          data: {
-            ...estimate,
-            size_limit_bytes: SIZE_LIMIT_BYTES,
-            within_limit: estimate.total_bytes <= SIZE_LIMIT_BYTES,
-          },
-        },
-        { headers: PRIVATE_NO_STORE_HEADERS },
+  if (estimateOnly) {
+    try {
+      const estimate = await estimateArchiveSize(
+        archiveClient,
+        companyId,
+        scope,
+        scope === 'period' ? periodId! : undefined
       )
+      return NextResponse.json({ data: estimate }, { headers: PRIVATE_NO_STORE_HEADERS })
+    } catch (err) {
+      log.error('full archive estimate failed', err as Error, { userId: user.id, companyId, scope })
+      return privateNoStore(errorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
     }
-
-    if (includeDocuments && estimate.total_bytes > SIZE_LIMIT_BYTES) {
-      return NextResponse.json(
-        {
-          error: 'archive_too_large',
-          size_bytes: estimate.total_bytes,
-          size_limit_bytes: SIZE_LIMIT_BYTES,
-        },
-        { status: 413, headers: PRIVATE_NO_STORE_HEADERS }
-      )
-    }
-
-    const zipBuffer = await generateFullArchive(
-      archiveClient,
-      companyId,
-      scope === 'period'
-        ? { scope: 'period', period_id: periodId!, include_documents: includeDocuments }
-        : { scope: 'all', include_documents: includeDocuments }
-    )
-
-    const filename =
-      scope === 'period'
-        ? `arkiv_${periodId}.zip`
-        : `arkiv_full_${companyId}_${utcDateStamp(new Date())}.zip`
-
-    log.info('full archive generated', {
-      userId: user.id,
-      companyId,
-      scope,
-      includeDocuments,
-      filename,
-      sizeBytes: zipBuffer.byteLength,
-    })
-
-    return new NextResponse(zipBuffer, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'private, no-store',
-      },
-    })
-  } catch (err) {
-    log.error('full archive generation failed', err as Error, {
-      userId: user.id,
-      companyId,
-      scope,
-      includeDocuments,
-    })
-    const message = err instanceof Error ? err.message : 'Failed to generate archive'
-    const status = message.includes('not found') ? 404 : 500
-    return NextResponse.json(
-      { error: getErrorMessage(err) },
-      { status, headers: PRIVATE_NO_STORE_HEADERS },
-    )
   }
+
+  const filename =
+    scope === 'period'
+      ? `arkiv_${periodId}.zip`
+      : `arkiv_full_${companyId}_${todayIsoStockholm().replace(/-/g, '')}.zip`
+  const logContext = { userId: user.id, companyId, scope, includeDocuments, filename }
+
+  // The headers go out at once and the ZIP follows as it is written, so the
+  // browser shows the download from the click and memory holds a few files,
+  // never the archive. Once the response has started, a failure can only cut
+  // it off: it is logged here and the browser reports the download as failed.
+  const archive = streamFullArchive(
+    archiveClient,
+    companyId,
+    scope === 'period'
+      ? { scope: 'period', period_id: periodId!, include_documents: includeDocuments }
+      : { scope: 'all', include_documents: includeDocuments }
+  )
+  return fileResponse(
+    streamedBody(archive, {
+      onEnd: (sizeBytes) => log.info('full archive generated', { ...logContext, sizeBytes }),
+      onError: (err, bytesSent) =>
+        log.error('full archive generation failed', err as Error, { ...logContext, bytesSent }),
+      onCancel: (bytesSent) => log.info('full archive download cancelled', { ...logContext, bytesSent }),
+    }),
+    { filename, contentType: 'application/zip', cacheControl: 'private, no-store' },
+  )
 })

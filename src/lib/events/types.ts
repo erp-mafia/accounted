@@ -7,12 +7,21 @@ import type {
   Article,
   FiscalPeriod,
   DocumentAttachment,
-  Receipt,
   CreditNote,
   ReconciliationMethod,
   InvoiceInboxItem,
   SupplierInvoice,
 } from '@/types'
+import type { ReopenedVatPeriod } from '@/lib/vat/filed-periods-reopened'
+
+/**
+ * The door a lock date change came through: the settings page ('app'), a
+ * direct v1 API call ('api'), the approval of a staged change, from MCP or
+ * ?stage=true ('approval'), or the automatic lock, the nightly job that acts
+ * on company_settings.auto_lock_period_days ('auto_lock'). Nobody is behind
+ * an 'auto_lock' change.
+ */
+export type LockDateChangeVia = 'app' | 'api' | 'approval' | 'auto_lock'
 
 // ============================================================
 // Core Event Types: discriminated union of all system events
@@ -26,11 +35,46 @@ import type {
  */
 export type DocumentExtractionOwner = 'invoice-inbox' | 'none'
 
+/**
+ * Where an MCP event's `client` label came from when the request carried no
+ * client marker: the provider stored on an OAuth key, the clientInfo name of
+ * a stateless request, the User-Agent of our stdio bridge (accounted-mcp,
+ * gnubok-mcp) with the client name it carries, any other User-Agent, or
+ * nothing at all (label 'other'). Absent on rows labelled by the marker.
+ */
+export type McpClientSource = 'oauth' | 'client_info' | 'bridge' | 'user_agent' | 'none'
+
+/**
+ * A dimension value as its events carry it: the v1 resource
+ * (GET /dimensions, values[]) plus the dimension's SIE number and name, so a
+ * receiver knows a projekt (6) from a kostnadsställe (1) without a lookup.
+ * is_active false means archived.
+ */
+export interface DimensionValueSnapshot {
+  id: string
+  dimension_id: string
+  sie_dim_no: number
+  dimension_name: string
+  code: string
+  name: string
+  is_active: boolean
+  start_date: string | null
+  end_date: string | null
+}
+
+export interface DimensionValueEventPayload {
+  dimensionValue: DimensionValueSnapshot
+  /** The name before a rename; null on every other event. */
+  previousName: string | null
+  userId: string
+  companyId: string
+}
+
 export type CoreEvent =
   // Bookkeeping
   | { type: 'journal_entry.drafted'; payload: { entry: JournalEntry; userId: string; companyId: string } }
   | { type: 'journal_entry.committed'; payload: { entry: JournalEntry; userId: string; companyId: string } }
-  | { type: 'journal_entry.corrected'; payload: { original: JournalEntry; storno: JournalEntry; corrected: JournalEntry; userId: string; companyId: string } }
+  | { type: 'journal_entry.corrected'; payload: { original: JournalEntry; storno: JournalEntry; corrected: JournalEntry; userId: string; companyId: string; keepLearnedTemplates?: true } }
   | { type: 'journal_entry.reversed'; payload: { originalEntry: JournalEntry; reversalEntry: JournalEntry; userId: string; companyId: string } }
   | { type: 'journal_entry.cancelled'; payload: { entry: JournalEntry; userId: string; companyId: string } }
   | { type: 'journal_entry.deleted'; payload: { entryId: string; voucherSeries: string; voucherNumber: number; userId: string; companyId: string } }
@@ -45,6 +89,14 @@ export type CoreEvent =
   | { type: 'document.uploaded'; payload: { document: DocumentAttachment; userId: string; companyId: string; extractionOwner?: DocumentExtractionOwner } }
   | { type: 'document.accessed'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   | { type: 'document.deleted'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
+  // BankID document signing (lib/signing). Payloads carry ids, positions and
+  // times only: never a name typed by the sender, an address or a personnummer.
+  // userId is the person who sent the request.
+  | { type: 'signing.requested'; payload: { signingRequestId: string; documentId: string; signerCount: number; createdVia: 'app' | 'api' | 'mcp'; annualReportVersionId: string | null; userId: string; companyId: string } }
+  | { type: 'signing.signer_signed'; payload: { signingRequestId: string; signerId: string; position: number; signedAt: string; userId: string; companyId: string } }
+  | { type: 'signing.declined'; payload: { signingRequestId: string; signerId: string; position: number; userId: string; companyId: string } }
+  | { type: 'signing.completed'; payload: { signingRequestId: string; documentId: string; signedDocumentId: string | null; evidenceDocumentId: string | null; annualReportVersionId: string | null; userId: string; companyId: string } }
+  | { type: 'signing.cancelled'; payload: { signingRequestId: string; userId: string; companyId: string } }
   /** Arkiv said what a document is (a model or a person). The invoice inbox routes it into or out of the Underlag queue on this. */
   | { type: 'document.classified'; payload: { document: { id: string; file_name: string }; companyId: string; userId: string; docType: string; admission: 'admitted' | 'held'; decidedBy: 'model' | 'human' } }
   // Invoicing
@@ -55,6 +107,9 @@ export type CoreEvent =
   // makulerade instead and surface via the journal, not this event.
   | { type: 'invoice.draft_deleted'; payload: { invoiceId: string; userId: string; companyId: string } }
   | { type: 'invoice.sent'; payload: { invoice: Invoice; userId: string; companyId: string } }
+  // A quote or proforma makulerad (lib/invoices/cancel-quote-or-proforma.ts).
+  // The row stays with status 'cancelled'; the event log is its audit trail.
+  | { type: 'invoice.cancelled'; payload: { invoice: Invoice; userId: string; companyId: string } }
   | { type: 'invoice.paid'; payload: { invoice: Invoice; paymentAmount: number; paymentDate: string; userId: string; companyId: string } }
   | { type: 'credit_note.created'; payload: { creditNote: CreditNote; userId: string; companyId: string } }
   // Recurring invoices: emitted by the daily cron after a schedule spawns
@@ -86,7 +141,7 @@ export type CoreEvent =
   // Bank connection lifecycle: consent + account selection are the
   // GDPR/PSD2 audit points; emitted to event_log for compliance trail.
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }
-  | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string } }
+  | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string; /** Set by a ledger-account change (lib/cash-accounts/ledger-change.ts): which bank account moved from which 19xx account to which, kept in event_log as the behandlingshistorik of the change. */ ledgerChanges?: Array<{ cashAccountId: string | null; uid: string; from: string | null; to: string }> } }
   | { type: 'bank_connection.revoked'; payload: { connectionId: string; bankName: string | null; userId: string; companyId: string } }
   // Emitted when a new or renewed connection supersedes an older row for the
   // same bank in the same company: the old row is parked as 'revoked' with
@@ -122,20 +177,6 @@ export type CoreEvent =
       userId: string
       companyId: string
     } }
-  // Emitted when the PSD2 callback fails to mirror a returned account into
-  // cash_accounts. ASVS V16 / ISO 27001 A.8.15: security-relevant failures
-  // must land in a structured audit log (event_log, 30-day TTL) rather than
-  // being lost to console.error.
-  | { type: 'bank_connection.cash_account_mirror_failed'; payload: {
-      connectionId: string
-      bankName: string | null
-      accountUid: string
-      ledgerAccount: string
-      currency: string
-      reason: string
-      userId: string
-      companyId: string
-    } }
   // Emitted on every failed bank sync (cron, the manual button, an agent
   // trigger): one durable row per failure with the class, the connection
   // status after handling and the INTERNAL error text, so a same-day
@@ -147,9 +188,13 @@ export type CoreEvent =
   | { type: 'bank_connection.sync_failed'; payload: {
       connectionId: string
       bankName: string | null
-      provider: 'enable_banking' | 'accounted_connect'
+      provider: 'enable_banking' | 'accounted_connect' | 'open_payments'
       trigger: 'agent' | 'cron' | 'manual'
-      errorClass: 'session_expired' | 'bank_unavailable' | 'rate_limited' | 'connector' | 'unknown'
+      /**
+       * throttled: the bank's short throttle (Open Payments), a retry in a minute; rate_limited: the daily cap;
+       * consent_refused: a permanent consent failure code (Open Payments), the row needs a renewal like session_expired.
+       */
+      errorClass: 'session_expired' | 'consent_refused' | 'bank_unavailable' | 'rate_limited' | 'throttled' | 'connector' | 'unknown'
       status: string
       /** Redacted summary (class name + scrubbed phrase); never a raw provider body. */
       diagnostic: string
@@ -177,10 +222,22 @@ export type CoreEvent =
   // Zettle organization lifecycle: same audit doctrine as shopify.*.
   | { type: 'zettle.connected'; payload: { connectionId: string; organizationUuid: string; userId: string; companyId: string } }
   | { type: 'zettle.disconnected'; payload: { connectionId: string; organizationUuid: string | null; reason: 'user' | 'revoked_upstream'; userId: string; companyId: string } }
+  // A point-of-sale venue connected through Accounted Connect
+  // (lib/pos-sales/service.ts connectPosVenue). Internal: not persisted to
+  // event_log and not a public webhook; the suggestion detectors listen to it.
+  | { type: 'pos.connected'; payload: { connectionId: string; provider: string; userId: string; companyId: string } }
   // Periods
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.year_closed'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
+  // The company-wide lock date ("Bokföring låst t.o.m.",
+  // company_settings.bookkeeping_locked_through) was set, moved or removed
+  // (lib/company/settings-service.ts). lockDate is null when the lock was
+  // removed, which is a move backward. `via` names the door, never the person
+  // (the webhook payload carries no personal data). Via 'auto_lock' there is
+  // no person: userId is then the company's creator, only because event_log
+  // files every row under a user (user_id is NOT NULL), and it is never served.
+  | { type: 'period.lock_date_changed'; payload: { previousLockDate: string | null; lockDate: string | null; direction: 'forward' | 'backward'; via: LockDateChangeVia; reopenedFiledVatPeriods: ReopenedVatPeriod[]; userId: string; companyId: string } }
   // Customers
   | { type: 'customer.created'; payload: { customer: Customer; userId: string; companyId: string } }
   // Articles (artikelregister)
@@ -189,29 +246,14 @@ export type CoreEvent =
   | { type: 'article.deleted'; payload: { articleId: string; userId: string; companyId: string } }
   // Suppliers
   | { type: 'supplier.created'; payload: { supplier: Supplier; userId: string; companyId: string } }
-  // Receipts
-  | { type: 'receipt.extracted'; payload: {
-      receipt: Receipt;
-      documentId: string | null;
-      confidence: number;
-      userId: string;
-      companyId: string;
-    }}
-  | { type: 'receipt.matched'; payload: {
-      receipt: Receipt;
-      transaction: Transaction;
-      confidence: number;
-      autoMatched: boolean;
-      userId: string;
-      companyId: string;
-    }}
-  | { type: 'receipt.confirmed'; payload: {
-      receipt: Receipt;
-      businessTotal: number;
-      privateTotal: number;
-      userId: string;
-      companyId: string;
-    }}
+  // Dimension values (SIE #OBJEKT: a projekt, kostnadsställe or custom code),
+  // accounted#193. One event per kind of change, whichever door wrote it
+  // (lib/dimensions/value-events.ts): a PATCH that renames and archives
+  // emits both. previousName is set on a rename only.
+  | { type: 'dimension_value.created'; payload: DimensionValueEventPayload }
+  | { type: 'dimension_value.renamed'; payload: DimensionValueEventPayload }
+  | { type: 'dimension_value.archived'; payload: DimensionValueEventPayload }
+  | { type: 'dimension_value.unarchived'; payload: DimensionValueEventPayload }
   // Supplier Invoice Lifecycle
   | { type: 'supplier_invoice.registered'; payload: { supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
   | { type: 'supplier_invoice.approved'; payload: { supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
@@ -222,16 +264,17 @@ export type CoreEvent =
   | { type: 'invoice.match_confirmed'; payload: { invoice: Invoice; transaction: Transaction; userId: string; companyId: string } }
   | { type: 'supplier_invoice.match_confirmed'; payload: { supplierInvoice: SupplierInvoice; transaction: Transaction; userId: string; companyId: string } }
   // Supplier Invoice Inbox
-  | { type: 'supplier_invoice.received'; payload: { inboxItem: InvoiceInboxItem; userId: string; companyId: string } }
-  | { type: 'supplier_invoice.extracted'; payload: { inboxItem: InvoiceInboxItem; confidence: number; userId: string; companyId: string } }
   | { type: 'supplier_invoice.confirmed'; payload: { inboxItem: InvoiceInboxItem; supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
   // Salary
+  // An employee registered (lib/salary/employee-commands.ts createEmployee,
+  // every door). Ids only, never personal data. Internal: not persisted to
+  // event_log and not a public webhook; the suggestion detectors listen to it.
+  | { type: 'employee.created'; payload: { employeeId: string; userId: string; companyId: string } }
   | { type: 'salary_run.created'; payload: { salaryRunId: string; periodYear: number; periodMonth: number; userId: string; companyId: string } }
   | { type: 'salary_run.approved'; payload: { salaryRunId: string; approvedBy: string; userId: string; companyId: string } }
   | { type: 'salary_run.approval_reverted'; payload: { salaryRunId: string; revertedBy: string; deletedAgiDeclarationId: string | null; userId: string; companyId: string } }
   | { type: 'salary_run.booked'; payload: { salaryRunId: string; entryIds: string[]; userId: string; companyId: string } }
   | { type: 'agi.generated'; payload: { agiId: string; periodYear: number; periodMonth: number; userId: string; companyId: string } }
-  | { type: 'agi.submitted'; payload: { salaryRunId: string; periodYear: number; periodMonth: number; userId: string; companyId: string } }
   // Bolagsverket: digital inlämning av årsredovisning. Status values follow
   // GUIDE §5.2.2 (arsred_inkommen → … → arsred_registrerad). `uploaded` fires
   // when the iXBRL lands in eget utrymme; the undertecknare then signs the
@@ -247,6 +290,11 @@ export type CoreEvent =
   | { type: 'skattekonto.connection.expired'; payload: { reason: 'REFRESH_EXHAUSTED' | 'SESSION_EXPIRED' | 'TOKEN_CORRUPTED'; userId: string; companyId: string } }
   // Company & account lifecycle
   | { type: 'company.deleted'; payload: { companyId: string; userId: string; archivedAt: string } }
+  // The K2/K3 framework of a räkenskapsår changed (lib/company/accounting-framework-change.ts,
+  // BFNAR 2012:4): a change of accounting principle. fiscalPeriodId is null when
+  // the company had no fiscal year and only its default changed. Internal:
+  // persisted to event_log, not a public webhook.
+  | { type: 'company.accounting_framework_changed'; payload: { companyId: string; userId: string; fiscalPeriodId: string | null; framework: 'k2' | 'k3'; previousFramework: 'k2' | 'k3' | null; cascadedPeriodIds: string[]; k3ToK2: boolean } }
   | { type: 'account.deleted'; payload: { userId: string; deletedAt: string } }
   // MCP telemetry: fired from the MCP dispatcher.
   // Persisted to event_log (180-day TTL for mcp.*/agent.* rows, vs 30 days for
@@ -255,6 +303,12 @@ export type CoreEvent =
   | { type: 'mcp.tool_called'; payload: {
       tool: string                                  // e.g. 'gnubok_create_invoice'
       requiredScope: string | null                  // from TOOL_SCOPE_MAP, null if unscoped
+      // How the call picked its company: the key default (no company_id),
+      // an explicit company_id, the row of a named pending operation, a
+      // scope resolved by a cross-company tool (one row per inner call), or
+      // none for company-independent tools. Optional so older emitters and
+      // stored rows stay valid.
+      companySelection?: 'default' | 'explicit' | 'operation' | 'scope' | 'none'
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null                        // api_key id, oauth client, etc.
       actorLabel: string | null                     // human-readable actor label
@@ -262,12 +316,14 @@ export type CoreEvent =
       success: boolean                              // true iff the tool returned without throwing AND was invoked (not denied)
       isError: boolean                              // matches the JSON-RPC tool-result isError flag returned to the client
       errorCode: string | null                      // structured error code from tool-result.toToolError when applicable
-      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
+      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'unattended_write_blocked' | 'bridge_refused' | 'package_off' | 'rate_limited' | null
                                                     // bridge_refused: gnubok_call_tool was pointed at a write tool, or at nothing.
                                                     // invalid_arguments: the call never reached the tool because its arguments
                                                     // were rejected (unknown parameter, malformed company_id). Split out of
                                                     // company_access_denied, which used to swallow both and send triage
                                                     // looking for a permissions problem that did not exist.
+                                                    // rate_limited: the key was over its per-minute limit; nothing ran
+                                                    // (actorId is the key, errorCode RATE_LIMITED).
       errorMessage: string | null                   // human-readable error message (truncated to 500 chars), null on success.
                                                     // Raw material for clustering real agent failures into curated gotchas:
                                                     // errorCode alone can't distinguish "period locked" from "unbalanced".
@@ -278,11 +334,17 @@ export type CoreEvent =
                                                     // Without it a 604-call outage looked identical to a typo in the logs:
                                                     // the agent was told exactly what was wrong, and we were not.
       requestId: string | number | null             // JSON-RPC request id (helps correlate with client-side logs)
+      traceId: string | null                        // W3C trace-id of the message (lib/observability/trace-context.ts): the
+                                                    // trace_id the rows it wrote carry (pending_operations, business_events,
+                                                    // suggestion_log). Older rows lack it.
       userId: string
       companyId: string
       sessionId: string | null                      // from Mcp-Session-Id header; null if absent
       client: string | null                         // distribution marker (X-Accounted-Client, legacy X-Gnubok-Client, or ?client=).
                                                     // Client-supplied (allow-list-sanitized): telemetry only, never identity or authz.
+                                                    // Without a marker: derived from the OAuth provider, clientInfo or User-Agent.
+      clientName?: string                           // sanitized raw client name when the derived label is 'other' (<= 64 chars)
+      clientSource?: McpClientSource                // which fallback derived `client`; absent when the marker set it
     }}
   // tools/list: informs us whether agents are using progressive discovery
   // (gnubok_search_tools) or pulling the full list. Tool counts vary with
@@ -297,7 +359,9 @@ export type CoreEvent =
       userId: string
       companyId: string
       sessionId: string | null                      // from Mcp-Session-Id header; null if absent
-      client: string | null                         // distribution-channel marker; null if absent
+      client: string | null                         // distribution-channel marker, else the derived label
+      clientName?: string
+      clientSource?: McpClientSource
     }}
   // resources/read: informs us which skills/widgets/data resources actually
   // get loaded by agents. `kind` discriminates by URI scheme so we can
@@ -315,27 +379,17 @@ export type CoreEvent =
       userId: string
       companyId: string
       sessionId: string | null                      // from Mcp-Session-Id header; null if absent
-      client: string | null                         // distribution-channel marker; null if absent
+      client: string | null                         // distribution-channel marker, else the derived label
+      clientName?: string
+      clientSource?: McpClientSource
     }}
   // Workflow lifecycle: agents declare "I'm starting month-end-close" via
   // gnubok_load_skill (or implicitly by following a skill's recommended tool
-  // sequence). Phase 3A captures these to measure: how often is a workflow
-  // started? How often does it complete? Where do agents abandon?
+  // sequence), or start a task with gnubok_get_task. Phase 3A captures these
+  // to measure how often a workflow is started.
   | { type: 'mcp.workflow_started'; payload: {
-      slug: string                                  // e.g. 'month-end-close'
+      slug: string                                  // load_skill: 'month-end-close'; get_task: 'task/vat', 'skill/<slug>', 'agent/<slug>', 'agent/own'
       sessionId: string | null
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
-      actorId: string | null
-      actorLabel: string | null
-      userId: string
-      companyId: string
-    }}
-  | { type: 'mcp.workflow_completed'; payload: {
-      slug: string
-      sessionId: string | null
-      outcome: 'success' | 'abandoned' | 'failed'
-      stepsCompleted: number | null                 // null when not tracked granularly
-      durationMs: number | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null
       actorLabel: string | null
@@ -349,13 +403,53 @@ export type CoreEvent =
   // make the model worse: measure, don't assume).
   | { type: 'mcp.skill_loaded'; payload: {
       slug: string                                  // e.g. 'modifier/holding-ab', 'month-end-close'
-      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier' | 'community' | 'own'
+      bodyHash?: string
+      version?: number
+      found?: true                                  // always true here; misses are mcp.skill_not_found. Optional: older rows lack it
       sessionId: string | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null
       actorLabel: string | null
       userId: string
       companyId: string
+      client?: string | null                        // as on mcp.tool_called; optional: older rows lack it
+      clientName?: string
+      clientSource?: McpClientSource
+    }}
+  // A gnubok_load_skill call whose slug matched no skill. Kept apart from
+  // mcp.skill_loaded, whose rows are read back as retrieval evidence (skill
+  // provenance, usage counts): a miss retrieved nothing.
+  | { type: 'mcp.skill_not_found'; payload: {
+      slug: string                                  // the requested slug, trimmed, <= 200 chars
+      found: false
+      sessionId: string | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
+      actorId: string | null
+      actorLabel: string | null
+      userId: string
+      companyId: string
+      client: string | null
+      clientName?: string
+      clientSource?: McpClientSource
+    }}
+  // One gnubok_search_tools call (either alias, direct or bridged): the query
+  // and what ranked first, so a capability agents look for and do not find
+  // shows up. The only tool whose argument text is recorded.
+  | { type: 'mcp.tool_searched'; payload: {
+      query: string                                 // as sent, trimmed, <= 200 chars; '' lists every tool
+      detail: 'name' | 'summary' | 'full'
+      topHits: string[]                             // canonical tool ids in rank order, <= 5
+      hitCount: number                              // every tool that matched (total_matched), not just the returned page
+      sessionId: string | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
+      actorId: string | null
+      actorLabel: string | null
+      userId: string
+      companyId: string
+      client: string | null
+      clientName?: string
+      clientSource?: McpClientSource
     }}
   // Fires when the agent's next tool call matches the previous response's
   // nextHint.tool: measures whether `next` hints are actually followed.
@@ -370,6 +464,37 @@ export type CoreEvent =
       actorLabel: string | null
       userId: string
       companyId: string
+    }}
+  // Collections: an invoice handed over to the company's collections
+  // provider, its stage moving, and the case closing. Ids and stages only:
+  // nothing about the debtor travels on the bus. userId is the person who
+  // acted, or, for a change the sync read from the provider, the person who
+  // handed the invoice over.
+  | { type: 'collection.case_opened'; payload: {
+      caseId: string
+      invoiceId: string
+      stage: string
+      origin: 'handover' | 'batch' | 'distribution'
+      companyId: string
+      userId: string
+    }}
+  | { type: 'collection.case_updated'; payload: {
+      caseId: string
+      invoiceId: string
+      stage: string
+      previousStage: string
+      closeReason: string | null
+      companyId: string
+      userId: string
+    }}
+  | { type: 'collection.case_closed'; payload: {
+      caseId: string
+      invoiceId: string
+      stage: string
+      previousStage: string
+      closeReason: string | null
+      companyId: string
+      userId: string
     }}
   // Agent self-reported feedback (gnubok_feedback tool). The product team
   // queries event_log for `agent.feedback` and routes to a backlog.
@@ -399,4 +524,3 @@ export type EventPayload<T extends CoreEventType> = Extract<CoreEvent, { type: T
 
 /** Handler function for a specific event type */
 export type EventHandler<T extends CoreEventType> = (payload: EventPayload<T>) => Promise<void> | void
-

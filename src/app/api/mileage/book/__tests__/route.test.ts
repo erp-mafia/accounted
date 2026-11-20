@@ -105,6 +105,35 @@ describe('POST /api/mileage/book', () => {
     expect(res.status).toBe(400)
   })
 
+  it('returns 400 for a counter account outside the request enum', async () => {
+    authed()
+    const res = await POST(postReq({ ...VALID_BODY, counter_account: '2440' }), params)
+    expect(res.status).toBe(400)
+    expect(bookMileagePeriod).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 with the allowed accounts when the legal form refuses the choice', async () => {
+    authed()
+    vi.mocked(bookMileagePeriod).mockResolvedValue({
+      ok: false,
+      code: 'COUNTER_ACCOUNT_NOT_ALLOWED',
+      allowed: ['2018', '1930'],
+    })
+    const res = await POST(postReq(VALID_BODY), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.allowed).toEqual(['2018', '1930'])
+    expect(body.error).toContain('2018 eller 1930')
+  })
+
+  it('leaves the counter account to the service default when omitted', async () => {
+    authed()
+    vi.mocked(bookMileagePeriod).mockResolvedValue({ ok: false, code: 'NO_TRIPS' })
+    const withoutCounter = { from: VALID_BODY.from, to: VALID_BODY.to, entry_date: VALID_BODY.entry_date }
+    await POST(postReq(withoutCounter), params)
+    expect(vi.mocked(bookMileagePeriod).mock.calls[0][3]).toMatchObject({ counterAccount: undefined })
+  })
+
   it('returns the verifikat summary on success', async () => {
     authed()
     vi.mocked(bookMileagePeriod).mockResolvedValue({

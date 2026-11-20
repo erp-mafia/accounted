@@ -16,7 +16,7 @@ import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 const mockAuthGetUser = vi.fn()
 const mockFrom = vi.fn()
 const mockSupabase = {
-  auth: { getUser: mockAuthGetUser },
+  auth: { getUser: mockAuthGetUser, mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   from: mockFrom,
 }
 

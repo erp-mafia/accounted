@@ -9,7 +9,7 @@ MCP server. New connections receive the `accounted_*` tool namespace. Existing
 
 ## Setup
 
-1. Create an API key in Accounted under **Settings > API**.
+1. Create an API key in Accounted under **Agents › Connect an agent** (`/settings/api`, the Developers group).
 2. Add the bridge to your MCP client:
 
 ```json
@@ -37,9 +37,15 @@ compatibility. Only the MCP integration is being renamed in this release.
 | `ACCOUNTED_API_KEY` | yes | none | Your existing Accounted API key. |
 | `ACCOUNTED_URL` | no | Accounted hosted MCP endpoint | Override for self-hosted Accounted. The bridge adds `tool_namespace=accounted` when omitted. |
 | `ACCOUNTED_CLIENT` | no | none | Telemetry-only distribution marker such as `claude-desktop`. |
+| `ACCOUNTED_COMPANY` | no | none | Company id (UUID) that pins the connection to one company: the company switch is hidden and every call runs for that company. A value that is not a UUID stops the bridge instead of falling back to the key default. |
 
 The API key scopes determine which tools are visible and callable. Write tools
 stage pending operations for explicit approval before anything is booked.
+
+A key reaches every company its user belongs to, or only the companies it was
+limited to when it was created; `ACCOUNTED_COMPANY` (the `?company=<id>` query
+parameter on the endpoint URL for OAuth connectors) narrows one connection
+further, to a single company.
 
 ## OAuth connector (no API key, no account needed up front)
 
@@ -84,7 +90,7 @@ change.
 
 ## Releasing
 
-The package is published to npm by the `Publish MCP bridges to npm` workflow
+The package is published to npm by the `Publish packages to npm` workflow
 (`.github/workflows/npm-publish.yml`), never by hand:
 
 1. Bump `version` in `packages/accounted-mcp/package.json`.
@@ -94,13 +100,13 @@ The package is published to npm by the `Publish MCP bridges to npm` workflow
    already exists on npm is skipped, so other `package.json` edits are harmless.
 
 The workflow needs the repository secret `NPM_TOKEN`: an npm granular access
-token with read and write access to `accounted-mcp` and `gnubok-mcp`, with
-two-factor bypass enabled so CI can publish. npm caps the lifetime of such
-tokens (90 days at the time of writing), so rotate the secret before it lapses.
-Without the secret the run fails at its first step. The workflow can also be
-started from the Actions tab, for one package or both, with a dry-run option
-that packs and validates without publishing.
+token with read and write access to `accounted-mcp`, `gnubok-mcp` and
+`accounted`, with two-factor bypass enabled so CI can publish. npm caps the
+lifetime of such tokens (90 days at the time of writing), so rotate the secret
+before it lapses. Without the secret the run fails at its first step. The
+workflow can also be started from the Actions tab, for one package or all, with
+a dry-run option that packs and validates without publishing.
 
 ## Gather what is missing
 
-Accounted's nightly check lists documents the bookkeeping expects but the archive lacks, as the resource `Accounted://arkiv/missing`. The skill in `skills/accounted-gather/SKILL.md` of the Accounted repository tells an assistant how to find those documents in the mail and drives it already has access to, upload them with the person's approval, and close each item with `gnubok_resolve_missing`. Install it as a custom skill in claude.ai or Claude Code next to this bridge.
+Accounted's nightly check lists documents the bookkeeping expects but the archive lacks, as the resource `Accounted://arkiv/missing`. The skill in `skills/accounted-gather/SKILL.md` of the Accounted repository tells an assistant how to find those documents in the mail and drives it already has access to, upload them with the person's approval, and close each item with `accounted_resolve_missing`. Install it as a custom skill in claude.ai or Claude Code next to this bridge.

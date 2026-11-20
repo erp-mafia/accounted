@@ -1,21 +1,6 @@
 import type { Extension } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
 import {
-  searchCompanyByOrgNumber,
-  getBankAccounts,
-  getIndustryCodes,
-  getEmails,
-  getPhones,
-  getCompanyPurpose,
-  getCompanyDocuments,
-  getFiscalYears,
-  getPayrolls,
-  getSignatory,
-  getRepresentatives,
-  getCompanyStatus,
-  getBeneficialOwners,
-} from './lib/tic-client'
-import {
   startBankIdAuth,
   pollBankIdSession,
   collectBankIdResult,
@@ -24,7 +9,6 @@ import {
   fetchEnrichmentData,
 } from './lib/bankid-client'
 import { TICAPIError } from './lib/tic-types'
-import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-types'
 import {
   BANKID_FLOW_ID_HEADER,
   FLOW_VERIFIED_WINDOW_SECONDS,
@@ -34,19 +18,17 @@ import {
   readBankIdFlow,
   setBankIdFlowCookies,
 } from './lib/bankid-flow-cookie'
-import {
-  lookupCompanyByOrgNumber,
-  pickCompanyName,
-  registrationDateToMs,
-  searchCompaniesForLookup,
-} from './lib/lookup'
+import { lookupCompanyByOrgNumber, searchCompaniesForLookup } from './lib/lookup'
+import { buildCompanyProfile } from './lib/profile'
+import { toTicCallPurpose } from '@/lib/tic-budget/budget'
 import { COMPANY_SEARCH_MIN_CHARS } from '@/lib/company-lookup/types'
 import type { RegistryHint } from '@/lib/company-lookup/types'
 import { createScbClient } from '@/lib/parties/scb/client'
 import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
-import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
 import { displayNameFromRegistry } from '@/lib/parties/registry-name'
 import { registrySummary } from '@/lib/parties/registry-summary'
+import { offerableSearchHits, ownCompanyRoles, ownPersonalNumberHash } from '@/lib/company-lookup/own-firm'
 import {
   hasForeignCredential,
   isUnadoptedPendingAccount,
@@ -56,6 +38,7 @@ import { sendBankIdSignupConfirmation } from './lib/bankid-confirmation-mail'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
 import { generateAuthPassword } from '@/lib/auth/generated-password'
 import { openBankIdResult, sealBankIdResult } from './lib/bankid-flow-result'
+import { bankIdSigningServices } from './lib/bankid-signing'
 import type { BankIdFlowResult, BankIdFlowState } from './lib/bankid-flow-cookie'
 import type { BankIdUser } from './lib/bankid-types'
 import {
@@ -64,6 +47,7 @@ import {
 } from '@/lib/auth/brand-signup-gate'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
+import { recordSignupAcceptances } from '@/lib/legal/acceptance'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import crypto from 'crypto'
@@ -222,9 +206,13 @@ async function consumeBankIdSession(
  * CompanyRoles is not free of national-ID data either: for an enskild
  * näringsidkare, `companyRegistrationNumber` starts with the owner's 12-digit
  * personnummer, because a sole trader's organisationsnummer is the
- * personnummer. The row is the signed-in user's own personal data, readable
- * only by them (RLS), and `erase_user_personal_data` deletes it when the
- * account is deleted.
+ * personnummer. Only the person's OWN sole-trader firm is kept
+ * (ownCompanyRoles against the BankID `personalNumber`): a role in another
+ * person's firm (a prokura, say) carries that person's personnummer, and the
+ * picker must never offer a firm that is provably someone else's (crm#1456).
+ * The row is the signed-in user's own personal data, readable only by them
+ * (RLS), and `erase_user_personal_data` deletes it when the account is
+ * deleted.
  *
  * Non-blocking: any failure is logged and swallowed: BankID auth must still
  * succeed even if enrichment is down.
@@ -278,6 +266,7 @@ async function completedUserFor(
 async function fetchAndStoreEnrichment(
   sessionId: string,
   userId: string,
+  personalNumber: string,
   supabase: SupabaseClient,
 ): Promise<void> {
   try {
@@ -354,12 +343,20 @@ async function fetchAndStoreEnrichment(
     })
 
     // Persist only what consumers actually read. See block comment on
-    // fetchAndStoreEnrichment for why SPAR + personnummer + name are excluded.
+    // fetchAndStoreEnrichment for why SPAR + personnummer + name are excluded,
+    // and why another person's sole-trader firm is dropped.
+    const roles = enrichmentData.companyRoles ?? []
+    const companyRoles = ownCompanyRoles(roles, personalNumber)
+    if (companyRoles.length < roles.length) {
+      log.info('enrichment dropped sole-trader roles that are not the user\'s own firm', {
+        dropped: roles.length - companyRoles.length,
+      })
+    }
     const { error: upsertError } = await supabase
       .from('bankid_enrichment')
       .upsert({
         user_id: userId,
-        company_roles: enrichmentData.companyRoles ?? [],
+        company_roles: companyRoles,
         enriched_at_utc: enrichmentData.enrichedAtUtc ?? null,
       }, { onConflict: 'user_id' })
 
@@ -372,7 +369,7 @@ async function fetchAndStoreEnrichment(
       })
     } else {
       log.info('enrichment persisted to bankid_enrichment', {
-        roleCount: enrichmentData.companyRoles?.length ?? 0,
+        roleCount: companyRoles.length,
       })
     }
   } catch (enrichError) {
@@ -383,31 +380,6 @@ async function fetchAndStoreEnrichment(
 // Server-side per-IP rate limit for /bankid/start (each call = billable TIC session)
 const bankIdStartCooldowns = new Map<string, number>()
 const BANKID_START_COOLDOWN_MS = 5_000
-
-/**
- * Map a v2 `CompanyDocument` (financial-report subset) into the legacy
- * `TICFinancialReportSummary` shape consumed by TicWorkspace. v2 nests
- * the metadata under `financialReportMetadata` and replaces v1's
- * `isAudited` boolean / `auditOpinion` string with auditor identity
- * fields: we derive `isAudited` from the presence of an auditor.
- */
-function toFinancialReportSummary(
-  doc: import('./lib/tic-types').TICDocument
-): TICFinancialReportSummary {
-  const meta = doc.financialReportMetadata ?? {}
-  const hasAuditor = Boolean(meta.auditor || meta.auditorFullName || meta.auditCompanyName)
-  return {
-    title: doc.type === 'annualReport' ? 'Årsredovisning' : doc.type,
-    arrivalDate: meta.arrivalDate ?? undefined,
-    registrationDate: meta.registrationDate ?? undefined,
-    periodStart: meta.periodStart ?? undefined,
-    periodEnd: meta.periodEnd ?? undefined,
-    isInterimReport: meta.isInterimReport ?? undefined,
-    isConsolidatedAccounts: meta.isConsolidatedAccounts ?? undefined,
-    isAudited: hasAuditor ? true : undefined,
-    auditOpinion: meta.auditorFullName ?? meta.auditCompanyName ?? undefined,
-  }
-}
 
 /**
  * Translate any error from the TIC pipeline into a structured HTTP response.
@@ -426,7 +398,7 @@ function toFinancialReportSummary(
 function handleTicError(
   error: unknown,
   log: { error: (msg: string, meta?: unknown) => void } | Console,
-  route: 'lookup' | 'profile' | 'search',
+  route: 'lookup' | 'search',
   orgNumber: string,
   fallbackMessage: string
 ): Response {
@@ -526,28 +498,59 @@ async function registryHintFromScb(
   }
 }
 
+/**
+ * The org number /lookup and /profile were asked about, from the JSON body
+ * (`{ org_number }`), or null when it is missing. Never a query parameter: a
+ * sole trader's org number is the owner's personnummer, and a URL is copied
+ * into request logs and error telemetry.
+ */
+async function orgNumberFromBody(request: Request): Promise<string | null> {
+  try {
+    const body = (await request.json()) as { org_number?: unknown } | null
+    const value = body && typeof body === 'object' ? body.org_number : null
+    return typeof value === 'string' && value.trim() !== '' ? value : null
+  } catch {
+    return null
+  }
+}
+
 export const ticExtension: Extension = {
   id: 'tic',
   name: 'Bolagsuppgifter',
   version: '1.0.0',
   sector: 'general',
 
+  // Core-callable services, resolved via the extension registry (core never
+  // imports extension code). The agent onboarding snapshot
+  // (lib/agent/composer/tic-fetch) reads the company profile here. The BankID
+  // signing ceremony (lib/signing/bankid-provider) starts and polls sign
+  // sessions here.
+  services: {
+    // opts.purpose: what the Lens calls are charged to (lib/tic-budget).
+    fetchCompanyProfile: (orgNumber: string, opts?: { purpose?: unknown }) =>
+      buildCompanyProfile(orgNumber, console, {
+        purpose: opts?.purpose === undefined ? undefined : toTicCallPurpose(opts.purpose),
+      }),
+    ...bankIdSigningServices,
+  },
+
   apiRoutes: [
     {
-      method: 'GET',
+      // A read sent as POST so the org number rides in the body
+      // (orgNumberFromBody); its one caller is fetchCompanyLookup.
+      method: 'POST',
       path: '/lookup',
-      // Used during onboarding (Step2CompanyDetails debounced lookup + the
-      // BankID picker): user is authenticated but does not yet have a
-      // company. Must not require a company context.
+      // Used during onboarding (the journey's orgnr step): user is
+      // authenticated but does not yet have a company. Must not require a
+      // company context.
       skipCompanyContext: true,
-      handler: async (request: Request, ctx?) => {
-        const log = ctx?.log ?? console
-        const url = new URL(request.url)
-        const orgNumber = url.searchParams.get('org_number')
+      handler: async (request: Request) => {
+        const log = console
+        const orgNumber = await orgNumberFromBody(request)
 
         if (!orgNumber) {
           return NextResponse.json(
-            { error: 'org_number query parameter is required' },
+            { error: 'org_number is required in the request body' },
             { status: 400 }
           )
         }
@@ -565,7 +568,7 @@ export const ticExtension: Extension = {
           // newly-registered companies without a financial summary return
           // fiscalYear: null and the client-side first-year derivation
           // takes over (see deriveFirstYearDefaults).
-          const result = await lookupCompanyByOrgNumber(orgNumber)
+          const result = await lookupCompanyByOrgNumber(orgNumber, { purpose: 'onboarding_lookup' })
 
           if (!result) {
             // Bolagsverket does not list ideella föreningar (Skatteverket
@@ -583,359 +586,6 @@ export const ticExtension: Extension = {
           return NextResponse.json({ data: result })
         } catch (error) {
           return handleTicError(error, log, 'lookup', cleanedOrgNumber, 'Failed to look up company')
-        }
-      },
-    },
-    {
-      method: 'GET',
-      path: '/profile',
-      // Used during onboarding to render richer company profile details:
-      // user is authenticated but may not yet have a company. See /lookup.
-      skipCompanyContext: true,
-      handler: async (request: Request, ctx?) => {
-        const log = ctx?.log ?? console
-        const url = new URL(request.url)
-        const orgNumber = url.searchParams.get('org_number')
-
-        if (!orgNumber) {
-          return NextResponse.json(
-            { error: 'org_number query parameter is required' },
-            { status: 400 }
-          )
-        }
-
-        const cleanedOrgNumber = orgNumber.replace(/[\s-]/g, '')
-
-        try {
-          const doc = await searchCompanyByOrgNumber(orgNumber)
-
-          if (!doc) {
-            return NextResponse.json(
-              { error: 'Company not found' },
-              { status: 404 }
-            )
-          }
-
-          const companyName = pickCompanyName(doc.names)
-          const companyId = doc.companyId
-
-          // Phase 2: ONLY data not already present at the top level of the
-          // search doc. We dropped bank-accounts, industries, email-addresses,
-          // phone-numbers, purposes, and signatory: those duplicate the
-          // search-doc fields and were burning 6 Lens calls per /profile
-          // for nothing. Per-/profile cost: 13 → 7 calls.
-          const [
-            documentsResult,
-            fiscalYearResult,
-            payrollsResult,
-            representativesResult,
-            statusResult,
-            beneficialOwnersResult,
-          ] = await Promise.allSettled([
-            getCompanyDocuments(companyId),
-            getFiscalYears(companyId),
-            getPayrolls(companyId),
-            getRepresentatives(companyId),
-            getCompanyStatus(companyId),
-            getBeneficialOwners(companyId),
-          ])
-
-          // Bankgiro list from search-doc (v2 `bankAccounts` array with
-          // `{accountNumber, bankAccountType}`).
-          const bankAccounts = (doc.bankAccounts ?? [])
-            .filter((ba) => ba.accountNumber != null && ba.bankAccountType === 'bankgiro')
-            .map((ba) => ({
-              type: 'bankgiro',
-              accountNumber: String(ba.accountNumber),
-              bic: null,
-            }))
-
-          // SNI codes from search-doc (`sniCodes` array with `sni_2007Code`).
-          const sniCodes = (doc.sniCodes ?? [])
-            .filter((s) => s.sni_2007Code)
-            .map((s) => ({
-              code: s.sni_2007Code ?? '',
-              name: s.sni_2007Name ?? '',
-            }))
-
-          const email = doc.emailAddresses?.[0]?.emailAddress ?? null
-
-          const phone =
-            doc.phoneNumbers?.[0]?.phoneNumberFormatted
-              ?? doc.phoneNumbers?.[0]?.e164PhoneNumber
-              ?? null
-
-          // v2 `/companies/{id}/documents` returns every document the
-          // company has filed; filter to annualReport rows and map into
-          // the legacy summary shape the workspace expects. Kept as a
-          // dedicated call: doc.documents has a different shape
-          // (`companyDocumentType` vs `type`) so direct substitution
-          // would silently drop annualReport detection.
-          const financialReports =
-            documentsResult.status === 'fulfilled' && documentsResult.value
-              ? documentsResult.value
-                  .filter((d) => d.type === 'annualReport')
-                  .map(toFinancialReportSummary)
-              : []
-
-          // Purpose: take `doc.mostRecentPurpose` directly. Dropped the
-          // /purposes call (which sorted history descending and picked
-          // the latest non-empty entry): the search doc's
-          // mostRecentPurpose is the same most-recently-registered string.
-          const purpose = doc.mostRecentPurpose ?? null
-
-          // ── New v2 sections ─────────────────────────────────────────
-          // Fiscal years: pick most-recently-updated row with both
-          // start and end populated, plus a deduped history of distinct
-          // start/end pairs sorted newest first.
-          const fiscalYearRows =
-            fiscalYearResult.status === 'fulfilled' && fiscalYearResult.value
-              ? [...fiscalYearResult.value].sort((a, b) =>
-                  (b.lastUpdatedAtUtc ?? '').localeCompare(a.lastUpdatedAtUtc ?? '')
-                )
-              : []
-          const fiscalYearCurrent = fiscalYearRows.find(
-            (fy) => fy.startMonthDay && fy.endMonthDay
-          )
-          const fiscalYear = fiscalYearCurrent
-            ? {
-                startMonthDay: fiscalYearCurrent.startMonthDay ?? null,
-                endMonthDay: fiscalYearCurrent.endMonthDay ?? null,
-                description: fiscalYearCurrent.startEndDescription ?? null,
-              }
-            : null
-
-          const fiscalYearHistorySeen = new Set<string>()
-          const fiscalYearHistory: import('./lib/tic-types').TICProfileFiscalYear[] = []
-          for (const fy of fiscalYearRows) {
-            if (!fy.startMonthDay && !fy.endMonthDay) continue
-            const key = `${fy.startMonthDay ?? ''}|${fy.endMonthDay ?? ''}`
-            if (fiscalYearHistorySeen.has(key)) continue
-            fiscalYearHistorySeen.add(key)
-            fiscalYearHistory.push({
-              startMonthDay: fy.startMonthDay ?? null,
-              endMonthDay: fy.endMonthDay ?? null,
-              description: fy.startEndDescription ?? null,
-            })
-          }
-
-          // Signatory: free-form firmateckning descriptions. v2 search doc
-          // exposes `mostRecentSignatory` directly (single entry). Drops the
-          // dedicated /signatory call: historical signatory entries are rare
-          // to use in onboarding and the current entry is what the review
-          // card surfaces.
-          const signatory = (() => {
-            const desc = doc.mostRecentSignatory?.signatureDescription?.trim()
-            return desc ? [{ description: desc }] : []
-          })()
-
-          // Board summary: most recently updated row from
-          // representativeInformation
-          const reprInfoRows =
-            representativesResult.status === 'fulfilled' && representativesResult.value?.representativeInformation
-              ? [...representativesResult.value.representativeInformation].sort((a, b) =>
-                  (b.lastUpdatedAtUtc ?? '').localeCompare(a.lastUpdatedAtUtc ?? '')
-                )
-              : []
-          const reprInfo = reprInfoRows[0]
-          const board = reprInfo
-            ? {
-                numberOfBoardMembers: reprInfo.numberOfBoardMembers ?? null,
-                numberOfDeputyBoardMembers: reprInfo.numberOfDeputyBoardMembers ?? null,
-                hasVacancy: reprInfo.hasVacancy ?? null,
-                missingCEODate: reprInfo.missingCEODate ?? null,
-                missingAuditor: reprInfo.missingAuditor ?? null,
-                lastChangeDate: reprInfo.lastChangeDate ?? null,
-              }
-            : null
-
-          // Representatives: filter to currently-active positions
-          // (positionEnd null or in the future) sorted by start date desc
-          const nowIso = new Date().toISOString()
-          const representatives =
-            representativesResult.status === 'fulfilled' && representativesResult.value?.representatives
-              ? representativesResult.value.representatives
-                  .filter((p) => !p.positionEnd || p.positionEnd > nowIso)
-                  .sort((a, b) => (b.positionStart ?? '').localeCompare(a.positionStart ?? ''))
-                  .map((p) => ({
-                    name: p.roleByPersonName ?? null,
-                    positionType: p.positionType ?? null,
-                    positionDescription: p.positionDescription ?? null,
-                    positionStart: p.positionStart ?? null,
-                    positionEnd: p.positionEnd ?? null,
-                  }))
-              : []
-
-          // Payrolls: map the modern payroll2 array, newest first
-          const payrolls =
-            payrollsResult.status === 'fulfilled' && payrollsResult.value?.payroll2
-              ? [...payrollsResult.value.payroll2]
-                  .sort((a, b) => (b.periodEnd ?? '').localeCompare(a.periodEnd ?? ''))
-                  .map((p) => ({
-                    periodStart: p.periodStart ?? null,
-                    periodEnd: p.periodEnd ?? null,
-                    numberOfEmployees: p.numberOfEmployees ?? null,
-                    sumPayrollTax: p.sumPayrollTax ?? null,
-                    calculatedPersonnelCosts: p.calculatedPersonnelCosts ?? null,
-                    personnelCostsInAnnualReport: p.personnelCostsInAnnualReport ?? null,
-                    deviation: p.deviation ?? null,
-                    numberOfLateFeesForPeriod: p.numberOfLateFeesForPeriod ?? null,
-                  }))
-              : []
-
-          // Statuses: most recent first; map traffic-light color through
-          // unchanged so the UI can render a badge.
-          const statuses: import('./lib/tic-types').TICProfileStatus[] =
-            statusResult.status === 'fulfilled' && statusResult.value
-              ? [...statusResult.value]
-                  .sort((a, b) => (b.statusDate ?? '').localeCompare(a.statusDate ?? ''))
-                  .map((s) => {
-                    const color = s.statusColor
-                    const validColor: 'red' | 'yellow' | 'green' | 'neutral' | null =
-                      color === 'red' || color === 'yellow' || color === 'green' || color === 'neutral'
-                        ? color
-                        : null
-                    return {
-                      code: s.companyStatusDescription?.code ?? null,
-                      description:
-                        s.companyStatusDescription?.name_SE
-                          ?? s.statusDescription
-                          ?? s.companyStatusDescription?.name_EN
-                          ?? null,
-                      color: validColor,
-                      statusDate: s.statusDate ?? null,
-                      isCeased: s.companyStatusDescription?.isCeased ?? null,
-                    }
-                  })
-              : []
-
-          // Log Phase 2 failures
-          if (documentsResult.status === 'rejected') {
-            log.warn('[tic] profile: documents fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(documentsResult.reason) })
-          }
-          if (fiscalYearResult.status === 'rejected') {
-            log.warn('[tic] profile: fiscal years fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(fiscalYearResult.reason) })
-          }
-          if (payrollsResult.status === 'rejected') {
-            log.warn('[tic] profile: payrolls fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(payrollsResult.reason) })
-          }
-          if (representativesResult.status === 'rejected') {
-            log.warn('[tic] profile: representatives fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(representativesResult.reason) })
-          }
-          if (statusResult.status === 'rejected') {
-            log.warn('[tic] profile: status fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(statusResult.reason) })
-          }
-          if (beneficialOwnersResult.status === 'rejected') {
-            log.warn('[tic] profile: beneficial-owners fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(beneficialOwnersResult.reason) })
-          }
-
-          // Flatten the beneficial-owners response. Bolagsverket returns one
-          // notification per registration event; the latest active
-          // notification's owners are the current ones. v2 returns the
-          // notifications as a top-level array (v1's wrapper with
-          // `.notifications` / `.exempts` is gone). Personnummer is
-          // intentionally excluded: PII we don't need cached and we
-          // don't want it persisted on `companies.tic_snapshot`.
-          let beneficialOwners: TICCompanyProfile['beneficialOwners'] = []
-          if (beneficialOwnersResult.status === 'fulfilled' && beneficialOwnersResult.value) {
-            const notifications = Array.isArray(beneficialOwnersResult.value)
-              ? beneficialOwnersResult.value
-              : []
-            // Prefer the latest notification by notificationDate (already
-            // sorted descending in practice, but we sort defensively).
-            const latest = [...notifications]
-              .filter((n) => n && Array.isArray(n.bolagsverket_BeneficialOwner))
-              .sort((a, b) => {
-                const ad = a.notificationDate ?? ''
-                const bd = b.notificationDate ?? ''
-                return bd.localeCompare(ad)
-              })[0]
-            if (latest?.bolagsverket_BeneficialOwner) {
-              beneficialOwners = latest.bolagsverket_BeneficialOwner
-                .map((o) => {
-                  const nameParts = [o.firstName, o.middleName, o.lastName]
-                    .map((p) => (p ?? '').trim())
-                    .filter((p) => p.length > 0)
-                  const name = nameParts.length > 0 ? nameParts.join(' ') : (o.fallbackName ?? '').trim()
-                  if (!name) return null
-                  return {
-                    name,
-                    extentCode: o.extentCode ?? null,
-                    extentDescription: o.extentDescription ?? null,
-                    citizenshipCountryCode: o.citizenshipCountryCode ?? null,
-                    countryOfResidenceCode: o.countryOfResidenceCode ?? null,
-                    registeredAt: latest.fromDate ?? latest.notificationDate ?? null,
-                  }
-                })
-                .filter((o): o is NonNullable<typeof o> => o !== null)
-            }
-          }
-
-          const fin = doc.mostRecentFinancialSummary
-          const financials = fin
-            ? {
-                periodStart: fin.periodStart,
-                periodEnd: fin.periodEnd,
-                netSalesK: fin.rs_NetSalesK ?? null,
-                operatingProfitK: fin.rs_OperatingProfitOrLossK ?? null,
-                totalAssetsK: fin.bs_TotalAssetsK ?? null,
-                numberOfEmployees: fin.fn_NumberOfEmployees ?? null,
-                operatingMargin: fin.km_OperatingMargin ?? null,
-                netProfitMargin: fin.km_NetProfitMargin ?? null,
-                equityAssetsRatio: fin.km_EquityAssetsRatio ?? null,
-              }
-            : null
-
-          // Translate v2's activityStatus enum into the v1 string the
-          // TicWorkspace `!== 'ceased'` check still compares against, so
-          // the UI keeps showing "Avregistrerat" for deregistered
-          // companies without UI changes.
-          const isCeasedProfile = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
-          const profile: TICCompanyProfile = {
-            companyId,
-            orgNumber: doc.registrationNumber,
-            companyName,
-            legalEntityType: doc.legalEntityType,
-            registrationDate: registrationDateToMs(doc.registrationDate) ?? 0,
-            activityStatus: isCeasedProfile ? 'ceased' : (doc.activityStatus ?? null),
-            purpose,
-            address: doc.mostRecentRegisteredAddress
-              ? {
-                  street: doc.mostRecentRegisteredAddress.streetAddress ?? null,
-                  postalCode: doc.mostRecentRegisteredAddress.postalCode ?? null,
-                  city: doc.mostRecentRegisteredAddress.city ?? null,
-                }
-              : null,
-            registration: {
-              fTax: doc.isRegisteredForFTax ?? false,
-              vat: doc.isRegisteredForVAT ?? false,
-              payroll: doc.isRegisteredForPayroll ?? false,
-            },
-            sector: doc.cSector
-              ? { code: doc.cSector.categoryCode, description: doc.cSector.categoryCodeDescription }
-              : null,
-            employeeRange: doc.cNbrEmployeesInterval?.categoryCodeDescription ?? null,
-            turnoverRange: doc.cTurnoverInterval?.categoryCodeDescription ?? null,
-            email,
-            phone,
-            sniCodes,
-            bankAccounts,
-            beneficialOwners,
-            financials,
-            financialReports,
-            fiscalYear,
-            fiscalYearHistory,
-            signatory,
-            board,
-            representatives,
-            payrolls,
-            statuses,
-            fetchedAt: new Date().toISOString(),
-          }
-
-          return NextResponse.json({ data: profile })
-        } catch (error) {
-          return handleTicError(error, log, 'profile', cleanedOrgNumber, 'Failed to fetch company profile')
         }
       },
     },
@@ -1048,11 +698,21 @@ export const ticExtension: Extension = {
       handler: async (request: Request) => {
         try {
           const flow = await readBankIdFlow(request)
+          const pollBody = await request.json().catch(() => ({}))
+          const isProbe = pollBody?.probe === true
+          // The login and signup panels ask on every mount whether this
+          // browser is mid-flow (the probe). "No" is the normal answer to
+          // that question, so it is a 200 with nothing in it: as a 404 it was
+          // the largest group of failed requests in production (about 330 a
+          // day in November 2026) for a page that had done nothing wrong. An
+          // active poll that has lost its flow still gets the 404 below.
+          const nothingToResume = () => NextResponse.json({ data: null })
           if (!flow) {
             // No live flow in this browser: the tab is polling something that
             // has finished, expired, or never belonged to it. Terminal, not an
             // error, so the client can settle instead of spinning.
-            log.info('poll no_session', { reason: 'no_flow' })
+            log.info('poll no_session', { reason: 'no_flow', probe: isProbe })
+            if (isProbe) return nothingToResume()
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
 
@@ -1061,12 +721,11 @@ export const ticExtension: Extension = {
           // picked up by the signup panel (or the reverse) whenever the user
           // navigates between them. Deliberately NOT clearing: the flow is
           // still legitimate for the page that started it.
-          const pollBody = await request.json().catch(() => ({}))
           if (!isBankIdFlowMode(pollBody?.mode) || pollBody.mode !== flow.mode) {
-            log.info('poll no_session', { reason: 'mode_mismatch', session: flow.sessionId.slice(0, 8) })
+            log.info('poll no_session', { reason: 'mode_mismatch', probe: isProbe, session: flow.sessionId.slice(0, 8) })
+            if (isProbe && isBankIdFlowMode(pollBody?.mode)) return nothingToResume()
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
-          const isProbe = pollBody?.probe === true
 
           // The cookie is shared by every tab. A newer same-mode /start can
           // replace it while an older tab is still polling, so mode alone is
@@ -1103,7 +762,10 @@ export const ticExtension: Extension = {
               // the user has just started in another tab. The stale cookie is
               // harmless (it answers no_session again and expires on its own),
               // whereas deleting a live flow costs a billable session.
-              if (error instanceof TICAPIError && (error.statusCode === 404 || error.statusCode === 410)) {
+              // TIC also answers an order BankID has already expired with a
+              // 4xx "invalidParameters: No such order": the same outcome.
+              if (error instanceof TICAPIError && (error.statusCode === 404 || error.statusCode === 410 ||
+                (!!error.statusCode && error.statusCode >= 400 && error.statusCode < 500 && /no such order/i.test(error.message)))) {
                 log.info('poll no_session', {
                   reason: 'tic_gone',
                   statusCode: error.statusCode,
@@ -1383,7 +1045,7 @@ export const ticExtension: Extension = {
             }
 
             // Refresh enrichment so /select-company sees current Bolagsverket roles.
-            await fetchAndStoreEnrichment(sessionId, existing.user_id, supabase)
+            await fetchAndStoreEnrichment(sessionId, existing.user_id, personalNumber, supabase)
 
             // settle(): the magic link is minted, so the flow is spent. A
             // second tab reaching here would mint another and invalidate this
@@ -1418,7 +1080,7 @@ export const ticExtension: Extension = {
 
           const host = forwardedHost(request)
 
-          // Invite-only brand domain gate (founder decision 2026-08-27):
+          // Invite-only brand domain gate (product decision 2026-08-27):
           // same rule POST /api/auth/signup enforces on the email path. Runs
           // AFTER the existing-identity check so a returning user's login is
           // never blocked, and before anything is created or consumed:
@@ -1594,8 +1256,13 @@ export const ticExtension: Extension = {
             ))
           }
 
+          // The register page says creating an account accepts the terms and
+          // the DPA: record it now the account exists and can no longer be
+          // rolled back. Never fails the signup (logged with the user id).
+          await recordSignupAcceptances(supabase, userId)
+
           // Enrichment (CompanyRoles): pre-fills /select-company picker.
-          await fetchAndStoreEnrichment(sessionId, userId, supabase)
+          await fetchAndStoreEnrichment(sessionId, userId, personalNumber, supabase)
 
           // settle(): account created and the mail is out. The flow is spent.
           // Same shape as POST /api/auth/signup, so the register page can show
@@ -1865,10 +1532,16 @@ export const ticExtension: Extension = {
       path: '/search',
       // Onboarding's orgnr field also accepts a company name: one Lens call
       // returns up to five hits in /lookup's shape so a pick needs no second
-      // call. User is authenticated but may not yet have a company.
+      // call. User is authenticated but may not yet have a company. A sole
+      // trader's firm is a hit only when it is the caller's own (its org
+      // number is their BankID personnummer): a name is no proof of whose
+      // firm it is, and every hit ships its number and register data to the
+      // browser (crm#1456). See offerableSearchHits.
       skipCompanyContext: true,
-      handler: async (request: Request, ctx?) => {
-        const log = ctx?.log ?? console
+      handler: async (request: Request) => {
+        const log = console
+        const auth = await requireAuth()
+        if (auth.error) return auth.error
         const url = new URL(request.url)
         const query = (url.searchParams.get('q') ?? '').trim()
 
@@ -1880,7 +1553,15 @@ export const ticExtension: Extension = {
         }
 
         try {
-          const hits = await searchCompaniesForLookup(query)
+          const [found, ownHash] = await Promise.all([
+            searchCompaniesForLookup(query, { purpose: 'onboarding_lookup' }),
+            ownPersonalNumberHash(auth.supabase, auth.user.id),
+          ])
+          const hits = offerableSearchHits(
+            found,
+            (hit) => ({ orgNumber: hit.orgNumber, legalForm: hit.result.legalEntityType }),
+            ownHash,
+          )
           if (hits.length === 0) {
             return NextResponse.json({ error: 'Company not found' }, { status: 404 })
           }

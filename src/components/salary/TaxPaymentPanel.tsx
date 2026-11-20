@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
@@ -8,20 +8,33 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
-import { Download, Loader2, CheckCircle2, ExternalLink } from 'lucide-react'
+import { ArrowDownTrayIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { postAction } from '@/lib/browser/post-action'
 import { failureDescription } from '@/lib/browser/action-failure'
-import type { ErrorLocale } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDateTime } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
+import { PayDeclarationViaBankButton } from '@/components/payments/PayDeclarationViaBankButton'
+import type { PaymentFileAccountView } from '@/lib/salary/payment/payment-account'
+import { payingAccountName } from '@/lib/payments/paying-account-label'
 
 type PaymentFormat = 'bg_lb' | 'pain001'
 
 interface TaxPaymentPanelProps {
-  /** YYYY-MM */
+  /**
+   * The AGI redovisningsperiod, YYYY-MM: the payout month (agiReportingPeriod),
+   * which the declaration, the payment file and mark-paid are keyed on. Not
+   * the earned month: for lön i efterskott that is the previous month's AGI.
+   */
   period: string
+  /**
+   * The day the period's tax and contributions must be on the skattekonto
+   * (YYYY-MM-DD, from GET /api/skatteverket/tax-payments/{period}); null or
+   * absent when unknown, and the row is then left out.
+   */
+  paymentDueDate?: string | null
   totalTax: number
   totalAvgifter: number
   paymentFileFormat: string | null
@@ -30,13 +43,31 @@ interface TaxPaymentPanelProps {
   /** company_settings.preferred_payment_format: seeds the format selector. */
   defaultFormat: PaymentFormat
   /**
-   * company_settings.bankgiro / iban: the sender account each format requires.
-   * null means missing as of the latest settings fetch (warn up front, the
-   * download would 400); undefined means unknown (settings not loaded).
+   * company_settings.bankgiro: the sender of an LB file. null means missing
+   * as of the latest settings fetch (warn up front, the download would 400);
+   * undefined means unknown (settings not loaded).
    */
   senderBankgiro?: string | null
-  senderIban?: string | null
+  /**
+   * The account a pain.001 pays from: the primary bank account
+   * (GET /api/salary/payment-account without a run). undefined while
+   * unknown: no warning.
+   */
+  fileAccount?: PaymentFileAccountView
   readOnly?: boolean
+  /**
+   * The AGI's redovisningsperiod (YYYY-MM) when the AGI declaration exists:
+   * offers Betala via banken for it where bank payments are switched on.
+   */
+  agiPeriod?: string | null
+  /**
+   * The refusal the payment file and the bank payment give the declaration
+   * (GET /api/skatteverket/tax-payments/{period}: period_conflict): it holds
+   * one run's totals while another live run is paid out in the month
+   * (crm#1768). Set, the panel says so instead of showing an amount to pay
+   * or offering to pay it; marking the month paid stays.
+   */
+  periodConflict?: { code: string; message: string; message_en?: string } | null
   onChange?: () => void
 }
 
@@ -52,10 +83,13 @@ export function TaxPaymentPanel({
   paymentFileFormat,
   paymentFileGeneratedAt,
   taxPaidAt,
+  paymentDueDate,
   defaultFormat,
   senderBankgiro,
-  senderIban,
+  fileAccount,
   readOnly,
+  agiPeriod,
+  periodConflict,
   onChange,
 }: TaxPaymentPanelProps) {
   const t = useTranslations('salary_payments')
@@ -64,17 +98,6 @@ export function TaxPaymentPanel({
   const [format, setFormat] = useState<PaymentFormat>(defaultFormat)
   const [downloading, setDownloading] = useState(false)
   const [marking, setMarking] = useState(false)
-  const [paymentDeadline, setPaymentDeadline] = useState<string>('')
-
-  useEffect(() => {
-    const m = /^(\d{4})-(\d{2})$/.exec(period)
-    if (!m) return
-    const year = parseInt(m[1], 10)
-    const month = parseInt(m[2], 10)
-    const dlMonth = month === 12 ? 1 : month + 1
-    const dlYear = month === 12 ? year + 1 : year
-    setPaymentDeadline(`${dlYear}-${String(dlMonth).padStart(2, '0')}-12`)
-  }, [period])
 
   // The page passes the AGI declaration's stored totals when the AGI exists
   // (whole kronor for declarations generated since the whole-krona change:
@@ -155,12 +178,15 @@ export function TaxPaymentPanel({
     pain001: t('format_pain001'),
   }
 
-  // The sender account lives in company_settings, not in the Bolagsverket
-  // snapshot shown on the settings overview: say the precondition here,
-  // before the download 400s on it (same logic as PaymentFilePanel).
-  const senderMissing =
-    (format === 'bg_lb' && senderBankgiro === null) ||
-    (format === 'pain001' && senderIban === null)
+  // The LB sender lives in company_settings, not in the Bolagsverket
+  // snapshot shown on the settings overview; the pain.001 pays from the
+  // primary bank account, which needs an IBAN and a BIC of its own. Say the
+  // precondition here, before the download 400s on it (same logic as
+  // PaymentFilePanel).
+  const accountMissing = format === 'pain001' ? (fileAccount?.missing ?? null) : null
+  const senderMissing = (format === 'bg_lb' && senderBankgiro === null) || accountMissing !== null
+  // A declaration that may not be paid shows no amount to pay and no way to pay it.
+  const payable = !periodConflict
 
   return (
     <DetailSection
@@ -177,25 +203,36 @@ export function TaxPaymentPanel({
             className={cn(QUIET_LINK_CLASS, 'inline-flex items-center gap-1')}
           >
             {t('tax_skattekonto_button')}
-            <ExternalLink className="h-3 w-3" />
+            <ArrowTopRightOnSquareIcon className="h-3 w-3" />
           </a>
         ) : undefined
       }
     >
+      {periodConflict && (
+        <div className="mb-3">
+          <AttnLine>{getErrorMessage(periodConflict, { locale })}</AttnLine>
+        </div>
+      )}
       <div>
-        <DefRow label={t('tax_label_tax')}>
-          <span className="tabular-nums">{formatCurrency(totalTax)}</span>
-        </DefRow>
-        <DefRow label={t('tax_label_avgifter')}>
-          <span className="tabular-nums">{formatCurrency(totalAvgifter)}</span>
-        </DefRow>
-        <DefRow label={t('tax_label_total')}>
-          <span className="font-medium tabular-nums">{formatCurrency(totalAmount)}</span>
-        </DefRow>
+        {payable && (
+          <>
+            <DefRow label={t('tax_label_tax')}>
+              <span className="tabular-nums">{formatCurrency(totalTax)}</span>
+            </DefRow>
+            <DefRow label={t('tax_label_avgifter')}>
+              <span className="tabular-nums">{formatCurrency(totalAvgifter)}</span>
+            </DefRow>
+            <DefRow label={t('tax_label_total')}>
+              <span className="font-medium tabular-nums">{formatCurrency(totalAmount)}</span>
+            </DefRow>
+          </>
+        )}
         <DefRow label={t('tax_recipient')}>{t('tax_recipient_value')}</DefRow>
-        <DefRow label={t('tax_due_date')}>
-          <span className="tabular-nums">{paymentDeadline}</span>
-        </DefRow>
+        {paymentDueDate && (
+          <DefRow label={t('tax_due_date')}>
+            <span className="tabular-nums">{paymentDueDate}</span>
+          </DefRow>
+        )}
         {paymentFileGeneratedAt && (
           <DefRow label={t('tax_file_generated')}>
             {paymentFileFormat && (
@@ -209,13 +246,13 @@ export function TaxPaymentPanel({
             <span className="tabular-nums">{formatDateTime(taxPaidAt)}</span>
           </DefRow>
         )}
-        {!readOnly && (
+        {!readOnly && payable && (
           <DefRow label={t('format_label')}>
             <SettingsSelect
               aria-label={t('format_label')}
               value={format}
               onChange={(e) => setFormat(e.target.value as PaymentFormat)}
-              wrapperClassName="-my-1"
+              wrapperClassName="-my-1 max-w-xs"
             >
               <option value="pain001">{FORMAT_LABEL.pain001}</option>
               <option value="bg_lb">{FORMAT_LABEL.bg_lb}</option>
@@ -224,31 +261,47 @@ export function TaxPaymentPanel({
         )}
       </div>
 
-      {!readOnly && senderMissing && (
+      {!readOnly && payable && senderMissing && (
         <div className="mt-3">
-          <AttnLine action={{ label: t('missing_sender_link'), href: '/settings/invoicing' }}>
-            {format === 'bg_lb' ? t('missing_bankgiro_warning') : t('missing_iban_warning')}
+          <AttnLine
+            action={{
+              label: accountMissing ? t('missing_account_link') : t('missing_sender_link'),
+              href: '/settings/invoicing',
+            }}
+          >
+            {accountMissing && fileAccount
+              ? t(accountMissing === 'iban' ? 'missing_account_iban_warning' : 'missing_account_bic_warning', {
+                  account: payingAccountName(fileAccount.account),
+                })
+              : t('missing_bankgiro_warning')}
           </AttnLine>
         </div>
       )}
 
       {!readOnly && (
         <div className="mt-3 flex flex-wrap justify-end gap-2">
-          <Button onClick={handleDownload} disabled={downloading || marking}>
-            {downloading ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="mr-2 h-4 w-4" />
-            )}
-            {t('tax_download_button')}
-          </Button>
+          {!taxPaidAt && agiPeriod && payable && (
+            <PayDeclarationViaBankButton
+              source={{ source: 'agi', year: Number(agiPeriod.slice(0, 4)), month: Number(agiPeriod.slice(5, 7)) }}
+              sourceLabel={agiPeriod}
+              variant="outline"
+              onDone={onChange}
+            />
+          )}
+          {payable && (
+            <Button variant="outline" onClick={handleDownload} disabled={marking} loading={downloading}>
+              {!downloading && <ArrowDownTrayIcon className="h-4 w-4" />}
+              {t('tax_download_button')}
+            </Button>
+          )}
           {!taxPaidAt && (
             <Button
               variant="outline"
               onClick={handleMarkPaid}
-              disabled={downloading || marking}
+              disabled={downloading}
+              loading={marking}
             >
-              {marking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              {!marking && <CheckCircleIcon className="h-4 w-4" />}
               {t('tax_mark_paid_button')}
             </Button>
           )}

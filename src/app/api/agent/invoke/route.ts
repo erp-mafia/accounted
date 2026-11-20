@@ -1,9 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { getIntent } from '@/lib/agent/intents/registry'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
@@ -12,16 +12,19 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { assistantChatEnabledFor, assistantChatOffForEveryone } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { createLogger } from '@/lib/logger'
+import { localeFromCookieHeader } from '@/i18n/config'
 
-// Make sure extensions are loaded: the chat loop dispatches against the
-// agent tool registry which is populated by the mcp-server extension at load.
-ensureInitialized()
+const log = createLogger('api.agent.invoke')
 
 // Deep turns (thinking at high/xhigh effort, up to 12 tool iterations, a
 // 15-27k-token prompt prefix) can outlive the plan default duration cap; a
 // function killed mid-stream closes the NDJSON stream cleanly, which the chat
 // used to render as silent success. 300 s matches the other long-running model
-// surfaces (app/api/agent/ask).
+// surfaces (app/api/receipt-hunt/run, app/api/agent/ask).
 export const maxDuration = 300
 
 // Hard cap on the per-turn user input. Generous for a chat composer (about
@@ -104,6 +107,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `Unknown intent: ${body.intent_id}` }, { status: 400 })
   }
 
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED) with no
+  // company keeping it: no turn runs, for any intent, and nothing is read
+  // first. The onboarding interview (onboarding.intake) goes with the rest.
+  if (assistantChatOffForEveryone(todayIsoStockholm())) {
+    return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
+  }
+
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
@@ -114,11 +124,20 @@ export async function POST(request: Request) {
     .eq('user_id', user.id)
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  // The invoicing-only role (lib/auth/invoicer-role.ts) never reaches the
+  // assistant: it runs as the service role and reads the whole company.
+  if (isInvoicerRole(membership.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   // No Anthropic Bedrock calls in the sandbox: the demo runs entirely on
   // seed data and the assistant is gated to a "look, don't touch" preview.
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked
+
+  // The chat switched off with some companies keeping it
+  // (ASSISTANT_CHAT_COMPANY_IDS): a member of a company that is not one of
+  // them gets the same answer as when it is off for everyone, for every
+  // intent, the onboarding interview included.
+  if (!assistantChatEnabledFor(companyId, todayIsoStockholm())) return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
 
   const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
   if (capBlocked) return capBlocked
@@ -307,6 +326,10 @@ export async function POST(request: Request) {
           userMessageHidden,
           persist: true,
           preloadedProfileSummary,
+          // The language the app renders in, so the agent answers in it.
+          locale: localeFromCookieHeader(request.headers.get('cookie')),
+          readOnly: membership.role === 'viewer',
+          role: membership.role,
           emit: (event) => emit(event),
         })
       } catch (err) {

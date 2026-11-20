@@ -24,20 +24,17 @@ const TX_ROW = {
   date: '2025-11-15',
   is_ignored: false,
 }
-const CORE_ROW = { id: TX_ID, journal_entry_id: null, is_ignored: false }
+const CORE_ROW = { id: TX_ID, journal_entry_id: null, is_booked: false, is_ignored: false }
 
 const noopSupabase = { from: vi.fn() } as never
 
-/** Tool fetch + shared-core fetch + the three junction lookups. */
+/** Tool fetch + shared-core fetch. */
 function enqueueUnbooked(
   enqueue: (r: { data?: unknown; error?: unknown }) => void,
   overrides: { tool?: Record<string, unknown>; core?: Record<string, unknown> } = {},
 ) {
   enqueue({ data: { ...TX_ROW, ...overrides.tool } })
   enqueue({ data: { ...CORE_ROW, ...overrides.core } })
-  enqueue({ data: [] }) // transaction_voucher_links
-  enqueue({ data: [] }) // invoice_payments
-  enqueue({ data: [] }) // supplier_invoice_payments
 }
 
 beforeEach(() => {
@@ -76,31 +73,46 @@ describe('gnubok_ignore_transaction: validation gates', () => {
     expect((noopSupabase as { from: ReturnType<typeof vi.fn> }).from).not.toHaveBeenCalled()
   })
 
-  it('rejects when the transaction does not exist in this company', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null })
-    await expect(
-      tool.execute({ transaction_id: TX_ID }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/not found/i)
-  })
-
-  it('refuses a directly booked row with TX_IGNORE_ALREADY_BOOKED', async () => {
+  it('rejects with NOT_FOUND when the id is neither a bank transaction nor a skattekonto row of this company', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: TX_ROW })
-    enqueue({ data: { ...CORE_ROW, journal_entry_id: 'je-1' } })
+    enqueue({ data: null }) // transactions
+    enqueue({ data: null }) // skattekonto_transactions
     await expect(
       tool.execute({ transaction_id: TX_ID }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/TX_IGNORE_ALREADY_BOOKED/)
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: expect.stringMatching(/no skattekonto row/i) })
     expect(findCalls('pending_operations', 'insert')).toEqual([])
   })
 
-  it('refuses a bulk-booked row anchored only through transaction_voucher_links', async () => {
+  it('refuses a directly booked row with TX_IGNORE_ALREADY_BOOKED, as a code and not only in the text', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: TX_ROW })
-    enqueue({ data: CORE_ROW })
-    enqueue({ data: [{ transaction_id: TX_ID }] }) // voucher links
-    enqueue({ data: [] })
-    enqueue({ data: [] })
+    enqueue({ data: { ...CORE_ROW, journal_entry_id: 'je-1', is_booked: true } })
+    await expect(
+      tool.execute({ transaction_id: TX_ID }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'TX_IGNORE_ALREADY_BOOKED', message: expect.stringMatching(/TX_IGNORE_ALREADY_BOOKED/) })
+    expect(findCalls('pending_operations', 'insert')).toEqual([])
+  })
+
+  it('stages a row whose pointer names a verifikat no longer posted: the commit releases the pointer with the flag', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueUnbooked(enqueue, { core: { journal_entry_id: 'je-reversed' } })
+    enqueue({ data: null }) // company_settings
+    enqueue({ data: null }) // fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await tool.execute(
+      { transaction_id: TX_ID },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(1)
+  })
+
+  it('refuses a row booked with no pointer (a voucher link, a payment allocation)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: TX_ROW })
+    enqueue({ data: { ...CORE_ROW, is_booked: true } })
     await expect(
       tool.execute({ transaction_id: TX_ID }, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/TX_IGNORE_ALREADY_BOOKED/)
@@ -166,7 +178,7 @@ describe('gnubok_ignore_transaction: staging', () => {
   it('restore: true stages ignored: false without the booked check and points back at categorize', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { ...TX_ROW, is_ignored: true } }) // tool fetch
-    enqueue({ data: { ...CORE_ROW, is_ignored: true } }) // core fetch (no junction lookups on restore)
+    enqueue({ data: { ...CORE_ROW, is_ignored: true } }) // core fetch
     enqueue({ data: null }) // company_settings
     enqueue({ data: null }) // fiscal_periods
     enqueue({ data: { id: 'op-2' }, error: null }) // insert
@@ -183,6 +195,98 @@ describe('gnubok_ignore_transaction: staging', () => {
     expect(findCalls('pending_operations', 'insert')[0][0]).toMatchObject({
       title: 'Återställ ignorerad transaktion: SWISH DUBBLETT',
       params: { transaction_id: TX_ID, ignored: false },
+    })
+  })
+})
+
+const SKV_ID = '00000000-0000-4000-8000-0000000000bb'
+const SKV_ROW = {
+  id: SKV_ID,
+  transaktionsdatum: '2026-04-04',
+  transaktionstext: 'Slutlig skatt',
+  belopp_skatteverket: '-80803.00',
+  journal_entry_id: null,
+  is_ignored: false,
+}
+
+describe('gnubok_ignore_transaction: a skattekonto item_id (crm#1178)', () => {
+  it('stages ignore_transaction with the qualified skattekonto_transaction_id, never as a transaction_id', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null }) // transactions: not a bank row
+    enqueue({ data: SKV_ROW }) // skattekonto_transactions
+    enqueue({ data: null }) // company_settings
+    enqueue({ data: null }) // fiscal_periods
+    enqueue({ data: { id: 'op-3' }, error: null }) // insert
+
+    const result = (await tool.execute(
+      { transaction_id: SKV_ID },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown>; next?: { tool: string; args?: Record<string, unknown> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject({
+      skattekonto_transaction_id: SKV_ID,
+      account_key: 'skattekonto',
+      amount: -80803,
+      currently_ignored: false,
+      will_be_ignored: true,
+      writes_verifikat: false,
+    })
+    expect(result.preview).not.toHaveProperty('transaction_id')
+    expect(result.next).toMatchObject({ tool: 'gnubok_get_reconciliation_status', args: { account_key: 'skattekonto' } })
+    expect(findCalls('pending_operations', 'insert')[0][0]).toMatchObject({
+      operation_type: 'ignore_transaction',
+      title: 'Ignorera skattekontohändelse: Slutlig skatt',
+      params: { skattekonto_transaction_id: SKV_ID, ignored: true },
+    })
+    // Staging never flips the flag itself.
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
+  })
+
+  it('dry run previews and writes nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({ data: SKV_ROW })
+    enqueue({ data: null })
+    enqueue({ data: null })
+
+    const result = (await tool.execute(
+      { transaction_id: SKV_ID, dry_run: true },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; dry_run?: boolean }
+
+    expect(result.staged).toBe(false)
+    expect(result.dry_run).toBe(true)
+    expect(findCalls('pending_operations', 'insert')).toEqual([])
+  })
+
+  it('refuses a linked skattekonto row and names the unlink tool', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({ data: { ...SKV_ROW, journal_entry_id: 'je-1' } })
+
+    await expect(
+      tool.execute({ transaction_id: SKV_ID }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({
+      code: 'TX_IGNORE_ALREADY_BOOKED',
+      remediation: { tool: 'gnubok_reconcile_unmatch', args: { account_key: 'skattekonto', external_id: SKV_ID } },
+    })
+    expect(findCalls('pending_operations', 'insert')).toEqual([])
+  })
+
+  it('restore: true stages ignored: false on an ignored row', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({ data: { ...SKV_ROW, is_ignored: true } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: { id: 'op-4' }, error: null })
+
+    await tool.execute({ transaction_id: SKV_ID, restore: true }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+
+    expect(findCalls('pending_operations', 'insert')[0][0]).toMatchObject({
+      title: 'Återställ ignorerad skattekontohändelse: Slutlig skatt',
+      params: { skattekonto_transaction_id: SKV_ID, ignored: false },
     })
   })
 })

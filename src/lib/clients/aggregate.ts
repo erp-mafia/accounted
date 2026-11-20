@@ -13,6 +13,8 @@ import {
   ACTION_NEEDED_THRESHOLD_DAYS,
   daysUntilDeadline,
 } from '@/lib/deadlines/status-engine'
+import type { CompanySwitchState } from '@/lib/bank-feed/switch-campaign'
+import type { AttestQueues } from '@/lib/supplier-invoices/attest-queues'
 
 export type DeadlineUrgency = 'overdue' | 'action_needed' | 'upcoming'
 
@@ -23,10 +25,47 @@ export interface ClientDeadline {
   urgency: DeadlineUrgency
 }
 
+/**
+ * Where a client stands in the Enable Banking to Open Payments switch, as the
+ * cockpit column shows it: pending (byt senast), stopped (the deadline has
+ * passed with the switch not made), uncovered (banks Open Payments does not
+ * reach: file import), done (switched, or connected anew).
+ */
+export type ClientBankSwitchState = 'pending' | 'stopped' | 'uncovered' | 'done'
+
+export interface ClientBankSwitch {
+  state: ClientBankSwitchState
+  /** The campaign deadline (ISO date). */
+  deadline: string
+  daysLeft: number
+  /** The banks still to switch (pending, stopped) or unreachable (uncovered); empty when done. */
+  banks: string[]
+}
+
+/**
+ * The cockpit's view of a company's campaign state (lib/bank-feed/
+ * switch-campaign.ts). Null when the company never had a bank feed to
+ * switch: no Enable Banking row left and no Open Payments connection, which
+ * the column shows as a dash rather than a false "done".
+ */
+export function clientBankSwitchFrom(state: CompanySwitchState | null | undefined): ClientBankSwitch | null {
+  if (!state) return null
+  if (state.pending.length > 0) {
+    return { state: state.passed ? 'stopped' : 'pending', deadline: state.deadline, daysLeft: state.days_left, banks: state.pending.map((p) => p.bank_name) }
+  }
+  if (state.uncovered.length > 0) {
+    return { state: 'uncovered', deadline: state.deadline, daysLeft: state.days_left, banks: state.uncovered.map((u) => u.bank_name) }
+  }
+  if (state.open_payments > 0) return { state: 'done', deadline: state.deadline, daysLeft: state.days_left, banks: [] }
+  return null
+}
+
 export interface ClientOverviewRow {
   companyId: string
   name: string
   orgNumber: string | null
+  /** The byrå's own customer number for the client (companies.byra_client_number); null when unset. */
+  clientNumber: string | null
   /** Canonical "att bokföra" count (lib/worklist book_transaction predicate). */
   unbookedCount: number
   /** Unconsumed inbox documents (lib/worklist inbox_document predicate). */
@@ -34,6 +73,28 @@ export interface ClientOverviewRow {
   nextDeadline: ClientDeadline | null
   /** Latest posted verifikat date; null = nothing booked yet. */
   lastBookedDate: string | null
+  /**
+   * The client's state in the bank connection switch campaign. Only present
+   * when the fetch layer was asked for it and the campaign is on (the byrå
+   * cockpit); null for a client the campaign does not apply to or that never
+   * had a bank feed.
+   */
+  bankSwitch?: ClientBankSwitch | null
+  /**
+   * The client's attest queues (lib/supplier-invoices/attest-queues.ts):
+   * invoices waiting for the client's attest and the ones ready to pay.
+   * Only present when the fetch layer was asked for them (the byrå client
+   * list); null for a client without an attest step (no policy, policy off,
+   * kontantmetoden), which the columns show as a dash.
+   */
+  attest?: AttestQueues | null
+  /**
+   * Open deadlines sorted by due date (at most DEADLINES_PER_COMPANY_CAP).
+   * Only present when the fetch layer was asked for them (portfolio reads
+   * filter on a deadline KIND, which nextDeadline alone cannot answer); the
+   * byrå cockpit payload does not carry them.
+   */
+  deadlines?: ClientDeadline[]
 }
 
 /** Count rows per company_id from a flat grouped-query result. */
@@ -83,12 +144,45 @@ export function pickNextDeadlines(rows: DeadlineRowInput[]): Map<string, ClientD
   }
   const result = new Map<string, ClientDeadline>()
   for (const [companyId, { row }] of next) {
-    result.set(companyId, {
-      title: row.title,
-      dueDate: row.due_date,
-      taxDeadlineType: row.tax_deadline_type,
-      urgency: deadlineUrgency(row),
-    })
+    result.set(companyId, toClientDeadline(row))
+  }
+  return result
+}
+
+function toClientDeadline(row: DeadlineRowInput): ClientDeadline {
+  return {
+    title: row.title,
+    dueDate: row.due_date,
+    taxDeadlineType: row.tax_deadline_type,
+    urgency: deadlineUrgency(row),
+  }
+}
+
+/** Open deadlines kept per company on a portfolio row (earliest first). */
+export const DEADLINES_PER_COMPANY_CAP = 10
+
+/**
+ * Group a flat list of open deadlines per company, earliest due date first
+ * (title breaks ties so the order is stable), capped per company. Input does
+ * not need to be pre-sorted. Feeds the portfolio deadline-kind filter, which
+ * needs more than the single earliest deadline pickNextDeadlines returns.
+ */
+export function groupDeadlinesByCompany(
+  rows: DeadlineRowInput[],
+  cap: number = DEADLINES_PER_COMPANY_CAP,
+): Map<string, ClientDeadline[]> {
+  const grouped = new Map<string, DeadlineRowInput[]>()
+  for (const row of rows) {
+    const list = grouped.get(row.company_id)
+    if (list) list.push(row)
+    else grouped.set(row.company_id, [row])
+  }
+  const result = new Map<string, ClientDeadline[]>()
+  for (const [companyId, list] of grouped) {
+    const sorted = [...list].sort(
+      (a, b) => a.due_date.localeCompare(b.due_date) || a.title.localeCompare(b.title, 'sv'),
+    )
+    result.set(companyId, sorted.slice(0, cap).map(toClientDeadline))
   }
   return result
 }
@@ -116,13 +210,14 @@ export function sortClientRows(rows: ClientOverviewRow[]): ClientOverviewRow[] {
   })
 }
 
-/** Case-insensitive free-text filter on name and org number. */
+/** Case-insensitive free-text filter on name, the byrå's customer number and org number. */
 export function filterClientRows(rows: ClientOverviewRow[], query: string): ClientOverviewRow[] {
   const q = query.trim().toLowerCase()
   if (!q) return rows
   const qDigits = q.replace(/[^0-9]/g, '')
   return rows.filter((row) => {
     if (row.name.toLowerCase().includes(q)) return true
+    if (row.clientNumber?.toLowerCase().includes(q)) return true
     const org = row.orgNumber ?? ''
     if (org.toLowerCase().includes(q)) return true
     // "5560-1257" should match "5560125790": compare digits to digits.

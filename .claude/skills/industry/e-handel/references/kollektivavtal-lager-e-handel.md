@@ -1,3 +1,7 @@
+---
+areas: [lon]
+---
+
 # Lager- och E-handelsavtalet 2025-2027
 
 ## Parter och avtalsperiod

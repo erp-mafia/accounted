@@ -10,8 +10,8 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "category": "operations",
           "icon": "Calendar",
           "dataPattern": "core",
-          "description": "Fullständig kalendervy med månads-, vecko- och dagsvisning",
-          "longDescription": "Se alla fakturadatum och deadlines i en interaktiv kalender med månads-, vecko- och dagsvy.",
+          "description": "Synka deadlines och fakturornas förfallodagar med Apple Calendar, Google Calendar eller Outlook",
+          "longDescription": "Prenumerera på deadlines och fakturornas förfallodagar i Apple Calendar, Google Calendar eller Outlook. Länken skapar du under Inställningar, Ditt konto.",
           "readsCoreTables": [
                 "invoices",
                 "deadlines",
@@ -53,7 +53,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "icon": "ArrowRightLeft",
           "dataPattern": "manual",
           "description": "Migrera bokföring från Fortnox, Visma, Bokio, Björn Lundén eller Briox",
-          "longDescription": "Flytta all bokföringsdata från ditt gamla system till gnubok. Importerar kontoplan, verifikationer, kunder, leverantörer och öppna fakturor automatiskt via säker API-integration direkt med leverantören."
+          "longDescription": "Flytta all bokföringsdata från ditt gamla system till Accounted. Importerar kontoplan, verifikationer, kunder, leverantörer och öppna fakturor automatiskt via säker API-integration direkt med leverantören."
     },
     {
           "slug": "tic",
@@ -64,14 +64,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "dataPattern": "manual",
           "description": "Hämta företagsinformation automatiskt vid registrering",
           "longDescription": "Fyll i företagsuppgifter automatiskt genom att ange organisationsnummer. Hämtar adress, momsregistrering, F-skattestatus och bankuppgifter från offentliga register via TIC.",
-          "hasOwnData": true,
-          "quickAction": {
-                "label": "Företagsprofil",
-                "description": "Visa offentliga uppgifter",
-                "icon": "Briefcase",
-                "href": "/e/general/tic",
-                "order": 10
-          }
+          "hasOwnData": true
     },
     {
           "slug": "mcp-server",
@@ -103,7 +96,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "icon": "FileCheck",
           "dataPattern": "core",
           "description": "Skicka momsdeklaration direkt till Skatteverket via BankID.",
-          "longDescription": "Anslut till Skatteverket med BankID och skicka din momsdeklaration direkt från gnubok. Spara utkast, validera, lås och signera: utan att lämna appen."
+          "longDescription": "Anslut till Skatteverket med BankID och skicka din momsdeklaration direkt från Accounted. Spara utkast, validera, lås och signera: utan att lämna appen."
     },
     {
           "slug": "invoice-inbox",
@@ -194,6 +187,18 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "description": "Hämta betalda köp och återbetalningar från Zettle till Ordersidan",
           "longDescription": "Anslut ditt Zettle-konto så hämtas betalda köp och återbetalningar automatiskt varje natt till Ordersidan, med belopp, betalsätt, moms per sats och radunderlag. Inget bokförs automatiskt: du bokför varje köp själv från Ordersidan.",
           "hasOwnData": true
+    },
+    {
+          "slug": "mail",
+          "name": "Brevlådor",
+          "sector": "general",
+          "category": "operations",
+          "icon": "Mail",
+          "dataPattern": "manual",
+          "description": "Låt Kvittojakten leta upp kvitton i era brevlådor",
+          "longDescription": "Koppla en eller flera brevlådor, så letar Kvittojakten själv upp kvitton till kortköp som saknar underlag. Åtkomsten är läsbehörighet: agenten kan aldrig skicka, ändra eller radera något i din mejl. Inkorgen kopieras aldrig, utan bara mejl som kan vara ett kvitto till ett visst köp hämtas i stunden och släpps igen. Det som blir underlag arkiveras i ert vanliga sjuåriga arkiv, efter att du godkänt det.",
+          "hasOwnData": true,
+          "subscriptionNotice": "Kräver ett Google-konto. Varje brevlåda kopplas av sin egen ägare och kan kopplas från när som helst."
     },
   ],
 }

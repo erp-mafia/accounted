@@ -66,18 +66,15 @@ describe('staged operation titles: must carry contextual data', () => {
    * call and require the title literal to either be a template (${...}) or
    * contain enough characters that it must include context.
    */
-  it('every stagePendingOperation call uses a template literal title', () => {
+  it('every stage() call uses a template literal title', () => {
     const source = readFileSync(
       resolve(__dirname, '../server.ts'),
       'utf8'
     )
 
-    // Match `stagePendingOperation(...,  <title>,  ...)` where <title> is the
-    // 5th argument. We use a forgiving regex: find each call site, then peel
-    // the args. The shape is consistent enough across the file (supabase,
-    // companyId, userId, opType, title, ...) that the 5th argument is always
-    // the title-bearing position.
-    const callPattern = /stagePendingOperation\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*['"][a-z_]+['"]\s*,\s*(`[^`]+`|'[^']+'|"[^"]+")/g
+    // Match `stage({ ..., type: '<op>', title: <title>, ...` in each call
+    // site: the named arguments keep the title right after the type.
+    const callPattern = /stage\(\{[^]*?\btype: ['"][a-z_]+['"],\s*title: (`[^`]+`|'[^']+'|"[^"]+")/g
 
     const titles: string[] = []
     let match: RegExpExecArray | null

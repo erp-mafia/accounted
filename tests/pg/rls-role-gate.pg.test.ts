@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getPool, withUserContext } from './setup'
+import { withUserContext } from './setup'
 import {
   insertAuthUser,
   insertCompany,
@@ -7,6 +7,7 @@ import {
   insertDraftJournalEntry,
   insertBalancedLines,
   seedCompany,
+  setActiveCompany,
 } from './fixtures'
 
 // Validates migration 20260702093000_rls_role_gate_and_voucher_rpc_guards:
@@ -16,15 +17,6 @@ import {
 //   2. commit_journal_entry() refuses an authenticated caller who is not a
 //      member of the target company (42501), the cross-tenant hole this
 //      migration closes, while a member commits normally.
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
-}
 
 describe('write-authorization role gate', () => {
   it('current_user_can_write() is true for a non-viewer member', async () => {
@@ -107,7 +99,7 @@ describe('commit_journal_entry tenant guard', () => {
           companyId,
           entryId,
         ]),
-      ).rejects.toThrow(/unauthorized: caller is not a member/i)
+      ).rejects.toMatchObject({ code: '42501', message: 'CASH_ACCOUNT_COMPANY_WRITE_DENIED' })
     })
   })
 })

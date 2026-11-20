@@ -44,7 +44,10 @@ export async function completeTaxDeadline(
     .select('id')
 
   if (error) {
-    log.warn('Failed to auto-complete tax deadline', {
+    // No caller retries (the filing that triggered this is already recorded),
+    // so the deadline stays open while the filing is done: an error, so it
+    // reaches error tracking (accounted#115). Still never a throw.
+    log.error('Failed to auto-complete tax deadline', {
       companyId,
       taxDeadlineTypes,
       taxPeriod,

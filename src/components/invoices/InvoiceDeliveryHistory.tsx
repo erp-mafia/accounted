@@ -1,12 +1,20 @@
 'use client'
 
 import { useFormatter, useTranslations } from 'next-intl'
-import { ChevronRight, ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, ChevronRightIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useBranding } from '@/lib/branding/brand-context'
-import { isDestructiveDeliveryStatus } from '@/lib/invoices/delivery-recipient-statuses'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
+import {
+  isDestructiveDeliveryStatus,
+  showsRecipientBreakdown,
+} from '@/lib/invoices/delivery-recipient-statuses'
+import { mergeDeliveryHistory, type MailboxDispatchView } from '@/lib/invoices/digital-mailbox-view'
+import { invoiceArchivedPdfUrl } from '@/lib/invoices/invoice-pdf-source'
+import { PROVIDER_DISPLAY_NAMES } from '@/lib/providers/unfinished-connect'
+import type { ProviderName } from '@/lib/providers/types'
 import type { InvoiceDelivery, InvoiceDeliveryProviderStatus } from '@/types'
 
 export type InvoiceDeliveryView = Pick<
@@ -32,7 +40,11 @@ export type InvoiceDeliveryView = Pick<
 
 interface InvoiceDeliveryHistoryProps {
   deliveries: InvoiceDeliveryView[]
+  /** Sends to the customer's Kivra or Billo mailbox, merged in by time. */
+  mailboxDispatches?: MailboxDispatchView[]
   showLegacyEmptyState: boolean
+  /** Set for the invoicing-only role: a delivery's file is linked through this invoice, not through /api/documents. */
+  pdfThroughInvoiceId?: string
 }
 
 /**
@@ -66,13 +78,24 @@ const outcomeVariant: Partial<Record<DeliveryOutcome, 'warning' | 'destructive'>
 
 export function InvoiceDeliveryHistory({
   deliveries,
+  mailboxDispatches = [],
   showLegacyEmptyState,
+  pdfThroughInvoiceId,
 }: InvoiceDeliveryHistoryProps) {
   const t = useTranslations('invoice_detail')
+  // The invoicing-only role reads a delivery's file through the invoice; it
+  // never reaches /api/documents (lib/auth/invoicer-role.ts).
+  const pdfHref = (deliveryId: string, documentId: string) =>
+    pdfThroughInvoiceId ? invoiceArchivedPdfUrl(pdfThroughInvoiceId, deliveryId) : `/api/documents/${documentId}/inline`
   const format = useFormatter()
   const { appName } = useBranding()
 
-  if (deliveries.length === 0 && !showLegacyEmptyState) return null
+  const entries = mergeDeliveryHistory(
+    deliveries,
+    (delivery) => delivery.sent_at || delivery.failed_at || delivery.created_at,
+    mailboxDispatches,
+  )
+  if (entries.length === 0 && !showLegacyEmptyState) return null
 
   const formatTimestamp = (value: string) =>
     format.dateTime(new Date(value), {
@@ -89,20 +112,47 @@ export function InvoiceDeliveryHistory({
       kicker={t('delivery_history_title')}
       help={<HelpPopover>{t('delivery_history_description')}</HelpPopover>}
     >
-      {deliveries.length === 0 ? (
+      {entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('delivery_history_legacy_description')}</p>
       ) : (
         <div className="divide-y divide-border">
-          {deliveries.map((delivery) => {
-            const occurredAt = delivery.sent_at || delivery.failed_at || delivery.created_at
+          {entries.map((entry) => {
+            if (entry.kind === 'mailbox') {
+              // A mailbox send: provider, time and outcome on one line. A
+              // failure carries the chip (convention 5).
+              const { dispatch } = entry
+              return (
+                <div key={`mailbox-${dispatch.id}`} className="flex min-h-11 items-center gap-3 py-2 text-sm">
+                  <span className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span className="tabular-nums text-muted-foreground">{formatTimestamp(entry.at)}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {t('delivery_channel_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[dispatch.provider] })}
+                  </span>
+                  {dispatch.status === 'failed' ? (
+                    <Badge variant="destructive">{t('delivery_status_failed')}</Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{t('delivery_status_sent')}</span>
+                  )}
+                </div>
+              )
+            }
+            const { delivery } = entry
+            const occurredAt = entry.at
             const isManual = delivery.channel === 'manual'
+            // The invoice's own PDF from the previous system: no recipients,
+            // no message and no send by us, only the archived copy.
+            const isImport = delivery.channel === 'import'
+            const importProvider = isImport
+              ? PROVIDER_DISPLAY_NAMES[delivery.provider as ProviderName] ?? delivery.provider ?? ''
+              : ''
             const outcome = outcomeOf(delivery)
-            const outcomeChip = outcomeVariant[outcome]
-            const isEmailSend = !isManual && delivery.status === 'sent'
+            const outcomeChip = isImport ? undefined : outcomeVariant[outcome]
+            const isEmailSend = delivery.channel === 'email' && delivery.status === 'sent'
             const recipientCount =
               delivery.to_addresses.length + delivery.cc_addresses.length
             const recipientStatuses = delivery.provider_recipient_statuses ?? {}
             const hasRecipientStatuses = Object.keys(recipientStatuses).length > 0
+            const showRecipientRows = showsRecipientBreakdown(outcome, recipientStatuses, recipientCount)
             const recipientRows = [
               ...delivery.to_addresses.map((address, index) => ({
                 address,
@@ -129,15 +179,19 @@ export function InvoiceDeliveryHistory({
             return (
               <details key={delivery.id} className="group">
                 <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 py-2 text-sm transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
+                  <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
                   <span className="tabular-nums text-muted-foreground">{formatTimestamp(occurredAt)}</span>
                   <span className="min-w-0 flex-1 truncate">
-                    {isManual ? t('delivery_channel_manual') : t('delivery_channel_email')}
+                    {isImport
+                      ? t('delivery_channel_import', { provider: importProvider })
+                      : isManual ? t('delivery_channel_manual') : t('delivery_channel_email')}
                   </span>
                   {outcomeChip ? (
                     <Badge variant={outcomeChip}>{t(`delivery_status_${outcome}`)}</Badge>
                   ) : (
-                    <span className="text-xs text-muted-foreground">{t(`delivery_status_${outcome}`)}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {isImport ? t('delivery_status_imported') : t(`delivery_status_${outcome}`)}
+                    </span>
                   )}
                 </summary>
 
@@ -146,6 +200,25 @@ export function InvoiceDeliveryHistory({
                     <p className="text-sm text-muted-foreground">
                       {t('delivery_manual_unknown_details', { appName })}
                     </p>
+                  ) : isImport ? (
+                    <div className="space-y-2 text-sm">
+                      <p className="text-muted-foreground">
+                        {t('delivery_import_details', { provider: importProvider, appName })}
+                      </p>
+                      {delivery.document_attachment_id && (
+                        <a
+                          href={pdfHref(delivery.id, delivery.document_attachment_id)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex max-w-full items-center gap-1 hover:underline"
+                        >
+                          <span className="truncate">
+                            {delivery.attachment_filename || t('delivery_pdf_fallback')}
+                          </span>
+                          <ArrowTopRightOnSquareIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        </a>
+                      )}
+                    </div>
                   ) : (
                     <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[8rem_minmax(0,1fr)]">
                       <dt className="text-muted-foreground">{t('delivery_to_label')}</dt>
@@ -169,7 +242,7 @@ export function InvoiceDeliveryHistory({
                               )}
                             </span>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {hasRecipientStatuses
+                              {showRecipientRows
                                 ? t('delivery_recipient_statuses_summary')
                                 : t(`delivery_status_explanation_${outcome}`)}
                             </p>
@@ -188,7 +261,7 @@ export function InvoiceDeliveryHistory({
                           </dd>
                         </>
                       )}
-                      {isEmailSend && hasRecipientStatuses && (
+                      {isEmailSend && showRecipientRows && (
                         <>
                           <dt className="text-muted-foreground">{t('delivery_recipient_statuses_label')}</dt>
                           <dd>
@@ -238,7 +311,7 @@ export function InvoiceDeliveryHistory({
                           <dt className="text-muted-foreground">{t('delivery_pdf_label')}</dt>
                           <dd>
                             <a
-                              href={`/api/documents/${delivery.document_attachment_id}/inline`}
+                              href={pdfHref(delivery.id, delivery.document_attachment_id)}
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex max-w-full items-center gap-1 hover:underline"
@@ -246,15 +319,9 @@ export function InvoiceDeliveryHistory({
                               <span className="truncate">
                                 {delivery.attachment_filename || t('delivery_pdf_fallback')}
                               </span>
-                              <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+                              <ArrowTopRightOnSquareIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
                             </a>
                           </dd>
-                        </>
-                      )}
-                      {delivery.provider && (
-                        <>
-                          <dt className="text-muted-foreground">{t('delivery_provider_label')}</dt>
-                          <dd className="text-muted-foreground">{delivery.provider}</dd>
                         </>
                       )}
                       {delivery.error_code && (

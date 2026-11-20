@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { todayIso } from '@/lib/arkiv/agreements/dates'
 import type { AgreementKind, Period } from '@/lib/arkiv/agreements/derive'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -64,12 +64,15 @@ interface DeadlineRow {
 const AMOUNT_FIELDS = ['monthly_rent', 'monthly_fee', 'instalment_amount', 'principal', 'fee_amount']
 
 export const GET = withRouteContext('arkiv.agreements', async (_request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const today = todayIso()
   const { data: agreementData, error } = await ctx.supabase
     .from('agreements')
     .select('id, kind, title, status, counterparty_party_id, counterparty_name, amount, currency, period, starts_on, ends_on, source_document_id, sources')
     .eq('company_id', ctx.companyId)
+    // The archive's agreements are the ones read from its documents; the ones a
+    // person registers by hand live in Avtal och åtaganden (lib/commitments).
+    .not('source_document_id', 'is', null)
     .order('status', { ascending: true })
     .order('ends_on', { ascending: true, nullsFirst: false })
     .limit(500)

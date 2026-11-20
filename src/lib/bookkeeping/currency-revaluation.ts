@@ -1,11 +1,18 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { fxDifferenceLine } from '@/lib/bookkeeping/ore-rounding'
+import { postingEvidence, yearEndStornoBusinessEvent } from '@/lib/core/bookkeeping/year-end-business-events'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import {
   fetchPaymentsAsOf,
   outstandingAsOf,
-  todayIsoDate,
   type PaymentsAsOf,
 } from '@/lib/reports/reskontra-payments'
 import {
@@ -20,7 +27,10 @@ import type {
   CurrencyRevaluationPreview,
   CurrencyRevaluationResult,
   CreateJournalEntryLineInput,
+  JournalEntry,
 } from '@/types'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const FX_CLOSING_RATE_UNAVAILABLE = 'FX_CLOSING_RATE_UNAVAILABLE' as const
 
@@ -140,6 +150,25 @@ export async function fetchFxExposureScope(
 }
 
 /**
+ * The exposure scope for the posting path. Unlike the preview's read above it
+ * fails closed (accounted#58): with the settings unreadable or missing, 'all'
+ * would revalue a kontantmetod or deferring company's unbooked rows and post
+ * a write-down of an account standing at zero.
+ */
+export async function requireFxExposureScope(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<FxExposureScope> {
+  const read = await supabase
+    .from('company_settings')
+    .select('accounting_method, defer_invoice_booking')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  requireAccountingMethod(read)
+  return fxExposureScope(read.data as Parameters<typeof fxExposureScope>[0])
+}
+
+/**
  * Fetch open foreign-currency receivables (invoices).
  * Returns invoices with status 'sent', 'overdue' or 'partially_paid' and
  * non-SEK currency, INCLUDING ones with no `exchange_rate`: filtering those
@@ -170,7 +199,7 @@ export async function getOpenForeignCurrencyReceivables(
   companyId: string,
   asOfDate?: string
 ): Promise<Invoice[]> {
-  const historical = asOfDate != null && asOfDate < todayIsoDate()
+  const historical = asOfDate != null && asOfDate < todayIsoStockholm()
   try {
     // Paginated with a stable id order so a company with >1000 open FX invoices
     // is fully revalued rather than silently truncated at 1000 rows.
@@ -186,8 +215,8 @@ export async function getOpenForeignCurrencyReceivables(
         .in(
           'status',
           historical
-            ? ['sent', 'overdue', 'partially_paid', 'paid']
-            : ['sent', 'overdue', 'partially_paid']
+            ? [...OWED_INVOICE_STATUSES, 'paid']
+            : OWED_INVOICE_STATUSES
         )
       const scoped = asOfDate != null ? base.lte('invoice_date', asOfDate) : base
       return scoped.order('id', { ascending: true }).range(from, to)
@@ -214,7 +243,7 @@ export async function getOpenForeignCurrencyPayables(
   companyId: string,
   asOfDate?: string
 ): Promise<SupplierInvoice[]> {
-  const historical = asOfDate != null && asOfDate < todayIsoDate()
+  const historical = asOfDate != null && asOfDate < todayIsoStockholm()
   try {
     // Paginated with a stable id order so a company with >1000 open FX payables
     // is fully revalued rather than silently truncated at 1000 rows.
@@ -261,7 +290,9 @@ export async function getOpenForeignCurrencyPayables(
 export async function previewCurrencyRevaluation(
   supabase: SupabaseClient,
   companyId: string,
-  closingDate: string
+  closingDate: string,
+  /** The posting path's fail-closed scope; the preview reads its own otherwise. */
+  options: { scope?: FxExposureScope } = {}
 ): Promise<CurrencyRevaluationPreviewWithExclusions> {
   const emptyPreview: CurrencyRevaluationPreviewWithExclusions = {
     items: [],
@@ -275,7 +306,7 @@ export async function previewCurrencyRevaluation(
     missingClosingRates: [],
   }
 
-  const scope = await fetchFxExposureScope(supabase, companyId)
+  const scope = options.scope ?? (await fetchFxExposureScope(supabase, companyId))
 
   const [receivables, payables] = await Promise.all([
     getOpenForeignCurrencyReceivables(supabase, companyId, closingDate),
@@ -286,7 +317,7 @@ export async function previewCurrencyRevaluation(
   // today, not the balance sheet being valued: reconstruct each row's
   // outstanding from the payment history, the same walk-back the reskontra
   // reports and countOpenFxItemsAtBalansdagen use.
-  const isHistorical = closingDate < todayIsoDate()
+  const isHistorical = closingDate < todayIsoStockholm()
   const [receivablePayments, payablePayments]: [PaymentsAsOf | null, PaymentsAsOf | null] =
     await Promise.all([
       isHistorical && receivables.length > 0
@@ -353,7 +384,7 @@ export async function previewCurrencyRevaluation(
       unconvertedFx.push({
         type: 'payable',
         source_id: si.id,
-        reference: si.supplier_invoice_number,
+        reference: si.supplier_invoice_number ?? '',
         currency: si.currency as Currency,
         amount_in_currency: outstanding,
       })
@@ -368,12 +399,10 @@ export async function previewCurrencyRevaluation(
   }
 
   // Fetch closing rates one currency at a time through fetchExchangeRate: it
-  // is the documented booking path and returns null rather than one of the
-  // hardcoded display-only constants in getFallbackRate(). fetchMultipleRates
-  // pads its Map with those constants to keep a fully-populated-Map contract,
-  // which is fine for a rate widget and unacceptable for a verifikat: this
-  // function's output is posted to 3960/7960. Passing `supabase` uses the
-  // shared exchange_rates cache, so a balansdagen rate stays reproducible.
+  // is the documented booking path and returns null rather than a made-up
+  // rate, which matters because this function's output is posted to
+  // 3960/7960. Passing `supabase` uses the shared exchange_rates cache, so a
+  // balansdagen rate stays reproducible.
   const currencyList = Array.from(currencies)
   const fetched = await Promise.all(
     currencyList.map((currency) => fetchExchangeRate(currency, new Date(closingDate), supabase))
@@ -404,8 +433,8 @@ export async function previewCurrencyRevaluation(
     if (!closingRate || !inv.exchange_rate) continue
 
     const amountInCurrency = outstanding
-    const originalSek = Math.round(amountInCurrency * inv.exchange_rate * 100) / 100
-    const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100
+    const originalSek = sekOfForeign(amountInCurrency, inv.exchange_rate)
+    const closingSek = sekOfForeign(amountInCurrency, closingRate)
     const difference = Math.round((closingSek - originalSek) * 100) / 100
 
     if (Math.abs(difference) < 0.01) continue
@@ -431,8 +460,8 @@ export async function previewCurrencyRevaluation(
 
     const amountInCurrency = outstanding
 
-    const originalSek = Math.round(amountInCurrency * si.exchange_rate * 100) / 100
-    const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100
+    const originalSek = sekOfForeign(amountInCurrency, si.exchange_rate)
+    const closingSek = sekOfForeign(amountInCurrency, closingRate)
     const difference = Math.round((closingSek - originalSek) * 100) / 100
 
     if (Math.abs(difference) < 0.01) continue
@@ -440,7 +469,7 @@ export async function previewCurrencyRevaluation(
     items.push({
       type: 'payable',
       source_id: si.id,
-      reference: si.supplier_invoice_number,
+      reference: si.supplier_invoice_number ?? '',
       currency: si.currency as Currency,
       amount_in_currency: amountInCurrency,
       original_rate: si.exchange_rate,
@@ -518,22 +547,9 @@ export async function previewCurrencyRevaluation(
       line_description: 'Omvärdering leverantörsskulder: orealiserad kursförlust',
     })
   }
-  if (credit3960 > 0) {
-    lines.push({
-      account_number: '3960',
-      debit_amount: 0,
-      credit_amount: Math.round(credit3960 * 100) / 100,
-      line_description: 'Orealiserade valutakursvinster',
-    })
-  }
-  if (debit7960 > 0) {
-    lines.push({
-      account_number: '7960',
-      debit_amount: Math.round(debit7960 * 100) / 100,
-      credit_amount: 0,
-      line_description: 'Orealiserade valutakursförluster',
-    })
-  }
+  const unrealised = { gain: 'Orealiserade valutakursvinster', loss: 'Orealiserade valutakursförluster' }
+  if (credit3960 > 0) lines.push(fxDifferenceLine(credit3960, unrealised))
+  if (debit7960 > 0) lines.push(fxDifferenceLine(-debit7960, unrealised))
 
   const totalGain = Math.round(credit3960 * 100) / 100
   const totalLoss = Math.round(debit7960 * 100) / 100
@@ -553,8 +569,45 @@ export async function previewCurrencyRevaluation(
 }
 
 /**
+ * The business event of a balansdagen revaluation (kind
+ * ledger.currency_revaluation), for the posting port: recorded while
+ * POSTING_EVENTS is shadow or strict, never built while it is off. Pure.
+ * The subject is the fiscal period valued, dated balansdagen; the amount is
+ * the net effect on the result (unrealised gains on 3960 less losses on
+ * 7960), a SEK magnitude, filed under finance.banking (whose key names
+ * currency results). No party: one verifikat values every open receivable
+ * and payable.
+ */
+export function currencyRevaluationBusinessEvent(args: {
+  fiscalPeriodId: string
+  closingDate: string
+  netEffect: number
+  linkBasis: LinkBasisColumns
+}): BusinessEventDraft {
+  const amount = Math.abs(args.netEffect)
+  return {
+    kind: 'ledger.currency_revaluation',
+    category: 'finance.banking',
+    occurredOn: args.closingDate,
+    subject: { type: 'fiscal_period', id: args.fiscalPeriodId },
+    currency: 'SEK',
+    amount,
+    amountSek: amount,
+    ...postingEvidence(args.linkBasis),
+    mappingVersion: mappingVersion('currencyRevaluation'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * Execute currency revaluation for a fiscal period.
  * Creates a journal entry with source_type 'currency_revaluation'.
+ *
+ * Posting port (step 2g): the verifikat goes through lib/posting, which hands
+ * the engine its input unchanged and, while POSTING_EVENTS is on, records
+ * ledger.currency_revaluation first. Its link basis is the request's own
+ * (linkBasisColumns): a person, an approved operation, an API client or the
+ * year-end close that runs it as its step 2.
  *
  * Returns null if no foreign-currency items exist.
  * Throws if a revaluation entry already exists for this period (idempotency).
@@ -568,7 +621,9 @@ export async function executeCurrencyRevaluation(
   fiscalPeriodId: string,
   userId?: string
 ): Promise<CurrencyRevaluationResultWithExclusions | null> {
-  // Idempotency check: prevent double revaluation
+  // Idempotency check: prevent double revaluation. The återföring of the
+  // previous year's revaluation (source_id set, see
+  // syncCurrencyRevaluationReversals) sits in this year too and is not one.
   const { count, error: checkError } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
@@ -576,6 +631,7 @@ export async function executeCurrencyRevaluation(
     .eq('fiscal_period_id', fiscalPeriodId)
     .eq('source_type', 'currency_revaluation')
     .eq('status', 'posted')
+    .is('source_id', null)
 
   if (checkError) {
     throw new BookkeepingDatabaseError('check_existing_revaluation', checkError.message)
@@ -585,7 +641,8 @@ export async function executeCurrencyRevaluation(
     throw new CurrencyRevaluationAlreadyExistsError()
   }
 
-  const preview = await previewCurrencyRevaluation(supabase, companyId, closingDate)
+  const scope = await requireFxExposureScope(supabase, companyId)
+  const preview = await previewCurrencyRevaluation(supabase, companyId, closingDate, { scope })
 
   // Refuse before anything is posted. Checked ahead of the empty-preview
   // shortcut on purpose: when every currency lacks a closing rate the item
@@ -601,14 +658,194 @@ export async function executeCurrencyRevaluation(
     return null
   }
 
-  const entry = await createJournalEntry(supabase, companyId, userId ?? companyId, {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: closingDate,
-    description: `Omvärdering utländsk valuta ${closingDate}`,
-    source_type: 'currency_revaluation',
-    voucher_series: 'A',
-    lines: preview.lines,
+  const entry = await postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId: userId ?? companyId,
+    event: () =>
+      currencyRevaluationBusinessEvent({
+        fiscalPeriodId,
+        closingDate,
+        netEffect: preview.netEffect,
+        linkBasis: linkBasisColumns('user_created'),
+      }),
+    input: {
+      fiscal_period_id: fiscalPeriodId,
+      entry_date: closingDate,
+      description: `Omvärdering utländsk valuta ${closingDate}`,
+      source_type: 'currency_revaluation',
+      voucher_series: 'A',
+      lines: preview.lines,
+    },
   })
 
   return { entry, preview }
+}
+
+/** A revaluation's lines as the återföring reads them back from the ledger. */
+export interface PostedRevaluationLine {
+  account_number: string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+  line_description?: string | null
+}
+
+/**
+ * The lines of a revaluation's återföring: every line of the posted
+ * revaluation on the opposite side, öre-rounded. Pure.
+ */
+export function revaluationReversalLines(lines: PostedRevaluationLine[]): CreateJournalEntryLineInput[] {
+  return lines.map((line) => ({
+    account_number: line.account_number,
+    debit_amount: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
+    credit_amount: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
+    line_description: `Återföring: ${line.line_description ?? ''}`.trim(),
+  }))
+}
+
+/** What the lines do to the result (credit less debit on classes 3-8), öre-rounded. Pure. */
+function resultEffect(lines: CreateJournalEntryLineInput[]): number {
+  let net = 0
+  for (const line of lines) {
+    const accountClass = line.account_number.charAt(0)
+    if (accountClass >= '3' && accountClass <= '8') net += line.credit_amount - line.debit_amount
+  }
+  return Math.round(net * 100) / 100
+}
+
+export interface CurrencyRevaluationReversals {
+  /** Återföringar posted now: one per revaluation that stood without one. */
+  posted: JournalEntry[]
+  /** Återföringar stornoed now, because the revaluation they turned back was stornoed since. */
+  stornoed: string[]
+}
+
+interface RevaluationRow {
+  id: string
+  entry_date: string
+  status: string
+  lines: PostedRevaluationLine[] | null
+}
+
+/**
+ * Turn the year's revaluations back on the first day of the next year
+ * (återföring, accounted#58).
+ *
+ * Every revaluation here is measured from the ORIGINAL booking rate, and every
+ * payment door clears 1510 / 2440 at that rate. A balansdag revaluation left
+ * standing into the next year was therefore counted twice on 3960 / 7960: by
+ * the payment's realised difference, which runs from the original rate again,
+ * and by the next revaluation, measured from the original rate once more. With
+ * the återföring the ledger is back on the original rate from the next year's
+ * first day, the convention the monthly revaluation already follows: the
+ * closed year keeps its balansdag valuation (ÅRL 4 kap. 13 §), and the next
+ * year books only the difference that arises in it.
+ *
+ * Not a storno: the valuation was right on balansdagen, and a storno stays in
+ * its original's year (BFL 5 kap 5 §). The återföring is an ordinary verifikat
+ * in the next year, dated its first day, source_type currency_revaluation,
+ * naming the revaluation it turns back in source_id (which is how the
+ * idempotency check of executeCurrencyRevaluation tells the two apart), with
+ * every line on the opposite side. Through the posting port and the engine.
+ *
+ * Idempotent, and it keeps the pair in step: a revaluation that already has
+ * its återföring gets none again, and the återföring of a revaluation that has
+ * been stornoed since (a reopened year, a storno by hand after a failed close)
+ * is stornoed, so the next year never turns back a valuation the closed year
+ * no longer holds. `nextPeriod` is resolved only when there is something to
+ * post or storno, so a year without a revaluation reads one query and creates
+ * nothing.
+ */
+export async function syncCurrencyRevaluationReversals(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  closedPeriodId: string,
+  nextPeriod: () => Promise<{ id: string; period_start: string }>,
+  options: { linkBasis?: LinkBasisColumns } = {},
+): Promise<CurrencyRevaluationReversals> {
+  const { data: revaluationData, error: revaluationError } = await supabase
+    .from('journal_entries')
+    .select('id, entry_date, status, lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', closedPeriodId)
+    .eq('source_type', 'currency_revaluation')
+    .is('source_id', null)
+    .in('status', ['posted', 'reversed'])
+  if (revaluationError) {
+    throw new BookkeepingDatabaseError('check_existing_revaluation', revaluationError.message, revaluationError.code)
+  }
+  const revaluations = (revaluationData ?? []) as RevaluationRow[]
+  if (revaluations.length === 0) return { posted: [], stornoed: [] }
+
+  const next = await nextPeriod()
+
+  const { data: reversalData, error: reversalError } = await supabase
+    .from('journal_entries')
+    .select('id, source_id')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', next.id)
+    .eq('source_type', 'currency_revaluation')
+    .eq('status', 'posted')
+    .in('source_id', revaluations.map((r) => r.id))
+  if (reversalError) {
+    throw new BookkeepingDatabaseError('check_existing_revaluation', reversalError.message, reversalError.code)
+  }
+  const reversalsOf = new Map<string, string[]>()
+  for (const row of (reversalData ?? []) as Array<{ id: string; source_id: string }>) {
+    reversalsOf.set(row.source_id, [...(reversalsOf.get(row.source_id) ?? []), row.id])
+  }
+
+  const linkBasis = options.linkBasis ?? linkBasisColumns('user_created')
+  const result: CurrencyRevaluationReversals = { posted: [], stornoed: [] }
+
+  for (const revaluation of revaluations) {
+    const reversals = reversalsOf.get(revaluation.id) ?? []
+
+    if (revaluation.status !== 'posted') {
+      for (const entryId of reversals) {
+        await postingPort.reverseJournalEntry({
+          supabase,
+          companyId,
+          userId,
+          entryId,
+          event: () =>
+            yearEndStornoBusinessEvent({ fiscalPeriodId: next.id, occurredOn: todayIsoStockholm(), linkBasis }),
+          role: 'reversal',
+        })
+        result.stornoed.push(entryId)
+      }
+      continue
+    }
+
+    if (reversals.length > 0) continue
+    const lines = revaluationReversalLines(revaluation.lines ?? [])
+    if (lines.length === 0) continue
+
+    const entry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: () =>
+        currencyRevaluationBusinessEvent({
+          fiscalPeriodId: next.id,
+          closingDate: next.period_start,
+          netEffect: resultEffect(lines),
+          linkBasis,
+        }),
+      input: {
+        fiscal_period_id: next.id,
+        entry_date: next.period_start,
+        description: `Återföring omvärdering utländsk valuta ${revaluation.entry_date}`,
+        source_type: 'currency_revaluation',
+        source_id: revaluation.id,
+        // No voucher_series: the engine takes the company's series for
+        // currency_revaluation from its map, as new year-end vouchers do.
+        lines,
+      },
+    })
+    result.posted.push(entry)
+  }
+
+  return result
 }

@@ -57,7 +57,7 @@ describe('buildArkivMap', () => {
     expect(map.company).toEqual({ name: 'Arcim Technology AB', org_number: '559538-6219', record_ref: 'company:co-1' })
     expect(map.documents.total).toBe(4)
     expect(map.documents.by_group).toEqual({ agreements: 1, authority: 1, corporate: 0, receipts_invoices: 1, statements: 0, other: 1 })
-    expect(map.documents.latest[0]).toEqual({ record_ref: 'document:d-1', title: 'Faktura Rollup-Kungen 215066768', type: 'supplier_invoice', date: '2026-04-10' })
+    expect(map.documents.latest[0]).toEqual({ record_ref: 'document:d-1', title: 'Faktura Rollup-Kungen 215066768', file_name: 'IMG_1.jpg', type: 'supplier_invoice', date: '2026-04-10' })
     expect(map.documents.latest[3].date).toBe('2026-09-12')
     expect(map.agreements).toEqual([
       {
@@ -103,6 +103,24 @@ describe('buildArkivMap', () => {
     expect(shownBaselines).toHaveLength(12)
     expect(shownBaselines[0].value).toBe('5013: typiskt 1400 kr/mån')
     expect(map.company_facts.find((f) => f.predicate === 'employee_count')?.label).toBe('Anställda i lönesystemet')
+  })
+
+  it('outside the brain draws the raw map: documents by group and file, no agreements, facts, readings or brain tools', async () => {
+    enqueue({ data: { name: 'Arcim Technology AB', org_number: '559538-6219' } })
+    enqueue({ data: [{ id: 'd-1', file_name: 'Convertible Loan Agreement.pdf', doc_type: 'agreement.loan', created_at: '2026-09-15T10:00:00Z' }] })
+    const map = await buildArkivMap(supabase, 'co-1', { brain: false })
+    expect(map.documents.latest).toEqual([{ record_ref: 'document:d-1', title: 'Låneavtal', file_name: 'Convertible Loan Agreement.pdf', type: 'agreement.loan', date: '2026-09-15' }])
+    expect(map.agreements).toEqual([])
+    expect(map.company_facts).toEqual([])
+    expect(map.waiting).toEqual({ questions: 0, findings: 0 })
+    expect(findCalls('agreements', 'select')).toEqual([])
+    expect(findCalls('company_facts', 'select')).toEqual([])
+    expect(findCalls('document_extractions', 'select')).toEqual([])
+    const how = map.how_to.join(' ')
+    expect(how).toContain('gnubok_list_records')
+    expect(how).toContain('gnubok_read_document')
+    expect(how).not.toMatch(/propose_fact|fact_history|record_links/)
+    expect(how).toMatch(/ask_document/)
   })
 
   it('throws with the failing read', async () => {

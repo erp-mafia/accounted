@@ -3,6 +3,7 @@ import {
   getDefaultAccountForCategory,
   getDefaultVatTreatmentForCategory,
 } from '@/lib/bookkeeping/category-mapping'
+import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import type { AccountCandidate, SelectAccountInput } from '../select-account'
 
 const generateStructured = vi.fn()
@@ -12,14 +13,14 @@ import { selectAccount } from '../select-account'
 
 function pick(
   choice: string,
-  opts: { confidence?: 'high' | 'medium' | 'low'; reverse_charge?: boolean; reasoning?: string } = {},
+  opts: { confidence?: 'high' | 'medium' | 'low'; moms?: string; reasoning?: string } = {},
 ) {
   return {
     value: {
       reasoning: opts.reasoning ?? 'resonemang',
       choice,
       confidence: opts.confidence ?? 'high',
-      reverse_charge: opts.reverse_charge ?? false,
+      ...(opts.moms ? { moms: opts.moms } : {}),
     },
     model: 'qwen3.8',
     usage: {},
@@ -87,20 +88,180 @@ describe('selectAccount', () => {
   })
 
   it('applies reverse charge only for a VAT-registered company', async () => {
-    generateStructured.mockResolvedValue(pick('cat:expense_professional_services', { reverse_charge: true }))
+    generateStructured.mockResolvedValue(pick('cat:expense_professional_services', { moms: 'omvand_eu' }))
     const yes = await selectAccount(input({ candidates: [], vatRegistered: true }))
+    expect(yes.vatCase).toBe('reverse_charge_eu')
     expect(yes.reverseCharge).toBe(true)
     expect(yes.vatTreatment).toBe('reverse_charge')
+    expect(yes.reverseChargeKind).toBe('eu_services')
 
-    generateStructured.mockResolvedValue(pick('cat:expense_professional_services', { reverse_charge: true }))
+    generateStructured.mockResolvedValue(pick('cat:expense_professional_services', { moms: 'omvand_eu' }))
     const no = await selectAccount(input({ candidates: [], vatRegistered: false }))
     expect(no.vatTreatment).not.toBe('reverse_charge')
+    expect(no.reverseChargeKind).toBeNull()
+  })
+
+  it('tells a service from outside the EU from one inside it, so the booking can report ruta 22', async () => {
+    generateStructured.mockResolvedValue(pick('cat:expense_software', { moms: 'omvand_utanfor_eu' }))
+    const res = await selectAccount(input({ candidates: [], vatRegistered: true }))
+    expect(res.vatCase).toBe('reverse_charge_non_eu')
+    expect(res.reverseCharge).toBe(true)
+    expect(res.vatTreatment).toBe('reverse_charge')
+    expect(res.reverseChargeKind).toBe('non_eu_services')
+
+    const unregistered = await selectAccount(input({ candidates: [], vatRegistered: false }))
+    expect(unregistered.vatTreatment).not.toBe('reverse_charge')
+    expect(unregistered.reverseChargeKind).toBeNull()
+  })
+
+  it('names no box for a reverse charge it only took over from a candidate', async () => {
+    generateStructured.mockResolvedValue(pick('cand:0', { moms: 'sverige' }))
+    const res = await selectAccount(input({ candidates: [{ ...CAND, vatTreatment: 'reverse_charge' }] }))
+    expect(res.vatTreatment).toBe('reverse_charge')
+    expect(res.reverseChargeKind).toBeNull()
+  })
+
+  // crm#1498: a seller abroad charges Swedish moms only when its invoice shows
+  // it, so "sverige" read off the underlag outranks a candidate's reverse charge.
+  it('books Swedish moms when the underlag shows it, over a candidate\'s reverse charge', async () => {
+    generateStructured.mockResolvedValue(pick('cand:0', { moms: 'sverige' }))
+    const res = await selectAccount(
+      input({
+        candidates: [{ ...CAND, account: '5420', vatTreatment: 'reverse_charge' }],
+        underlag: 'Leverantör: Microsoft\nMoms 25 %: 107,09 kr\nSumma: 535,45 kr',
+      }),
+    )
+    expect(res.vatTreatment).toBe('standard_25')
+    expect(res.reverseChargeKind).toBeNull()
+  })
+
+  it('keeps the candidate\'s reverse charge when the model left moms unsaid, underlag or not', async () => {
+    generateStructured.mockResolvedValue(pick('cand:0'))
+    const res = await selectAccount(
+      input({ candidates: [{ ...CAND, vatTreatment: 'reverse_charge' }], underlag: 'Leverantör: Adobe\nSumma: 300 kr' }),
+    )
+    expect(res.vatTreatment).toBe('reverse_charge')
   })
 
   it('never applies reverse charge to a needs_review outcome', async () => {
-    generateStructured.mockResolvedValue(pick('needs_review', { reverse_charge: true }))
+    generateStructured.mockResolvedValue(pick('needs_review', { moms: 'omvand_eu' }))
     const res = await selectAccount(input())
     expect(res.reverseCharge).toBe(false)
+    expect(res.vatCase).toBe('domestic')
+  })
+
+  describe('where the purchase is taxed', () => {
+    const MEAL_ABROAD = { merchantName: null, description: 'BUN MEE SAN FRANCISCO', amount: -473.63, currency: 'SEK' }
+
+    it('books a purchase used on the spot abroad without Swedish moms, whatever the category defaults to', async () => {
+      expect(getDefaultVatTreatmentForCategory('expense_travel')).toBe('standard_25')
+      generateStructured.mockResolvedValue(pick('cat:expense_travel', { moms: 'utomlands' }))
+      const res = await selectAccount(input({ candidates: [], transaction: MEAL_ABROAD }))
+      expect(res.account).toBe(getDefaultAccountForCategory('expense_travel', 'aktiebolag'))
+      expect(res.vatCase).toBe('abroad')
+      expect(res.vatTreatment).toBe('exempt')
+      expect(res.reverseCharge).toBe(false)
+      expect(res.reverseChargeKind).toBeNull()
+    })
+
+    it('lets it override a candidate learned with Swedish moms too: it is this row that was bought abroad', async () => {
+      generateStructured.mockResolvedValue(pick('cand:0', { moms: 'utomlands' }))
+      const res = await selectAccount(input({ transaction: MEAL_ABROAD }))
+      expect(res.account).toBe('5410')
+      expect(res.vatTreatment).toBe('exempt')
+    })
+
+    it('keeps the default for a purchase in Sweden, said or unsaid', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_travel', { moms: 'sverige' }))
+      expect((await selectAccount(input({ candidates: [] }))).vatTreatment).toBe('standard_25')
+
+      generateStructured.mockResolvedValue(pick('cat:expense_travel'))
+      const unsaid = await selectAccount(input({ candidates: [] }))
+      expect(unsaid.vatCase).toBe('domestic')
+      expect(unsaid.vatTreatment).toBe('standard_25')
+    })
+
+    it('reads an answer outside the closed set as the default', async () => {
+      for (const moms of ['usa', 'constructor', 'reverse_charge_non_eu', 'omvand_eu_vara']) {
+        generateStructured.mockResolvedValue(pick('cat:expense_travel', { moms }))
+        const res = await selectAccount(input({ candidates: [] }))
+        expect(res.vatCase).toBe('domestic')
+        expect(res.vatTreatment).toBe('standard_25')
+      }
+    })
+
+    it('never touches money coming in: abroad is about a purchase', async () => {
+      generateStructured.mockResolvedValue(pick('cat:income_services', { moms: 'utomlands' }))
+      const res = await selectAccount(
+        input({ candidates: [], transaction: { description: 'Inbetalning', amount: 1000, currency: 'SEK' } }),
+      )
+      expect(res.vatTreatment).toBe(getDefaultVatTreatmentForCategory('income_services'))
+    })
+
+    it('books a journey to or from another country without Swedish moms', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_travel:persontransport', { moms: 'utomlands' }))
+      const res = await selectAccount(
+        input({ candidates: [], transaction: { description: 'RYANAIR', amount: -1290, currency: 'SEK' } }),
+      )
+      expect(res.account).toBe('5810')
+      expect(res.vatTreatment).toBe('exempt')
+      const { system } = generateStructured.mock.calls[0][0]
+      expect(system).toContain('resa mellan Sverige och ett annat land')
+    })
+
+    it('offers the model exactly the four answers the booking can carry', async () => {
+      await selectAccount(input())
+      const { schema, system } = generateStructured.mock.calls[0][0]
+      expect(schema.jsonSchema.properties.moms.enum).toEqual(['sverige', 'utomlands', 'omvand_eu', 'omvand_utanfor_eu'])
+      expect(schema.jsonSchema.properties).not.toHaveProperty('reverse_charge')
+      for (const id of schema.jsonSchema.properties.moms.enum) expect(system).toContain(`"${id}"`)
+    })
+  })
+
+  describe('travel, priced by the catalog', () => {
+    it('books a ticket in Sweden at 6 %, from the catalog template, not the category default of 25 %', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_travel:persontransport', { moms: 'sverige' }))
+      const res = await selectAccount(
+        input({ candidates: [], transaction: { description: 'ARLANDA EXPRESS', amount: -320, currency: 'SEK' } }),
+      )
+      expect(res.category).toBe('expense_travel')
+      expect(res.account).toBe(getTemplateById('travel_transport')!.debit_account)
+      expect(res.vatTreatment).toBe('reduced_6')
+      expect(res.choice).toEqual({ kind: 'category', category: 'expense_travel', template: 'travel_transport' })
+    })
+
+    it('books a hotel night in Sweden at 12 % on the hotel account', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_travel:logi'))
+      const res = await selectAccount(input({ candidates: [] }))
+      expect(res.account).toBe(getTemplateById('travel_hotel')!.debit_account)
+      expect(res.vatTreatment).toBe('reduced_12')
+    })
+
+    it('keeps the plain travel option at the category default (a hired car or scooter)', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_travel'))
+      const res = await selectAccount(input({ candidates: [] }))
+      expect(res.account).toBe(getDefaultAccountForCategory('expense_travel', 'aktiebolag'))
+      expect(res.vatTreatment).toBe('standard_25')
+    })
+
+    it('books no moms line for a company that is not VAT-registered', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_travel:persontransport'))
+      const res = await selectAccount(input({ candidates: [], vatRegistered: false }))
+      expect(res.vatTreatment).toBe('exempt')
+    })
+
+    it('lists both travel options right after the plain one, in the closed set', async () => {
+      await selectAccount(input())
+      const { schema, prompt } = generateStructured.mock.calls[0][0]
+      const ids: string[] = schema.jsonSchema.properties.choice.enum
+      const at = ids.indexOf('cat:expense_travel')
+      expect(ids.slice(at, at + 3)).toEqual([
+        'cat:expense_travel',
+        'cat:expense_travel:persontransport',
+        'cat:expense_travel:logi',
+      ])
+      expect(prompt).toContain('cat:expense_travel:persontransport → Resor: biljett för persontransport')
+    })
   })
 
   describe('self-consistency', () => {

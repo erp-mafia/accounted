@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Switch } from '@/components/ui/switch'
 import { AttnLine } from '@/components/ui/attn-line'
 import {
@@ -17,7 +18,14 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { Box, Cloud, ExternalLink, Loader2, RefreshCw, Unplug } from 'lucide-react'
+import {
+  ArrowPathIcon,
+  ArrowTopRightOnSquareIcon,
+  CloudIcon,
+  CubeIcon,
+  LinkSlashIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { useBranding } from '@/lib/branding/brand-context'
 import type {
   CloudBackupStatus,
@@ -26,6 +34,8 @@ import type {
   CloudProviderStatus,
   CloudSchedule,
 } from '../types'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { backupIsStale } from '../lib/schedule'
 
 const API_BASE = '/api/extensions/ext/cloud-backup'
 
@@ -34,9 +44,9 @@ const API_BASE = '/api/extensions/ext/cloud-backup'
  * both locales; everything around it is a `{provider}` placeholder so the
  * copy reads naturally whichever destination the row describes.
  */
-const PROVIDER_META: Record<CloudProviderId, { label: string; icon: typeof Cloud }> = {
-  google_drive: { label: 'Google Drive', icon: Cloud },
-  dropbox: { label: 'Dropbox', icon: Box },
+const PROVIDER_META: Record<CloudProviderId, { label: string; icon: typeof CloudIcon }> = {
+  google_drive: { label: 'Google Drive', icon: CloudIcon },
+  dropbox: { label: 'Dropbox', icon: CubeIcon },
 }
 
 export default function CloudBackupCard() {
@@ -46,6 +56,8 @@ export default function CloudBackupCard() {
   const searchParams = useSearchParams()
 
   const [status, setStatus] = useState<CloudBackupStatus | null>(null)
+  // When the status was read: what the age of the last backup is judged against.
+  const [statusReadAt, setStatusReadAt] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   const loadStatus = useCallback(async () => {
@@ -54,6 +66,7 @@ export default function CloudBackupCard() {
       if (!res.ok) throw new Error(t('ext_cloud_backup_status_failed'))
       const { data } = (await res.json()) as { data: CloudBackupStatus }
       setStatus(data)
+      setStatusReadAt(Date.now())
     } finally {
       setIsLoading(false)
     }
@@ -100,10 +113,15 @@ export default function CloudBackupCard() {
         }
       }, 10_000)
     } else if (result === 'error') {
-      const reason = searchParams.get('reason') || t('ext_cloud_backup_unknown_error')
+      const reason = searchParams.get('reason')
       toast({
         title: t('ext_cloud_backup_connect_failed', { provider: providerLabel }),
-        description: reason,
+        // The storage box left unticked at the provider is the one refusal
+        // the user can fix themselves, so it gets words instead of a code.
+        description:
+          reason === 'missing_scope'
+            ? t('ext_cloud_backup_connect_missing_scope', { provider: providerLabel })
+            : reason || t('ext_cloud_backup_unknown_error'),
         variant: 'destructive',
       })
     }
@@ -128,6 +146,24 @@ export default function CloudBackupCard() {
   // would only bounce off `/connect`, so that row keeps its quiet
   // "not configured" line instead.
   const reauthProviders = providers.filter((p) => p.configured && p.needs_reauth)
+  // Automatic backup is on but nothing has been saved for two days: the row
+  // would otherwise keep showing the last attempt as "lyckades" while every
+  // attempt since ended before it could record anything.
+  const staleProviders =
+    statusReadAt === null
+      ? []
+      : providers.filter(
+          (p) =>
+            p.configured &&
+            p.connected &&
+            !p.needs_reauth &&
+            backupIsStale({
+              schedule: p.schedule,
+              lastSavedAt: p.last_sync?.at,
+              connectedAt: p.connected_at,
+              now: new Date(statusReadAt),
+            })
+        )
 
   // `/status` returns a row for every provider the build knows about, whether
   // or not this deployment has credentials for it, so the note has to filter:
@@ -142,7 +178,12 @@ export default function CloudBackupCard() {
 
   return (
     <div>
-      {reauthProviders.length > 0 && <ReauthAttn providers={reauthProviders} />}
+      {/* One attention sentence per section: a reconnect explains a stale backup too. */}
+      {reauthProviders.length > 0 ? (
+        <ReauthAttn providers={reauthProviders} />
+      ) : (
+        staleProviders.length > 0 && <StaleBackupAttn providers={staleProviders} />
+      )}
 
       <div>
         {providers.map((providerStatus) => (
@@ -177,6 +218,7 @@ export default function CloudBackupCard() {
 function useConnectProvider(providerId: CloudProviderId, provider: string) {
   const { toast } = useToast()
   const t = useTranslations('extensions')
+  const errorLocale = useLocale() as ErrorLocale
   const [isConnecting, setIsConnecting] = useState(false)
 
   const connect = useCallback(async () => {
@@ -191,7 +233,7 @@ function useConnectProvider(providerId: CloudProviderId, provider: string) {
       )
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || t('ext_cloud_backup_connect_start_failed'))
+        throw new Error(getErrorMessage(body, { locale: errorLocale, fallback: t('ext_cloud_backup_connect_start_failed') }))
       }
       const { url } = (await res.json()) as { url: string }
       window.location.href = url
@@ -220,18 +262,45 @@ function ReauthAttn({ providers }: { providers: CloudProviderStatus[] }) {
   const t = useTranslations('extensions')
   const labels = providers.map((p) => PROVIDER_META[p.provider]?.label ?? p.provider)
   const { isConnecting, connect } = useConnectProvider(providers[0].provider, labels[0])
+  const { canWrite } = useViewerLock()
 
   return (
     <AttnLine
       className="pb-3"
-      action={{
+      // Reconnecting is a write: a read-only member sees the sentence without the action.
+      action={canWrite ? {
         label: isConnecting
           ? t('ext_cloud_backup_redirecting')
           : t('ext_cloud_backup_reauth_action', { provider: labels[0] }),
         onClick: connect,
-      }}
+      } : undefined}
     >
-      {t('ext_cloud_backup_reauth_description', { provider: labels.join(' / ') })}
+      {t(
+        // A grant without the storage box ticked needs different advice than
+        // an expired one: reconnecting alone would repeat the same refusal.
+        providers.every((p) => p.reauth_reason === 'missing_scope')
+          ? 'ext_cloud_backup_reauth_missing_scope_description'
+          : 'ext_cloud_backup_reauth_description',
+        { provider: labels.join(' / ') }
+      )}
+    </AttnLine>
+  )
+}
+
+/**
+ * Automatic backup is on and the last saved copy is more than two days old.
+ * Names every affected destination and the oldest date, in the section's one
+ * attention sentence.
+ */
+function StaleBackupAttn({ providers }: { providers: CloudProviderStatus[] }) {
+  const t = useTranslations('extensions')
+  const provider = providers.map((p) => PROVIDER_META[p.provider]?.label ?? p.provider).join(' / ')
+  const saved = providers.flatMap((p) => (p.last_sync?.at ? [p.last_sync.at] : [])).sort()
+  return (
+    <AttnLine className="pb-3">
+      {saved.length === providers.length
+        ? t('ext_cloud_backup_stale_warning', { provider, date: formatDateTime(saved[0]) })
+        : t('ext_cloud_backup_stale_never_warning', { provider })}
     </AttnLine>
   )
 }
@@ -251,7 +320,9 @@ interface ProviderRowProps {
  */
 function ProviderRow({ status, onChanged }: ProviderRowProps) {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('extensions')
+  const errorLocale = useLocale() as ErrorLocale
   const { dialogProps, confirm } = useDestructiveConfirm()
   const { appName } = useBranding()
 
@@ -261,7 +332,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
   const providerId = status.provider
   const meta = PROVIDER_META[providerId]
   const provider = meta?.label ?? providerId
-  const Icon = meta?.icon ?? Cloud
+  const Icon = meta?.icon ?? CloudIcon
   const qs = `?provider=${encodeURIComponent(providerId)}`
 
   const { isConnecting, connect: handleConnect } = useConnectProvider(providerId, provider)
@@ -272,7 +343,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
       const res = await fetch(`${API_BASE}/disconnect${qs}`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || t('ext_cloud_backup_disconnect_failed'))
+        throw new Error(getErrorMessage(body, { locale: errorLocale, fallback: t('ext_cloud_backup_disconnect_failed') }))
       }
       toast({ title: t('ext_cloud_backup_disconnected', { provider }) })
       await onChanged()
@@ -318,12 +389,22 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                 : null,
             }
           }
+          if (body.error === 'sync_in_progress') {
+            throw new Error(t('ext_cloud_backup_sync_in_progress', { provider }))
+          }
           if (body.error === 'needs_reauth') {
             // Refresh status so the row switches to the reconnect state.
             await onChanged()
-            throw new Error(t('ext_cloud_backup_reauth_description', { provider }))
+            throw new Error(
+              t(
+                body.reauth_reason === 'missing_scope'
+                  ? 'ext_cloud_backup_reauth_missing_scope_description'
+                  : 'ext_cloud_backup_reauth_description',
+                { provider }
+              )
+            )
           }
-          throw new Error(body.error || t('ext_cloud_backup_sync_failed'))
+          throw new Error(getErrorMessage(body, { locale: errorLocale, fallback: t('ext_cloud_backup_sync_failed') }))
         }
         const { data } = (await res.json()) as {
           data: CloudLastSync & {
@@ -397,7 +478,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
       : null
 
   return (
-    <div className="border-b border-border">
+    <div className="border-b-hairline">
       <DestructiveConfirmDialog {...dialogProps} />
 
       {/* Header row: identity left, action right, in every state. */}
@@ -432,40 +513,31 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
           <div className="flex shrink-0 items-center gap-2">
             {status.connected ? (
               <>
-                <Button variant="outline" onClick={handleSync} disabled={isSyncing}>
+                <Button variant="outline" onClick={handleSync} loading={isSyncing} disabled={!canWrite} title={lockedTitle}>
                   {isSyncing ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {t('ext_cloud_backup_syncing')}
-                    </>
+                    t('ext_cloud_backup_syncing')
                   ) : (
                     <>
-                      <RefreshCw className="mr-2 h-4 w-4" />
+                      <ArrowPathIcon className="h-4 w-4" />
                       {t('ext_cloud_backup_sync_now')}
                     </>
                   )}
                 </Button>
-                <Button variant="ghost" onClick={handleDisconnect} disabled={isDisconnecting}>
+                <Button variant="ghost" onClick={handleDisconnect} loading={isDisconnecting} disabled={!canWrite} title={lockedTitle}>
                   {isDisconnecting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {t('ext_cloud_backup_disconnecting')}
-                    </>
+                    t('ext_cloud_backup_disconnecting')
                   ) : (
                     <>
-                      <Unplug className="mr-2 h-4 w-4" />
+                      <LinkSlashIcon className="h-4 w-4" />
                       {t('ext_cloud_backup_disconnect')}
                     </>
                   )}
                 </Button>
               </>
             ) : (
-              <Button onClick={handleConnect} disabled={isConnecting}>
+              <Button onClick={handleConnect} loading={isConnecting} disabled={!canWrite} title={lockedTitle}>
                 {isConnecting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('ext_cloud_backup_redirecting')}
-                  </>
+                  t('ext_cloud_backup_redirecting')
                 ) : (
                   t('ext_cloud_backup_connect', { provider })
                 )}
@@ -487,7 +559,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
         <div
           role="group"
           aria-label={provider}
-          className="ml-3 border-l border-border pb-3 pl-4"
+          className="ml-3 border-l-hairline pb-3 pl-4"
         >
           <SettingsRow label={t('ext_cloud_backup_last_sync_label')} align="baseline">
             {status.last_sync ? (
@@ -549,7 +621,7 @@ function LastSyncSummary({
         className="inline-flex items-center gap-1 font-medium underline-offset-4 hover:underline tabular-nums"
       >
         {formatDateTime(lastSync.at)}
-        <ExternalLink className="h-3 w-3 text-muted-foreground" />
+        <ArrowTopRightOnSquareIcon className="h-3 w-3 text-muted-foreground" />
       </a>
       <p className="text-xs text-muted-foreground tabular-nums">
         {formatMb(sizeBytes)}
@@ -598,7 +670,9 @@ function ScheduleSection({
   onUpdated,
 }: ScheduleSectionProps) {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('extensions')
+  const errorLocale = useLocale() as ErrorLocale
 
   // Prefer the DST-stable Stockholm hour; fall back to converting the legacy
   // UTC hour through the browser's clock (Swedish users: same thing).
@@ -637,7 +711,7 @@ function ScheduleSection({
         )
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
-          throw new Error(body.error || t('ext_cloud_backup_schedule_save_failed'))
+          throw new Error(getErrorMessage(body, { locale: errorLocale, fallback: t('ext_cloud_backup_schedule_save_failed') }))
         }
         await onUpdated()
       } catch (err) {
@@ -681,7 +755,8 @@ function ScheduleSection({
           <Switch
             checked={enabled}
             onCheckedChange={handleToggle}
-            disabled={isSaving}
+            disabled={!canWrite || isSaving}
+            title={lockedTitle}
             aria-label={t('ext_cloud_backup_auto_sync_title')}
           />
         </SettingsRowEnd>
@@ -693,7 +768,7 @@ function ScheduleSection({
             id={hourId}
             value={localHour}
             onChange={handleHourChange}
-            disabled={isSaving}
+            disabled={!canWrite || isSaving}
             className="tabular-nums"
           >
             {Array.from({ length: 24 }, (_, h) => (
@@ -702,7 +777,7 @@ function ScheduleSection({
               </option>
             ))}
           </SettingsSelect>
-          {isSaving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+          {isSaving && <SpinnerIcon className="h-3 w-3 animate-spin text-muted-foreground" />}
         </SettingsRow>
       )}
 
@@ -710,7 +785,7 @@ function ScheduleSection({
         <p className="px-1 text-xs text-muted-foreground">
           {t('ext_cloud_backup_last_auto_sync')} {formatDateTime(schedule.last_auto_sync_at)}{' '}
           {schedule.last_auto_sync_status === 'success' ? (
-            <span className="text-success">· {t('ext_cloud_backup_auto_sync_success')}</span>
+            <span>· {t('ext_cloud_backup_auto_sync_success')}</span>
           ) : schedule.last_auto_sync_status === 'error' ? (
             <span className="text-destructive">
               · {t('ext_cloud_backup_auto_sync_error')}

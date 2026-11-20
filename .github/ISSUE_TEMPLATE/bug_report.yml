@@ -37,7 +37,7 @@ body:
     attributes:
       label: Deployment
       options:
-        - Hosted (app.gnubok.se)
+        - Hosted (app.accounted.se)
         - Self-hosted (Docker)
         - Local development
     validations:

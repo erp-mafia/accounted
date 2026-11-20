@@ -1,7 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
-/node_modules
+# dependencies (any depth: vitest writes its cache to src/node_modules/.vite)
+node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -34,20 +34,27 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
-!.env.docker.example
+!docker/.env.example
 
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
+# CI-only cache of tsc state and ESLint results (CHECKS_CACHE_DIR)
+.ci-cache/
 next-env.d.ts
 
 # supabase temp files
 supabase/.temp/
 
-# claude local settings
+# npm run local:up's throwaway stack: Supabase config, state with the seeded
+# login, dev server log and local:check screenshots (scripts/local/)
+/.local/
+
+# claude local settings and agent worktrees
 .claude/settings.local.json
+.claude/worktrees/
 .claude/scheduled_tasks.lock
 
 # compliance scan output (SARIF / dossier / PR comment)
@@ -56,6 +63,11 @@ supabase/.temp/
 # generated service worker (built from public/sw.template.js by
 # scripts/inject-public-branding.mjs: runs via predev/prebuild)
 /public/sw.js
+
+# generated page texts for the support assistant (built from the pages and
+# the message files by scripts/generate-support-page-texts.ts: runs via
+# predev/prebuild, read at run time by src/lib/agent/support/page-texts.ts)
+/src/lib/agent/support/_generated/
 
 # Local internal notes and private fixtures stay untracked. Published reference
 # inputs for taxonomy generation and golden tests live in docs/reference/.
@@ -67,9 +79,7 @@ supabase/.branches/
 # Local-only SIE test fixtures: may contain real/scrubbed company data, never commit
 tests/fixtures/sie/
 
-# Local-only DESTRUCTIVE duplicate-cleanup tooling: one-off, run by hand against
-# real räkenskapsinformation. Deliberately NOT committed so it can never run in
-# CI/cron and so its logic isn't mistaken for a supported product feature.
+# Local-only maintainer tooling, never committed.
 scripts/delete-duplicate-transactions.ts
 
 # Diagnostic/cleanup tooling under /scripts is tracked, but the DATA those
@@ -77,16 +87,18 @@ scripts/delete-duplicate-transactions.ts
 # räkenskapsinformation: never commit it. Keep the .ts/.sql tooling, ignore the data.
 scripts/*.csv
 
-# Local-only DESTRUCTIVE support tool: reopens a closed räkenskapsår by deleting
-# only its bokslut layer (dispositioner + closing entry + next-year IB). Run by
-# hand against real räkenskapsinformation; bypasses BFL immutability triggers, so
-# it must never live in the repo / CI / cron.
 scripts/reopen-bokslut.sql
 
-.agents
+.agents/*
+# The Codex plugin marketplace is published from here; the rest of .agents is local.
+!.agents/plugins/
 .codex
 # PostHog wizard scratch: vendor reference docs downloaded by
 # `npx @posthog/wizard`, useful locally (and for `wizard audit`) but not
 # part of the app. The integration itself lives in lib/analytics/ and
 # instrumentation-client.ts.
 .posthog/
+
+# Kept by the maintainers outside this repository
+/docs/decisions/
+/.compliance/

@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Undo2 } from 'lucide-react'
+import { createSIEHistoryPollGate, startSIEHistoryPolling, type SIEHistoryPollGate } from '@/lib/import/sie-history-poll'
+import { ArrowUturnLeftIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
@@ -13,6 +15,9 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import Link from 'next/link'
 import SIELegacyRecoveryPanel from './SIELegacyRecoveryPanel'
+import { announceSIEHoldsChanged } from '@/lib/import/sie-holds-client'
+import { ImportHistorySkeleton, ImportStatus } from './import-history-parts'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 
 const PAGE_SIZE = 20
 
@@ -31,7 +36,8 @@ interface SIEImportListRow {
   status: string
   job_state?: string | null
   job_kind?: string | null
-  job_result?: {repairOutcome?:string} | null
+  /** job_result->>repairOutcome: the route leaves the rest of job_result out. */
+  repair_outcome?: string | null
   imported_at: string | null
   created_at: string
 }
@@ -45,7 +51,7 @@ const STATUS_LABEL_KEY: Record<string, string> = {
 }
 
 /**
- * Chips mark exceptions (design.md convention 5): the normal 'completed'
+ * Chips mark exceptions: the normal 'completed'
  * state renders as muted text; only deviating states get a Badge.
  */
 const STATUS_BADGE_VARIANT: Record<string, 'secondary' | 'warning' | 'destructive'> = {
@@ -61,6 +67,8 @@ const STATUS_BADGE_VARIANT: Record<string, 'secondary' | 'warning' | 'destructiv
  */
 export default function SIEImportHistory() {
   const t = useTranslations('import')
+  const tCommon = useTranslations('common')
+  const { canWrite, lockedTitle } = useViewerLock()
   const { toast } = useToast()
   const [rows, setRows] = useState<SIEImportListRow[] | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -70,6 +78,7 @@ export default function SIEImportHistory() {
   const [total, setTotal] = useState(0)
   const requestVersion = useRef(0)
   const reviewTrigger = useRef<HTMLButtonElement | null>(null)
+  const pollGate = useRef<SIEHistoryPollGate | null>(null)
 
   const fetchImports = useCallback(async (signal?: AbortSignal) => {
     const version = ++requestVersion.current
@@ -82,7 +91,9 @@ export default function SIEImportHistory() {
       }
       const data = await res.json()
       if (signal?.aborted || version !== requestVersion.current) return
-      setRows(Array.isArray(data.data) ? data.data : [])
+      const list: SIEImportListRow[] = Array.isArray(data.data) ? data.data : []
+      setRows(list)
+      pollGate.current?.record(list, Date.now())
       setTotal(data.count ?? 0)
       setLoadFailed(false)
     } catch {
@@ -91,18 +102,18 @@ export default function SIEImportHistory() {
     }
   }, [offset])
 
+  // Every 5 s while a job moves, slower while nothing changes, never while
+  // the tab is hidden (lib/import/sie-history-poll.ts). A new page starts over.
   useEffect(() => {
     const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout>
-    const poll = async () => {
-      await fetchImports(controller.signal)
-      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 5000)
-    }
-    timer = setTimeout(() => void poll(), 0)
-    return () => {
-      controller.abort()
-      clearTimeout(timer)
-    }
+    pollGate.current = createSIEHistoryPollGate()
+    startSIEHistoryPolling({
+      gate: pollGate.current,
+      fetchPage: () => fetchImports(controller.signal),
+      isVisible: () => document.visibilityState !== 'hidden',
+      signal: controller.signal,
+    })
+    return () => controller.abort()
   }, [fetchImports])
 
   // The route acknowledges the durable undo job; history polls its progress.
@@ -120,6 +131,7 @@ export default function SIEImportHistory() {
         })
         return
       }
+      announceSIEHoldsChanged()
 
       toast({
         title: t('sie_history_undo_success_title'),
@@ -149,30 +161,15 @@ export default function SIEImportHistory() {
 
   const statusCell = (status: string) => {
     const labelKey = STATUS_LABEL_KEY[status]
-    const label = labelKey ? t(labelKey) : status
-    const variant = STATUS_BADGE_VARIANT[status]
-    if (!variant) {
-      return <span className="text-xs text-muted-foreground">{label}</span>
-    }
-    return (
-      <Badge variant={variant} className="font-normal">
-        {label}
-      </Badge>
-    )
+    return <ImportStatus label={labelKey ? t(labelKey) : status} variant={STATUS_BADGE_VARIANT[status]} />
   }
 
   if (loadFailed && rows === null) {
-    return <p className="px-1 text-xs leading-5 text-muted-foreground">{t('sie_history_load_error')}</p>
+    return <LoadError title={t('sie_history_load_error')} onRetry={() => void fetchImports()} />
   }
 
   if (rows === null) {
-    return (
-      <div className="space-y-2" role="status">
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-      </div>
-    )
+    return <ImportHistorySkeleton />
   }
 
   if (rows.length === 0 && offset === 0) {
@@ -183,8 +180,12 @@ export default function SIEImportHistory() {
 
   return (
     <div>
-      {loadFailed && <p role="status" className="mb-3 text-xs leading-5 text-muted-foreground">{t('sie_history_load_error')}</p>}
-      <div className="overflow-x-auto">
+      {loadFailed && (
+        <AttnLine className="mb-3" action={{ label: tCommon('retry'), onClick: () => void fetchImports() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -202,14 +203,14 @@ export default function SIEImportHistory() {
             {rows.map((row) => (
               <tr key={row.id} className="transition-colors duration-150 hover:bg-secondary/35">
                 <td className={TD_CLASS}>{row.filename}</td>
-                <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>
                   {formatDate(row.imported_at ?? row.created_at)}
                 </td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                   {fiscalYearLabel(row)}
                 </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.transactions_count}</td>
-                <td className={TD_CLASS}>{row.job_result?.repairOutcome === 'stopped' ? t('sie_job.repairStopped') : row.job_state ? t(`sie_job.states.${row.job_state}`) : statusCell(row.status)}</td>
+                <td className={TD_CLASS}>{row.repair_outcome === 'stopped' ? t('sie_job.repairStopped') : row.job_state ? t(`sie_job.states.${row.job_state}`) : statusCell(row.status)}</td>
                 <td className={cn(TD_CLASS, 'text-right')}>
                   {row.job_state && !['completed','undone','failed'].includes(row.job_state) && (
                     <Link className="text-primary underline underline-offset-4" href={`/import?mode=sie&job=${row.id}`}>{t('sie_job.open')}</Link>
@@ -217,16 +218,17 @@ export default function SIEImportHistory() {
                   {row.job_state === 'completed' && row.job_kind !== 'duplicate_repair' && (
                     <Button
                       variant="outline"
-                      size="sm"
                       className="text-destructive hover:text-destructive"
                       onClick={() => setPendingUndo(row)}
+                      disabled={!canWrite}
+                      title={lockedTitle}
                     >
-                      <Undo2 className="mr-2 h-4 w-4" />
+                      <ArrowUturnLeftIcon className="h-4 w-4" />
                       {t('sie_history_undo_button')}
                     </Button>
                   )}
                   {!row.job_state && (
-                    <Button variant="outline" size="sm" className="min-h-10" onClick={event => {
+                    <Button variant="outline" onClick={event => {
                       reviewTrigger.current = event.currentTarget
                       setReviewImport(row)
                     }}>
@@ -243,11 +245,11 @@ export default function SIEImportHistory() {
       {(total > PAGE_SIZE || offset > 0) && (
         <nav className="mt-4 flex flex-wrap items-center justify-end gap-3" aria-label={t('sie_recovery.pagination')}>
           <span className="text-xs tabular-nums text-muted-foreground">{t('sie_recovery.page', { page: offset / PAGE_SIZE + 1 })}</span>
-          <Button variant="outline" size="sm" className="min-h-10" disabled={offset === 0} onClick={() => {
+          <Button variant="outline" disabled={offset === 0} onClick={() => {
             setRows(null)
             setOffset(value => Math.max(0, value - PAGE_SIZE))
           }}>{t('sie_recovery.previous')}</Button>
-          <Button variant="outline" size="sm" className="min-h-10" disabled={offset + PAGE_SIZE >= total} onClick={() => {
+          <Button variant="outline" disabled={offset + PAGE_SIZE >= total} onClick={() => {
             setRows(null)
             setOffset(value => value + PAGE_SIZE)
           }}>{t('sie_recovery.next')}</Button>

@@ -91,10 +91,12 @@ describe('POST /api/bookkeeping/journal-entries/[id]/strike-lines', () => {
     })
 
     const response = await POST(makeRequest({ strike_line_ids: [LINE_ID] }), params())
-    const { body } = await parseJsonResponse<{ error: string }>(response)
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(response.status).toBe(409)
-    expect(body.error).toContain('balanserar')
+    // Failures answer the structured envelope (sessionFailureResponse) since the
+    // route moved onto the shared operation service; the message is in error.message.
+    expect(body.error.message).toContain('balanserar')
   })
 
   it('maps the tenant guard (42501) to 403', async () => {
@@ -147,6 +149,9 @@ describe('POST /api/bookkeeping/journal-entries/[id]/strike-lines', () => {
         },
       ],
       p_user_id: 'user-1',
+      // The cookie-session door runs as actor 'user' (withRouteContext).
+      p_actor_type: 'user',
+      p_actor_label: null,
     })
   })
 

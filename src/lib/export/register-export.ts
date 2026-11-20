@@ -19,14 +19,14 @@ export function parseExportFormat(raw: string | null): RegisterExportFormat {
  * UTF-8 BOM so Excel renders åäö correctly; both formats share the same
  * column/row spec so files round-trip back through the importer.
  */
-export function buildRegisterExport(
+export async function buildRegisterExport(
   spec: Parameters<typeof reportToWorkbook>[0],
   opts: { format: RegisterExportFormat; slug: string; companyName: string; date: string },
-): { buffer: Buffer; contentType: string; filename: string } {
+): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
   const { format, slug, companyName, date } = opts
 
   if (format === 'csv') {
-    const buf = reportToWorkbook(spec, { bookType: 'csv' })
+    const buf = await reportToWorkbook(spec, { bookType: 'csv' })
     return {
       buffer: Buffer.concat([Buffer.from(UTF8_BOM, 'utf-8'), buf]),
       contentType: 'text/csv; charset=utf-8',
@@ -35,11 +35,11 @@ export function buildRegisterExport(
   }
 
   return {
-    buffer: reportToWorkbook(spec),
+    buffer: await reportToWorkbook(spec),
     contentType: XLSX_MIME,
     filename: exportFilename(slug, companyName, date, 'xlsx'),
   }
 }
 
 /** Today's date as `YYYY-MM-DD` for export filenames. */
-export { todayIsoUtc as todayIso } from '@/lib/dates/iso'
+export { todayIsoStockholm as todayIso } from '@/lib/dates/iso'

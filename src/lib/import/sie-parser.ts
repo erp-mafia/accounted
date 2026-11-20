@@ -10,13 +10,22 @@
  * Reference: https://sie.se/format/
  */
 
-import { monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
+import { exceedsFiscalYearCap, monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
+import {
+  describeObjectBalancePlan,
+  planObjectBalances,
+  SIE_DEFAULT_ACCUMULATING_DIMENSIONS,
+} from './sie-object-balances'
 import type {
   SIEType,
   SIEEncoding,
   SIEHeader,
   SIEAccount,
   SIEBalance,
+  SIEObjectBalance,
+  SIEPeriodBudget,
   SIEVoucher,
   SIETransactionLine,
   SIEDimension,
@@ -26,6 +35,7 @@ import type {
   ParseIssueSeverity,
   ValidationResult,
 } from './types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // CP437 to UTF-8 mapping: full 0x80-0x9F range
 // CP437 was the standard encoding for DOS/early Windows (used by SIE #FORMAT PC8)
@@ -157,6 +167,14 @@ export function decodeBuffer(buffer: ArrayBuffer, encoding: SIEEncoding): string
   const primary = decodeBufferRaw(buffer, encoding)
   if (!primary.includes('\uFFFD')) return primary
 
+  // A U+FFFD inside a file that IS valid UTF-8 was written by the exporter:
+  // the character was lost before the file reached us, and no decoding brings
+  // it back. Retrying such a file as Windows-1252 turned each U+FFFD into its
+  // three bytes, "ï¿½", and passed that off as a clean decode (a Wint export,
+  // feedback seq 743529). Keep the honest replacement character instead;
+  // validateSIEFile warns about it.
+  if (encoding === 'utf8' && isValidUtf8(buffer)) return primary
+
   const alternates: SIEEncoding[] = (['utf8', 'windows1252', 'cp437'] as const).filter(
     (e) => e !== encoding
   )
@@ -165,6 +183,15 @@ export function decodeBuffer(buffer: ArrayBuffer, encoding: SIEEncoding): string
     if (!candidate.includes('\uFFFD')) return candidate
   }
   return primary
+}
+
+function isValidUtf8(buffer: ArrayBuffer): boolean {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function decodeBufferRaw(buffer: ArrayBuffer, encoding: SIEEncoding): string {
@@ -488,11 +515,57 @@ function parseTransactionLine(
  * otherwise share the single key "0".
  */
 export function formatVoucherRef(
-  voucher: { series: string; number: number; numberOmitted?: boolean },
+  voucher: { series: string; number: number; numberOmitted?: boolean; numberRepeated?: boolean },
   ordinal: number
 ): string {
   const series = voucher.series.trim()
-  return voucher.numberOmitted ? `${series}#${ordinal}` : `${series}${voucher.number}`
+  if (voucher.numberOmitted) return `${series}#${ordinal}`
+  // A repeated number names its source voucher and stays unique: "A762#909".
+  return voucher.numberRepeated ? `${series}${voucher.number}#${ordinal}` : `${series}${voucher.number}`
+}
+
+/** How many repeated voucher numbers the preview warning names. */
+const REPEATED_REFS_NAMED = 10
+
+/**
+ * Moves every #VER whose series and number an earlier #VER of the file
+ * already used to the end of the file order, marked `numberRepeated`, and
+ * returns their references ("A762").
+ *
+ * A Capego Bokslut export numbered two year-end vouchers with numbers the
+ * year's own vouchers already had (crm#1653). journal_import_source_owned_idx
+ * keeps (series, source number) unique per year, so the import wrote the file
+ * up to the repeat and then failed the same chunk on every retry. A repeat is
+ * therefore no source key (like numberOmitted: no source_voucher_number, no
+ * held number), and as the last voucher of its series it takes the next free
+ * number there, and no other voucher's number moves. Only vouchers
+ * with a series: without one there is no source key to collide. The order of
+ * a file without repeats is untouched.
+ */
+export function moveRepeatedVoucherNumbersLast(vouchers: SIEVoucher[]): string[] {
+  const seen = new Set<string>()
+  const kept: SIEVoucher[] = []
+  const repeated: SIEVoucher[] = []
+  for (const voucher of vouchers) {
+    const series = voucher.series.trim()
+    if (voucher.numberOmitted || !series) {
+      kept.push(voucher)
+      continue
+    }
+    const key = `${series}\u0000${voucher.number}`
+    if (seen.has(key)) {
+      repeated.push({ ...voucher, numberRepeated: true })
+    } else {
+      seen.add(key)
+      kept.push(voucher)
+    }
+  }
+  if (repeated.length === 0) return []
+  // In place, without spreading: a file can hold tens of thousands of vouchers.
+  vouchers.length = 0
+  for (const voucher of kept) vouchers.push(voucher)
+  for (const voucher of repeated) vouchers.push(voucher)
+  return repeated.map((voucher) => `${voucher.series.trim()}${voucher.number}`)
 }
 
 /**
@@ -526,7 +599,9 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const vouchers: SIEVoucher[] = []
   const dimensions: SIEDimension[] = []
   const dimensionValues: SIEDimensionValue[] = []
-  let objectBalanceCount = 0
+  const objectOpeningBalances: SIEObjectBalance[] = []
+  const objectClosingBalances: SIEObjectBalance[] = []
+  const periodBudgets: SIEPeriodBudget[] = []
 
   // Track current voucher being parsed (inside #VER { ... })
   let currentVoucher: SIEVoucher | null = null
@@ -656,7 +731,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           // reported and skipped so fiscalYears never carries an entry the
           // rest of the pipeline cannot trust. The one exception is the
           // 18-month BFL 3 kap. cap: an over-long span is reported as a
-          // warning but the entry is KEPT, because executeSIEImport refuses
+          // warning but the entry is KEPT, because ensureFiscalPeriod refuses
           // the current year (#RAR 0) with a precise Swedish error that needs
           // the real dates, and dropping the record here would degrade that
           // message to "no fiscal year defined".
@@ -685,13 +760,12 @@ export function parseSIEFile(content: string): ParsedSIEFile {
             break
           }
 
-          const rarMonths = monthsBetween(start, end)
-          if (rarMonths > 18) {
+          if (exceedsFiscalYearCap(start, end)) {
             addIssue(
               issues,
               'warning',
               lineNum,
-              `Räkenskapsåret i #RAR ${yearIndex} (${start} till ${end}) omfattar ${rarMonths} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.)`,
+              `Räkenskapsåret i #RAR ${yearIndex} (${start} till ${end}) omfattar ${monthsBetween(start, end)} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.)`,
               tag
             )
           }
@@ -776,6 +850,75 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           if (account) {
             resultBalances.push({ yearIndex, account, amount, quantity })
           }
+          break
+        }
+
+        case 'OIB':
+        case 'OUB': {
+          // #OIB / #OUB yearIndex accountNumber {dimNo "code"} amount [quantity]
+          // Opening/closing balance per object (SIE type 3, optional in 4E).
+          // Parsed so the import can split the IB per project (issue #3313);
+          // which dimensions carry into IB is decided there, not here.
+          const yearIndex = parseInt(parseStringField(fields[1]), 10)
+          const account = parseStringField(fields[2])
+          const objectListRaw = fields[3]
+          if (!Number.isInteger(yearIndex) || !account || !objectListRaw?.startsWith('{')) {
+            addIssue(issues, 'warning', lineNum, `Ogiltig objektbalansrad (#${tag}): raden hoppas över`, tag)
+            break
+          }
+          const amount = parseAmountField(fields[4], tag, issues, lineNum, account, yearIndex)
+          if (amount === null) break
+          const objects = parseObjectList(objectListRaw, issues, lineNum)
+          const pairs = objects ? Object.entries(objects) : []
+          if (pairs.length !== 1) {
+            addIssue(
+              issues,
+              'warning',
+              lineNum,
+              `#${tag} ${account} ska ange exakt ett objekt ({dimension "kod"}): raden hoppas över`,
+              tag
+            )
+            break
+          }
+          const [dimNo, code] = pairs[0]
+          const row: SIEObjectBalance = { yearIndex, account, dimNo, code, amount }
+          if (fields[5]) row.quantity = parseNumberField(fields[5])
+          ;(tag === 'OIB' ? objectOpeningBalances : objectClosingBalances).push(row)
+          break
+        }
+
+        case 'PBUDGET': {
+          // #PBUDGET yearIndex period account {objects} amount [quantity]
+          // The month's budgeted change (not cumulative), SIE sign. Kept apart
+          // from the bookkeeping: only the budget import reads these rows.
+          const yearIndex = parseInt(parseStringField(fields[1] ?? ''), 10)
+          const period = parseStringField(fields[2] ?? '').trim()
+          const account = parseStringField(fields[3] ?? '').trim()
+          const periodMatch = /^(\d{4})(0[1-9]|1[0-2])$/.exec(period)
+          if (!Number.isInteger(yearIndex) || !periodMatch || !account) {
+            addIssue(issues, 'warning', lineNum, 'Ogiltig budgetrad (#PBUDGET): raden hoppas över', tag)
+            break
+          }
+          // The object list is compulsory in the record ({} when empty);
+          // a writer that leaves it out still gets its amount read.
+          let fieldIndex = 4
+          let dims: Record<string, string> | undefined
+          if (fields[fieldIndex]?.startsWith('{')) {
+            dims = parseObjectList(fields[fieldIndex], issues, lineNum)
+            fieldIndex++
+          }
+          const amount = parseAmountField(fields[fieldIndex++], tag, issues, lineNum, account, yearIndex)
+          if (amount === null) break
+          const row: SIEPeriodBudget = {
+            yearIndex,
+            month: `${periodMatch[1]}-${periodMatch[2]}`,
+            account,
+            amount,
+            line: lineNum,
+          }
+          if (dims) row.dimensions = dims
+          if (fields[fieldIndex]) row.quantity = parseNumberField(fields[fieldIndex])
+          periodBudgets.push(row)
           break
         }
 
@@ -908,14 +1051,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
         }
 
         default:
-          // Unknown tag - add info issue for notable ones. OIB/OUB (per-object
-          // opening/closing balances) are counted and surfaced as ONE info
-          // issue below: dimension reporting is P&L-only in v1, so
-          // object-level balance records have no consumer yet, but dropping
-          // them must never be silent (#866 review).
-          if (tag === 'OIB' || tag === 'OUB') {
-            objectBalanceCount++
-          } else if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PBUDGET', 'PSALDO'].includes(tag)) {
+          // Unknown tag - add info issue for notable ones.
+          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PSALDO'].includes(tag)) {
             addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag}, ignoreras`, tag)
           }
       }
@@ -934,6 +1071,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const definedAccountNumbers = new Set(accounts.map((a) => a.number))
   const referencedAccounts = new Set<string>()
 
+  // Object balances (#OIB/#OUB) add no accounts: they only split the IB of
+  // accounts the file declares or balances, never demand a mapping of their own.
   for (const balance of [...openingBalances, ...closingBalances, ...resultBalances]) {
     if (balance.account && !definedAccountNumbers.has(balance.account)) {
       referencedAccounts.add(balance.account)
@@ -945,6 +1084,23 @@ export function parseSIEFile(content: string): ParsedSIEFile {
         referencedAccounts.add(line.account)
       }
     }
+  }
+
+  // A #VER that repeats the series and number of an earlier #VER (crm#1653).
+  // SIE 4B wants verno unique per series, but both are bookkeeping the
+  // balances need, so neither is dropped: see moveRepeatedVoucherNumbersLast.
+  const repeatedRefs = moveRepeatedVoucherNumbersLast(vouchers)
+  if (repeatedRefs.length > 0) {
+    const named = repeatedRefs.slice(0, REPEATED_REFS_NAMED).join(', ')
+    const more = repeatedRefs.length > REPEATED_REFS_NAMED ? ` med flera (${repeatedRefs.length} totalt)` : ''
+    addIssue(
+      issues,
+      'warning',
+      0,
+      `Filen använder samma verifikationsnummer två gånger: ${named}${more}. Båda verifikationerna bokförs: ` +
+        'den senare får nästa lediga nummer sist i sin serie, och ingen annan verifikations nummer flyttas.',
+      'VER'
+    )
   }
 
   for (const accountNumber of referencedAccounts) {
@@ -986,15 +1142,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
   // Dimension visibility: the preview step renders parse issues, so these
   // make dimension handling explicit BEFORE the user executes the import.
-  if (objectBalanceCount > 0) {
-    addIssue(
-      issues,
-      'info',
-      0,
-      `${objectBalanceCount} objektbalansrader (#OIB/#OUB) hoppades över: balanser per objekt stöds inte ännu`,
-      'OIB'
-    )
-  }
+  // Object balances (#OIB/#OUB) get theirs below, once the result exists.
   const taggedLineCount = vouchers.reduce(
     (sum, v) => sum + v.lines.filter((l) => l.dimensions).length,
     0
@@ -1009,16 +1157,31 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     )
   }
 
+  // A budget in the file is not bookkeeping: the ledger import leaves it
+  // out, and says where it goes instead of dropping it silently.
+  if (periodBudgets.length > 0) {
+    addIssue(
+      issues,
+      'info',
+      0,
+      `Filen innehåller ${periodBudgets.length} budgetrader (#PBUDGET). De ingår inte i bokföringen: läs in filen under Budget, Importera, för att få med budgeten.`,
+      'PBUDGET'
+    )
+  }
+
   // Calculate statistics
   const currentFiscalYear = header.fiscalYears.find((fy) => fy.yearIndex === 0)
   const totalTransactionLines = vouchers.reduce((sum, v) => sum + v.lines.length, 0)
 
-  return {
+  const result: ParsedSIEFile = {
     header,
     accounts,
     openingBalances,
     closingBalances,
     resultBalances,
+    objectOpeningBalances,
+    objectClosingBalances,
+    periodBudgets,
     vouchers,
     dimensions,
     dimensionValues,
@@ -1030,6 +1193,89 @@ export function parseSIEFile(content: string): ParsedSIEFile {
       fiscalYearStart: currentFiscalYear?.start || null,
       fiscalYearEnd: currentFiscalYear?.end || null,
     },
+  }
+  addObjectBalanceIssues(result)
+  return result
+}
+
+/**
+ * Preview issues for #OIB/#OUB (issue #3313): what the IB split will do with
+ * the file's object balances, by outcome with counts, plus a consistency
+ * check of #OUB 0 against #OIB 0 and the year's tagged transactions. The
+ * preview has no company, so it assumes the SIE convention (projekt,
+ * dimension 6, accumulates); the import itself reads the company registry.
+ */
+function addObjectBalanceIssues(parsed: ParsedSIEFile): void {
+  const { rows, source } = getEffectiveObjectOpeningBalances(parsed)
+  if (rows.length > 0) {
+    const plan = planObjectBalances(rows, SIE_DEFAULT_ACCUMULATING_DIMENSIONS)
+    for (const issue of describeObjectBalancePlan(plan, source === 'prior_year_oub' ? 'prior_oub' : 'oib')) {
+      addIssue(parsed.issues, issue.severity, 0, issue.message, 'OIB')
+    }
+  } else if (source === 'none') {
+    const unused = (parsed.objectOpeningBalances ?? []).filter((b) => b.yearIndex === 0).length
+    if (unused > 0) {
+      addIssue(
+        parsed.issues,
+        'info',
+        0,
+        `${unused} objektbalanser (#OIB) används inte: filen har ingen ingående balans per konto (#IB) att fördela per objekt`,
+        'OIB'
+      )
+    }
+  }
+
+  // #OUB 0 = the effective opening object balances (#OIB 0, or #OUB -1 when
+  // the IB is derived from #UB -1) + that object's tagged movements in the
+  // file, per balance-sheet account. Only meaningful when the file carries
+  // both the closing object balances and the year's vouchers; exporters that
+  // write no #OUB at all are not flagged. Skipped when the file has no
+  // per-account IB at all (source 'none', e.g. an IB #VER stands in for it):
+  // there is no opening object balance to compare against. Informational:
+  // never blocks the import.
+  if (source === 'none') return
+  const closing = (parsed.objectClosingBalances ?? []).filter(
+    (b) => b.yearIndex === 0 && isBalanceSheetAccount(b.account)
+  )
+  if (closing.length === 0 || parsed.vouchers.length === 0) return
+
+  const key = (account: string, dimNo: string, code: string) => `${account}\u0000${dimNo}\u0000${code}`
+  const expected = new Map<string, number>()
+  const actual = new Map<string, number>()
+  const add = (target: Map<string, number>, k: string, amount: number) =>
+    target.set(k, roundOre((target.get(k) ?? 0) + amount))
+  for (const b of rows) {
+    if (isBalanceSheetAccount(b.account)) add(expected, key(b.account, b.dimNo, b.code), b.amount)
+  }
+  for (const b of closing) add(actual, key(b.account, b.dimNo, b.code), b.amount)
+  for (const voucher of parsed.vouchers) {
+    for (const line of voucher.lines) {
+      if (!line.dimensions || !isBalanceSheetAccount(line.account)) continue
+      for (const [dimNo, code] of Object.entries(line.dimensions)) {
+        add(expected, key(line.account, dimNo, code), line.amount)
+      }
+    }
+  }
+
+  const mismatches: string[] = []
+  for (const k of new Set([...expected.keys(), ...actual.keys()])) {
+    if (Math.abs(roundOre((expected.get(k) ?? 0) - (actual.get(k) ?? 0))) >= 0.01) mismatches.push(k)
+  }
+  if (mismatches.length > 0) {
+    const sample = mismatches
+      .slice(0, 3)
+      .map((k) => {
+        const [account, dimNo, code] = k.split('\u0000')
+        return `konto ${account} objekt ${dimNo} "${code}"`
+      })
+      .join(', ')
+    addIssue(
+      parsed.issues,
+      'warning',
+      0,
+      `${mismatches.length} objekt har en utgående balans (#OUB) som inte stämmer med ingående balans (#OIB) plus årets taggade transaktioner i filen (${sample}): kontrollera exporten`,
+      'OUB'
+    )
   }
 }
 
@@ -1132,11 +1378,77 @@ export function getEffectiveOpeningBalances(parsed: ParsedSIEFile): {
 }
 
 /**
- * Validate a parsed SIE file
+ * The object balances (#OIB/#OUB) that belong to the effective opening
+ * balances, mirroring getEffectiveOpeningBalances' precedence exactly
+ * (issue #3313): #OIB 0 next to explicit #IB 0; #OUB -1 (balance-sheet
+ * accounts, re-labeled to year 0) when the IB is derived from #UB -1; none
+ * when an opening-balance #VER stands in for the IB (its #TRANS lines carry
+ * their own object lists).
  */
-export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
+export function getEffectiveObjectOpeningBalances(parsed: ParsedSIEFile): {
+  rows: SIEObjectBalance[]
+  source: ObjectOpeningBalanceSource
+} {
+  const effective = getEffectiveOpeningBalances(parsed)
+  const source: ObjectOpeningBalanceSource =
+    effective.balances.length === 0 ? 'none' : effective.derivedFromPriorYearUB ? 'prior_year_oub' : 'oib'
+  return { rows: selectObjectOpeningBalances(parsed, source), source }
+}
+
+export type ObjectOpeningBalanceSource = 'oib' | 'prior_year_oub' | 'none'
+
+/**
+ * The object rows for a resolved source. Split out so the resumable import
+ * job, which seals the source in its manifest at snapshot time (the global
+ * opening-voucher check needs every voucher), selects the same rows later.
+ */
+export function selectObjectOpeningBalances(
+  parsed: Pick<ParsedSIEFile, 'objectOpeningBalances' | 'objectClosingBalances'>,
+  source: ObjectOpeningBalanceSource
+): SIEObjectBalance[] {
+  if (source === 'oib') return (parsed.objectOpeningBalances ?? []).filter((b) => b.yearIndex === 0)
+  if (source === 'prior_year_oub') {
+    return (parsed.objectClosingBalances ?? [])
+      .filter((b) => b.yearIndex === -1 && isBalanceSheetAccount(b.account))
+      .map((b) => ({ ...b, yearIndex: 0 }))
+  }
+  return []
+}
+
+/**
+ * The refusal for a file kept in another currency than kronor, or null.
+ *
+ * #VALUTA names the currency of every amount in the file (ISO 4217; absent
+ * means SEK, SIE 4B). The ledger is kronor only and the import never
+ * converts, so a EUR file would post EUR figures as kronor, and an entry
+ * scaled by an exchange rate still balances: nothing later would catch it.
+ * Both gates call this (validateSIEFile for the preview, validateSIEJobInput
+ * at submit and in the worker), so every door refuses before any write.
+ */
+export function sieCurrencyRefusal(header: Pick<SIEHeader, 'currency'>): string | null {
+  const currency = header.currency.trim().toUpperCase().slice(0, 10)
+  if (isLedgerCurrency(currency)) return null
+  return `SIE-filens belopp är i ${currency} (#VALUTA ${currency}). Accounted bokför bara i svenska kronor, och beloppen skulle bokföras som kronor utan omräkning, så filen importeras inte. Exportera bokföringen i SEK om källsystemet kan det.`
+}
+
+/**
+ * Validate a parsed SIE file.
+ *
+ * `importOpeningBalances: false` is an import that leaves the file's IB out
+ * (crm#1294): no IB verifikat and no adjustment entry are booked, so the two
+ * warnings that say what the import does with the IB are left out too.
+ * Omitted, the IB is assumed imported, as the job's default.
+ */
+export function validateSIEFile(
+  parsed: ParsedSIEFile,
+  options: { importOpeningBalances?: boolean } = {},
+): ValidationResult {
+  const importsOpeningBalances = options.importOpeningBalances !== false
   const errors: string[] = []
   const warnings: string[] = []
+
+  const currencyRefusal = sieCurrencyRefusal(parsed.header)
+  if (currencyRefusal) errors.push(currencyRefusal)
 
   // Check #FLAGGA for already-imported files
   if (parsed.header.flagga === 1) {
@@ -1232,7 +1544,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   // which account was used.
   const effectiveIB = getEffectiveOpeningBalances(parsed)
 
-  if (effectiveIB.derivedFromPriorYearUB) {
+  if (importsOpeningBalances && effectiveIB.derivedFromPriorYearUB) {
     warnings.push(
       'Filen saknar ingående balanser (#IB) för aktuellt räkenskapsår: de härleds från föregående års utgående balans (#UB -1) vid import.'
     )
@@ -1240,7 +1552,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
 
   const ibTotal = effectiveIB.balances.reduce((sum, b) => sum + b.amount, 0)
 
-  if (Math.abs(ibTotal) > 0.01) {
+  if (importsOpeningBalances && Math.abs(ibTotal) > 0.01) {
     warnings.push(`Ingående balanser balanserar inte (differens: ${ibTotal.toFixed(2)} kr). En automatisk justeringspost mot eget kapital (företagsformens konto för årets resultat) skapas vid import.`)
   }
 
@@ -1251,7 +1563,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   // every subsequent year. SIE amounts are debit-positive, so the class 3-8
   // sum is the un-transferred result with flipped sign.
   const currentFiscalYear = parsed.header.fiscalYears.find((fy) => fy.yearIndex === 0)
-  if (currentFiscalYear?.end && currentFiscalYear.end < formatLocalDate(new Date())) {
+  if (currentFiscalYear?.end && currentFiscalYear.end < todayIsoStockholm()) {
     const plResidual = parsed.vouchers.reduce(
       (sum, voucher) =>
         sum +
@@ -1265,9 +1577,23 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
     if (Math.abs(plResidual) > 0.01) {
       warnings.push(
         `Räkenskapsåret är avslutat men filen saknar omföring av årets resultat (${Math.abs(plResidual).toFixed(2)} kr ligger kvar på resultatkonton). ` +
-        `Om senare räkenskapsår importeras kommer balansräkningen att visa en differens på ${Math.abs(plResidual).toFixed(2)} kr tills omföringen bokförs.`
+        'Året efter öppnar ändå med resultatet i eget kapital.'
       )
     }
+  }
+
+  // U+FFFD in voucher texts means the source system lost the character (most
+  // often å, ä or ö) when it wrote the file; the import cannot restore it.
+  const vouchersWithLostCharacters = parsed.vouchers.filter(
+    (voucher) =>
+      voucher.description.includes('\uFFFD') ||
+      voucher.lines.some((line) => line.description?.includes('\uFFFD')),
+  ).length
+  if (vouchersWithLostCharacters > 0) {
+    warnings.push(
+      `${vouchersWithLostCharacters === 1 ? '1 verifikation har' : `${vouchersWithLostCharacters} verifikationer har`} tecken som saknas redan i filen (visas som \uFFFD, oftast å, ä eller ö). ` +
+      'Texterna importeras som de står och kan inte återskapas vid import: exportera om filen från källsystemet om de ska bli hela.'
+    )
   }
 
   // Add parse issues as errors/warnings

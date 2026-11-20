@@ -2,6 +2,29 @@
 
 All entries dated on balance sheet date (e.g., 2025-12-31). These are the core entries a software system must generate.
 
+<!-- toc -->
+**Contents**
+
+- [Salary accruals](#salary-accruals)
+- [Vacation pay accruals](#vacation-pay-accruals)
+- [Social fees on accrued salary and vacation](#social-fees-on-accrued-salary-and-vacation)
+- [Depreciation (example: machinery)](#depreciation-example-machinery)
+- [Överavskrivningar (excess tax depreciation)](#överavskrivningar-excess-tax-depreciation)
+- [Inventory increase](#inventory-increase)
+- [Prepaid expenses (e.g., insurance covering next year)](#prepaid-expenses-eg-insurance-covering-next-year)
+- [Accrued income (work performed, invoice pending)](#accrued-income-work-performed-invoice-pending)
+- [Deferred revenue (advance payment for future service)](#deferred-revenue-advance-payment-for-future-service)
+- [Accrued audit/accounting fees](#accrued-auditaccounting-fees)
+- [Periodiseringsfond avsättning (AB, 25% of 400,000 = 100,000)](#periodiseringsfond-avsättning-ab-25-of-400000--100000)
+- [Tax provision (AB, taxable profit 500,000 × 20.6% = 103,000)](#tax-provision-ab-taxable-profit-500000--206--103000)
+- [Result closing (AB, profit 397,000 after tax)](#result-closing-ab-profit-397000-after-tax)
+- [Result closing (Enskild firma, profit)](#result-closing-enskild-firma-profit)
+- [New year opening: carry forward previous year result (AB)](#new-year-opening-carry-forward-previous-year-result-ab)
+- [New year opening: consolidate equity (Enskild firma)](#new-year-opening-consolidate-equity-enskild-firma)
+- [Särskild löneskatt on pension provisions](#särskild-löneskatt-on-pension-provisions)
+
+<!-- /toc -->
+
 ## Salary accruals
 December salary earned but paid in January:
 ```
@@ -41,9 +64,9 @@ Credit 2153  Ack. överavskrivningar maskiner & inventarier
 ## Inventory increase
 ```
 Debit  1460  Lager av handelsvaror
-Credit 4990  Lagerförändring
+Credit 4960  Förändring av lager av handelsvaror
 ```
-For decrease: reverse the entry. Use separate accounts per inventory type for manufacturing.
+For decrease: reverse the entry. Use the account matching the stock type: **4910** råvaror, **4920** tillsatsmaterial och förnödenheter, **4950** färdiga varor, **4960** handelsvaror. (4990 is a software convention, not a BAS account.)
 
 ## Prepaid expenses (e.g., insurance covering next year)
 ```

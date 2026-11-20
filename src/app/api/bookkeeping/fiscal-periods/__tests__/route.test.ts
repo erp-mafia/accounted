@@ -15,6 +15,11 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { createClient } from '@/lib/supabase/server'
 import { POST } from '../route'
 
+// Refusals answer the canonical { error: { code, message, details } } envelope
+// since the rules moved to lib/core/bookkeeping/fiscal-year-service.ts (they
+// used to be raw English strings in { error }): assertions read the code and
+// details, which agents and the UI both rely on.
+
 function createMockRequest(body: unknown): Request {
   return new Request('http://localhost/api/bookkeeping/fiscal-periods', {
     method: 'POST',
@@ -24,6 +29,13 @@ function createMockRequest(body: unknown): Request {
 }
 
 type Period = { id: string; period_start: string; period_end: string; is_closed: boolean; name?: string }
+
+/** The company's legal form, read before the year's shape is judged. */
+const COMPANY_ROW = {
+  select: () => ({
+    eq: () => ({ maybeSingle: async () => ({ data: { entity_type: 'aktiebolag' }, error: null }) }),
+  }),
+}
 
 /**
  * Build a mock supabase that tracks sequential from('fiscal_periods') calls
@@ -52,6 +64,7 @@ function buildMockSupabase(options: {
   const supabase = {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user } }),
+      mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) },
     },
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'company_settings') {
@@ -66,6 +79,7 @@ function buildMockSupabase(options: {
           }),
         }
       }
+      if (table === 'companies') return COMPANY_ROW
       fpCallIndex++
       const callNum = fpCallIndex
 
@@ -167,7 +181,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.error).toMatch(/Overlaps/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_OVERLAP')
   })
 
   // Dropping the "prior year must be locked" gate must not open an overlap
@@ -183,7 +197,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.error).toMatch(/Overlaps/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_OVERLAP')
   })
 
   it('rejects forward period with wrong start date', async () => {
@@ -194,7 +208,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/must start on 2026-01-01/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_start).toBe('2026-01-01')
   })
 
   // Regression (BFL 5 kap 2 §): this used to be a 409. One unbooked December
@@ -293,7 +308,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(body.data).toBeDefined()
   })
 
-  // Regression: a real user (Egon Johansson, 2026-04-27) set the company-wide
+  // Regression: a user (2026-04-27) set the company-wide
   // bookkeeping_locked_through to 2024-12-31 but never set locked_at on the
   // FY 2024 period. From their perspective and from the enforce_company_lock_date
   // trigger's perspective, the period is locked. The creation check must agree.
@@ -350,7 +365,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/must end on 2025-12-31/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_end).toBe('2025-12-31')
   })
 
   it('backward chaining skips unclosed period constraint', async () => {
@@ -396,9 +412,10 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req, { params: Promise.resolve({}) })
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/1st of a month/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH')
     // The refusal explains the rule instead of only saying no.
-    expect(body.error).toMatch(/first fiscal year may start mid-month/)
+    expect(body.error.message).toMatch(/första räkenskapsår får börja mitt i en månad/)
+    expect(body.error.message_en).toMatch(/first fiscal year may start mid-month/)
   })
 
   // Regression (2026-06-16): a company with FY 2024 + FY 2026 but no
@@ -432,7 +449,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/must start on 2025-01-01/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_start).toBe('2025-01-01')
   })
 
   // Regression: the start check only constrains the predecessor side. A gap-fill
@@ -452,7 +470,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/must end on 2025-12-31/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_end).toBe('2025-12-31')
   })
 
   // A gap fill is a backfill (like backward chaining), so the "prior year must be
@@ -483,7 +502,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/18 months/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_TOO_LONG')
   })
 
   it('rejects invalid body', async () => {
@@ -506,7 +525,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
 
     let fpCallIndex = 0
     const supabase = {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'company_settings') {
           return {
@@ -520,6 +539,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
             }),
           }
         }
+        if (table === 'companies') return COMPANY_ROW
         fpCallIndex++
         const callNum = fpCallIndex
         return {
@@ -582,7 +602,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
 
     let fpCallIndex = 0
     const supabase = {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'company_settings') {
           return {
@@ -596,6 +616,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
             }),
           }
         }
+        if (table === 'companies') return COMPANY_ROW
         fpCallIndex++
         const callNum = fpCallIndex
         return {
@@ -661,7 +682,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
 
     let fpCallIndex = 0
     const supabase = {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'company_settings') {
           return {
@@ -672,6 +693,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
             }),
           }
         }
+        if (table === 'companies') return COMPANY_ROW
         fpCallIndex++
         const callNum = fpCallIndex
         return {
@@ -715,5 +737,274 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     // FY 2026 (the successor) is relinked to follow the new period.
     expect(updatePayloads[0]).toEqual({ previous_period_id: 'new-2025' })
     expect(updatedIds[0]).toBe('p-2026')
+  })
+})
+
+// crm#1982: an SIE import of an old year beside the year onboarding created
+// leaves a hole of several years. One year can never close it (the 18 month
+// cap, BFL 3 kap.), so "reach the successor" refused every create.
+describe('POST /api/bookkeeping/fiscal-periods: a gap longer than one räkenskapsår', () => {
+  type StoredPeriod = {
+    id: string
+    name: string
+    period_start: string
+    period_end: string
+    is_closed: boolean
+    locked_at: string | null
+    previous_period_id: string | null
+  }
+
+  /** The query chains createFiscalPeriod makes on fiscal_periods. */
+  type PeriodQuery = {
+    select: () => PeriodQuery
+    insert: (values: Partial<StoredPeriod>) => PeriodQuery
+    update: (values: Partial<StoredPeriod>) => PeriodQuery
+    eq: (column: string, value: unknown) => PeriodQuery
+    is: (column: string, value: unknown) => PeriodQuery
+    lte: (column: string, value: string) => PeriodQuery
+    gte: (column: string, value: string) => PeriodQuery
+    order: () => PeriodQuery
+    limit: () => PeriodQuery
+    single: () => Promise<{ data: StoredPeriod | null; error: null }>
+    then: (resolve: (answer: unknown) => void) => void
+  }
+
+  const emptyParams = { params: Promise.resolve({}) }
+
+  const period = (
+    id: string,
+    period_start: string,
+    period_end: string,
+    previous_period_id: string | null = null,
+  ): StoredPeriod => ({ id, name: id, period_start, period_end, is_closed: false, locked_at: null, previous_period_id })
+
+  /**
+   * An in-memory fiscal_periods table behind the chains createFiscalPeriod
+   * makes, so successive creates see each other: filters select the rows, an
+   * insert adds one (id `fill-N`), an update patches the rows it matches.
+   */
+  function buildStatefulSupabase(seed: StoredPeriod[]) {
+    const rows = seed.map((row) => ({ ...row }))
+    const updates: Array<{ id: string; values: Partial<StoredPeriod> }> = []
+    const field = (row: StoredPeriod, column: string) => (row as Record<string, unknown>)[column]
+
+    const fiscalPeriods = () => {
+      const filters: Array<(row: StoredPeriod) => boolean> = []
+      let write: { kind: 'insert' | 'update'; values: Partial<StoredPeriod> } | null = null
+      const run = () => {
+        if (write?.kind === 'insert') {
+          const created = { ...period(`fill-${rows.length - seed.length + 1}`, '', ''), ...write.values }
+          rows.push(created)
+          return { data: [created], error: null }
+        }
+        const matched = rows.filter((row) => filters.every((matches) => matches(row)))
+        if (write?.kind === 'update') {
+          for (const row of matched) {
+            updates.push({ id: row.id, values: write.values })
+            Object.assign(row, write.values)
+          }
+          return { data: null, error: null }
+        }
+        return { data: [...matched].sort((a, b) => a.period_start.localeCompare(b.period_start)), error: null }
+      }
+      const query: PeriodQuery = {
+        select: () => query,
+        insert: (values) => {
+          write = { kind: 'insert', values }
+          return query
+        },
+        update: (values) => {
+          write = { kind: 'update', values }
+          return query
+        },
+        eq: (column, value) => {
+          if (column !== 'company_id') filters.push((row) => field(row, column) === value)
+          return query
+        },
+        is: (column, value) => {
+          filters.push((row) => field(row, column) === value)
+          return query
+        },
+        lte: (column, value) => {
+          filters.push((row) => String(field(row, column)) <= value)
+          return query
+        },
+        gte: (column, value) => {
+          filters.push((row) => String(field(row, column)) >= value)
+          return query
+        },
+        order: () => query,
+        limit: () => query,
+        single: async () => ({ data: run().data?.[0] ?? null, error: null }),
+        then: (resolve) => resolve(run()),
+      }
+      return query
+    }
+
+    const supabase = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
+        mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) },
+      },
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'companies') return COMPANY_ROW
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({ maybeSingle: async () => ({ data: { bookkeeping_locked_through: null }, error: null }) }),
+            }),
+          }
+        }
+        return fiscalPeriods()
+      }),
+    }
+    ;(createClient as ReturnType<typeof vi.fn>).mockResolvedValue(supabase)
+    return { rows, updates, byId: (id: string) => rows.find((row) => row.id === id) }
+  }
+
+  const create = (period_start: string, period_end: string) =>
+    POST(createMockRequest({ name: `FY ${period_start}`, period_start, period_end }), emptyParams)
+
+  // A year ending 2023-09-30 and one starting 2026-10-01: a hole of 36 months.
+  const OLD = period('old', '2022-10-01', '2023-09-30')
+  const CURRENT = period('current', '2026-10-01', '2027-09-30')
+
+  it('accepts the first fill year without it reaching the successor, and leaves the successor alone', async () => {
+    const db = buildStatefulSupabase([OLD, CURRENT])
+
+    const res = await create('2023-10-01', '2024-09-30')
+
+    expect(res.status).toBe(200)
+    expect(db.byId('fill-1')).toMatchObject({ period_start: '2023-10-01', period_end: '2024-09-30', previous_period_id: 'old' })
+    // 24 months of the hole remain: nothing ends the day before the successor
+    // starts, so it gets no previous year yet.
+    expect(db.updates).toEqual([])
+    expect(db.byId('current')?.previous_period_id).toBeNull()
+  })
+
+  it('fills the hole year by year, and the year that closes it becomes the successor\'s previous year', async () => {
+    // The successor still carries a link across the hole (older SIE imports
+    // linked the nearest year): it is not followed, and it is replaced only
+    // by the year that ends the day before the successor starts.
+    const db = buildStatefulSupabase([OLD, { ...CURRENT, previous_period_id: 'old' }])
+
+    expect((await create('2023-10-01', '2024-09-30')).status).toBe(200)
+    expect(db.byId('fill-1')?.previous_period_id).toBe('old')
+    expect(db.byId('current')?.previous_period_id).toBe('old')
+
+    expect((await create('2024-10-01', '2025-09-30')).status).toBe(200)
+    expect(db.byId('fill-2')?.previous_period_id).toBe('fill-1')
+    expect(db.byId('current')?.previous_period_id).toBe('old')
+    expect(db.updates).toEqual([])
+
+    expect((await create('2025-10-01', '2026-09-30')).status).toBe(200)
+    expect(db.byId('fill-3')?.previous_period_id).toBe('fill-2')
+    expect(db.updates).toEqual([{ id: 'current', values: { previous_period_id: 'fill-3' } }])
+
+    // Five adjacent years, each linked to the one ending the day before it.
+    expect(db.rows.map((row) => [row.id, row.previous_period_id]).sort()).toEqual([
+      ['current', 'fill-3'],
+      ['fill-1', 'old'],
+      ['fill-2', 'fill-1'],
+      ['fill-3', 'fill-2'],
+      ['old', null],
+    ])
+  })
+
+  it('once 18 months or less remain, the year must close the hole', async () => {
+    const db = buildStatefulSupabase([OLD, CURRENT])
+    expect((await create('2023-10-01', '2024-09-30')).status).toBe(200)
+    expect((await create('2024-10-01', '2025-09-30')).status).toBe(200)
+
+    // 12 months remain: a six month year would leave a new hole.
+    const short = await create('2025-10-01', '2026-03-31')
+    expect(short.status).toBe(400)
+    const body = await short.json()
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_end).toBe('2026-09-30')
+    expect(db.rows).toHaveLength(4)
+  })
+
+  it('a hole of exactly 18 months keeps the rule: one year, ending the day before the successor', async () => {
+    const eighteenMonths = [period('old', '2024-01-01', '2024-12-31'), period('current', '2026-07-01', '2027-06-30')]
+
+    buildStatefulSupabase(eighteenMonths)
+    const twelve = await create('2025-01-01', '2025-12-31')
+    expect(twelve.status).toBe(400)
+    const body = await twelve.json()
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_end).toBe('2026-06-30')
+    expect(body.error.message).toBe('Räkenskapsåret måste sluta 2026-06-30, dagen innan nästa räkenskapsår börjar.')
+
+    const db = buildStatefulSupabase(eighteenMonths)
+    expect((await create('2025-01-01', '2026-06-30')).status).toBe(200)
+    expect(db.updates).toEqual([{ id: 'current', values: { previous_period_id: 'fill-1' } }])
+  })
+
+  it('still refuses one year over the whole hole (18 month cap), naming where to start', async () => {
+    const db = buildStatefulSupabase([OLD, CURRENT])
+
+    const res = await create('2023-10-01', '2026-09-30')
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('FISCAL_PERIOD_TOO_LONG')
+    expect(body.error.details).toMatchObject({
+      months: 36,
+      max_months: 18,
+      expected_start: '2023-10-01',
+      gap_end: '2026-09-30',
+      following_period_id: 'current',
+    })
+    expect(body.error.message).toContain('högst 18 månader')
+    expect(body.error.message).toContain('fylls ett räkenskapsår i taget')
+    expect(body.error.message).toContain('börjar 2023-10-01')
+    expect(db.rows).toHaveLength(2)
+  })
+
+  it('still refuses a fill year longer than 18 months that stays inside the hole', async () => {
+    const db = buildStatefulSupabase([OLD, CURRENT])
+    const res = await create('2023-10-01', '2025-04-30')
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('FISCAL_PERIOD_TOO_LONG')
+    expect(db.rows).toHaveLength(2)
+  })
+
+  it('refuses a year in the middle of the hole, saying which start continues the chain', async () => {
+    const db = buildStatefulSupabase([OLD, CURRENT])
+
+    // The year next to the successor, before the ones in front of it exist.
+    const res = await create('2025-10-01', '2026-09-30')
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details).toMatchObject({
+      expected_start: '2023-10-01',
+      preceding_period_id: 'old',
+      gap_end: '2026-09-30',
+      following_period_id: 'current',
+    })
+    expect(body.error.message).toContain('måste börja 2023-10-01')
+    expect(body.error.message).toContain('fylls ett räkenskapsår i taget')
+    expect(db.rows).toHaveLength(2)
+  })
+
+  it('still refuses a fill year that runs into the successor', async () => {
+    const db = buildStatefulSupabase([OLD, CURRENT])
+    expect((await create('2023-10-01', '2024-09-30')).status).toBe(200)
+    // 24 months remain, so an 18 month year is a legal fill: 6 months are left.
+    expect((await create('2024-10-01', '2026-03-31')).status).toBe(200)
+    expect(db.byId('current')?.previous_period_id).toBeNull()
+
+    // Starts where it should and ends three months into the successor.
+    const res = await create('2026-04-01', '2026-12-31')
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('FISCAL_PERIOD_OVERLAP')
+    expect(body.error.details.overlapping_period_id).toBe('current')
+    expect(db.rows).toHaveLength(4)
+    expect(db.updates).toEqual([])
   })
 })

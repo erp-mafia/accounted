@@ -25,6 +25,8 @@ vi.mock('../lib/provider-client', () => ({
   listConsents: vi.fn(),
   generateOtc: vi.fn(),
   consumeOAuthState: vi.fn(),
+  peekOAuthState: vi.fn(),
+  oauthStateRejectionReason: vi.fn(),
   mintHandoff: vi.fn(),
   consumeHandoff: vi.fn(),
   getAuthUrl: vi.fn(),
@@ -80,7 +82,7 @@ const connectHandler = findRoute('POST', '/connect').handler as RouteHandler
 
 const APP_URL = 'https://app.example.test'
 const CALLBACK_PATH = '/api/extensions/ext/arcim-migration/callback'
-const ACTIVATION_KEY = '36b2bf61-0514-4825-a8a5-08cf151176f2'
+const ACTIVATION_KEY = '11111111-2222-4333-8444-555555555555'
 const USER_KEY = '1f0e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f'
 
 const blState = {
@@ -93,7 +95,9 @@ const blState = {
 
 const ctxFor = (userId: string) => ({
   companyId: 'company-1',
-  supabase: { auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: userId } } }) } },
+  userId,
+  supabase: {},
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }) as unknown as ExtensionContext
 
 beforeEach(() => {

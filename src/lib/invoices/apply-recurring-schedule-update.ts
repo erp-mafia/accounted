@@ -1,5 +1,8 @@
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
-import { toRecurringScheduleItemRow } from '@/lib/invoices/recurring-schedule-items'
+import {
+  insertRecurringScheduleItems,
+  toRecurringScheduleItemRow,
+} from '@/lib/invoices/recurring-schedule-items'
 import type { z } from 'zod'
 import type { RecurringScheduleItemSchema } from '@/lib/api/schemas'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -218,9 +221,7 @@ export async function applyRecurringScheduleUpdate(
 
   const itemRows = items.map((item, idx) => toRecurringScheduleItemRow(scheduleId, item, idx))
 
-  const { error: insertError } = await supabase
-    .from('recurring_invoice_schedule_items')
-    .insert(itemRows)
+  const { error: insertError } = await insertRecurringScheduleItems(supabase, itemRows)
 
   if (insertError) {
     // Best-effort restore of the previous lines so the schedule stays valid for

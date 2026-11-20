@@ -96,6 +96,43 @@ describe('GET /api/sales-orders/[id]', () => {
     expect(body.data.customer?.personal_number).not.toBe('199001011234')
     expect(findCalls('sales_orders', 'eq')).toContainEqual(['id', IDS.order])
     expect(findCalls('sales_orders', 'eq')).toContainEqual(['company_id', IDS.company])
+    // No source document to read.
+    expect(body.data).toMatchObject({ source_document: null })
+    expect(findCalls('invoices', 'eq')).toEqual([])
+  })
+
+  // The page asked GET /api/invoices/{id} for this, which the invoice route
+  // never answered (405), so "Skapad från" said Proforma for every order,
+  // offerter included. The order's GET carries it now.
+  it('carries the offert or proforma the order was created from, read in the company', async () => {
+    enqueue({ data: makeSalesOrder({ source_invoice_id: 'inv-quote-1' }) })
+    enqueue({ data: [] })
+    enqueue({ data: { document_type: 'quote', invoice_number: 'O-1042' } })
+
+    const { status, body } = await parseJsonResponse<{ data: SalesOrder & { source_document: unknown } }>(
+      await GET(createMockRequest(url), params),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.source_document).toEqual({ document_type: 'quote', invoice_number: 'O-1042' })
+    expect(findCalls('invoices', 'eq')).toEqual([
+      ['id', 'inv-quote-1'],
+      ['company_id', IDS.company],
+    ])
+  })
+
+  it('still answers the order when the source document cannot be read, leaving the row out', async () => {
+    enqueue({ data: makeSalesOrder({ source_invoice_id: 'inv-quote-1' }) })
+    enqueue({ data: [] })
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+    const { status, body } = await parseJsonResponse<{ data: SalesOrder & { source_document: unknown } }>(
+      await GET(createMockRequest(url), params),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.id).toBe(IDS.order)
+    expect(body.data.source_document).toBeNull()
   })
 })
 

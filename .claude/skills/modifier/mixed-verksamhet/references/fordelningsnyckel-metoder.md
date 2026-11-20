@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Fördelningsnyckel: metoder och val efter HFD 2023 ref. 45
 
 Lagstöd: ML 13 kap 29 § NML (motsv. 8 kap 13-14 § GML). EU-rätt: momsdirektivet art. 173-175. Skatteverket: ställningstagande dnr 8-2749853 (2024-02-02) "Uppdelning av ingående mervärdesskatt", med 2025-efterträdare efter HFD 2025 not. 29.

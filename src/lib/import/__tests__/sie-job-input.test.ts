@@ -49,6 +49,33 @@ describe('SIE durable input boundaries', () => {
     expect(jobInput(job).mappings).toEqual(customMappings)
   })
 
+  it('seals the used and the own accounts\' mappings, without unused BAS ones, when the import asks (#63)', async () => {
+    vi.stubEnv('SIE_IMPORT_JOBS', 'true')
+    const source = '#RAR 0 20260101 20261231\n#KONTO 9999 "Unused custom account"\n#KONTO 2440 "Unused BAS account"\n' + content
+    const fullChart = [...mappings, ...['9999', '2440'].map(number => ({ ...mappings[1], sourceAccount: number, targetAccount: number }))]
+    const submit = async (submitted: typeof options & { onlyUsedAccounts?: boolean }) => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([{ data: { id: 'period-1' } }, { data: null }, { data: { id: 'import-1', job_state: 'queued' } }])
+      await submitSIEJob(supabase as unknown as SupabaseClient, 'company-1', 'user-1', source, fullChart, submitted)
+      return vi.mocked(supabase.rpc).mock.calls[0][1].p_manifest.input
+    }
+
+    const usedOnly = await submit({ ...options, onlyUsedAccounts: true })
+    // 2440 is unused BAS: left out. 9999 is unused but outside BAS: kept.
+    expect(usedOnly.mappings.map((m: AccountMapping) => m.sourceAccount)).toEqual(['1930', '3001', '9999'])
+    expect(usedOnly.options.onlyUsedAccounts).toBe(true)
+    // The worker reads the sealed input on every lease, so a resumed
+    // preparation creates the same accounts.
+    const fileHash = createHash('sha256').update(source).digest('hex')
+    const sealed = { id: 'import-1', file_hash: fileHash, manifest: { input: { ...usedOnly, sourceHash: fileHash } } } as unknown as SIEJob
+    expect(jobInput(sealed).mappings.map(m => m.sourceAccount)).toEqual(['1930', '3001', '9999'])
+
+    // Without the flag the input is what it was before the option existed.
+    const whole = await submit(options)
+    expect(whole.mappings.map((m: AccountMapping) => m.sourceAccount)).toEqual(['1930', '3001', '9999', '2440'])
+    expect(whole.options).not.toHaveProperty('onlyUsedAccounts')
+  })
+
   it('retains an empty target for accounts the import will treat as unmapped', () => {
     const unmapped = { ...mappings[0], targetAccount: '', targetName: '' }
     expect(SIEJobMappingsSchema.parse([unmapped])).toEqual([unmapped])
@@ -67,9 +94,25 @@ describe('SIE durable input boundaries', () => {
     expect(database.storage.from).not.toHaveBeenCalled()
   })
 
+  // 2026-11-10: a provider migration was refused for years of about 50 000 to
+  // 113 000 vouchers (estimated from the archived file sizes) at a limit of
+  // 50 000, while the job works in 200-voucher chunks either way.
+  it('takes a year of more than 50 000 vouchers, and names the count past the limit', () => {
+    const source = '#RAR 0 20260101 20261231\n' + content
+    const year = (count: number) => {
+      const parsed = parseSIEFile(source)
+      const voucher = parsed.vouchers[0]
+      parsed.vouchers = Array.from({ length: count }, () => voucher)
+      return parsed
+    }
+    expect(() => validateSIEJobInput(source, year(113_000), mappings, options)).not.toThrow()
+    expect(() => validateSIEJobInput(source, year(150_001), mappings, options))
+      .toThrow(/^SIE-filen har 150\s001 verifikationer, fler än de 150\s000 som en import tar emot\. Hör av dig till supporten/)
+  })
+
   it('lets a line-less voucher dated outside the fiscal year through: it is skipped as empty, never posted', () => {
     // One #BTRANS-only voucher dated in the previous year refused the same
-    // file three times (Easy Online Stores, 2026-09-16).
+    // file three times (reported 2026-09-16).
     const source = '#RAR 0 20260101 20261231\n' + content +
       '\n#VER "LESSLIE" 2 20250102 "Tomt verifikat"\n{\n#BTRANS 1930 {} 100 20250102\n}'
     expect(() => validateSIEJobInput(source, parseSIEFile(source), mappings, options)).not.toThrow()
@@ -225,7 +268,9 @@ describe('SIE durable input boundaries', () => {
     expect(() => validateSIEJobInput(source, parseSIEFile(source), mappings,
       { ...options, importOpeningBalances: true })).not.toThrow()
     const openingVoucher = '#RAR 0 20260101 20261231\n#UB -1 1930\n#VER A 1 20260101 "Ingående balans"\n{\n#TRANS 1930 {} 100\n#TRANS 2091 {} -100\n}'
-    expect(() => validateSIEJobInput(openingVoucher, parseSIEFile(openingVoucher), mappings,
+    // 2091 carries the voucher's other side, so it needs its target too.
+    expect(() => validateSIEJobInput(openingVoucher, parseSIEFile(openingVoucher),
+      [...mappings, { ...mappings[0], sourceAccount: '2091', targetAccount: '2091' }],
       { ...options, importOpeningBalances: true })).not.toThrow()
   })
 
@@ -315,6 +360,40 @@ describe('SIE durable input boundaries', () => {
       enqueueMany([{data:periods}])
       await expect(resolveSIEFiscalYear(supabase as unknown as SupabaseClient,'company-1',parseSIEFile(content))).rejects.toThrow('saknar #RAR')
     })
+  // Fortnox's "Kundfakturor och inbetalningar" export: no #RAR, verifikat over
+  // several years. No company year can contain it, and creating one (what the
+  // old refusal asked for) never helps: the refusal names the partial export.
+  const multiYear = '#FLAGGA 0\n#SIETYP 4\n#PROGRAM "Fortnox" 3.62\n' +
+    '#VER B 1 20200115 "Kundfaktura"\n{\n#TRANS 1510 {} 125\n#TRANS 3001 {} -125\n}\n' +
+    '#VER C 1 20261103 "Inbetalning"\n{\n#TRANS 1930 {} 125\n#TRANS 1510 {} -125\n}'
+  it.each([
+    { label: 'the books hold the years the file spans', periods: [
+      { period_start: '2020-01-01', period_end: '2020-12-31' }, { period_start: '2026-01-01', period_end: '2026-12-31' }] },
+    { label: 'the company has no year yet', periods: [] },
+  ])('names a multi-year file without #RAR as a partial export when $label', async ({ periods }) => {
+    const {supabase,enqueueMany} = createQueuedMockSupabase()
+    enqueueMany([{data:periods}])
+    const parsed = parseSIEFile(multiYear)
+    const refusal = resolveSIEFiscalYear(supabase as unknown as SupabaseClient,'company-1',parsed)
+    await expect(refusal).rejects.toThrow('över mer än ett räkenskapsår (2020-01-15 till 2026-11-03)')
+    await expect(refusal).rejects.toThrow('Exportera i stället hela bokföringen som SIE typ 4, en fil per räkenskapsår')
+    await expect(refusal).rejects.not.toThrow('Skapa ett räkenskapsår')
+    expect(parsed.stats.fiscalYearStart).toBeFalsy()
+  })
+  it('still asks for a year when the dates fit one and the company has none, naming the dates', async () => {
+    const {supabase,enqueueMany} = createQueuedMockSupabase()
+    enqueueMany([{data:[]}])
+    await expect(resolveSIEFiscalYear(supabase as unknown as SupabaseClient,'company-1',parseSIEFile(content)))
+      .rejects.toThrow('Skapa ett räkenskapsår som omfattar filens datum (2026-02-01 till 2026-02-01) först.')
+  })
+  it('resolves an extended first year of up to 18 months that contains every date', async () => {
+    const extended = content.replace('20260201', '20250715') + '\n#VER "" "" 20261220 "Late"\n{\n#TRANS 1930 {} 50\n#TRANS 3001 {} -50\n}'
+    const {supabase,enqueueMany} = createQueuedMockSupabase()
+    enqueueMany([{data:[{period_start:'2025-07-01',period_end:'2026-12-31'}]}])
+    const parsed = parseSIEFile(extended)
+    await resolveSIEFiscalYear(supabase as unknown as SupabaseClient,'company-1',parsed)
+    expect(parsed.stats).toMatchObject({ fiscalYearStart: '2025-07-01', fiscalYearEnd: '2026-12-31' })
+  })
   it('names an oversized voucher before any ledger write', () => {
     const withYear = '#RAR 0 20260101 20261231\n'+content
     const parsed = parseSIEFile(withYear)

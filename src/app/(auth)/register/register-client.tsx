@@ -6,13 +6,27 @@ import Image from 'next/image'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { verifyOtp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, Loader2, Mail, ArrowLeft, ExternalLink, Eye, EyeOff } from 'lucide-react'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import {
+  ArrowTopRightOnSquareIcon,
+  CheckIcon,
+  EnvelopeIcon,
+  EyeIcon,
+  EyeSlashIcon,
+} from '@/components/icons'
+import {
+  STANDALONE_LINK_CLASS,
+  StandaloneHeading,
+  StandaloneOr,
+  StandalonePage,
+  StandaloneBelowLine,
+  StandaloneStack,
+} from '@/components/standalone/StandalonePage'
+import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
@@ -33,7 +47,10 @@ import {
   captchaTokenOptions,
   isTurnstileSubmissionBlocked,
 } from '@/lib/auth/turnstile'
-import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
+import { buildLoginHref, persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
+import { handOffLoginEmail } from '@/lib/auth/login-email-handoff'
+import type { SessionAuthMethod } from '@/lib/auth/session-timeout-shared'
+import { INVITE_TOKEN_HEADER } from '@/lib/auth/invite-token-header'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { cn } from '@/lib/utils'
 import type { GoTrueAuthSettings } from '@/lib/auth/gotrue-providers'
@@ -61,7 +78,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
   // nothing else may ever be forwarded here.
   const searchParams = useSearchParams()
   const nextPath = safeReturnTo(searchParams.get('next'), '/')
-  const loginHref = nextPath === '/' ? '/login' : `/login?next=${encodeURIComponent(nextPath)}`
+  const loginHref = buildLoginHref({ next: nextPath })
   const inviteToken = searchParams.get('invite')
 
   // When password login is not available, self-service registration is not
@@ -89,8 +106,14 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
   const [bankIdEmail, setBankIdEmail] = useState('')
   // Signup failures render inline next to the form (see AuthFormError), never
   // as a toast. Field-level problems attach to their field; everything else
-  // goes to the form-level alert above the form.
-  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid' | 'oauth'; message: string } | null>(null)
+  // goes to the form-level alert above the form. `signIn` is the way out when
+  // an account already exists: the method that will work, and for an
+  // address that has the account, that address (filled in on /login).
+  const [formError, setFormError] = useState<{
+    kind: AuthErrorKind | 'bankid' | 'oauth'
+    message: string
+    signIn?: { method: SessionAuthMethod; email?: string }
+  } | null>(null)
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [confirmError, setConfirmError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
@@ -100,7 +123,6 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
   const emailInputRef = useRef<HTMLInputElement>(null)
   const turnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
-  const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   // Per-request brand merged over getBranding() defaults (WL-12): identical
   // values on default hosts, brand values on branded hosts.
@@ -163,7 +185,8 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
     const inviteToken = searchParams.get('invite')
     if (!inviteToken) return
 
-    fetch(`/api/team/accept?token=${encodeURIComponent(inviteToken)}`)
+    // The token rides in a header, never in the request URL.
+    fetch('/api/team/accept', { headers: { [INVITE_TOKEN_HEADER]: inviteToken }, cache: 'no-store' })
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data?.data?.email) {
@@ -230,17 +253,28 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
           return
         }
         if (json.error === 'already_linked') {
-          // email_exists kind: the alert renders a sign-in link, which is the
-          // recovery path for both "BankID taken" and "email taken".
-          setFormError({ kind: 'email_exists', message: t('bankid_already_linked_description') })
+          // The alert renders a sign-in link: this BankID has an account, so
+          // the link opens /login on BankID.
+          setFormError({
+            kind: 'email_exists',
+            message: t('bankid_already_linked_description'),
+            signIn: { method: 'bankid' },
+          })
         } else if (json.error === 'account_exists') {
           // Inline with a sign-in link instead of yanking the user to /login
-          // mid-read: they keep the context and choose when to leave.
-          setFormError({ kind: 'email_exists', message: t('account_exists_description') })
+          // mid-read: they keep the context and choose when to leave. The
+          // address has a password account and this BankID has none, so the
+          // link opens the e-mail form with the address filled in (issue
+          // #209): BankID on /login would only answer "no account".
+          setFormError({
+            kind: 'email_exists',
+            message: t('account_exists_description'),
+            signIn: { method: 'password', email: emailValue },
+          })
         } else {
           setFormError({
             kind: 'unknown',
-            message: json.message || json.error || t('register_failed_default'),
+            message: getErrorMessage(json, { locale: errorLocale, fallback: t('register_failed_default') }),
           })
         }
         return
@@ -255,14 +289,15 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         return
       }
 
-      // Exchange token hash for Supabase session
-      const { error } = await supabase.auth.verifyOtp({
+      // Exchange token hash for a session: the server sets the HttpOnly
+      // session cookie (and records the BankID sign-in method).
+      const { error } = await verifyOtp({
         token_hash: json.data.tokenHash,
-        type: json.data.type as 'magiclink',
+        type: 'magiclink',
       })
 
       if (error) {
-        console.error('[register] BankID verifyOtp failed', error.message)
+        console.error('[register] BankID verifyOtp failed', error.code ?? error.status)
         setFormError({
           kind: 'unknown',
           message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
@@ -373,7 +408,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
       if (!res.ok) {
         const error = {
           code: json?.error?.code,
-          message: json?.error?.message ?? t('register_failed_default'),
+          message: getErrorMessage(json, { locale: errorLocale, fallback: t('register_failed_default') }),
           status: res.status,
         }
         if (error.code === 'signup_not_allowed') {
@@ -416,6 +451,9 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
             message:
               messageByKind[kind] ??
               getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+            ...(kind === 'email_exists'
+              ? { signIn: { method: 'password' as const, email: emailValue } }
+              : {}),
           })
         }
         return
@@ -483,98 +521,60 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
     const canonicalRegisterHref = `${branding.appUrl.replace(/\/+$/, '')}/register`
 
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up space-y-8">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <Mail className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl tracking-tight">
-              {t('invite_only_title', { appName: branding.appName })}
-            </h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              {t('invite_only_body', { appName: branding.appName })}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              {t('invite_only_hint')}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <Button className="w-full" asChild>
-              <a href={canonicalRegisterHref}>
-                {t('invite_only_cta')}
-                <ExternalLink className="ml-2 h-4 w-4" />
-              </a>
-            </Button>
-            <Button
-              variant="ghost"
-              className="w-full text-muted-foreground"
-              onClick={() => setInviteOnlyBlocked(false)}
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              {t('back')}
-            </Button>
-          </div>
-        </div>
-      </div>
+      <StandalonePage>
+        <StandaloneHeading
+          title={t('invite_only_title', { appName: branding.appName })}
+          sub={t('invite_only_body', { appName: branding.appName })}
+        />
+        <StandaloneStack>
+          <p className="text-sm text-foreground">{t('invite_only_hint')}</p>
+          <Button size="lg" className="w-full" asChild>
+            <a href={canonicalRegisterHref}>
+              {t('invite_only_cta')}
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+            </a>
+          </Button>
+          <Button variant="ghost" size="lg" className="w-full" onClick={() => setInviteOnlyBlocked(false)}>
+            {t('back')}
+          </Button>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
   if (duplicateEmail) {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up space-y-8">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <Mail className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl tracking-tight">{t('duplicate_title')}</h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
+      <StandalonePage>
+        <StandaloneHeading
+          title={t('duplicate_title')}
+          sub={
+            <>
               {t('duplicate_body_prefix')}{' '}
               <span className="font-medium text-foreground">{duplicateEmail}</span>.
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              {t('duplicate_hint')}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {/*
-              Plain /login, no `email` parameter: app/(auth)/login/page.tsx
-              reads only `error`, `flow` and `next`, so the address was
-              travelling in the URL (browser history, Referer, every proxy
-              access log) and arriving nowhere. The address is already on
-              screen above, so nothing is lost by dropping it.
-            */}
-            <Button className="w-full" asChild>
-              <Link href={loginHref}>
-                {t('sign_in')}
-              </Link>
-            </Button>
-            <Button
-              variant="ghost"
-              className="w-full text-muted-foreground"
-              onClick={() => setDuplicateEmail(null)}
+            </>
+          }
+        />
+        <StandaloneStack>
+          <p className="text-sm text-foreground">{t('duplicate_hint')}</p>
+          {/*
+            The e-mail form on /login, with the address filled in. The
+            address never goes in the URL (browser history, Referer, every
+            proxy access log): it travels in this tab's sessionStorage
+            (lib/auth/login-email-handoff.ts).
+          */}
+          <Button size="lg" className="w-full" asChild>
+            <Link
+              href={buildLoginHref({ method: 'password', next: nextPath })}
+              onClick={() => handOffLoginEmail(duplicateEmail)}
             >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              {t('back')}
-            </Button>
-          </div>
-        </div>
-      </div>
+              {t('sign_in')}
+            </Link>
+          </Button>
+          <Button variant="ghost" size="lg" className="w-full" onClick={() => setDuplicateEmail(null)}>
+            {t('back')}
+          </Button>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
@@ -582,62 +582,69 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
     const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
 
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up space-y-8">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <Mail className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl tracking-tight">{t('confirm_email_title')}</h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              {t.rich('confirm_email_body', {
-                email,
-                strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
-              })}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              {t('confirm_email_hint')}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {webmailHint && (
-              <Button className="w-full" asChild>
-                <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
-                  {t(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
-                    provider: webmailHint.name,
-                  })}
-                  <ExternalLink className="ml-2 h-4 w-4" />
-                </a>
-              </Button>
-            )}
-            <Button variant="ghost" className="w-full text-muted-foreground" asChild>
-              <Link href="/login">
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                {t('back_to_login')}
-              </Link>
+      <StandalonePage>
+        <StandaloneHeading
+          title={t('confirm_email_title')}
+          sub={t.rich('confirm_email_body', {
+            email,
+            strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+          })}
+        />
+        <StandaloneStack>
+          <p className="text-sm text-foreground">{t('confirm_email_hint')}</p>
+          {webmailHint && (
+            <Button variant="outline" size="lg" className="w-full" asChild>
+              <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
+                {t(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
+                  provider: webmailHint.name,
+                })}
+                <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+              </a>
             </Button>
-          </div>
-        </div>
-      </div>
+          )}
+          <Button variant="ghost" size="lg" className="w-full" asChild>
+            <Link href="/login">{t('back_to_login')}</Link>
+          </Button>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <header className="text-center mb-8">
-          <h1 className="sr-only">{t('create_account')}</h1>
-          <BrandWordmark size="hero" />
-        </header>
+    <StandalonePage
+      hero
+      below={
+        <>
+        <StandaloneBelowLine>
+          {t('already_have_account')}{' '}
+          <Link href={loginHref} className={STANDALONE_LINK_CLASS}>
+            {t('sign_in')}
+          </Link>
+        </StandaloneBelowLine>
 
-        <div className="rounded-xl border border-border bg-background p-6">
+        <StandaloneBelowLine>
+          {t('terms_prefix')}{' '}
+          {/* The in-app legal pages (host-relative for branded domains).
+              Creating the account accepts the terms and the DPA: both signup
+              routes record it in legal_acceptances (method 'signup'). */}
+          <a href="/terms" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {t('terms_link')}
+          </a>{' '}
+          {t('terms_and')}{' '}
+          <a href="/dpa" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {t('dpa_link')}
+          </a>
+          . {t('privacy_prefix')}{' '}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {t('privacy_link')}
+          </a>
+          .
+        </StandaloneBelowLine>
+          <SourceCodeFooter />
+        </>
+      }
+    >
+          <StandaloneHeading title={t('create_account')} hidden />
           {bankIdUnavailable && !bankIdUser && (
             <p className="mb-4 text-[13px] leading-5 text-muted-foreground">
               {t('bankid_unavailable_body')}
@@ -649,9 +656,12 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               <AuthFormError
                 message={formError.message}
                 action={
-                  formError.kind === 'email_exists' ? (
+                  formError.signIn ? (
                     <Link
-                      href={loginHref}
+                      href={buildLoginHref({ method: formError.signIn.method, next: nextPath })}
+                      onClick={() => {
+                        if (formError.signIn?.email) handOffLoginEmail(formError.signIn.email)
+                      }}
                       className="font-medium underline underline-offset-2"
                     >
                       {t('sign_in')}
@@ -663,8 +673,8 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
           )}
 
           {bankIdUser ? (
-            <form onSubmit={handleBankIdSignup} className="space-y-4">
-              <div className="rounded-lg border bg-muted/30 p-3">
+            <form onSubmit={handleBankIdSignup} className="flex flex-col gap-3">
+              <div className="rounded-lg p-3 bg-control shadow-raised">
                 <p className="text-sm font-medium">
                   {bankIdUser.givenName} {bankIdUser.surname}
                 </p>
@@ -693,12 +703,9 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               </div>
               {/* Also disabled while Back's /cancel is in flight: submitting
                   then would race the cookie clear (recoverable, but pointless). */}
-              <Button type="submit" className="w-full h-11" disabled={isLoading || isCancelling}>
+              <Button type="submit" size="lg" className="w-full" loading={isLoading} disabled={isCancelling}>
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('creating')}
-                  </>
+                  t('creating')
                 ) : (
                   t('create_account')
                 )}
@@ -706,7 +713,8 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               <Button
                 type="button"
                 variant="ghost"
-                className="w-full text-muted-foreground"
+                size="lg"
+                className="w-full"
                 disabled={isLoading || isCancelling}
                 onClick={async () => {
                   // AWAIT the cancel before remounting BankIdAuth. The flow
@@ -738,7 +746,6 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   }
                 }}
               >
-                <ArrowLeft className="mr-2 h-4 w-4" />
                 {t('back')}
               </Button>
             </form>
@@ -749,7 +756,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
           ) : !passwordLoginEnabled ? (
             <p className="text-[13px] leading-5 text-muted-foreground">{t('password_signup_unavailable')}</p>
           ) : (
-          <form onSubmit={handleRegister} className="space-y-4">
+          <form onSubmit={handleRegister} className="flex flex-col gap-3">
             <div className="space-y-2">
               <Label htmlFor="email">{t('email_label')}</Label>
               <Input
@@ -804,9 +811,9 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   aria-pressed={showPassword}
                 >
                   {showPassword ? (
-                    <EyeOff className="h-4 w-4" aria-hidden="true" />
+                    <EyeSlashIcon className="h-4 w-4" aria-hidden="true" />
                   ) : (
-                    <Eye className="h-4 w-4" aria-hidden="true" />
+                    <EyeIcon className="h-4 w-4" aria-hidden="true" />
                   )}
                 </button>
               </div>
@@ -827,7 +834,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                       className="flex h-3 w-3 items-center justify-center"
                     >
                       {check.met ? (
-                        <Check className="h-3 w-3" />
+                        <CheckIcon className="h-3 w-3" />
                       ) : (
                         <span className="h-1 w-1 rounded-full bg-current opacity-60" />
                       )}
@@ -882,14 +889,12 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
             />
             <Button
               type="submit"
-              className="w-full h-11"
-              disabled={isLoading || isTurnstileSubmissionBlocked(captchaToken)}
+              size="lg" className="w-full"
+              loading={isLoading}
+              disabled={isTurnstileSubmissionBlocked(captchaToken)}
             >
               {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('creating')}
-                </>
+                t('creating')
               ) : (
                 t('create_account')
               )}
@@ -901,22 +906,16 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
 
           {!bankIdUser && chipCount > 0 && (
             <>
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border" />
-                </div>
-                <div className="relative flex justify-center">
-                  <span className="bg-background px-3 text-xs text-muted-foreground">
-                    {tAuth('or_divider')}
-                  </span>
-                </div>
+              <div className="my-3">
+                <StandaloneOr>{tAuth('or_divider')}</StandaloneOr>
               </div>
               <div className={chipCount === 2 ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
                 {showBankIdChip && (
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 w-full gap-2"
+                    size="lg"
+                    className="w-full gap-2"
                     onClick={() => switchMethod('bankid')}
                   >
                     <Image
@@ -926,7 +925,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                       height={18}
                       className="dark:invert"
                     />
-                    BankID
+                    {chipCount === 2 ? 'BankID' : tAuth('continue_with_provider', { provider: 'BankID' })}
                   </Button>
                 )}
                 {providers.map((provider) => (
@@ -942,52 +941,18 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 w-full gap-2"
+                    size="lg"
+                    className="w-full gap-2"
                     onClick={() => switchMethod('email')}
                   >
-                    <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <EnvelopeIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     {tAuth('method_email_chip')}
                   </Button>
                 )}
               </div>
             </>
           )}
-        </div>
 
-        <p className="mt-6 text-center text-[13px] text-muted-foreground">
-          {t('already_have_account')}{' '}
-          <Link
-            href={loginHref}
-            className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
-          >
-            {t('sign_in')}
-          </Link>
-        </p>
-
-        <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
-          {t('terms_prefix')}{' '}
-          {/* Same targets as the login page: platform terms on the marketing
-              site, in-app /privacy (host-relative for branded domains). */}
-          <a
-            href="https://accounted.se/terms"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {t('terms_link')}
-          </a>{' '}
-          {t('terms_and')}{' '}
-          <a
-            href="/privacy"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {t('privacy_link')}
-          </a>
-          .
-        </p>
-      </div>
-    </div>
+    </StandalonePage>
   )
 }

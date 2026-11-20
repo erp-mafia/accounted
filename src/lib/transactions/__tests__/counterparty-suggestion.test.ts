@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildCounterpartySuggestion } from '../category-suggestions'
-import { categorizeBodyFor, previewInputFor } from '@/lib/bookkeeping/proposal'
+import { categorizeBodyFor } from '@/lib/bookkeeping/proposal'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import type { CategorizationTemplate } from '@/types'
 
@@ -77,14 +77,15 @@ describe('buildCounterpartySuggestion', () => {
 
   it('previews and books as the learned counterpart, never as a bare category', () => {
     // Exactly the reported case: a Bankavgift line, a "Fee" counterparty with
-    // four prior bookings. The review previews the learned pair on the
-    // legacy counterparty path and books through the counterparty rule id.
+    // four prior bookings. The review previews, and the booking posts, the
+    // one body that names the counterparty rule: the learned pair, never a
+    // category.
     const s = buildCounterpartySuggestion(makeTemplate(), 0.9)
-    expect(previewInputFor(s, { amount: -100, amountSek: -100 })).toMatchObject({
-      templateDebitAccount: '6570',
-      templateCreditAccount: '1930',
-      counterpartyLegacy: true,
+    expect(s).toMatchObject({ debit_account: '6570', credit_account: '1930' })
+    expect(categorizeBodyFor(s)).toEqual({
+      is_business: true,
+      counterparty_template_id: '11111111-1111-1111-1111-111111111111',
+      proposal_id: s.template_id,
     })
-    expect(categorizeBodyFor(s)).toEqual({ is_business: true, counterparty_template_id: '11111111-1111-1111-1111-111111111111' })
   })
 })

@@ -96,7 +96,9 @@ describe('DELETE /api/transactions/[id]', () => {
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(404)
-    expect((body as { error: { code: string } }).error.code).toBe('TRANSACTION_NOT_FOUND')
+    // Registry code shared with the v1 door and the other transaction routes
+    // (lib/transactions/manage.ts); the old inline 'TRANSACTION_NOT_FOUND' had no registry entry.
+    expect((body as { error: { code: string } }).error.code).toBe('TX_CATEGORIZE_TX_NOT_FOUND')
   })
 
   it('returns 409 with an actionable code when transaction has a journal entry', async () => {

@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
 import { generateSIEExport, encodeSIEToCP437 } from '@/lib/reports/sie-export'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 export const GET = withRouteContext(
   'report.sie_export',
@@ -41,13 +41,10 @@ export const GET = withRouteContext(
       const body = useCP437 ? Buffer.from(encodeSIEToCP437(sieContent)) : sieContent
       const contentType = useCP437 ? 'application/octet-stream' : 'text/plain; charset=utf-8'
 
-      return new NextResponse(body, {
-        status: 200,
-        headers: {
-          'Content-Type': contentType,
-          'Content-Disposition': `attachment; filename="export_${periodId}.se"`,
-          'X-Request-Id': requestId,
-        },
+      return fileResponse(body, {
+        filename: `export_${periodId}.se`,
+        contentType,
+        headers: { 'X-Request-Id': requestId },
       })
     } catch (err) {
       opLog.error('sie export generation failed', err as Error)

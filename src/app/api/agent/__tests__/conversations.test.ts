@@ -106,7 +106,7 @@ describe('GET /api/agent/conversations', () => {
 
 describe('GET /api/agent/conversations/[id]', () => {
   it('returns 404 when the conversation is not owned by the caller', async () => {
-    // Ownership is part of the fetch (.eq user_id) — a non-owned id resolves null.
+    // Ownership is part of the fetch (.eq user_id) - a non-owned id resolves null.
     const { supabase, calls } = createCapturingSupabase([{ data: null }])
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
 

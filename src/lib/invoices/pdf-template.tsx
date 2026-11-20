@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { roundOre } from '@/lib/money'
 import {
   Document,
@@ -7,820 +7,103 @@ import {
   View,
   Image,
   Link,
-  StyleSheet,
+  Svg,
+  Path,
+  Rect,
 } from '@react-pdf/renderer'
+import type { ReactNode } from 'react'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
-import { generateOcrReference } from '@/lib/bankgiro/luhn'
-import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
-import {
-  BUNDLED_INVOICE_FONT_FAMILIES,
-  INVOICE_LOGO_MAX_HEIGHT_PT,
-  INVOICE_LOGO_MAX_WIDTH_PT,
-  STANDARD_PDF_FONT_FAMILIES,
-} from '@/lib/invoices/branding-constants'
-import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
-import { getAmountToPay } from '@/lib/invoices/rounding'
+import type { InvoicePdfPaymentQr } from '@/lib/invoices/payment-qr'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
+import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import { getCountryName } from '@/lib/vat/country-codes'
-import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import { unitLabel } from '@/lib/invoices/unit-labels'
-import { HELVETICA_WIDTHS } from '@/lib/invoices/pdf-glyph-widths'
+import { deliveryAddressLines } from '@/lib/invoices/delivery-address'
+import { formatPostalAddress, postalPlaceLine } from '@/lib/invoices/postal-address'
+import { sellerRegisteredOffice } from '@/lib/invoices/seller-registered-office'
+import {
+  PAYMENT_AREA_GAP_PT,
+  PAYMENT_AREA_HEIGHT_PT,
+  PAYMENT_QR_PT,
+} from '@/lib/invoices/pdf/geometry'
+import { bareLabel, formatPdfAmount, formatPdfCurrency, formatPdfDate, formatPdfQuantity, type PdfLang } from '@/lib/invoices/pdf/format'
+import { invoiceFinePrint } from '@/lib/invoices/fine-print'
+import {
+  DEDUCTION_LABOR_ONLY_NOTICE,
+  GRON_TEKNIK_BASE_NOTICE,
+  PDF_LABELS as LABELS,
+  localizeVatNotice,
+} from '@/lib/invoices/pdf/labels'
+import {
+  createStyles,
+  resolveBranding,
+  type InvoiceBranding,
+  type PdfStyles,
+} from '@/lib/invoices/pdf/styles'
+import {
+  DESCRIPTION_COLUMN_PT,
+  FINE_PRINT_KEEP_TOGETHER_LINES,
+  FULL_WIDTH_BOX_PT,
+  HEADING_MIN_PRESENCE_AHEAD,
+  MAX_KEEP_TOGETHER_LINES,
+  NOTICE_BOX_CHROME_PT,
+  NOTICE_FONT_SIZE_PT,
+  TABLE_ROW_CHROME_PT,
+  TABLE_ROW_FONT_SIZE_PT,
+  fitsOnOnePage,
+  keepTogetherLineCap,
+  splitParagraphs,
+  wrapArticleNumberWords,
+  wrapDescriptionWords,
+  wrapFullWidthWords,
+} from '@/lib/invoices/pdf/text-fit'
+import {
+  buildPdfPaymentArea,
+  documentHasPaymentArea,
+  resolvePdfPaidState,
+  type PdfPaymentArea,
+} from '@/lib/invoices/pdf/payment-area'
+
+// The template's public surface: the render entry point, the routes, the
+// editor and the tests import these from here.
+export { formatPdfCurrency } from '@/lib/invoices/pdf/format'
+export { resolvePdfPaidState, type PdfPaidState } from '@/lib/invoices/pdf/payment-area'
+export { GRON_TEKNIK_BASE_NOTICE, localizeVatNotice } from '@/lib/invoices/pdf/labels'
+export {
+  DRAFT_WATERMARK_COLOR,
+  DRAFT_WATERMARK_FONT_SIZE_PT,
+  DRAFT_WATERMARK_OPACITY,
+  DRAFT_WATERMARK_ROTATION_DEG,
+  STATUS_STAMP_ROTATION_DEG,
+  brandingFromCompanySettings,
+  type InvoiceBranding,
+} from '@/lib/invoices/pdf/styles'
+export * from '@/lib/invoices/pdf/text-fit'
+export {
+  FOOTER_BOTTOM_PT,
+  PAGE_MARGIN_PT,
+  PAGE_PADDING_BOTTOM_PT,
+  PAGE_PADDING_TOP_PT,
+  PAYMENT_AREA_GAP_PT,
+  PAYMENT_AREA_HEIGHT_PT,
+  PAYMENT_QR_PT,
+  RUNNING_HEADER_HEIGHT_PT,
+  USABLE_PAGE_HEIGHT_PT,
+} from '@/lib/invoices/pdf/geometry'
+
 
 /**
- * react-pdf hyphenates long words with English patterns by default, which
- * split Swedish words at English syllable boundaries ("Septem-ber"). The
- * callbacks below keep every word whole that can fit its column, judged by a
- * rough ink-width estimate. Only a token that cannot fit (a URL, an e-mail
- * address, an order reference) gets break opportunities, first after its
- * natural separators and then wherever the estimate says the column is
- * full: react-pdf cannot break inside a word it was not given parts for, so a
- * token wider than its column would otherwise overprint the next column or
- * be dropped from the page entirely.
- *
- * Widths are the real Helvetica advances at 10pt (HELVETICA_WIDTHS) with a
- * 10% margin for the bundled fonts (Source Sans 3, Source Serif 4). Those
- * are narrower than Helvetica on most letters but up to 20% wider on the
- * narrow ones (i, l, I, r); ordinary words come out at or under the
- * estimate, and only a token of some 40 consecutive narrow glyphs could
- * get past it. A glyph Helvetica does not carry (Cyrillic, Greek, symbols)
- * is counted at the widest Latin advance so it can only be over-estimated.
- * Ordinary Swedish compounds up to about 28 characters come out under
- * 160pt and are never split in the narrowest column.
+ * Whether the line table prints the article number column: the company's
+ * setting is on and at least one row with amounts carries a number.
  */
-const FONT_SIZE_PT = 10
-const WIDTH_SAFETY_FACTOR = 1.1
-const UNKNOWN_GLYPH_WIDTH = 1100
-
-export function approxWidthPt(word: string): number {
-  let units = 0
-  for (const ch of word) {
-    units += HELVETICA_WIDTHS.get(ch.codePointAt(0) ?? 0) ?? UNKNOWN_GLYPH_WIDTH
-  }
-  return (units / 1000) * FONT_SIZE_PT * WIDTH_SAFETY_FACTOR
-}
-
-/**
- * The narrowest description column (discount and VAT columns shown) is about
- * 172pt at 10pt; a full-width notice box is about 490pt at 9pt. The budgets
- * sit under those so an estimate error still lands inside the column.
- */
-export const DESCRIPTION_COLUMN_PT = 160
-export const FULL_WIDTH_BOX_PT = 440
-
-export function wrapWholeWordsWithin(budgetPt: number): (word: string) => string[] {
-  return (word: string): string[] => {
-    if (approxWidthPt(word) <= budgetPt) return [word]
-    const parts: string[] = []
-    for (const piece of word.split(/(?<=[/\-.@_?&=:])/)) {
-      let chunk = ''
-      let chunkWidth = 0
-      for (const ch of piece) {
-        const w = approxWidthPt(ch)
-        if (chunk.length > 0 && chunkWidth + w > budgetPt) {
-          parts.push(chunk)
-          chunk = ''
-          chunkWidth = 0
-        }
-        chunk += ch
-        chunkWidth += w
-      }
-      if (chunk.length > 0) parts.push(chunk)
-    }
-    return parts
-  }
-}
-
-export const wrapDescriptionWords = wrapWholeWordsWithin(DESCRIPTION_COLUMN_PT)
-export const wrapFullWidthWords = wrapWholeWordsWithin(FULL_WIDTH_BOX_PT)
-
-/**
- * Whether a free-text block is short enough to be kept on one page.
- *
- * `wrap={false}` keeps a block from splitting across pages, but react-pdf
- * places a non-splittable block that is taller than a page anyway and
- * everything past the page edge is lost. Blocks that could plausibly be that
- * tall (line descriptions and notes, both multi-line) are only kept together
- * when a line estimate says they fit comfortably; past that they are allowed
- * to split, which is the lesser evil.
- *
- * The estimate counts rendered lines, not source lines: a token wider than
- * the column is chunked by the wrap callback and each chunk can take a line
- * of its own. The cap is small enough that even the tallest font a company
- * can pick (bundled Source Serif 4 at about 13.7pt per line, or an uploaded
- * font at 20pt) keeps 12 lines under 250pt, a third of the usable page
- * height, so a kept-together block can never be taller than a page.
- */
-export const MAX_KEEP_TOGETHER_LINES = 12
-
-export function fitsOnOnePage(text: string | null | undefined, budgetPt: number): boolean {
-  if (!text) return true
-  let lines = 0
-  for (const line of text.split('\n')) {
-    let chunkLines = 0
-    let flowingWidth = 0
-    for (const word of line.split(/\s+/)) {
-      if (word.length === 0) continue
-      const width = approxWidthPt(word)
-      if (width > budgetPt) chunkLines += Math.ceil(width / budgetPt)
-      else flowingWidth += width + 4
-    }
-    const flowingLines = Math.ceil(flowingWidth / budgetPt)
-    lines += chunkLines + Math.max(chunkLines === 0 ? 1 : 0, flowingLines)
-    if (lines > MAX_KEEP_TOGETHER_LINES) return false
-  }
-  return true
-}
-
-/**
- * How much content (in pt) must fit below a heading on the same page before
- * react-pdf may leave the heading there; otherwise the heading moves to the
- * next page together with what follows it. Roughly two table rows.
- */
-export const HEADING_MIN_PRESENCE_AHEAD = 40
-
-/**
- * Draft watermark geometry (#2437). One word ("UTKAST" / "DRAFT"), bold,
- * diagonal and faint, centred on every page. The font size keeps the widest
- * word ("UTKAST", 6 glyphs with letter spacing) inside the 595pt A4 width
- * once rotated. The colour and opacity are a balance: the invoice underneath
- * must stay legible, and the word must survive a monochrome print or a
- * greyscale scan, because a numbered draft otherwise carries every field of
- * a real faktura (title, number, OCR). #4b5563 at 0.3 composites to about
- * 79% brightness on white: clearly grey on paper, still background.
- */
-export const DRAFT_WATERMARK_FONT_SIZE_PT = 96
-export const DRAFT_WATERMARK_OPACITY = 0.3
-export const DRAFT_WATERMARK_COLOR = '#4b5563'
-export const DRAFT_WATERMARK_ROTATION_DEG = -35
-
-type PdfLang = 'sv' | 'en'
-
-// Customer-facing labels. Statutory chapter references (ML 17 kap 24§, ML 3 kap.)
-// stay intact in both locales: they identify the law, not the language.
-const LABELS = {
-  sv: {
-    // Document titles
-    titleInvoice: 'FAKTURA',
-    titleCreditNote: 'KREDITFAKTURA',
-    titleProforma: 'PROFORMAFAKTURA',
-    titleQuote: 'OFFERT',
-    titleDeliveryNote: 'FÖLJESEDEL',
-    titlePreview: 'FÖRHANDSGRANSKNING',
-    // Status banners
-    cancelledTitle: 'MAKULERAD: inte en giltig faktura',
-    cancelledWithNumber: (n: string) => `Faktura ${n} har makulerats. Numret behålls i serien för att hålla nummerföljden obruten enligt ML 17 kap 24§, men dokumentet är inte ett giltigt fakturaunderlag.`,
-    cancelledNoNumber: 'Detta utkast har makulerats och är inte ett giltigt fakturaunderlag.',
-    draftWatermark: 'UTKAST',
-    paidTitle: 'BETALD',
-    paidBannerText: (date: string, amount: string) => `Betald ${date} · ${amount}`,
-    paidBannerNoDate: (amount: string) => `Betald · ${amount}`,
-    // Credit note reference
-    creditNoteRef: (n: string) => `Denna kreditfaktura avser och krediterar faktura nr ${n}`,
-    // Sections
-    invoiceInfoHeading: 'Fakturainformation',
-    quoteInfoHeading: 'Offertinformation',
-    billedToHeading: 'Faktureras till',
-    itemsHeading: 'Specifikation',
-    // Invoice details
-    invoiceDate: 'Fakturadatum:',
-    dueDate: 'Förfallodatum:',
-    // Quote (offert) date labels: a quote has an issue date and an expiry,
-    // never a due date.
-    quoteDate: 'Offertdatum:',
-    validUntil: 'Giltig till:',
-    deliveryDate: 'Leveransdatum:',
-    yourReference: 'Er referens:',
-    ourReference: 'Vår referens:',
-    invoiceMarking: 'Märkning:',
-    // Customer box
-    custNo: 'Kundnr:',
-    orgNo: 'Org.nr:',
-    vat: 'VAT:',
-    // Table columns
-    colDescription: 'Beskrivning',
-    colQty: 'Antal',
-    colUnit: 'Enhet',
-    colUnitPrice: 'à-pris',
-    colDiscount: 'Rabatt',
-    colVat: 'Moms',
-    colTotal: 'Summa',
-    // Totals
-    subtotal: 'Delsumma:',
-    net: (rate: number) => `Netto ${rate}%:`,
-    vatRow: (rate: number) => `Moms ${rate}%:`,
-    rounding: 'Öresavrundning:',
-    deductionRow: 'Skattereduktion ROT/RUT:',
-    deductionInfoHeading: 'Underlag för skattereduktion',
-    deductionPersonnummer: 'Personnummer:',
-    deductionHousingDesignation: 'Fastighetsbeteckning:',
-    deductionApartmentNumber: 'Lägenhetsnummer:',
-    deductionWorkType: 'Arbete:',
-    deductionLaborHours: 'Arbetstimmar:',
-    deductionNotice: 'Köparen ansöker om utbetalning hos Skatteverket via fakturamodellen. Säljaren begär utbetalning för den del köparen inte betalat.',
-    toCredit: 'Att kreditera:',
-    toPay: 'Att betala:',
-    // A quote is not a payment request, so its grand total is a neutral sum.
-    totalQuote: 'Summa:',
-    paidRow: 'Betalt:',
-    vatInSek: (rate: number | string) => `Moms i SEK (kurs ${rate}):`,
-    totalInSek: 'Totalt i SEK:',
-    // Proforma / quote / exempt
-    proformaNotice: 'Detta är en proformafaktura och utgör ingen betalningsanmodan.',
-    quoteNotice: 'Detta är en offert och utgör ingen faktura eller betalningsanmodan.',
-    exemptNotice: 'Undantag från skatteplikt, ML 3 kap.',
-    exportNotice: EXPORT_NOTICE_SV,
-    notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
-    // Payment
-    paymentHeading: 'Betalningsinformation',
-    bank: 'Bank:',
-    account: 'Kontonummer:',
-    bankgiro: 'Bankgiro:',
-    plusgiro: 'Plusgiro:',
-    swish: 'Swish:',
-    iban: 'IBAN:',
-    bic: 'BIC/SWIFT:',
-    routingNumber: 'Routing number (ABA):',
-    sortCode: 'Sort code:',
-    bankCode: 'Bankkod:',
-    foreignAccount: 'Kontonummer:',
-    ocr: 'OCR/Referens:',
-    paymentReference: 'Betalningsreferens:',
-    invoiceNumber: 'Fakturanummer:',
-    swishQrCaption: 'Skanna för att betala med Swish',
-    payOnline: 'Betala online:',
-    paymentLinkQrCaption: 'Skanna för att betala online',
-    // Footer
-    orgNoLong: 'Org.nr:',
-    vatRegNo: 'Momsreg.nr:',
-    fSkatt: 'Godkänd för F-skatt',
-  },
-  en: {
-    titleInvoice: 'INVOICE',
-    titleCreditNote: 'CREDIT NOTE',
-    titleProforma: 'PROFORMA INVOICE',
-    titleQuote: 'QUOTE',
-    titleDeliveryNote: 'DELIVERY NOTE',
-    titlePreview: 'PREVIEW',
-    cancelledTitle: 'VOID: not a valid invoice',
-    cancelledWithNumber: (n: string) => `Invoice ${n} has been voided. The number is retained in the sequence to keep the numbering unbroken (ML 17 kap 24§, Swedish VAT Act), but this document is not a valid invoice.`,
-    cancelledNoNumber: 'This draft has been voided and is not a valid invoice.',
-    draftWatermark: 'DRAFT',
-    paidTitle: 'PAID',
-    paidBannerText: (date: string, amount: string) => `Paid ${date} · ${amount}`,
-    paidBannerNoDate: (amount: string) => `Paid · ${amount}`,
-    creditNoteRef: (n: string) => `This credit note credits invoice no. ${n}`,
-    invoiceInfoHeading: 'Invoice information',
-    quoteInfoHeading: 'Quote information',
-    billedToHeading: 'Billed to',
-    itemsHeading: 'Items',
-    invoiceDate: 'Invoice date:',
-    dueDate: 'Due date:',
-    quoteDate: 'Quote date:',
-    validUntil: 'Valid until:',
-    deliveryDate: 'Delivery date:',
-    yourReference: 'Your reference:',
-    ourReference: 'Our reference:',
-    invoiceMarking: 'Buyer reference:',
-    custNo: 'Customer no.:',
-    orgNo: 'Reg. no.:',
-    vat: 'VAT:',
-    colDescription: 'Description',
-    colQty: 'Qty',
-    colUnit: 'Unit',
-    colUnitPrice: 'Unit price',
-    colDiscount: 'Discount',
-    colVat: 'VAT',
-    colTotal: 'Amount',
-    subtotal: 'Subtotal:',
-    net: (rate: number) => `Net ${rate}%:`,
-    vatRow: (rate: number) => `VAT ${rate}%:`,
-    rounding: 'Rounding:',
-    deductionRow: 'ROT/RUT tax reduction:',
-    deductionInfoHeading: 'Tax reduction details',
-    deductionPersonnummer: 'Personnummer:',
-    deductionHousingDesignation: 'Property designation:',
-    deductionApartmentNumber: 'Apartment number:',
-    deductionWorkType: 'Service type:',
-    deductionLaborHours: 'Labor hours:',
-    deductionNotice: 'The customer claims the deduction via fakturamodellen at Skatteverket. The seller requests payment from the agency for the portion not paid by the customer.',
-    toCredit: 'To credit:',
-    toPay: 'Total due:',
-    totalQuote: 'Total:',
-    paidRow: 'Paid:',
-    vatInSek: (rate: number | string) => `VAT in SEK (rate ${rate}):`,
-    totalInSek: 'Total in SEK:',
-    proformaNotice: 'This is a proforma invoice and is not a request for payment.',
-    quoteNotice: 'This is a quote and is not an invoice or a request for payment.',
-    exemptNotice: 'Exempt from VAT (ML 3 kap., Swedish VAT Act).',
-    exportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
-    notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
-    paymentHeading: 'Payment information',
-    bank: 'Bank:',
-    account: 'Account number:',
-    bankgiro: 'Bankgiro:',
-    plusgiro: 'Plusgiro:',
-    swish: 'Swish:',
-    iban: 'IBAN:',
-    bic: 'BIC/SWIFT:',
-    routingNumber: 'Routing number (ABA):',
-    sortCode: 'Sort code:',
-    bankCode: 'Bank code:',
-    foreignAccount: 'Account number:',
-    ocr: 'Reference:',
-    paymentReference: 'Payment reference:',
-    invoiceNumber: 'Invoice number:',
-    swishQrCaption: 'Scan to pay with Swish',
-    payOnline: 'Pay online:',
-    paymentLinkQrCaption: 'Scan to pay online',
-    orgNoLong: 'Reg. no.:',
-    vatRegNo: 'VAT reg. no.:',
-    // The F-skatt approval must be stated on the invoice, but ML sets no
-    // language requirement for invoice text (swedish-invoice-compliance,
-    // invoice-rules.md §4). Skatteverket's own English term is "approved for
-    // F-tax"; the Swedish phrase stays in parentheses so the literal statutory
-    // wording is still on the document. Peppol SE-R-005 (the literal string
-    // rule) applies to the UBL file (peppol-bis-billing.ts), which is
-    // unaffected by PDF language.
-    fSkatt: 'Approved for F-tax (Godkänd för F-skatt)',
-  },
-} as const
-
-// Swish on invoices (the number row + the payment QR). When true, the Swish row
-// and QR render on the invoice PDF and the settings "Visa Swish" toggle is live.
-export const SHOW_SWISH_ON_INVOICE = true
-
-/**
- * Render a stored VAT notice in the document language.
- *
- * reverse_charge_text is stamped in Swedish at create time and stored on the
- * invoice, so an English PDF of an existing export invoice would otherwise
- * print "Omsättning utanför EU, ML 10 kap." verbatim. Known statutory defaults
- * (byte-identical to the constants getVatRules() writes) are rendered from
- * LABELS in the document language; any other text (custom or unknown) is
- * printed exactly as stored.
- */
-export function localizeVatNotice(text: string, lang: PdfLang): string {
-  if (text === EXPORT_NOTICE_SV) return LABELS[lang].exportNotice
-  return text
-}
-
-// Labor-only disclaimer for the ROT/RUT block. Kept Swedish-only in both
-// locales: references Skatteverket's fakturamodell directly, which is a
-// statutory Swedish concept and has no formal English equivalent.
-const DEDUCTION_LABOR_ONLY_NOTICE =
-  'Endast arbetskostnad har inkluderats i underlaget för ROT/RUT-avdrag enligt Skatteverkets fakturamodell.'
-
-// Resolved branding values used by the stylesheet. Keeping the resolved shape
-// distinct from the prop shape lets us validate the font allowlist in one
-// place (createStyles below) and gives the rest of the component a fully
-// non-null object to work with.
-export interface InvoiceBranding {
-  /** Primary color: used for the document title and other strong text.
-   *  Default '#1a1a1a' (the existing hardcoded value). */
-  primaryColor?: string
-  /** Accent color: used for muted labels and section headings.
-   *  Default '#666666' (the existing hardcoded value). */
-  accentColor?: string
-  /** Registered react-pdf font family. Default 'Helvetica'. */
-  fontFamily?: string
-  /** Optional banner text rendered above the document title. */
-  headerText?: string | null
-  /** Optional footer text rendered above the statutory company footer line. */
-  footerText?: string | null
-}
-
-interface ResolvedBranding {
-  primaryColor: string
-  accentColor: string
-  fontFamily: string
-}
-
-const ALLOWED_FONTS = new Set<string>([
-  ...STANDARD_PDF_FONT_FAMILIES,
-  ...BUNDLED_INVOICE_FONT_FAMILIES,
-])
-
-/**
- * Extract the InvoicePDF branding shape from a CompanySettings row. Tolerates
- * legacy rows where the branding columns are still null/undefined: returns
- * undefined fields that resolveBranding() then maps to the legacy defaults.
- *
- * Use this at every InvoicePDF call site that has access to a CompanySettings:
- * keeping the extraction logic in one place means a future schema rename or
- * new branding field only needs to land here.
- */
-export function brandingFromCompanySettings(
-  company: CompanySettings | (Partial<CompanySettings> & Record<string, unknown>),
-): InvoiceBranding {
-  return {
-    primaryColor: (company as CompanySettings).invoice_primary_color ?? undefined,
-    accentColor: (company as CompanySettings).invoice_accent_color ?? undefined,
-    fontFamily: (company as CompanySettings).invoice_font_family ?? undefined,
-    headerText: (company as CompanySettings).invoice_header_text ?? null,
-    footerText: (company as CompanySettings).invoice_footer_text ?? null,
-  }
-}
-
-const DEFAULT_BRANDING: ResolvedBranding = {
-  primaryColor: '#1a1a1a',
-  accentColor: '#666666',
-  fontFamily: 'Helvetica',
-}
-
-function resolveBranding(branding: InvoiceBranding | undefined): ResolvedBranding {
-  if (!branding) return DEFAULT_BRANDING
-  const fontFamily =
-    branding.fontFamily &&
-    (ALLOWED_FONTS.has(branding.fontFamily) ||
-      branding.fontFamily.startsWith(CUSTOM_INVOICE_FONT_RENDER_PREFIX))
-      ? branding.fontFamily
-      : DEFAULT_BRANDING.fontFamily
-  return {
-    primaryColor: branding.primaryColor || DEFAULT_BRANDING.primaryColor,
-    accentColor: branding.accentColor || DEFAULT_BRANDING.accentColor,
-    fontFamily,
-  }
-}
-
-// Create styles. Calling without args yields the original (pre-branding)
-// stylesheet: required so the default code path is byte-equivalent to the
-// previous hardcoded version.
-function createStyles(branding?: InvoiceBranding) {
-  const b = resolveBranding(branding)
-  return StyleSheet.create({
-    page: {
-      padding: 40,
-      fontSize: 10,
-      fontFamily: b.fontFamily,
-    },
-    header: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      marginBottom: 30,
-    },
-    title: {
-      fontSize: 24,
-      fontWeight: 'bold',
-      color: b.primaryColor,
-    },
-    companyInfo: {
-      textAlign: 'left',
-    },
-    companyName: {
-      fontSize: 14,
-      fontWeight: 'bold',
-      marginBottom: 4,
-    },
-    section: {
-      marginBottom: 20,
-    },
-    sectionTitle: {
-      fontSize: 11,
-      fontWeight: 'bold',
-      marginBottom: 8,
-      color: b.accentColor,
-      textTransform: 'uppercase',
-      letterSpacing: 0.5,
-    },
-    row: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      marginBottom: 4,
-    },
-    label: {
-      color: b.accentColor,
-    },
-    value: {
-      fontWeight: 'bold',
-    },
-    customerBox: {
-      backgroundColor: '#f5f5f5',
-      padding: 15,
-      borderRadius: 4,
-      marginBottom: 20,
-    },
-    customerName: {
-      fontSize: 12,
-      fontWeight: 'bold',
-      marginBottom: 4,
-    },
-    table: {
-      marginTop: 10,
-    },
-    tableHeader: {
-      flexDirection: 'row',
-      borderBottomWidth: 1,
-      borderBottomColor: '#ddd',
-      paddingBottom: 8,
-      marginBottom: 8,
-    },
-    tableRow: {
-      flexDirection: 'row',
-      paddingVertical: 6,
-      borderBottomWidth: 1,
-      borderBottomColor: '#eee',
-    },
-    colDescription: {
-      flex: 3.5,
-    },
-    colQty: {
-      flex: 1,
-      textAlign: 'right',
-    },
-    colUnit: {
-      flex: 1,
-      textAlign: 'center',
-    },
-    colPrice: {
-      flex: 1.5,
-      textAlign: 'right',
-    },
-    colDiscount: {
-      flex: 1,
-      textAlign: 'right',
-    },
-    colVat: {
-      flex: 1,
-      textAlign: 'right',
-    },
-    colTotal: {
-      flex: 1.5,
-      textAlign: 'right',
-    },
-    tableHeaderText: {
-      fontWeight: 'bold',
-      color: b.accentColor,
-      fontSize: 9,
-      textTransform: 'uppercase',
-    },
-    totalsSection: {
-      marginTop: 20,
-      paddingTop: 15,
-      borderTopWidth: 2,
-      borderTopColor: '#ddd',
-    },
-    totalRow: {
-      flexDirection: 'row',
-      justifyContent: 'flex-end',
-      marginBottom: 4,
-    },
-    totalLabel: {
-      width: 120,
-      textAlign: 'right',
-      paddingRight: 15,
-      color: b.accentColor,
-    },
-    totalValue: {
-      width: 100,
-      textAlign: 'right',
-    },
-    grandTotal: {
-      flexDirection: 'row',
-      justifyContent: 'flex-end',
-      marginTop: 10,
-      paddingTop: 10,
-      borderTopWidth: 1,
-      borderTopColor: '#333',
-    },
-    grandTotalLabel: {
-      width: 120,
-      textAlign: 'right',
-      paddingRight: 15,
-      fontSize: 14,
-      fontWeight: 'bold',
-    },
-    grandTotalValue: {
-      width: 100,
-      textAlign: 'right',
-      fontSize: 14,
-      fontWeight: 'bold',
-    },
-    paymentSection: {
-      marginTop: 30,
-      padding: 15,
-      backgroundColor: '#f8f9fa',
-      borderRadius: 4,
-      position: 'relative',
-    },
-    paymentTitle: {
-      fontSize: 11,
-      fontWeight: 'bold',
-      marginBottom: 10,
-      color: '#333',
-    },
-    paymentRow: {
-      flexDirection: 'row',
-      marginBottom: 4,
-    },
-    paymentLabel: {
-      width: 100,
-      color: b.accentColor,
-    },
-    paymentValue: {
-      flex: 1,
-    },
-    // One shape for every notice below the totals (proforma / quote notice,
-    // statutory VAT notice, free-text notes): the same border, radius,
-    // padding and spacing, in a neutral palette that does not fight the
-    // brand colour. Per-notice colours made the stack look patchy.
-    noticeBox: {
-      marginTop: 12,
-      padding: 12,
-      backgroundColor: '#f8f9fa',
-      borderRadius: 4,
-      borderWidth: 1,
-      borderColor: '#dee2e6',
-    },
-    noticeText: {
-      fontSize: 9,
-      color: '#495057',
-    },
-    creditNoteBox: {
-      marginBottom: 20,
-      padding: 12,
-      backgroundColor: '#f8d7da',
-      borderRadius: 4,
-      borderWidth: 1,
-      borderColor: '#f5c6cb',
-    },
-    creditNoteText: {
-      fontSize: 10,
-      color: '#721c24',
-    },
-    creditNoteTitle: {
-      color: '#721c24',
-    },
-    // Draft watermark (#2437): one word, diagonal and faint, across the whole
-    // page, the way a stamp marks a paper document. The overlay is absolutely
-    // positioned over the page box and taken out of the flow, so a draft
-    // previews exactly as the final invoice will print; `fixed` repeats it
-    // on every page. It replaced a yellow banner in the top margin, which
-    // read as UI chrome on a document (and, before that, a banner in the
-    // flow that pushed the whole document down).
-    draftWatermark: {
-      position: 'absolute',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    // Rotation and opacity sit on a padded wrapper so the word turns about
-    // the centre of its own box and the Text keeps a plain type style.
-    draftWatermarkWord: {
-      transform: `rotate(${DRAFT_WATERMARK_ROTATION_DEG}deg)`,
-      opacity: DRAFT_WATERMARK_OPACITY,
-      paddingVertical: 24,
-      paddingHorizontal: 24,
-    },
-    draftWatermarkText: {
-      fontSize: DRAFT_WATERMARK_FONT_SIZE_PT,
-      fontWeight: 'bold',
-      color: DRAFT_WATERMARK_COLOR,
-      letterSpacing: 6,
-    },
-    cancelledBanner: {
-      marginBottom: 16,
-      padding: 10,
-      backgroundColor: '#f8d7da',
-      borderWidth: 2,
-      borderColor: '#721c24',
-      borderRadius: 4,
-    },
-    cancelledBannerTitle: {
-      fontSize: 14,
-      fontWeight: 'bold',
-      color: '#721c24',
-      textAlign: 'center',
-      marginBottom: 2,
-    },
-    cancelledBannerText: {
-      fontSize: 9,
-      color: '#721c24',
-      textAlign: 'center',
-    },
-    paidBanner: {
-      marginBottom: 16,
-      padding: 10,
-      backgroundColor: '#d4edda',
-      borderWidth: 2,
-      borderColor: '#155724',
-      borderRadius: 4,
-    },
-    paidBannerTitle: {
-      fontSize: 14,
-      fontWeight: 'bold',
-      color: '#155724',
-      textAlign: 'center',
-      marginBottom: 2,
-    },
-    paidBannerText: {
-      fontSize: 9,
-      color: '#155724',
-      textAlign: 'center',
-    },
-    footer: {
-      position: 'absolute',
-      bottom: 30,
-      left: 40,
-      right: 40,
-      borderTopWidth: 1,
-      borderTopColor: '#ddd',
-      paddingTop: 10,
-    },
-    footerText: {
-      fontSize: 8,
-      color: '#999',
-      textAlign: 'center',
-    },
-    twoColumn: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-    },
-    column: {
-      width: '48%',
-    },
-    // New: optional branding banner above the document title.
-    brandingHeader: {
-      marginBottom: 12,
-      paddingBottom: 8,
-      borderBottomWidth: 1,
-      borderBottomColor: '#eee',
-    },
-    brandingHeaderText: {
-      fontSize: 9,
-      color: b.accentColor,
-      textAlign: 'left',
-    },
-    // ROT/RUT-avdrag info box (Skattereduktion ROT/RUT). Surfaces the
-    // customer's personnummer last 4, fastighetsbeteckning, work type per
-    // row and the statutory notice about fakturamodellen.
-    deductionBox: {
-      marginTop: 18,
-      padding: 12,
-      backgroundColor: '#f5f5f5',
-      borderRadius: 4,
-      borderWidth: 1,
-      borderColor: '#ddd',
-    },
-    deductionTitle: {
-      fontSize: 10,
-      fontWeight: 'bold',
-      marginBottom: 6,
-      color: b.primaryColor,
-      textTransform: 'uppercase',
-      letterSpacing: 0.5,
-    },
-    deductionRow: {
-      flexDirection: 'row',
-      marginBottom: 3,
-    },
-    deductionLabel: {
-      width: 130,
-      fontSize: 9,
-      color: b.accentColor,
-    },
-    deductionValue: {
-      fontSize: 9,
-      flex: 1,
-    },
-    deductionLineItem: {
-      fontSize: 9,
-      marginTop: 4,
-      paddingLeft: 8,
-      color: '#444',
-    },
-    deductionNotice: {
-      fontSize: 8,
-      marginTop: 8,
-      color: b.accentColor,
-      fontStyle: 'italic',
-    },
-    // New: optional branding footnote rendered above the statutory company
-    // line in the footer block.
-    brandingFooterText: {
-      fontSize: 8,
-      color: b.accentColor,
-      textAlign: 'center',
-      marginBottom: 4,
-    },
-  })
-}
-
-// Format currency with explicit ISO code so non-Swedish recipients see "1 234,56 SEK"
-// instead of the Swedish symbol "kr". Decimal style + appended code works for any
-// currency (SEK/EUR/USD) and avoids Intl's locale-specific symbol quirks.
-export function formatPdfCurrency(amount: number, currency: string = 'SEK', language: PdfLang = 'sv'): string {
-  const formatted = new Intl.NumberFormat(language === 'en' ? 'en-US' : 'sv-SE', {
-    style: 'decimal',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-    // sv-SE emits U+2212, which standard PDF fonts can silently drop. The
-    // ASCII minus is supported by every allowed invoice font.
-  }).format(amount).replaceAll('\u2212', '-')
-  return `${formatted} ${currency}`
+export function articleNumberColumnShown(
+  company: Pick<CompanySettings, 'invoice_show_article_number'>,
+  items: InvoiceItem[],
+): boolean {
+  if (company.invoice_show_article_number !== true) return false
+  return items.some((item) => !isTextLikeLine(item) && Boolean(item.article_number?.trim()))
 }
 
 export function buildPdfVatBreakdown(items: InvoiceItem[]): Map<number, { base: number; vat: number }> {
@@ -836,60 +119,119 @@ export function buildPdfVatBreakdown(items: InvoiceItem[]): Map<number, { base: 
   return vatByRate
 }
 
-// Format date as ISO yyyy-MM-dd in both locales: universally unambiguous and
-// matches the project's formatDate() convention (lib/utils.ts).
-// Input is already a YYYY-MM-DD string from the DB, so slice avoids the
-// new Date() + local-getter timezone hazard.
-function formatDate(date: string): string {
-  return date.slice(0, 10)
+function documentNames(invoice: Invoice, lang: PdfLang): { title: string; name: string } {
+  const L = LABELS[lang]
+  if (invoice.credited_invoice_id) return { title: L.titleCreditNote, name: L.nameCreditNote }
+  const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
+  if (docType === 'proforma') return { title: L.titleProforma, name: L.nameProforma }
+  if (docType === 'quote') return { title: L.titleQuote, name: L.nameQuote }
+  if (docType === 'delivery_note') return { title: L.titleDeliveryNote, name: L.nameDeliveryNote }
+  return { title: L.titleInvoice, name: L.nameInvoice }
+}
+
+/** What react-pdf passes a `render` prop; totalPages is only known in the final pass. */
+interface PdfPageContext {
+  pageNumber: number
+  totalPages?: number
 }
 
 /**
- * Payment state the PDF prints for a real faktura (#1693): the BETALD stamp
- * and the "Betalt / Att betala" rows. Null for every other document or status,
- * so unpaid invoices, credit notes and proformas render exactly as before.
- *
- * `paid_amount` is what the customer actually paid; the deduction-aware amount
- * to pay is only the fallback for legacy rows marked paid before paid_amount
- * existed. `remaining_amount` is the row's own figure: 0 once fully paid.
+ * The bank-app code's module path (one unit per module, quiet zone included)
+ * scaled to the 96pt slot. The payment area is drawn by a `render` callback,
+ * and react-pdf lays out what a callback returns without parsing an Svg's
+ * viewBox, so a viewBox would be ignored and the code drawn one point per
+ * module. The path holds only M, h, v and z, whose every number is a
+ * coordinate or a length, so scaling all of them scales the drawing.
  */
-export interface PdfPaidState {
-  kind: 'paid' | 'partially_paid'
-  paidAmount: number
-  remainingAmount: number
-  /** ISO yyyy-MM-dd, or null when paid_at was never recorded. */
-  paidDate: string | null
+export function qrPathInPoints(vector: { path: string; size: number }): string {
+  const scale = PAYMENT_QR_PT / vector.size
+  return vector.path.replace(/-?\d+(?:\.\d+)?/g, (n) => String(Math.round(Number(n) * scale * 1000) / 1000))
 }
 
-export function resolvePdfPaidState(
-  invoice: Invoice,
-  docType: InvoiceDocumentType,
-  isCreditNote: boolean,
-  amountToPay: number,
-): PdfPaidState | null {
-  if (isCreditNote || docType !== 'invoice') return null
-  if (invoice.status !== 'paid' && invoice.status !== 'partially_paid') return null
-  const paidAmount = invoice.paid_amount ?? (invoice.status === 'paid' ? amountToPay : 0)
-  const remainingAmount =
-    invoice.status === 'paid'
-      ? 0
-      : invoice.remaining_amount ?? Math.max(0, roundOre(amountToPay - paidAmount))
-  return {
-    kind: invoice.status,
-    paidAmount,
-    remainingAmount,
-    paidDate: invoice.paid_at ? formatDate(invoice.paid_at) : null,
-  }
-}
-
-function getDocumentTitle(invoice: Invoice, lang: PdfLang): string {
-  const L = LABELS[lang]
-  if (invoice.credited_invoice_id) return L.titleCreditNote
-  const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
-  if (docType === 'proforma') return L.titleProforma
-  if (docType === 'quote') return L.titleQuote
-  if (docType === 'delivery_note') return L.titleDeliveryNote
-  return L.titleInvoice
+/** The payment area's three columns: amount, rows (under or in place of a status), and the QR slot. */
+function renderPaymentArea(area: PdfPaymentArea, styles: PdfStyles, lang: PdfLang): ReactNode {
+  const rows = area.rows.map((row) => (
+    <View key={row.key} style={styles.areaRow}>
+      <Text style={styles.areaRowLabel} hyphenationCallback={wrapDescriptionWords}>{row.label}</Text>
+      {row.href ? (
+        // The text in its own Text: the area is laid out by a
+        // `render` callback, where react-pdf drops a bare string
+        // child of a Link and prints only the empty link box.
+        <Link src={row.href} style={[styles.areaRowValue, styles.areaRowLink]}>
+          <Text>{row.value}</Text>
+        </Link>
+      ) : (
+        <Text
+          style={row.emphasis ? styles.areaRowValueStrong : styles.areaRowValue}
+          hyphenationCallback={wrapDescriptionWords}
+        >
+          {row.value}
+        </Text>
+      )}
+    </View>
+  ))
+  return (
+    <View style={styles.paymentArea}>
+      <View style={styles.areaLeft}>
+        <Text style={styles.areaKicker}>{area.kicker}</Text>
+        <Text style={styles.areaLabel}>{area.amountLabel}</Text>
+        <Text style={styles.areaAmount}>{formatPdfAmount(area.amount, lang)}</Text>
+        <Text style={styles.areaQuiet}>{area.currency}</Text>
+        {area.amountNote && <Text style={styles.areaQuiet}>{area.amountNote}</Text>}
+        {area.detail && (
+          <View style={styles.areaDetail}>
+            <Text style={styles.areaLabel}>{area.detail.label}</Text>
+            <Text style={styles.areaDetailValue}>{area.detail.value}</Text>
+          </View>
+        )}
+      </View>
+      <View style={styles.areaMiddle}>
+        {area.status ? (
+          <>
+            <Text style={styles.areaStatusHeadline} hyphenationCallback={wrapDescriptionWords}>{area.status.headline}</Text>
+            {area.status.text && (
+              <Text style={styles.areaStatusText} hyphenationCallback={wrapDescriptionWords}>
+                {area.status.text}
+              </Text>
+            )}
+            {/* Cancelled and credited carry no rows; Autogiro's payer number sits under its heading. */}
+            {rows.length > 0 && <View style={styles.areaStatusRows}>{rows}</View>}
+          </>
+        ) : (
+          rows
+        )}
+      </View>
+      <View style={styles.areaSlot}>
+        {area.slot?.kind === 'qr' && (
+          <>
+            {/* The one payment QR code. The bank-app code is a vector path on
+                a white square that includes its quiet zone, as the format
+                asks; nothing is drawn over it. */}
+            <View style={styles.qrBox}>
+              {area.slot.qr.vector ? (
+                <Svg width={PAYMENT_QR_PT} height={PAYMENT_QR_PT} style={styles.qrBox}>
+                  <Rect x={0} y={0} width={PAYMENT_QR_PT} height={PAYMENT_QR_PT} fill="#ffffff" />
+                  <Path d={qrPathInPoints(area.slot.qr.vector)} fill="#000000" />
+                </Svg>
+              ) : area.slot.qr.imageDataUrl ? (
+                <Image src={area.slot.qr.imageDataUrl} style={styles.qrBox} />
+              ) : null}
+            </View>
+            <Text style={styles.qrCaption} hyphenationCallback={wrapDescriptionWords}>
+              {area.slot.qr.caption}
+            </Text>
+          </>
+        )}
+        {area.slot?.kind === 'paid' && (
+          <View style={styles.paidMarker}>
+            <Text style={styles.paidMarkerTitle}>{area.slot.title}</Text>
+            {area.slot.date && <Text style={styles.paidMarkerDate}>{area.slot.date}</Text>}
+            <Text style={styles.paidMarkerAmount}>{area.slot.amount}</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  )
 }
 
 /**
@@ -911,28 +253,38 @@ interface InvoicePDFProps {
   isPreview?: boolean
   language?: PdfLang
   /**
-   * Per-company branding overrides. Omit to render with the original default
-   * stylesheet: the rendered output is byte-equivalent to the pre-branding
-   * version of this template, which makes the rollout safe for the snapshot
-   * suite and for callers that haven't yet been migrated to forward branding.
+   * Per-company branding overrides. Omit to render with the default
+   * stylesheet (Helvetica, the default ink and accent).
    */
   branding?: InvoiceBranding
-  /** Pre-rendered Swish payment QR (PNG data URL). Built offline in
-   *  pdf-render-helpers; null/omitted renders no QR. */
-  swishQrDataUrl?: string | null
-  /** Pre-rendered payment-link QR (PNG data URL) for invoice.payment_link_url.
-   *  Built offline in pdf-render-helpers; null/omitted renders no QR. */
-  paymentLinkQrDataUrl?: string | null
+  /**
+   * The invoice's one payment QR code, resolved and drawn by the render entry
+   * point (lib/invoices/render-invoice-pdf.ts): a PNG (Swish, payment link)
+   * or a vector path (bank app), with its caption. null/omitted prints none.
+   */
+  paymentQr?: InvoicePdfPaymentQr | null
 }
 
-export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, swishQrDataUrl, paymentLinkQrDataUrl }: InvoicePDFProps) {
+/**
+ * The invoice PDF, built from fixed zones (lib/invoices/pdf/geometry.ts):
+ * identity band, running header, rows, totals block, payment area, footer,
+ * and the overlays. Each zone has one place and a known height, so the page
+ * breaks depend only on the rows and the note, never on the status, the
+ * payment settings or the QR code.
+ */
+export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, paymentQr }: InvoicePDFProps) {
   const lang: PdfLang = language ?? customer.language ?? 'sv'
   const L = LABELS[lang]
   // Build the stylesheet per-render so each invoice picks up its company's
-  // current branding. createStyles() with no argument returns the original
-  // hardcoded stylesheet: the default code path is unchanged.
+  // current branding.
   const styles = createStyles(branding)
+  // How many estimated lines of free text a table row or the note may hold
+  // and still be kept on one page, in this render's font.
+  const fontFamily = resolveBranding(branding).fontFamily
+  const rowLineCap = keepTogetherLineCap(fontFamily, TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)
+  const noteLineCap = keepTogetherLineCap(fontFamily, NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)
   const isCreditNote = !!invoice.credited_invoice_id
+  const names = documentNames(invoice, lang)
   // ROT/RUT personnummer as printed in the deduction box: YYYYMMDD-XXXX.
   // Derived from the stored ciphertext unless the caller already masked a
   // plaintext value (preview). Null when nothing is stored or it cannot be
@@ -948,675 +300,709 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // neither print zeros nor seed an empty per-rate VAT group.
   const billableItems = items.filter((item) => !isTextLikeLine(item))
 
-  // Check if items have mixed VAT rates
+  // Skattereduktion för grön teknik. It never shares an invoice with ROT/RUT
+  // (refused at creation), so its presence decides the whole deduction
+  // block: the reduction row, the total incl. moms, the property, what the
+  // installation cost apart from övriga kostnader, and the notice.
+  const hasGronTeknik = items.some((item) => item.deduction_type === 'gron_teknik')
+  const lineInclVat = (item: InvoiceItem): number => roundOre((item.line_total ?? 0) + (item.vat_amount ?? 0))
+  const gronTeknikEligibleCost = hasGronTeknik
+    ? roundOre(billableItems.filter((item) => item.deduction_type === 'gron_teknik').reduce((sum, item) => sum + lineInclVat(item), 0))
+    : 0
+  // Several installation types on one invoice: Skatteverket asks for their
+  // costs apart ("ska du särskilja kostnader för de olika
+  // installationstyperna"), one row per type in its list order.
+  const gronTeknikCostByType = hasGronTeknik
+    ? GRON_TEKNIK_WORK_TYPES.map((type) => ({
+        label: type.label,
+        amount: roundOre(
+          billableItems
+            .filter((item) => item.deduction_type === 'gron_teknik' && item.work_type?.trim() === type.code)
+            .reduce((sum, item) => sum + lineInclVat(item), 0),
+        ),
+        present: billableItems.some(
+          (item) => item.deduction_type === 'gron_teknik' && item.work_type?.trim() === type.code,
+        ),
+      })).filter((type) => type.present)
+    : []
+  const gronTeknikOtherCost = hasGronTeknik
+    ? roundOre(billableItems.filter((item) => !item.deduction_type).reduce((sum, item) => sum + lineInclVat(item), 0))
+    : 0
+
+  // Moms column only when the rows carry more than one rate.
   const hasPerLineVat = billableItems.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
   const uniqueRates = hasPerLineVat
     ? new Set(billableItems.map((item) => item.vat_rate))
     : new Set<number>()
   const showVatColumn = hasPerLineVat && uniqueRates.size > 1
-  // Rabatt column only when some line actually carries a discount: the
-  // stored line_total is already net, so the column documents the reduction
-  // (ML 17 kap 24 § p.10: prisnedsättning ska framgå av fakturan).
-  const showDiscountColumn = billableItems.some((item) => (item.discount_percent ?? 0) > 0)
 
-  // Calculate per-rate VAT breakdown for totals
+  // Article number column (crm#1084): only when the company turned it on and
+  // a row carries a number, so a free-text invoice, and every invoice written
+  // before the number was copied onto its lines, prints as before.
+  const showArticleNumberColumn = articleNumberColumnShown(company, items)
+
   const vatByRate = hasPerLineVat
     ? buildPdfVatBreakdown(billableItems)
     : new Map<number, { base: number; vat: number }>()
   const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
   const isProforma = docType === 'proforma'
-  // A quote (offert) is never a payment request: no payment box, no OCR,
-  // no Swish/QR, no payment link (pdf-render-helpers gates the QR builders
-  // on docType === 'invoice'). Its expiry replaces the due date.
+  // A quote (offert) is never a payment request: no payment rows, no OCR,
+  // no QR code (lib/invoices/payment-qr resolves none for anything but a
+  // payable faktura), no payment link. Its expiry replaces the due date.
   const isQuote = docType === 'quote'
 
   // Shared with the invoice email (lib/email/invoice-templates.ts) so the
-  // mail and the PDF always state the same "Att betala". Computed once here
-  // because the paid state below needs it too.
+  // mail and the PDF always state the same "Att betala".
   const amountToPay = getAmountToPay(invoice, company)
 
   // Payment state (#1693). Only a real faktura carries it: credit notes are
-  // settled against their original, proformas are not a payment request. The
-  // paid amount is what the customer actually paid (paid_amount), not a
-  // recomputation of the deduction-aware total; the fallback to the amount to
-  // pay covers legacy rows marked paid before paid_amount was recorded.
+  // settled against their original, proformas are not a payment request. It
+  // changes the payment area's words and the stamp, never the flow.
   const paidState = resolvePdfPaidState(invoice, docType, isCreditNote, amountToPay.toPay)
+  const paymentArea = buildPdfPaymentArea({
+    invoice,
+    company,
+    lang,
+    docType,
+    isCreditNote,
+    amountToPay: amountToPay.toPay,
+    paidState,
+    originalInvoiceNumber,
+    paymentQr,
+  })
+  const hasPaymentArea = documentHasPaymentArea(docType, isCreditNote)
+
   // Draft watermark (#2437): genuine drafts, plus the corrupt-state case of a
   // non-cancelled invoice that somehow lacks a number. Cancelled wins (the
-  // MAKULERAD banner below), and the interactive preview has its own title.
+  // MAKULERAD stamp), and the interactive preview has its own title.
   const isDraftMarked =
     invoice.status !== 'cancelled' && !isPreview && (invoice.status === 'draft' || !invoice.invoice_number)
 
-  // Optional branding banner text. Rendered only when the company has set
-  // invoice_header_text: invisible chrome by default, so the byte-equivalence
-  // promise for un-branded callers holds.
-  const headerText = branding?.headerText ?? null
-  const footerText = branding?.footerText ?? null
+  // Status stamp: cancelled on any document; paid (with its date) and
+  // credited only on a real faktura. Never on a preview or a draft.
+  const stamp: { text: string; tone: 'paid' | 'void' } | null =
+    invoice.status === 'cancelled'
+      ? { text: L.stampCancelled, tone: 'void' }
+      : isPreview || isDraftMarked || isCreditNote || docType !== 'invoice'
+        ? null
+        : paidState?.kind === 'paid'
+          ? { text: paidState.paidDate ? `${L.stampPaid} ${paidState.paidDate}` : L.stampPaid, tone: 'paid' }
+          : invoice.status === 'credited'
+            ? { text: L.stampCredited, tone: 'void' }
+            : null
+
+  const headerText = branding?.headerText?.trim() || null
+  const footerText = branding?.footerText?.trim() || null
+
+  const logoUrl = (company.invoice_show_logo ?? true) ? company.logo_url : null
+  const numberLine = invoice.invoice_number ? `${L.numberPrefix} ${invoice.invoice_number}` : L.titlePreview
+
+  // Seller and buyer blocks (ML 17 kap 24 § p.4-5): name and address.
+  const sellerCountry = customer.country && customer.country !== (company.country || 'SE')
+    ? getCountryName(company.country || 'SE', lang)
+    : null
+  // Each address in its country's order (lib/invoices/postal-address.ts):
+  // "111 22 Stockholm", "Bellevue, WA 98006".
+  const sellerAddressLines = formatPostalAddress(company, sellerCountry)
+  const buyerAddressLines = formatPostalAddress(
+    customer,
+    customer.country && customer.country !== 'SE' ? getCountryName(customer.country, lang) : null,
+  )
+  // Leveransadress (crm#1547): where the goods go, when not to the invoice address.
+  const deliveryLines = deliveryAddressLines(
+    invoice.delivery_address,
+    company.country || 'SE',
+    (code) => getCountryName(code, lang),
+    customer.country,
+  )
+
+  // The one notice slot: the statutory VAT notice, then the proforma or quote
+  // notice. "Not VAT-registered" trumps the others ONLY when the invoice
+  // actually carries no VAT: a non-registered seller who chose to state VAT
+  // (warned at create time per ML 16 kap. 23 §) gets the normal reverse-charge
+  // / exempt notices instead, since the "ej momsregistrerad" line would
+  // contradict the VAT shown in the totals block.
+  const vatNotice =
+    company.vat_registered === false && invoice.vat_amount === 0
+      ? L.notVatRegisteredNotice
+      : invoice.reverse_charge_text
+        ? localizeVatNotice(invoice.reverse_charge_text, lang)
+        : invoice.vat_treatment === 'exempt'
+          ? L.exemptNotice
+          : null
+  const notices = [vatNotice, isProforma ? L.proformaNotice : isQuote ? L.quoteNotice : null].filter(
+    (n): n is string => !!n,
+  )
+
+  // Fine print: the company's payment terms (Betalningsvillkor, Dröjsmålsränta).
+  // A short one travels with the payment area, or with the totals when there
+  // is none, so it can never be stranded alone on a page (crm#242); a long one
+  // follows the totals as ordinary text and may break across pages
+  // (FINE_PRINT_KEEP_TOGETHER_LINES, crm#1787). Payment terms, so only on a
+  // document that asks for a payment: never on a quote, a kreditfaktura or a
+  // följesedel. In the invoice's language: the English texts on an English
+  // invoice, each falling back to the Swedish one (crm#1735).
+  const { lateFee, creditTerms } = invoiceFinePrint(company, lang)
+  const finePrint = isQuote || isDeliveryNote || isCreditNote
+    ? []
+    : [lateFee, creditTerms].filter((t): t is string => t !== null)
+  const finePrintTravelsWhole = fitsOnOnePage(finePrint.join('\n'), FULL_WIDTH_BOX_PT, FINE_PRINT_KEEP_TOGETHER_LINES)
+  const finePrintBlock = finePrint.length > 0 ? (
+    <View style={styles.finePrint}>
+      {finePrint.map((text, index) => (
+        <Text key={index} style={styles.finePrintText} hyphenationCallback={wrapFullWidthWords}>
+          {text}
+        </Text>
+      ))}
+    </View>
+  ) : null
+
+  const hasDeductionBox = !isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0
+  // The summary (totals, the underlag, the notice) is kept whole, unless a
+  // long ROT/RUT breakdown makes it taller than a page could hold: then the
+  // breakdown may split, each of its parts still kept whole
+  // (MAX_KEEP_TOGETHER_LINES).
+  const deductionFits = !hasDeductionBox || fitsOnOnePage(
+    items
+      .filter((i) => i.deduction_type)
+      .map((i) => i.description)
+      .join('\n'),
+    FULL_WIDTH_BOX_PT,
+    MAX_KEEP_TOGETHER_LINES,
+  )
+
+  const metaItem = (key: string, label: string, value: string) => (
+    <View key={key} style={styles.metaItem}>
+      <Text style={styles.metaLabel}>{bareLabel(label)}</Text>
+      <Text style={styles.metaValue}>{value}</Text>
+    </View>
+  )
+
+  const registeredOffice = sellerRegisteredOffice(company)
+  const statutoryLine = [
+    company.company_name,
+    company.address_line1,
+    company.address_line2,
+    postalPlaceLine(company),
+    company.org_number ? `${bareLabel(L.orgNoLong)} ${formatOrgNumberDisplay(company.org_number)}` : null,
+    // Säte when the company has set it (crm#1604); never the postal town.
+    registeredOffice ? `${bareLabel(L.registeredOffice)} ${registeredOffice}` : null,
+    // Momsreg.nr only for a VAT-registered seller (ML 17 kap 24 § p.3);
+    // F-skatt only when the company holds it.
+    company.vat_registered !== false && company.vat_number ? `${bareLabel(L.vatRegNo)} ${company.vat_number}` : null,
+    company.f_skatt ? L.fSkatt : null,
+  ]
+    .filter((part): part is string => !!part)
+    // Each part stays whole: a line that has to wrap breaks between the
+    // parts, never inside "Godkänd för F-skatt" or an address.
+    .map((part) => part.replace(/ /g, '\u00a0'))
+    .join(' · ')
+
+  // ROT/RUT / grön teknik underlag. Kept on one page while the per-line
+  // breakdown (which carries the line descriptions, possibly multi-line) is
+  // short enough; past that it may split rather than be clipped. Fixed cap:
+  // the estimate does not see the rest of the box (MAX_KEEP_TOGETHER_LINES).
+  const deductionBox = hasDeductionBox ? (
+    <View style={styles.deductionBox} wrap={!deductionFits}>
+      <Text style={styles.deductionTitle}>{L.deductionInfoHeading}</Text>
+      {deductionPersonnummerMasked && (
+        <View style={styles.deductionRow}>
+          <Text style={styles.deductionLabel}>{bareLabel(L.deductionPersonnummer)}</Text>
+          <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{deductionPersonnummerMasked}</Text>
+        </View>
+      )}
+      {(() => {
+        // The first item-level housing_designation (typical: a single
+        // property). RUT-only invoices have none.
+        const housing = items.find((i) => i.housing_designation)?.housing_designation
+        const apartment = items.find((i) => i.apartment_number)?.apartment_number
+        // Grön teknik in a bostadsrätt: the förening's orgnr goes with
+        // the lägenhetsnummer.
+        // The förening's orgnr prints whenever a deduction line carries it
+        // (ROT in a bostadsrätt as well as grön teknik).
+        const brf = items.find((i) => i.brf_org_number)?.brf_org_number ?? null
+        return (
+          <>
+            {housing && (
+              <View style={styles.deductionRow}>
+                <Text style={styles.deductionLabel}>{bareLabel(L.deductionHousingDesignation)}</Text>
+                <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{housing}</Text>
+              </View>
+            )}
+            {apartment && (
+              <View style={styles.deductionRow}>
+                <Text style={styles.deductionLabel}>{bareLabel(L.deductionApartmentNumber)}</Text>
+                <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{apartment}</Text>
+              </View>
+            )}
+            {brf && (
+              <View style={styles.deductionRow}>
+                <Text style={styles.deductionLabel}>{bareLabel(L.deductionBrfOrgNumber)}</Text>
+                <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{brf}</Text>
+              </View>
+            )}
+          </>
+        )
+      })()}
+      {hasGronTeknik && (
+        <>
+          {gronTeknikCostByType.length > 1 ? (
+            gronTeknikCostByType.map((type, idx) => (
+              <View key={type.label} style={styles.deductionRow}>
+                <Text style={styles.deductionLabel}>{idx === 0 ? bareLabel(L.gronTeknikEligibleCost) : ''}</Text>
+                <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
+                  {`${type.label}: ${formatPdfCurrency(type.amount, invoice.currency, lang)} ${L.inclVatSuffix}`}
+                </Text>
+              </View>
+            ))
+          ) : (
+            <View style={styles.deductionRow}>
+              <Text style={styles.deductionLabel}>{bareLabel(L.gronTeknikEligibleCost)}</Text>
+              <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
+                {`${formatPdfCurrency(gronTeknikEligibleCost, invoice.currency, lang)} ${L.inclVatSuffix}`}
+              </Text>
+            </View>
+          )}
+          <View style={styles.deductionRow}>
+            <Text style={styles.deductionLabel}>{bareLabel(L.gronTeknikOtherCost)}</Text>
+            <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
+              {`${formatPdfCurrency(gronTeknikOtherCost, invoice.currency, lang)} ${L.inclVatSuffix}`}
+            </Text>
+          </View>
+        </>
+      )}
+      {/* What the base covers (Skatteverket fakturamodellen): labor
+          only for ROT/RUT, material invoiced separately. Grön teknik
+          prints its base once, after the breakdown (below). */}
+      {!hasGronTeknik && (
+        <Text style={styles.deductionNotice}>{DEDUCTION_LABOR_ONLY_NOTICE}</Text>
+      )}
+      {/* Per-line breakdown: one row per eligible item with kind,
+          work type if present and the deducted amount. */}
+      {items
+        .filter((i) => i.deduction_type)
+        .map((i, idx) => {
+          // Grön teknik rows name the installation type (Skatteverket:
+          // "vilken typ av arbete"); ROT/RUT rows keep printing the code.
+          const isGronTeknik = i.deduction_type === 'gron_teknik'
+          const kind = isGronTeknik ? L.gronTeknikKind : i.deduction_type === 'rot' ? 'ROT' : 'RUT'
+          const workText = isGronTeknik ? (workTypeLabel(i.work_type) ?? i.work_type) : i.work_type
+          const work = workText ? `, ${workText}` : ''
+          return (
+            <Text key={idx} style={styles.deductionLineItem} hyphenationCallback={wrapFullWidthWords}>
+              {`${kind}${work}: ${i.description}, ${formatPdfCurrency(i.deduction_amount ?? 0, invoice.currency, lang)}`}
+            </Text>
+          )
+        })}
+      {/* Grön teknik: labor and material, övriga kostnader excluded,
+          and the seller requests the payout: one notice. ROT/RUT keep
+          their own notice as it was. */}
+      <Text style={styles.deductionNotice}>
+        {hasGronTeknik ? `${GRON_TEKNIK_BASE_NOTICE} ${L.deductionPayoutNotice}` : L.deductionPayoutNotice}
+      </Text>
+    </View>
+  ) : null
+
+  const descriptionCellBudget = (item: InvoiceItem) =>
+    (item.discount_percent ?? 0) > 0 ? `${item.description ?? ''}\n${L.discountLine(item.discount_percent ?? 0)}` : item.description
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        {/* Optional branded header: rendered above the status banners so it
-            sits at the very top of the page. Non-statutory free-form text. */}
-        {headerText && (
-          <View style={styles.brandingHeader}>
-            <Text style={styles.brandingHeaderText}>{headerText}</Text>
-          </View>
-        )}
-
-        {/* Status banner: cancelled takes precedence over draft so a cancelled
-            row that lacks a number (legacy un-numbered draft that was later
-            cancelled) still surfaces as MAKULERAD rather than UTKAST. The draft
-            watermark only shows for genuine drafts and for the corrupt-state
-            case of a non-cancelled invoice that somehow lacks a number. */}
-        {invoice.status === 'cancelled' ? (
-          <View style={styles.cancelledBanner}>
-            <Text style={styles.cancelledBannerTitle}>{L.cancelledTitle}</Text>
-            <Text style={styles.cancelledBannerText}>
-              {invoice.invoice_number
-                ? L.cancelledWithNumber(invoice.invoice_number)
-                : L.cancelledNoNumber}
-            </Text>
-          </View>
-        ) : isPreview || isDraftMarked ? null : paidState?.kind === 'paid' && (
-          // BETALD stamp (#1693): the re-rendered copy of a settled faktura
-          // doubles as the betalningsbekräftelse the customer can be handed.
-          // partially_paid gets no banner, only the Betalt / Att betala rows.
-          <View style={styles.paidBanner}>
-            <Text style={styles.paidBannerTitle}>{L.paidTitle}</Text>
-            <Text style={styles.paidBannerText}>
-              {paidState.paidDate
-                ? L.paidBannerText(paidState.paidDate, formatPdfCurrency(paidState.paidAmount, invoice.currency, lang))
-                : L.paidBannerNoDate(formatPdfCurrency(paidState.paidAmount, invoice.currency, lang))}
-            </Text>
-          </View>
-        )}
-
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={styles.companyInfo}>
-            {company.logo_url && (company.invoice_show_logo ?? true) && (
-              <Image
-                src={company.logo_url}
-                style={{
-                  maxHeight: INVOICE_LOGO_MAX_HEIGHT_PT,
-                  maxWidth: INVOICE_LOGO_MAX_WIDTH_PT,
-                  marginBottom: 6,
-                  alignSelf: 'flex-start',
-                  objectFit: 'contain',
-                  // Any logo bigger than the reserved area is clamped to the
-                  // full 240x80pt box, so the box never hugs the image and the
-                  // image is placed *inside* it. Anchor it top-left: with the
-                  // default centering, a near-square logo scaled down to the
-                  // 80pt height cap is only ~117pt wide and gets pushed ~60pt
-                  // in from the left margin, while a wide banner logo fills the
-                  // width and looks correctly aligned. Left-anchoring makes
-                  // every aspect ratio start at the margin instead, so a
-                  // company doesn't have to reshape its logo to fit the layout.
-                  objectPosition: 'left top',
-                }}
-              />
-            )}
-            {(company.invoice_show_company_name ?? true) &&
-              (company.invoice_company_name_position ?? 'header') === 'header' && (
-                <Text style={styles.companyName}>{company.company_name}</Text>
-              )}
-          </View>
-          <View style={{ textAlign: 'right' }}>
-            <Text style={[styles.title, isCreditNote ? styles.creditNoteTitle : {}]}>
-              {getDocumentTitle(invoice, lang)}
-            </Text>
-            <Text style={{ marginTop: 5, color: '#666' }}>{invoice.invoice_number ?? L.titlePreview}</Text>
-          </View>
-        </View>
-
-        {/* Credit note reference */}
-        {isCreditNote && originalInvoiceNumber && (
-          <View style={styles.creditNoteBox}>
-            <Text style={styles.creditNoteText}>
-              {L.creditNoteRef(originalInvoiceNumber)}
-            </Text>
-          </View>
-        )}
-
-        {/* Invoice details and Customer - two columns */}
-        <View style={styles.twoColumn}>
-          {/* Invoice details */}
-          <View style={styles.column}>
-            <Text style={styles.sectionTitle} minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>{isQuote ? L.quoteInfoHeading : L.invoiceInfoHeading}</Text>
-            <View style={styles.row}>
-              <Text style={styles.label}>{isQuote ? L.quoteDate : L.invoiceDate}</Text>
-              <Text style={styles.value}>{formatDate(invoice.invoice_date)}</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>{isQuote ? L.validUntil : L.dueDate}</Text>
-              <Text style={styles.value}>
-                {formatDate(isQuote ? (invoice.valid_until || invoice.due_date) : invoice.due_date)}
-              </Text>
-            </View>
-            {invoice.delivery_date && invoice.delivery_date !== invoice.invoice_date && (
-              <View style={styles.row}>
-                <Text style={styles.label}>{L.deliveryDate}</Text>
-                <Text style={styles.value}>{formatDate(invoice.delivery_date)}</Text>
+        {/* Zone B: running header on pages 2 and later. Page 1 has the
+            identity band in the same place. */}
+        <View
+          fixed
+          style={styles.runningHeaderFrame}
+          render={(context) => {
+            const { pageNumber, totalPages } = context as PdfPageContext
+            if (pageNumber <= 1) return null
+            return (
+              <View style={styles.runningHeader}>
+                <Text style={styles.runningHeaderText} hyphenationCallback={wrapDescriptionWords}>
+                  {[company.company_name, [names.name, invoice.invoice_number].filter(Boolean).join(' '), customer.name]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </Text>
+                <Text style={styles.runningHeaderPage}>{L.pageOf(pageNumber, totalPages ?? pageNumber)}</Text>
               </View>
-            )}
-            {invoice.your_reference && (
-              <View style={{ marginBottom: 4 }}>
-                <Text style={styles.label}>{L.yourReference}</Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-                  {invoice.your_reference.split(',').map((ref, i) => (
-                    <Text key={i} style={{ backgroundColor: '#f0f0f0', borderRadius: 3, paddingHorizontal: 6, paddingVertical: 2, fontSize: 9, fontWeight: 'bold' }}>
-                      {ref.trim()}
-                    </Text>
-                  ))}
-                </View>
-              </View>
-            )}
-            {invoice.our_reference && (
-              <View style={{ marginBottom: 4 }}>
-                <Text style={styles.label}>{L.ourReference}</Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-                  {invoice.our_reference.split(',').map((ref, i) => (
-                    <Text key={i} style={{ backgroundColor: '#f0f0f0', borderRadius: 3, paddingHorizontal: 6, paddingVertical: 2, fontSize: 9, fontWeight: 'bold' }}>
-                      {ref.trim()}
-                    </Text>
-                  ))}
-                </View>
-              </View>
-            )}
-            {/* Fakturamärkning: one buyer-required marking string, never
-                comma-split (a PO/cost-center label may contain commas). */}
-            {invoice.invoice_marking && (
-              <View style={{ marginBottom: 4 }}>
-                <Text style={styles.label}>{L.invoiceMarking}</Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-                  <Text style={{ backgroundColor: '#f0f0f0', borderRadius: 3, paddingHorizontal: 6, paddingVertical: 2, fontSize: 9, fontWeight: 'bold' }}>
-                    {invoice.invoice_marking.trim()}
-                  </Text>
-                </View>
-              </View>
-            )}
-          </View>
+            )
+          }}
+        />
 
-          {/* Customer */}
-          <View style={styles.column}>
-            <Text style={styles.sectionTitle} minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>{L.billedToHeading}</Text>
-            <View style={styles.customerBox}>
-              <Text style={styles.customerName}>{customer.name}</Text>
-              {customer.address_line1 && <Text>{customer.address_line1}</Text>}
-              {customer.address_line2 && <Text>{customer.address_line2}</Text>}
-              {(customer.postal_code || customer.city) && (
-                <Text>{customer.postal_code} {customer.city}</Text>
-              )}
-              {customer.country && customer.country !== 'SE' && (
-                <Text>{getCountryName(customer.country, lang)}</Text>
-              )}
-              {/* Seller-assigned kundnummer: no per-customer-type guard needed,
-                  it identifies the customer in the seller's own register and
-                  carries no personal data of its own. */}
-              {customer.customer_number && (
-                <Text style={{ marginTop: 6 }}>{L.custNo} {customer.customer_number}</Text>
-              )}
-              {/* Suppress the identifier row for private customers: their
-                  personnummer is not required on a B2C invoice (ML 17 kap 24§
-                  asks for name + address only) and printing it is a GDPR
-                  data-minimization regression. ROT/RUT-avdrag invoices surface
-                  the masked personnummer in the dedicated deductionBox below
-                  when Skatteverket needs it. */}
-              {customer.customer_type !== 'individual' && customer.org_number && (
-                <Text style={{ marginTop: 6 }}>{L.orgNo} {customer.org_number}</Text>
-              )}
-              {/* Same data-minimisation guard as org_number above: for a
-                  private customer a VAT number functions as a personal tax
-                  identifier in some EU jurisdictions and is not required by
-                  ML 17 kap 24§ on a B2C invoice. */}
-              {customer.customer_type !== 'individual' && customer.vat_number && (
-                <Text>{L.vat} {customer.vat_number}</Text>
-              )}
-            </View>
-          </View>
-        </View>
-
-        {/* Items table */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle} minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>{L.itemsHeading}</Text>
-          <View style={styles.table}>
-            {/* Table header */}
-            <View style={styles.tableHeader} minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>
-              <Text style={[styles.colDescription, styles.tableHeaderText]}>{L.colDescription}</Text>
-              <Text style={[styles.colQty, styles.tableHeaderText]}>{L.colQty}</Text>
-              <Text style={[styles.colUnit, styles.tableHeaderText]}>{L.colUnit}</Text>
-              {!isDeliveryNote && (
-                <Text style={[styles.colPrice, styles.tableHeaderText]}>{L.colUnitPrice}</Text>
-              )}
-              {!isDeliveryNote && showDiscountColumn && (
-                <Text style={[styles.colDiscount, styles.tableHeaderText]}>{L.colDiscount}</Text>
-              )}
-              {!isDeliveryNote && showVatColumn && (
-                <Text style={[styles.colVat, styles.tableHeaderText]}>{L.colVat}</Text>
-              )}
-              {!isDeliveryNote && (
-                <Text style={[styles.colTotal, styles.tableHeaderText]}>{L.colTotal}</Text>
-              )}
-            </View>
-
-            {/* Table rows */}
-            {items.map((item, index) =>
-              isTextLikeLine(item) ? (
-                // Free-text / blank row: description spans the full width, no
-                // numeric columns. An empty description renders as a spacer.
-                <View
-                  key={index}
-                  style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, FULL_WIDTH_BOX_PT)}
-                >
-                  <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={wrapFullWidthWords}>
-                    {item.description || ' '}
-                  </Text>
-                </View>
+        {/* Zone A: identity band (page 1). Fixed shape: logo slot and title
+            row, at most one line of header text, three meta columns. */}
+        <View style={styles.band} wrap={false}>
+          <View style={styles.bandTop}>
+            <View style={styles.logoSlot}>
+              {logoUrl ? (
+                <Image src={logoUrl} style={styles.logo} />
               ) : (
-                <View
-                  key={index}
-                  style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_COLUMN_PT)}
-                >
-                  <Text style={styles.colDescription} hyphenationCallback={wrapDescriptionWords}>{item.description}</Text>
-                  <Text style={styles.colQty}>{item.quantity}</Text>
-                  <Text style={styles.colUnit}>{unitLabel(item.unit, lang)}</Text>
-                  {!isDeliveryNote && (
-                    <Text style={styles.colPrice}>{formatPdfCurrency(item.unit_price, invoice.currency, lang)}</Text>
-                  )}
-                  {!isDeliveryNote && showDiscountColumn && (
-                    <Text style={styles.colDiscount}>
-                      {(item.discount_percent ?? 0) > 0 ? `${item.discount_percent}%` : ''}
-                    </Text>
-                  )}
-                  {!isDeliveryNote && showVatColumn && (
-                    <Text style={styles.colVat}>{item.vat_rate ?? 0}%</Text>
-                  )}
-                  {!isDeliveryNote && (
-                    <Text style={styles.colTotal}>{formatPdfCurrency(item.line_total, invoice.currency, lang)}</Text>
-                  )}
-                </View>
-              )
-            )}
+                // Without a logo the slot always carries the company name: the
+                // fixed layout has no switch for it (the settings control was
+                // removed with the company-name placement setting).
+                <Text style={styles.slotName} hyphenationCallback={wrapDescriptionWords}>{company.company_name}</Text>
+              )}
+            </View>
+            <View style={styles.titleBlock}>
+              <Text style={styles.title}>{names.title}</Text>
+              <Text style={styles.titleNumber}>{numberLine}</Text>
+            </View>
           </View>
+          {headerText && <Text style={styles.headerText} hyphenationCallback={wrapDescriptionWords}>{headerText}</Text>}
+
+          <View style={styles.meta}>
+            {/* Document facts */}
+            <View style={styles.metaColumn}>
+              {isQuote ? (
+                <>
+                  {metaItem('date', L.quoteDate, formatPdfDate(invoice.invoice_date))}
+                  {metaItem('valid', L.validUntil, formatPdfDate(invoice.valid_until || invoice.due_date))}
+                </>
+              ) : (
+                <>
+                  {metaItem('date', isDeliveryNote ? L.documentDate : L.invoiceDate, formatPdfDate(invoice.invoice_date))}
+                  {!isCreditNote && !isDeliveryNote && metaItem('due', L.dueDate, formatPdfDate(invoice.due_date))}
+                </>
+              )}
+              {invoice.delivery_date && invoice.delivery_date !== invoice.invoice_date &&
+                metaItem('delivery', L.deliveryDate, formatPdfDate(invoice.delivery_date))}
+              {isCreditNote && originalInvoiceNumber && (
+                <Text style={[styles.metaLineFull, styles.metaSmall]} hyphenationCallback={wrapDescriptionWords}>{L.creditNoteRef(originalInvoiceNumber)}</Text>
+              )}
+            </View>
+
+            {/* Seller */}
+            <View style={styles.metaColumn}>
+              <Text style={styles.metaLabel}>{L.fromHeading}</Text>
+              <Text style={styles.metaNameFull} hyphenationCallback={wrapDescriptionWords}>{company.company_name}</Text>
+              {sellerAddressLines.map((line, index) => (
+                <Text key={`seller-address-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
+              {company.email && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{company.email}</Text>}
+              {invoice.our_reference && (
+                <Text style={styles.metaReference} hyphenationCallback={wrapDescriptionWords}>
+                  <Text style={styles.metaMuted}>{L.ourReference}</Text> {invoice.our_reference}
+                </Text>
+              )}
+            </View>
+
+            {/* Buyer */}
+            <View style={styles.metaColumnLast}>
+              <Text style={styles.metaLabel}>{L.toHeading}</Text>
+              <Text style={styles.metaNameFull} hyphenationCallback={wrapDescriptionWords}>{customer.name}</Text>
+              {buyerAddressLines.map((line, index) => (
+                <Text key={`buyer-address-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
+              {/* No identifier rows for a private customer: their personnummer
+                  is not required on a B2C invoice (ML 17 kap 24§ asks for name
+                  + address only) and printing it is a GDPR data-minimisation
+                  regression; the ROT/RUT underlag carries the masked one when
+                  Skatteverket needs it. A VAT number of a private person works
+                  as a personal tax identifier in some EU jurisdictions. */}
+              {customer.customer_type !== 'individual' && customer.org_number && (
+                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{bareLabel(L.orgNo)} {customer.org_number}</Text>
+              )}
+              {customer.customer_type !== 'individual' && customer.vat_number && (
+                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{bareLabel(L.vat)} {customer.vat_number}</Text>
+              )}
+              {/* Seller-assigned kundnummer: identifies the customer in the
+                  seller's own register and carries no personal data. */}
+              {customer.customer_number && (
+                <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{bareLabel(L.custNo)} {customer.customer_number}</Text>
+              )}
+              {invoice.your_reference && (
+                <Text style={styles.metaReference} hyphenationCallback={wrapDescriptionWords}>
+                  <Text style={styles.metaMuted}>{L.yourReference}</Text> {invoice.your_reference}
+                </Text>
+              )}
+              {/* Fakturamärkning: one buyer-required marking string. */}
+              {invoice.invoice_marking && (
+                <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>
+                  <Text style={styles.metaMuted}>{L.invoiceMarking}</Text> {invoice.invoice_marking.trim()}
+                </Text>
+              )}
+              {deliveryLines.length > 0 && (
+                <Text style={styles.metaReference} hyphenationCallback={wrapDescriptionWords}>
+                  <Text style={styles.metaMuted}>{L.deliveryAddress}</Text>
+                </Text>
+              )}
+              {deliveryLines.map((line, index) => (
+                <Text key={`delivery-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
+            </View>
+          </View>
+
+          {/* Status stamp: out of the flow, page 1, under the title. Painted
+              after the band's own content. */}
+          {stamp && (
+            <View style={styles.stampFrame}>
+              <View style={stamp.tone === 'paid' ? styles.stampPaid : styles.stampVoid}>
+                <Text style={stamp.tone === 'paid' ? styles.stampPaidText : styles.stampVoidText}>{stamp.text}</Text>
+              </View>
+            </View>
+          )}
         </View>
 
-        {/* Totals - hidden for delivery notes */}
-        {!isDeliveryNote && (
-          <View style={styles.totalsSection} wrap={false}>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>{L.subtotal}</Text>
-              <Text style={styles.totalValue}>{formatPdfCurrency(invoice.subtotal, invoice.currency, lang)}</Text>
-            </View>
-            {vatByRate.size > 1 ? (
-              Array.from(vatByRate.entries())
-                .sort(([a], [b]) => b - a)
-                .map(([rate, group]) => (
-                  <View key={rate}>
-                    <View style={styles.totalRow}>
-                      <Text style={styles.totalLabel}>{L.net(rate)}</Text>
-                      <Text style={styles.totalValue}>{formatPdfCurrency(group.base, invoice.currency, lang)}</Text>
-                    </View>
-                    {group.vat !== 0 && (
-                      <View style={styles.totalRow}>
-                        <Text style={styles.totalLabel}>{L.vatRow(rate)}</Text>
-                        <Text style={styles.totalValue}>{formatPdfCurrency(group.vat, invoice.currency, lang)}</Text>
-                      </View>
-                    )}
-                  </View>
-                ))
-            ) : (
-              // Suppress the "Moms 0%" row only when the seller is not
-              // VAT-registered AND the invoice actually carries no VAT.
-              // A non-registered seller who states VAT (warned at create time
-              // per ML 16 kap. 23 §) still gets the totals row so the printed
-              // invoice matches what the customer is being asked to pay.
-              !(company.vat_registered === false && invoice.vat_amount === 0) && (
-                <View style={styles.totalRow}>
-                  <Text style={styles.totalLabel}>{L.vatRow(invoice.vat_rate ?? (vatByRate.size === 1 ? (vatByRate.keys().next().value ?? 0) : 0))}</Text>
-                  <Text style={styles.totalValue}>{formatPdfCurrency(invoice.vat_amount, invoice.currency, lang)}</Text>
-                </View>
-              )
+        {/* Zone C: the rows. The header row is `fixed` inside the table, so
+            it repeats on every page the table continues to. */}
+        <View>
+          <View style={styles.tableHeader} fixed minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>
+            {showArticleNumberColumn && (
+              <Text style={[styles.colArticleNumber, styles.tableHeaderText]}>{L.colArticleNumber}</Text>
             )}
-            {(() => {
-              const { rounding, deductionApplies: showDeduction, toPay: grandTotal } = amountToPay
-              return (
-                <>
-                  {rounding.applies && (
-                    <View style={styles.totalRow}>
-                      <Text style={[styles.totalLabel, { fontSize: 8 }]}>{L.rounding}</Text>
-                      <Text style={[styles.totalValue, { fontSize: 8 }]}>{formatPdfCurrency(rounding.roundingDelta, 'SEK', lang)}</Text>
-                    </View>
+            <Text style={[styles.colDescription, styles.tableHeaderText]}>{L.colDescription}</Text>
+            <Text style={[styles.colQty, styles.tableHeaderText]}>{L.colQty}</Text>
+            {!isDeliveryNote && (
+              <Text style={[styles.colPrice, styles.tableHeaderText]}>{L.colUnitPrice}</Text>
+            )}
+            {!isDeliveryNote && showVatColumn && (
+              <Text style={[styles.colVat, styles.tableHeaderText]}>{L.colVat}</Text>
+            )}
+            {!isDeliveryNote && (
+              <Text style={[styles.colTotal, styles.tableHeaderText]}>{L.colTotal}</Text>
+            )}
+          </View>
+
+          {items.map((item, index) =>
+            isTextLikeLine(item) ? (
+              // Free-text / blank row: description spans the full width, no
+              // numeric columns. An empty description renders as a spacer.
+              <View
+                key={index}
+                style={styles.tableRow}
+                wrap={!fitsOnOnePage(item.description, FULL_WIDTH_BOX_PT, rowLineCap)}
+              >
+                <Text style={[styles.colDescription, styles.textRow, { width: '100%' }]} hyphenationCallback={wrapFullWidthWords}>
+                  {item.description || ' '}
+                </Text>
+              </View>
+            ) : (
+              <View
+                key={index}
+                style={styles.tableRow}
+                wrap={!fitsOnOnePage(descriptionCellBudget(item), DESCRIPTION_COLUMN_PT, rowLineCap)}
+              >
+                {showArticleNumberColumn && (
+                  // Blank for a row that is not from an article.
+                  <Text style={styles.colArticleNumber} hyphenationCallback={wrapArticleNumberWords}>
+                    {item.article_number?.trim() || ' '}
+                  </Text>
+                )}
+                <View style={styles.colDescription}>
+                  <Text hyphenationCallback={wrapDescriptionWords}>{item.description}</Text>
+                  {/* A discount is stated on the row (ML 17 kap 24 § p.10:
+                      prisnedsättning ska framgå); line_total is already net. */}
+                  {!isDeliveryNote && (item.discount_percent ?? 0) > 0 && (
+                    <Text style={styles.rowSubline} hyphenationCallback={wrapDescriptionWords}>{L.discountLine(item.discount_percent ?? 0)}</Text>
                   )}
-                  {showDeduction && (
-                    <View style={styles.totalRow}>
-                      <Text style={styles.totalLabel}>{L.deductionRow}</Text>
-                      <Text style={styles.totalValue}>
-                        {/* deduction_total is stored as a positive magnitude;
-                            -Math.abs() keeps the row a reduction even if the
-                            stored sign convention ever changes. */}
-                        {formatPdfCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency, lang)}
-                      </Text>
-                    </View>
-                  )}
-                  {paidState ? (
-                    // Settled or partly settled faktura: state what was paid,
-                    // then what is still due (0 when fully paid). The bold
-                    // total row is the figure that matters to the reader:
-                    // the paid amount on a betald faktura, the remainder on
-                    // a partly paid one.
-                    <>
-                      <View style={paidState.kind === 'paid' ? styles.grandTotal : styles.totalRow}>
-                        <Text style={paidState.kind === 'paid' ? styles.grandTotalLabel : styles.totalLabel}>{L.paidRow}</Text>
-                        <Text style={paidState.kind === 'paid' ? styles.grandTotalValue : styles.totalValue}>{formatPdfCurrency(paidState.paidAmount, invoice.currency, lang)}</Text>
+                </View>
+                <Text style={styles.colQty}>{formatPdfQuantity(item.quantity, lang)} {unitLabel(item.unit, lang, item.quantity)}</Text>
+                {!isDeliveryNote && (
+                  <Text style={styles.colPrice}>{formatPdfAmount(item.unit_price, lang)}</Text>
+                )}
+                {!isDeliveryNote && showVatColumn && (
+                  <Text style={styles.colVat}>{item.vat_rate ?? 0}%</Text>
+                )}
+                {!isDeliveryNote && (
+                  <Text style={styles.colTotal}>{formatPdfAmount(item.line_total, lang)}</Text>
+                )}
+              </View>
+            )
+          )}
+        </View>
+
+        {/* The note: directly under the rows it annotates. Moves to the next
+            page whole whenever it fits on one; a note too long for any page
+            splits between its paragraphs, each kept together when it fits. */}
+        {invoice.notes && (
+          <View style={styles.noteBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT, noteLineCap)}>
+            {splitParagraphs(invoice.notes).map((paragraph, index) => (
+              <Text
+                key={index}
+                style={styles.noteText}
+                hyphenationCallback={wrapFullWidthWords}
+                wrap={!fitsOnOnePage(paragraph, FULL_WIDTH_BOX_PT, noteLineCap)}
+              >
+                {paragraph}
+              </Text>
+            ))}
+          </View>
+        )}
+
+        {/* Zone D: the totals block, in two units that are each kept whole.
+            The summary (totals, the deduction underlag, the one notice slot)
+            stays on the page where the rows and the note end whenever it fits
+            (agent feedback seq 1080289: it used to follow the payment area's
+            reservation to the next page and leave page 1 half empty). The
+            fine print and a spacer as tall as the payment area follow it and
+            may move to the next page on their own (a long fine print is its
+            own unit and may break, crm#1787); the page the spacer lands
+            on is the last one, where the payment area, which states the
+            amount again, is drawn over it. A ROT/RUT breakdown too long to
+            keep whole comes first instead and may split. */}
+        <View style={styles.totalsBlock}>
+          {!deductionFits && deductionBox}
+          <View style={deductionFits ? undefined : styles.totalsAfterDeduction} wrap={false}>
+            {!isDeliveryNote && (
+              <View style={styles.totals} wrap={false}>
+                <View style={styles.totalRow}>
+                  <Text style={styles.totalLabel}>{bareLabel(L.subtotal)}</Text>
+                  <Text style={styles.totalValue}>{formatPdfAmount(invoice.subtotal, lang)}</Text>
+                </View>
+                {vatByRate.size > 1 ? (
+                  Array.from(vatByRate.entries())
+                    .sort(([a], [b]) => b - a)
+                    .map(([rate, group]) => (
+                      <View key={rate}>
+                        <View style={styles.totalRow}>
+                          <Text style={styles.totalLabel}>{bareLabel(L.net(rate))}</Text>
+                          <Text style={styles.totalValue}>{formatPdfAmount(group.base, lang)}</Text>
+                        </View>
+                        {group.vat !== 0 && (
+                          <View style={styles.totalRow}>
+                            <Text style={styles.totalLabel}>{bareLabel(L.vatRow(rate))}</Text>
+                            <Text style={styles.totalValue}>{formatPdfAmount(group.vat, lang)}</Text>
+                          </View>
+                        )}
                       </View>
-                      <View style={paidState.kind === 'paid' ? styles.totalRow : styles.grandTotal}>
-                        <Text style={paidState.kind === 'paid' ? styles.totalLabel : styles.grandTotalLabel}>{L.toPay}</Text>
-                        <Text style={paidState.kind === 'paid' ? styles.totalValue : styles.grandTotalValue}>{formatPdfCurrency(paidState.remainingAmount, invoice.currency, lang)}</Text>
-                      </View>
-                    </>
-                  ) : (
-                    <View style={styles.grandTotal}>
-                      <Text style={styles.grandTotalLabel}>{isCreditNote ? L.toCredit : isQuote ? L.totalQuote : L.toPay}</Text>
-                      <Text style={styles.grandTotalValue}>{formatPdfCurrency(grandTotal, invoice.currency, lang)}</Text>
+                    ))
+                ) : (
+                  // Suppress the "Moms 0%" row only when the seller is not
+                  // VAT-registered AND the invoice actually carries no VAT.
+                  // A non-registered seller who states VAT (warned at create time
+                  // per ML 16 kap. 23 §) still gets the totals row so the printed
+                  // invoice matches what the customer is being asked to pay.
+                  !(company.vat_registered === false && invoice.vat_amount === 0) && (
+                    <View style={styles.totalRow}>
+                      <Text style={styles.totalLabel}>{bareLabel(L.vatRow(invoice.vat_rate ?? (vatByRate.size === 1 ? (vatByRate.keys().next().value ?? 0) : 0)))}</Text>
+                      <Text style={styles.totalValue}>{formatPdfAmount(invoice.vat_amount, lang)}</Text>
                     </View>
-                  )}
-                </>
-              )
-            })()}
-            {invoice.currency !== 'SEK' && invoice.total_sek && (
-              <View style={{ marginTop: 8 }}>
-                {invoice.vat_amount_sek != null && invoice.vat_amount_sek !== 0 && (
+                  )
+                )}
+                {amountToPay.rounding.applies && (
                   <View style={styles.totalRow}>
-                    <Text style={[styles.totalLabel, { fontSize: 9 }]}>{L.vatInSek(invoice.exchange_rate ?? '')}</Text>
-                    <Text style={[styles.totalValue, { fontSize: 9 }]}>{formatPdfCurrency(invoice.vat_amount_sek, 'SEK', lang)}</Text>
+                    <Text style={styles.totalLabel}>{bareLabel(L.rounding)}</Text>
+                    <Text style={styles.totalValue}>{formatPdfAmount(amountToPay.rounding.roundingDelta, lang)}</Text>
                   </View>
                 )}
-                <View style={styles.totalRow}>
-                  <Text style={[styles.totalLabel, { fontSize: 9 }]}>{L.totalInSek}</Text>
-                  <Text style={[styles.totalValue, { fontSize: 9 }]}>{formatPdfCurrency(invoice.total_sek, 'SEK', lang)}</Text>
+                {amountToPay.deductionApplies && (
+                  // Every deduction invoice states the total incl. moms next
+                  // to the reduction (ROT/RUT: "Total excl/incl moms with moms
+                  // amount"; grön teknik: "Fakturans totala belopp och
+                  // skattereduktionens storlek").
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>{bareLabel(L.totalInclVat)}</Text>
+                    <Text style={styles.totalValue}>{formatPdfAmount(amountToPay.rounding.displayed, lang)}</Text>
+                  </View>
+                )}
+                {amountToPay.deductionApplies && (
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>{bareLabel(hasGronTeknik ? L.deductionRowGronTeknik : L.deductionRow)}</Text>
+                    <Text style={styles.totalValue}>
+                      {/* deduction_total is stored as a positive magnitude;
+                          -Math.abs() keeps the row a reduction even if the
+                          stored sign convention ever changes. */}
+                      {formatPdfAmount(-Math.abs(invoice.deduction_total ?? 0), lang)}
+                    </Text>
+                  </View>
+                )}
+                {/* The document as issued: the same rows paid or unpaid, so a
+                    re-render paginates like the original. What is still due
+                    lives in the payment area. */}
+                <View style={styles.grandTotal}>
+                  <Text style={styles.grandTotalLabel}>{bareLabel(isCreditNote ? L.toCredit : isQuote ? L.totalQuote : L.toPay)}</Text>
+                  <Text style={styles.grandTotalValue}>{formatPdfCurrency(amountToPay.toPay, invoice.currency, lang)}</Text>
                 </View>
+                {/* ML 17 kap 29 §: VAT in SEK on a foreign-currency invoice. */}
+                {invoice.currency !== 'SEK' && invoice.total_sek && (
+                  <View style={styles.sekRows}>
+                    {invoice.vat_amount_sek != null && invoice.vat_amount_sek !== 0 && (
+                      <View style={styles.totalRow}>
+                        <Text style={[styles.totalLabel, styles.totalSmall]}>{bareLabel(L.vatInSek(invoice.exchange_rate ?? ''))}</Text>
+                        <Text style={[styles.totalValue, styles.totalSmall]}>{formatPdfCurrency(invoice.vat_amount_sek, 'SEK', lang)}</Text>
+                      </View>
+                    )}
+                    <View style={styles.totalRow}>
+                      <Text style={[styles.totalLabel, styles.totalSmall]}>{bareLabel(L.totalInSek)}</Text>
+                      <Text style={[styles.totalValue, styles.totalSmall]}>{formatPdfCurrency(invoice.total_sek, 'SEK', lang)}</Text>
+                    </View>
+                  </View>
+                )}
               </View>
             )}
-          </View>
-        )}
 
-        {/* ROT/RUT-avdrag underlying details. Surfaces the masked
-            personnummer (YYYYMMDD-XXXX), fastighetsbeteckning,
-            lägenhetsnummer, the per-line breakdown and the statutory notice
-            about fakturamodellen. Suppressed on delivery notes (no payment
-            info at all). */}
-        {!isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0 && (
-          // Kept on one page while the per-line breakdown (which carries the
-          // line descriptions, possibly multi-line) is short enough; past
-          // that it may split rather than be clipped.
-          <View
-            style={styles.deductionBox}
-            wrap={
-              !fitsOnOnePage(
-                items
-                  .filter((i) => i.deduction_type)
-                  .map((i) => i.description)
-                  .join('\n'),
-                FULL_WIDTH_BOX_PT,
-              )
-            }
-          >
-            <Text style={styles.deductionTitle}>{L.deductionInfoHeading}</Text>
-            {deductionPersonnummerMasked && (
-              <View style={styles.deductionRow}>
-                <Text style={styles.deductionLabel}>{L.deductionPersonnummer}</Text>
-                <Text style={styles.deductionValue}>{deductionPersonnummerMasked}</Text>
-              </View>
-            )}
-            {(() => {
-              // Show the first item-level housing_designation if any line
-              // has one (typical case for a single property). Falls back to
-              // null when only RUT lines exist (RUT doesn't require it).
-              const housing = items.find((i) => i.housing_designation)?.housing_designation
-              const apartment = items.find((i) => i.apartment_number)?.apartment_number
-              return (
-                <>
-                  {housing && (
-                    <View style={styles.deductionRow}>
-                      <Text style={styles.deductionLabel}>{L.deductionHousingDesignation}</Text>
-                      <Text style={styles.deductionValue}>{housing}</Text>
-                    </View>
-                  )}
-                  {apartment && (
-                    <View style={styles.deductionRow}>
-                      <Text style={styles.deductionLabel}>{L.deductionApartmentNumber}</Text>
-                      <Text style={styles.deductionValue}>{apartment}</Text>
-                    </View>
-                  )}
-                </>
-              )
-            })()}
-            {/* Labor-only disclaimer (Skatteverket fakturamodellen). Per ML
-                17 kap, only the labor portion qualifies; material must be
-                invoiced separately. */}
-            <Text style={styles.deductionNotice}>{DEDUCTION_LABOR_ONLY_NOTICE}</Text>
-            {/* Per-line breakdown: one row per eligible item with kind,
-                work type if present and the deducted amount. */}
-            {items
-              .filter((i) => i.deduction_type)
-              .map((i, idx) => {
-                const kind = i.deduction_type === 'rot' ? 'ROT' : 'RUT'
-                const work = i.work_type ? `, ${i.work_type}` : ''
-                return (
-                  <Text key={idx} style={styles.deductionLineItem} hyphenationCallback={wrapFullWidthWords}>
-                    {`${kind}${work}: ${i.description}, ${formatPdfCurrency(i.deduction_amount ?? 0, invoice.currency, lang)}`}
+            {deductionFits && deductionBox}
+
+            {notices.length > 0 && (
+              <View style={styles.noticeSlot} wrap={false}>
+                {notices.map((notice, index) => (
+                  <Text
+                    key={index}
+                    style={index === 0 ? styles.noticeText : styles.noticeTextNext}
+                    hyphenationCallback={wrapFullWidthWords}
+                  >
+                    {notice}
                   </Text>
-                )
-              })}
-            <Text style={styles.deductionNotice}>{L.deductionNotice}</Text>
-          </View>
-        )}
+                ))}
+              </View>
+            )}
 
-        {/* Proforma notice */}
-        {isProforma && (
-          <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>
-              {L.proformaNotice}
-            </Text>
+            {/* No payment area (proforma): a short fine print stays with the totals. */}
+            {!hasPaymentArea && finePrintTravelsWhole && finePrintBlock}
           </View>
-        )}
 
-        {/* Quote notice */}
-        {isQuote && (
-          <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>
-              {L.quoteNotice}
-            </Text>
-          </View>
-        )}
+          {/* A long fine print follows the summary as ordinary text and may
+              break across pages, so it never drags a unit kept whole to a
+              fresh page and leaves the page above mostly empty (crm#1787). */}
+          {!finePrintTravelsWhole && finePrintBlock}
 
-        {/* Payment information - not shown for credit notes, proformas, quotes, or delivery notes */}
-        {!isCreditNote && !isProforma && !isQuote && !isDeliveryNote && (
-          <View style={styles.paymentSection} wrap={false}>
-            <Text style={styles.paymentTitle}>{L.paymentHeading}</Text>
-            {invoice.payment_link_url && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.payOnline}</Text>
-                <Link src={invoice.payment_link_url} style={styles.paymentValue}>
-                  {invoice.payment_link_url.length > 60
-                    ? `${invoice.payment_link_url.slice(0, 57)}...`
-                    : invoice.payment_link_url}
-                </Link>
-              </View>
-            )}
-            {company.bank_name && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.bank}</Text>
-                <Text style={styles.paymentValue}>{company.bank_name}</Text>
-              </View>
-            )}
-            {(company.clearing_number || company.account_number) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.account}</Text>
-                <Text style={styles.paymentValue}>
-                  {company.clearing_number}-{company.account_number}
-                </Text>
-              </View>
-            )}
-            {company.bankgiro && (company.invoice_show_bankgiro ?? true) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.bankgiro}</Text>
-                <Text style={styles.paymentValue}>{company.bankgiro}</Text>
-              </View>
-            )}
-            {company.plusgiro && (company.invoice_show_plusgiro ?? true) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.plusgiro}</Text>
-                <Text style={styles.paymentValue}>{company.plusgiro}</Text>
-              </View>
-            )}
-            {SHOW_SWISH_ON_INVOICE && company.swish && (company.invoice_show_swish ?? false) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.swish}</Text>
-                <Text style={styles.paymentValue}>{company.swish}</Text>
-              </View>
-            )}
-            {/* Non-IBAN foreign routing (USD ABA / GBP sort code): the label
-                names the identifier the customer's bank asks for. */}
-            {company.bank_code && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>
-                  {invoice.currency === 'USD'
-                    ? L.routingNumber
-                    : invoice.currency === 'GBP'
-                      ? L.sortCode
-                      : L.bankCode}
-                </Text>
-                <Text style={styles.paymentValue}>{company.bank_code}</Text>
-              </View>
-            )}
-            {company.foreign_account_number && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.foreignAccount}</Text>
-                <Text style={styles.paymentValue}>{company.foreign_account_number}</Text>
-              </View>
-            )}
-            {company.iban && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.iban}</Text>
-                <Text style={styles.paymentValue}>{company.iban}</Text>
-              </View>
-            )}
-            {company.bic && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.bic}</Text>
-                <Text style={styles.paymentValue}>{company.bic}</Text>
-              </View>
-            )}
-            <View style={[styles.paymentRow, { marginTop: 8 }]}>
-              <Text style={styles.paymentLabel}>{L.dueDate}</Text>
-              <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{formatDate(invoice.due_date)}</Text>
+          {/* The payment area's reservation, one unit so the last page always
+              has room for the payment area. A short fine print travels with
+              it, so it is never stranded without it. */}
+          {hasPaymentArea && (
+            <View wrap={false}>
+              {finePrintTravelsWhole && finePrintBlock}
+              <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />
             </View>
-            {invoice.invoice_number && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.invoiceNumber}</Text>
-                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number}</Text>
-              </View>
-            )}
-            {invoiceShowsOcrReference(company, lang) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.ocr}</Text>
-                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number ? generateOcrReference(invoice.invoice_number) : '-'}</Text>
-              </View>
-            )}
-            {swishQrDataUrl && (
-              <View style={{ position: 'absolute', top: 15, right: 15, width: 96, alignItems: 'center' }}>
-                <Image src={swishQrDataUrl} style={{ width: 96, height: 96 }} />
-                <Text style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}>{L.swishQrCaption}</Text>
-              </View>
-            )}
-            {/* Payment-link QR: shifts left when the Swish QR occupies the corner. */}
-            {paymentLinkQrDataUrl && (
-              <View style={{ position: 'absolute', top: 15, right: swishQrDataUrl ? 125 : 15, width: 96, alignItems: 'center' }}>
-                <Image src={paymentLinkQrDataUrl} style={{ width: 96, height: 96 }} />
-                <Text style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}>{L.paymentLinkQrCaption}</Text>
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Reverse charge / export / exempt / not-registered notice.
-            "Not VAT-registered" trumps the others ONLY when the invoice
-            actually carries no VAT: a non-registered seller who chose to
-            state VAT on the invoice (warned at create time per ML 16 kap.
-            23 §) gets the normal reverse-charge / exempt notices instead,
-            since the "ej momsregistrerad" line would contradict the VAT
-            shown in the totals block. */}
-        {company.vat_registered === false && invoice.vat_amount === 0 ? (
-          <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{L.notVatRegisteredNotice}</Text>
-          </View>
-        ) : (
-          <>
-            {invoice.reverse_charge_text && (
-              <View style={styles.noticeBox} wrap={false}>
-                <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{localizeVatNotice(invoice.reverse_charge_text, lang)}</Text>
-              </View>
-            )}
-            {invoice.vat_treatment === 'exempt' && !invoice.reverse_charge_text && (
-              <View style={styles.noticeBox} wrap={false}>
-                <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{L.exemptNotice}</Text>
-              </View>
-            )}
-          </>
-        )}
-
-        {/* Notes */}
-        {invoice.notes && (
-          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT)}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{invoice.notes}</Text>
-          </View>
-        )}
-
-        {/* Late fee & credit terms: payment terms, so never on a quote */}
-        {!isQuote && (company.invoice_late_fee_text || company.invoice_credit_terms_text) && (
-          <View style={{ marginTop: 10, marginBottom: 10 }} wrap={false}>
-            {company.invoice_late_fee_text && (
-              <Text style={{ fontSize: 8, color: '#666', marginBottom: 2 }}>{company.invoice_late_fee_text}</Text>
-            )}
-            {company.invoice_credit_terms_text && (
-              <Text style={{ fontSize: 8, color: '#666' }}>{company.invoice_credit_terms_text}</Text>
-            )}
-          </View>
-        )}
-
-        {/* Footer: collected legal info per ML 17 kap 24§. Optional branded
-            footnote sits above the statutory line so it can never crowd out
-            the compliance text (which is why the user-supplied string lives
-            in its own Text node, not inside the join). */}
-        <View style={styles.footer}>
-          {footerText && (
-            <Text style={styles.brandingFooterText} hyphenationCallback={wrapFullWidthWords}>{footerText}</Text>
           )}
-          <Text style={styles.footerText} hyphenationCallback={wrapFullWidthWords}>
-            {[
-              (company.invoice_show_company_name ?? true) &&
-              (company.invoice_company_name_position ?? 'header') === 'footer'
-                ? company.company_name
-                : null,
-              company.address_line1,
-              (company.postal_code || company.city) ? `${company.postal_code ?? ''} ${company.city ?? ''}`.trim() : null,
-              company.org_number ? `${L.orgNoLong} ${formatOrgNumber(company.org_number)}` : null,
-              company.vat_number ? `${L.vatRegNo} ${company.vat_number}` : null,
-              company.f_skatt ? L.fSkatt : null,
-            ].filter(Boolean).join(' · ')}
-          </Text>
+        </View>
+
+        {/* Zone E: the payment area, drawn over the spacer at the bottom of
+            the last page. Fixed height for every status (R8). */}
+        {paymentArea && (
+          <View
+            fixed
+            style={styles.paymentAreaFrame}
+            render={(context) => {
+              const { pageNumber, totalPages } = context as PdfPageContext
+              return pageNumber === totalPages ? renderPaymentArea(paymentArea, styles, lang) : null
+            }}
+          />
+        )}
+
+        {/* Zone F: footer on every page. The company's statutory details
+            (ML 17 kap 24 §), at most one line of the company's own footer
+            text above them, and the page number. */}
+        <View style={styles.footer} fixed>
+          {footerText && <Text style={styles.footerNote} hyphenationCallback={wrapDescriptionWords}>{footerText}</Text>}
+          <View style={styles.footerRow}>
+            <Text style={styles.footerText} hyphenationCallback={wrapFullWidthWords}>
+              {statutoryLine}
+            </Text>
+            <Text
+              style={styles.footerPage}
+              render={({ pageNumber, totalPages }) => L.pageOf(pageNumber, totalPages ?? pageNumber)}
+            />
+          </View>
         </View>
 
         {/* Draft watermark (#2437), deliberately the LAST child of the page:
             react-pdf paints children in document order and `fixed` does not
             hoist, so anything emitted after it with a backgroundColor (the
-            customer box, the payment section, notice boxes) would paint over
-            the word. Absolute + fixed keeps it out of the flow on every page. */}
+            note, the payment area) would paint over the word. Absolute +
+            fixed keeps it out of the flow on every page. */}
         {isDraftMarked && (
           <View style={styles.draftWatermark} fixed>
             <View style={styles.draftWatermarkWord}>

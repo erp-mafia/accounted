@@ -3,7 +3,10 @@
  *
  * Architectural contract (per the v1 plan):
  *
- *   1. Every POST / PATCH / DELETE accepts `?dry_run=true` or `X-Dry-Run: true`.
+ *   1. A POST / PATCH / DELETE registered with `dryRunSupported: true` accepts
+ *      `?dry_run=true` or `X-Dry-Run: true`. On any other write withApiV1
+ *      refuses the flag (400 VALIDATION_ERROR, field dry_run) before the
+ *      handler runs: a request sent as a preview never commits.
  *   2. A dry-run response returns 200 OK with `{ data: { dry_run: true, preview, ... } }`
  *      and the `X-Dry-Run: true` response header: NEVER the resource's
  *      normal success status (201, 204, etc.). A caller that sees `200`
@@ -45,6 +48,12 @@ export interface DryRunPreviewBase<T> {
   dry_run: true
   /** The would-be resource. Same shape as the success response. */
   preview: T
+  /**
+   * Operation writes only (lib/operations/preview-token.ts): the preview's
+   * fingerprint. Send it back in the Preview-Token header on the commit and
+   * the commit books exactly this preview or answers 409 PREVIEW_STALE.
+   */
+  preview_token?: string
 }
 
 interface DryRunResponseOptions {
@@ -52,6 +61,8 @@ interface DryRunResponseOptions {
   log: Logger
   /** Non-blocking warnings the real write would carry in meta.warnings. */
   warnings?: ResponseWarning[]
+  /** The preview's fingerprint, answered as data.preview_token. */
+  previewToken?: string
 }
 
 /**
@@ -62,7 +73,11 @@ interface DryRunResponseOptions {
  * to know what would be written and whether validation passes.
  */
 export function dryRunPreview<T>(preview: T, opts: DryRunResponseOptions): NextResponse {
-  const body: DryRunPreviewBase<T> = { dry_run: true, preview }
+  const body: DryRunPreviewBase<T> = {
+    dry_run: true,
+    preview,
+    ...(opts.previewToken ? { preview_token: opts.previewToken } : {}),
+  }
   opts.log.info('dry-run preview returned', { stage: 'validation-only' })
   return ok(body, { requestId: opts.requestId, dryRun: true, warnings: opts.warnings })
 }

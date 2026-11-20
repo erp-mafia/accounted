@@ -1,8 +1,7 @@
 /**
  * Core <-> Enable Banking extension boundary for the agent-triggered sync.
  *
- * `lib/` and `app/api/v1/` cannot import from `@/extensions/` (CI guard,
- * core-build.yml), so the v1 REST endpoint
+ * `lib/` and `app/api/v1/` cannot import from `@/extensions/` (CI guard), so the v1 REST endpoint
  * POST /companies/{id}/bank-connections/{connectionId}/sync reaches the
  * runner only through the registry-resolved `services` channel: same
  * pattern as lib/skatteverket/declaration-status.ts. This module holds the
@@ -35,8 +34,12 @@ export type TriggerSyncFailureCode =
   | 'BANK_SYNC_NO_ACCOUNTS'
   | 'BANK_SYNC_COOLDOWN'
   | 'BANK_RATE_LIMITED'
+  /** The bank's short throttle (Open Payments): try again in a minute, the daily cap is untouched. */
+  | 'BANK_THROTTLED'
   | 'BANK_SESSION_EXPIRED'
   | 'BANK_SYNC_FAILED'
+  /** The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts enableBankingSunset): switch, do not retry. */
+  | 'ENABLE_BANKING_SUNSET'
 
 export type TriggerSyncResult =
   | {
@@ -48,6 +51,20 @@ export type TriggerSyncResult =
       from_date: string
       to_date: string
       last_synced_at: string
+      /**
+       * A first import only (Open Payments): whether the bank's extended history
+       * was asked for, or the ordinary window because the extended one had closed
+       * before the import ran (lib/bank-feed/feed.ts).
+       */
+      history_window?: 'extended' | 'ordinary'
+      /**
+       * Open Payments only: stored rows the re-read updated with the bank's
+       * daily enrichment (a reference, a payer, an organisationsnummer), and
+       * whether the window carried today's enrichment (null when the bank
+       * reports nothing about it).
+       */
+      enriched_updated?: number
+      window_enriched?: boolean | null
     }
   | {
       ok: false
@@ -58,6 +75,12 @@ export type TriggerSyncResult =
       next_allowed_at?: string
       /** Seconds until next_allowed_at (cooldown and bank rate limit). */
       retry_after_seconds?: number
+      /**
+       * Only from the Open Payments cron, which passes a deadline: the run's
+       * time budget stopped the sync before every account was read. Nothing
+       * was stamped, so the connection is still due (lib/bank-feed/feed.ts).
+       */
+      deadline_reached?: true
     }
 
 /** Services the enable-banking extension registers for core callers. */

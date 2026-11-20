@@ -5,7 +5,7 @@
  * then case-insensitive full name. That works for Swedish suppliers and fails
  * for every foreign one, because the extractor deliberately leaves orgNumber
  * null unless the document carries a real Swedish organisationsnummer (see
- * extensions/general/invoice-inbox/lib/extract-invoice-fields.ts). A supplier
+ * lib/documents/inbox-extraction/extract-invoice-fields.ts). A supplier
  * like "ADOBE SYSTEMS SOFTWARE IRELAND LTD" only ever prints a
  * momsregistreringsnummer (IE6364992H), which the suppliers table stores in
  * vat_number and which nothing looked at, so an exact name match was the sole

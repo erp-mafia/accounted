@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import {
@@ -10,6 +10,7 @@ import {
 } from '@/lib/salary/agi/reporting-period'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { RecordHeader } from '@/components/ui/record-header'
 import { Input } from '@/components/ui/input'
 import {
   Dialog,
@@ -27,34 +28,24 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
-  AlertTriangle,
-  ArrowLeftCircle,
-  Download,
-  Eye,
-  FileDown,
-  Loader2,
-  MoreHorizontal,
-  Send,
-  Trash2,
-  Undo2,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowLeftCircleIcon,
+  ArrowUturnLeftIcon,
+  CheckCircleIcon,
+  DocumentArrowDownIcon,
+  EllipsisHorizontalIcon,
+  ExclamationTriangleIcon,
+  EyeIcon,
+  PaperAirplaneIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { periodLabelOf, type RunDetail } from './types'
-
-// Same chip vocabulary as the Löner list (chips mark exceptions): in-flight
-// states wear the quiet beige chip, paid is sage, corrected the outline
-// exception, and booked renders as muted text.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
-  draft: 'secondary',
-  review: 'secondary',
-  approved: 'secondary',
-  paid: 'success',
-  booked: 'success',
-  corrected: 'outline',
-}
+import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
+import { resolvePayslipChannel, type PayslipSendChannel } from '@/lib/salary/payslips/channel-options'
 
 const STATUS_RANK: Record<string, number> = {
   draft: 0,
@@ -70,18 +61,31 @@ interface RunHeaderProps {
   canWrite: boolean
   actionLoading: string | null
   employeeCount: number
+  // The calculation is current (lib/salary/calculation-state.ts): a stale
+  // one has nothing worth previewing.
   isCalculated: boolean
   // The single "forward" step for the current status (Beräkna, Till
-  // granskning, Godkänn, Markera utbetald, Bokför): the one default button
-  // in the header. Everything else lives behind the ⋯ menu, except the
-  // payslip send, which is a rail step of its own and stays visible.
+  // granskning, Godkänn, Betala via banken or Markera som betald, Bokför,
+  // Lämna in AGI): the one
+  // default button in the header. Everything else lives behind the ⋯ menu,
+  // the payslip send included.
   primaryAction?: { key: string; label: string; onClick: () => void } | null
+  // Markera som betald in the ⋯ menu, when the header's button pays another
+  // way (Betala via banken): the money may still leave by file or by hand.
+  onMarkPaid?: (() => void) | null
   onPreview: () => void
   onRevert: () => void
   onUnapprove: () => void
-  onSendPayslips: () => void
+  // The ways the payslips can go out (lib/salary/payslips/channel-options.ts):
+  // the email link, plus each digital mailbox the company sends through.
+  // With a mailbox the send asks which first; email alone sends at once.
+  payslipChannels: PayslipSendChannel[]
+  onSendPayslips: (channel: PayslipSendChannel) => void
   onDownloadPayslips: () => void
   onDownloadAgi: () => void
+  // Fora's monthly file for the run's payment month (lib/salary/fora). Null
+  // when nobody on the run has a Fora code: the company does not report to Fora.
+  onOpenForaReport: (() => void) | null
   onDelete: () => void
   onCorrect: () => void
   // Draft-only: payment_date is frozen once the run leaves draft (it becomes
@@ -97,23 +101,33 @@ export function RunHeader({
   employeeCount,
   isCalculated,
   primaryAction,
+  onMarkPaid,
   onPreview,
   onRevert,
   onUnapprove,
+  payslipChannels,
   onSendPayslips,
   onDownloadPayslips,
   onDownloadAgi,
+  onOpenForaReport,
   onDelete,
   onCorrect,
   onUpdatePaymentDate,
 }: RunHeaderProps) {
   const t = useTranslations('salary_run')
   const tSalary = useTranslations('salary')
+  const tNav = useTranslations('nav')
   const [correctOpen, setCorrectOpen] = useState(false)
+  // The channel dialog: open only when a mailbox can be chosen.
+  const [channelDialogOpen, setChannelDialogOpen] = useState(false)
+  const [channelChoice, setChannelChoice] = useState<PayslipSendChannel | null>(null)
+  const pickedChannel = resolvePayslipChannel(channelChoice, payslipChannels)
   const periodLabel = periodLabelOf(run)
   const hasEmailSend = useCapability(CAPABILITY.email_send)
 
-  const statusKey = `status_${run.status}`
+  // The same status as the Löner list and the payslip page (lib/salary/run-status-display.ts).
+  const statusDisplay = salaryRunStatusDisplay(run.status)
+  const statusLabel = statusDisplay ? tSalary(statusDisplay.labelKey) : run.status
   const rank = STATUS_RANK[run.status] ?? 0
   const busy = !!actionLoading
   const deliveries = run.payslip_deliveries_summary
@@ -124,27 +138,35 @@ export function RunHeader({
   const payslipsAvailable = rank >= 2
   const showPayslipSend = payslipsAvailable && canWrite
 
+  const showMarkPaid = canWrite && run.status === 'approved' && !!onMarkPaid
   const showPreview = canWrite && (run.status === 'draft' || run.status === 'review')
   const showRevert = canWrite && run.status === 'review'
   const showUnapprove = canWrite && run.status === 'approved'
   const showDownloadPayslips = payslipsAvailable && canWrite
   const showDownloadAgi = canWrite && run.status === 'booked'
+  // A read, so not gated on canWrite; approved is the first status whose pay counts.
+  const showForaReport = !!onOpenForaReport && payslipsAvailable
   const showDelete = canWrite && run.status === 'draft'
   const showCorrect = canWrite && run.status === 'booked'
   const hasMenu =
+    showMarkPaid ||
+    showPayslipSend ||
     showPreview ||
     showRevert ||
     showUnapprove ||
     showDownloadPayslips ||
     showDownloadAgi ||
+    showForaReport ||
     showDelete ||
     showCorrect
   const menuBusy =
+    actionLoading === 'payslips-send' ||
     actionLoading === 'delete' ||
     actionLoading === 'correct' ||
     actionLoading === 'preview' ||
     actionLoading === 'bulk_payslip' ||
-    actionLoading === 'agi-download'
+    actionLoading === 'agi-download' ||
+    (showMarkPaid && actionLoading === 'paid')
 
   // Editable while draft: prefilled with the effective value, committed on
   // blur/Enter so half-typed dates never fire a PATCH. The draft state resyncs
@@ -179,21 +201,24 @@ export function RunHeader({
   const deviationWindow = hasCustomDeviationWindow(run) ? runDeviationWindow(run) : null
 
   const metaParts: React.ReactNode[] = [
-    <span key="payment" className="inline-flex items-center gap-2">
+    <span key="payment">
       {t('payment_date_label')}{' '}
       {paymentDateEditable ? (
-        <Input
-          type="date"
-          value={paymentDateDraft}
-          onChange={(e) => setPaymentDateDraft(e.target.value)}
-          onBlur={commitPaymentDate}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur()
-          }}
-          disabled={busy}
-          aria-label={t('payment_date_edit_aria')}
-          className="h-8 w-fit px-2 py-0 text-sm tabular-nums"
-        />
+        // inline-flex keeps the field on the meta line, whose parts the top bar sets inline.
+        <span className="inline-flex align-middle">
+          <Input
+            type="date"
+            value={paymentDateDraft}
+            onChange={(e) => setPaymentDateDraft(e.target.value)}
+            onBlur={commitPaymentDate}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+            disabled={busy}
+            aria-label={t('payment_date_edit_aria')}
+            className="h-8 w-fit px-2 py-0 text-sm tabular-nums"
+          />
+        </span>
       ) : (
         <span className="tabular-nums">{formatDate(run.payment_date)}</span>
       )}
@@ -240,64 +265,41 @@ export function RunHeader({
     )
   }
 
+  const statusChips = (
+    <>
+      {statusDisplay && statusDisplay.chip === null ? (
+        <span className="text-sm text-muted-foreground">{statusLabel}</span>
+      ) : (
+        <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
+      )}
+      {run.is_correction && run.corrects_run_id && (
+        <Badge variant="outline">{t('correction_badge')}</Badge>
+      )}
+    </>
+  )
+  // Separated in the text, as the other detail pages do: the top bar sets
+  // the parts inline, where a flex gap does not apply.
+  const runFacts = metaParts.map((part, i) => (
+    <Fragment key={i}>
+      {i > 0 && ' · '}
+      {part}
+    </Fragment>
+  ))
+
   return (
     <>
       {/* Header: serif title with one status element, a quiet meta line, and
           the next step on the right. Everything else lives in the ⋯ menu.
           The page-header hooks turn it into the top bar; the sidebar says
           where we are, so there is no back link. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="page-header-lead min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
-              {t('title', { period: periodLabel })}
-            </h1>
-            {run.status === 'booked' ? (
-              <span className="text-sm text-muted-foreground">{tSalary(statusKey)}</span>
-            ) : (
-              <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>
-                {tSalary(statusKey)}
-              </Badge>
-            )}
-            {run.is_correction && run.corrects_run_id && (
-              <Badge variant="outline">{t('correction_badge')}</Badge>
-            )}
-          </div>
-          <p className="page-header-meta mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-            {metaParts.map((part, i) => (
-              <span key={i} className="inline-flex items-center gap-x-2">
-                {i > 0 && <span aria-hidden>·</span>}
-                {part}
-              </span>
-            ))}
-          </p>
-        </div>
-
-        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
-          {showPayslipSend && (
-            // The span carries the tooltip: browsers suppress `title` on
-            // disabled elements, and hover events don't fire on them.
-            <span title={!hasEmailSend ? t('payslips_send_requires_subscription') : undefined}>
-              <Button
-                variant="outline"
-                onClick={onSendPayslips}
-                disabled={busy || !hasEmailSend}
-              >
-                {actionLoading === 'payslips-send' ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="mr-2 h-4 w-4" />
-                )}
-                {deliveries && deliveries.sent > 0
-                  ? t('action_send_payslips_again')
-                  : t('action_send_payslips')}
-              </Button>
-            </span>
-          )}
-
+      <RecordHeader
+        parent={{ label: tNav('v2_salary_runs'), href: '/salary' }}
+        title={t('title', { period: periodLabel })}
+        status={statusChips}
+        facts={runFacts}
+        actions={<>
           {primaryAction && (
-            <Button onClick={primaryAction.onClick} disabled={busy}>
-              {actionLoading === primaryAction.key && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button size="toolbar" onClick={primaryAction.onClick} disabled={busy} loading={actionLoading === primaryAction.key}>
               {primaryAction.label}
             </Button>
           )}
@@ -305,34 +307,70 @@ export function RunHeader({
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={t('more_actions')}>
-                  {menuBusy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <MoreHorizontal className="h-4 w-4" />
-                  )}
+                <Button variant="ghost" size="icon-toolbar" aria-label={t('more_actions')} loading={menuBusy}>
+                  {!menuBusy && <EllipsisHorizontalIcon className="h-4 w-4" />}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">
+                {showMarkPaid && (
+                  <DropdownMenuItem onSelect={() => onMarkPaid?.()} disabled={busy}>
+                    <CheckCircleIcon className="h-4 w-4" />
+                    {t('action_mark_paid')}
+                  </DropdownMenuItem>
+                )}
                 {showPreview && (
                   <DropdownMenuItem
                     onSelect={onPreview}
-                    disabled={busy || (run.status === 'draft' && !isCalculated)}
+                    disabled={busy || !isCalculated}
                   >
-                    <Eye className="h-4 w-4" />
+                    <EyeIcon className="h-4 w-4" />
                     {t('action_preview')}
+                  </DropdownMenuItem>
+                )}
+                {showPayslipSend && (
+                  // Email send is a paid capability: without it the item stays
+                  // visible but disabled, and says why on the item itself (a
+                  // disabled menu item takes no hover, so no tooltip).
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      if (payslipChannels.length > 1) {
+                        setChannelChoice(null)
+                        setChannelDialogOpen(true)
+                      } else {
+                        onSendPayslips('email')
+                      }
+                    }}
+                    disabled={busy || !hasEmailSend}
+                  >
+                    <PaperAirplaneIcon className="h-4 w-4" />
+                    <span className="min-w-0 flex-1">
+                      {deliveries && deliveries.sent > 0
+                        ? t('action_send_payslips_again')
+                        : t('action_send_payslips')}
+                    </span>
+                    {!hasEmailSend && (
+                      <span className="text-xs text-muted-foreground">
+                        {t('payslips_send_requires_subscription')}
+                      </span>
+                    )}
                   </DropdownMenuItem>
                 )}
                 {showDownloadPayslips && (
                   <DropdownMenuItem onSelect={onDownloadPayslips} disabled={busy}>
-                    <FileDown className="h-4 w-4" />
+                    <DocumentArrowDownIcon className="h-4 w-4" />
                     {t('action_download_payslips')}
                   </DropdownMenuItem>
                 )}
                 {showDownloadAgi && (
                   <DropdownMenuItem onSelect={onDownloadAgi} disabled={busy}>
-                    <Download className="h-4 w-4" />
+                    <ArrowDownTrayIcon className="h-4 w-4" />
                     {t('action_download_agi')}
+                  </DropdownMenuItem>
+                )}
+                {showForaReport && (
+                  <DropdownMenuItem onSelect={() => onOpenForaReport?.()} disabled={busy}>
+                    <ArrowDownTrayIcon className="h-4 w-4" />
+                    {t('action_fora_report', { period: formatAgiPeriodDashed(agiPeriod) })}
                   </DropdownMenuItem>
                 )}
                 {(showRevert || showUnapprove) && (
@@ -340,7 +378,7 @@ export function RunHeader({
                     <DropdownMenuSeparator />
                     {showRevert && (
                       <DropdownMenuItem onSelect={onRevert} disabled={busy}>
-                        <ArrowLeftCircle className="h-4 w-4" />
+                        <ArrowLeftCircleIcon className="h-4 w-4" />
                         {t('action_revert')}
                       </DropdownMenuItem>
                     )}
@@ -350,7 +388,7 @@ export function RunHeader({
                         the AGI has reached Skatteverket. */}
                     {showUnapprove && (
                       <DropdownMenuItem onSelect={onUnapprove} disabled={busy}>
-                        <ArrowLeftCircle className="h-4 w-4" />
+                        <ArrowLeftCircleIcon className="h-4 w-4" />
                         {t('action_unapprove')}
                       </DropdownMenuItem>
                     )}
@@ -365,13 +403,13 @@ export function RunHeader({
                         disabled={busy}
                         className="text-destructive focus:text-destructive"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <TrashIcon className="h-4 w-4" />
                         {t('action_delete_draft')}
                       </DropdownMenuItem>
                     )}
                     {showCorrect && (
                       <DropdownMenuItem onSelect={() => setCorrectOpen(true)} disabled={busy}>
-                        <Undo2 className="h-4 w-4" />
+                        <ArrowUturnLeftIcon className="h-4 w-4" />
                         {t('action_correct')}
                       </DropdownMenuItem>
                     )}
@@ -380,8 +418,53 @@ export function RunHeader({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-        </div>
-      </div>
+        </>}
+      />
+
+      {/* How the payslips go out, when a digital mailbox can carry them: the
+          email link (default), or Billo or Kivra first with the email link
+          for whoever the mailbox does not reach. */}
+      <Dialog open={channelDialogOpen} onOpenChange={setChannelDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('payslips_channel_title')}</DialogTitle>
+            <DialogDescription>{t('payslips_channel_description', { period: periodLabel })}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-[13px]" role="radiogroup" aria-label={t('payslips_channel_title')}>
+            {payslipChannels.map((channel) => (
+              <label key={channel} className="flex items-start gap-3 rounded-lg p-4 bg-control shadow-raised">
+                <input
+                  type="radio"
+                  name="payslip-channel"
+                  className="mt-1"
+                  checked={pickedChannel === channel}
+                  onChange={() => setChannelChoice(channel)}
+                />
+                <span>
+                  <span className="block">{t(`payslips_channel_${channel}`)}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {t(`payslips_channel_${channel}_hint`)}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChannelDialogOpen(false)}>
+              {t('payslips_channel_cancel')}
+            </Button>
+            <Button
+              onClick={() => {
+                setChannelDialogOpen(false)
+                onSendPayslips(pickedChannel)
+              }}
+              disabled={busy}
+            >
+              {t('payslips_channel_confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Correction confirm: storno per BFL 5 kap. 5 §, nothing is deleted. */}
       <Dialog open={correctOpen} onOpenChange={setCorrectOpen}>
@@ -391,8 +474,8 @@ export function RunHeader({
             <DialogDescription className="space-y-3 pt-2 text-left">
               <span className="block">{t('correct_dialog_body', { period: periodLabel })}</span>
               {run.agi_generated_at && (
-                <span className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span className="flex items-start gap-2 rounded-lg p-3 text-xs bg-control shadow-raised">
+                  <ExclamationTriangleIcon className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                   <span>{t('correct_dialog_agi_warning')}</span>
                 </span>
               )}

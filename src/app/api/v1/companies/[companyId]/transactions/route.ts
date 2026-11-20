@@ -1,7 +1,8 @@
 /**
  * GET /api/v1/companies/{companyId}/transactions
  *
- * Cursor-paginated transaction list. Filters: status (booked/unbooked),
+ * Cursor-paginated transaction list. Filters: status (booked/unbooked, the
+ * definitions in lib/transactions/unbooked.ts),
  * date range, currency, cash_account_id (one bank account), search
  * (description ilike). Default sort: (date DESC, id ASC): newest first,
  * deterministic tie-break.
@@ -17,6 +18,8 @@ import {
 import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
+import { applyBookedFilter } from '@/lib/transactions/unbooked'
+import { openTransactionClaims } from '@/lib/pending-operations/transaction-claims'
 
 const TransactionSummary = z.object({
   id: z.string().uuid(),
@@ -34,6 +37,13 @@ const TransactionSummary = z.object({
   import_source: z.string().nullable(),
   cash_account_id: z.string().uuid().nullable(),
   created_at: z.string(),
+  pending_operation_id: z
+    .string()
+    .uuid()
+    .nullable()
+    .describe(
+      'The open proposal (a staged categorize or bulk booking, awaiting approval) that already holds this row; null when none does. Approve or reject that one: staging the row again answers TRANSACTION_ALREADY_STAGED.',
+    ),
 })
 
 const TransactionListResponse = listEnvelope(TransactionSummary)
@@ -49,7 +59,9 @@ const ListFilters = z.object({
   status: z
     .enum(['booked', 'unbooked'])
     .optional()
-    .describe('booked: linked to a verifikat (journal_entry_id set). unbooked: not yet booked. Default: both.'),
+    .describe(
+      'booked: anchored to a verifikat (journal_entry_id, a bulk booking or split, or a batch allocation). unbooked: the work queue, not ignored, not private and anchored to no verifikat. Default: every row.',
+    ),
   currency: z.string().min(1).max(8).optional().describe('Only transactions in this currency code (e.g. SEK).'),
   date_from: z
     .string()
@@ -89,7 +101,7 @@ registerEndpoint({
     'Looking up one transaction by id (use the detail endpoint). Reconciliation status (use /reconciliation/bank/status).',
   pitfalls: [
     'Default page size is 50. Pass ?limit=100 for the maximum. Cursor pagination: pass ?cursor=<next_cursor> from the previous response.',
-    'A booked transaction has a non-null journal_entry_id. is_business / category live on the transaction row even before booking.',
+    'Filter on status rather than journal_entry_id: a bulk-booked, split or batch-allocated transaction is booked with journal_entry_id null. status=unbooked leaves out ignored and private rows; without status every row is listed. is_business / category live on the transaction row even before booking.',
     'reverse-charge or storno entries can leave a transaction with journal_entry_id pointing at a cancelled JE: check status on the JE separately.',
   ],
   example: {
@@ -144,16 +156,19 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // cursor (date is YYYY-MM-DD only, decoder rejects it). For users
     // who care about transaction-date ordering specifically, the date
     // is still in every row and ?date_from / ?date_to filters work.
+    // The open rows are public.open_bank_rows, the same definition as the MCP
+    // list, the period-lock guard and the VAT close check; the booked ones are
+    // the is_booked computed column. Both filter server-side, so the cursor
+    // never skips a row.
     let query = ctx.supabase
-      .from('transactions')
+      .from(f.status === 'unbooked' ? 'open_bank_rows' : 'transactions')
       .select(TRANSACTION_SUMMARY_COLUMNS)
       .eq('company_id', ctx.companyId!)
       .order('created_at', { ascending: false })
       .order('id', { ascending: true })
       .limit(limit + 1)
 
-    if (f.status === 'booked') query = query.not('journal_entry_id', 'is', null)
-    else if (f.status === 'unbooked') query = query.is('journal_entry_id', null)
+    if (f.status === 'booked') query = applyBookedFilter(query)
     if (f.currency) query = query.eq('currency', f.currency)
     if (f.cash_account_id) query = query.eq('cash_account_id', f.cash_account_id)
     if (f.date_from) query = query.gte('date', f.date_from)
@@ -188,7 +203,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
         : null
 
-    return paginated(trimmed, {
+    // crm#1264: the open proposal that already holds a row, the staging
+    // check's own definition, so a client sees it before it stages the row a
+    // second time. One read per page; a booked row is in no open proposal
+    // that can still book it, so a booked-only page reads nothing.
+    let openClaims = new Map<string, string>()
+    if (f.status !== 'booked') {
+      try {
+        openClaims = await openTransactionClaims(ctx.supabase, ctx.companyId!, trimmed.map((row) => row.id))
+      } catch (claimsError) {
+        return v1ErrorResponse(claimsError, ctx.log, { requestId: ctx.requestId })
+      }
+    }
+    const withClaims = trimmed.map((row) => ({ ...row, pending_operation_id: openClaims.get(row.id) ?? null }))
+
+    return paginated(withClaims, {
       requestId: ctx.requestId,
       nextCursor: nextCursor ?? undefined,
     })

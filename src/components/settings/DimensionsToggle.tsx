@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -11,6 +11,7 @@ import {
   SettingsRowEnd,
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -21,10 +22,13 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  * settings PUT: the flag gates UI visibility only (nav row + register),
  * never correctness (dimensions plan §2).
  *
- * Toggling ON runs the "Importera befintliga koder" scan
- * (POST /api/dimensions/import-existing): codes already present on
- * journal_entry_lines.dimensions but missing from the registry are created as
- * archived placeholder values, and the user is told how many were found.
+ * Toggling ON registers the codes already present on
+ * journal_entry_lines.dimensions but missing from the registry as archived
+ * placeholder values. The settings save does that itself
+ * (lib/dimensions/import-existing.ts) and answers with the count, which the
+ * user is told; when it has no count (the registration failed, or dimensions
+ * were already on) the toggle runs the scan through
+ * POST /api/dimensions/import-existing instead.
  */
 export function DimensionsToggle() {
   const t = useTranslations('dimensions')
@@ -32,6 +36,7 @@ export function DimensionsToggle() {
   const { settings, updateSettings } = useSettings()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const [isSaving, setIsSaving] = useState(false)
 
   const enabled = settings?.dimensions_enabled ?? false
@@ -39,23 +44,26 @@ export function DimensionsToggle() {
   async function handleChange(next: boolean) {
     setIsSaving(true)
     try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dimensions_enabled: next }),
-      })
-      const json = await res.json().catch(() => null)
-      if (!res.ok) {
-        toast({
-          title: t('settings_save_failed_title'),
-          description: getErrorMessage(json, { locale: errorLocale }),
-          variant: 'destructive',
-        })
-        return
-      }
+      const json = await saveSettings(
+        { dimensions_enabled: next },
+        { failedTitle: t('settings_save_failed_title'), refreshNav: true },
+      )
+      if (!json) return
       updateSettings({ dimensions_enabled: next })
 
-      if (next) {
+      // The save registered the codes already on lines when it turned
+      // dimensions on, and says how many.
+      const importedBySave: number | null =
+        typeof json?.dimension_codes_imported === 'number' ? json.dimension_codes_imported : null
+
+      if (next && importedBySave !== null) {
+        if (importedBySave > 0) {
+          toast({
+            title: t('settings_imported_toast_title'),
+            description: t('settings_imported_toast', { count: importedBySave }),
+          })
+        }
+      } else if (next) {
         // Import scan: registry rows for codes already used on lines. Failure
         // is non-fatal: the toggle stays on and the scan can be re-run by
         // toggling again.
@@ -88,12 +96,9 @@ export function DimensionsToggle() {
         }
       }
     } catch (err) {
-      // A rejected fetch (offline, DNS failure, aborted request) never reaches
-      // the !res.ok arm above, and the switch is controlled by the settings
-      // context, so it simply stays where it was: without this toast the click
-      // looks like a dead control rather than a save that did not happen.
-      // One toast per failed click, never two: TOAST_LIMIT is 1
-      // (components/ui/use-toast.tsx) and a second would evict the first.
+      // The save itself reports its own failures (useSaveSettings); this is
+      // for anything else that throws on the way. One toast per failed
+      // click, never two: TOAST_LIMIT is 1 (components/ui/use-toast.tsx).
       toast({
         title: t('settings_save_failed_title'),
         description: getErrorMessage(err, { locale: errorLocale }),
@@ -126,7 +131,7 @@ export function DimensionsToggle() {
             href="/dimensions"
             className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             {t('settings_open_register')}
           </Link>
         </SettingsRowEnd>

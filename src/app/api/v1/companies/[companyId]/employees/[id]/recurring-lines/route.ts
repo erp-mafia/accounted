@@ -7,7 +7,8 @@
  * A recurring line is derived into every salary run whose payment_date
  * falls inside valid_from..valid_to at :calculate time
  * (lib/salary/run-calculation.ts, step 8d3): a benefit bike gross deduction,
- * a union fee, a net deduction for a benefit the employee pays for. The
+ * a union fee, a net deduction for a benefit the employee pays for, or a
+ * text row explaining the payslip. The
  * commands live in lib/salary/employee-recurring-lines.ts and are shared
  * with the dashboard route.
  */
@@ -72,8 +73,9 @@ function toRecurringLineResource(
 
 const RECURRING_LINE_PITFALLS = [
   'Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.',
-  'The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.',
-  'account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.',
+  'The amount follows the item type: a deduction is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag), and a text row (item_type text) has none: omit amount (0 is accepted) and put the words in description, e.g. how the salary is built up. The API rejects the wrong sign, or an amount on a text row, with 400 VALIDATION_ERROR on field amount.',
+  'Recurring additions (a personligt tillägg next to Grundlön, a cash allowance) are not supported: proration, absence deductions, sjuklön, semestertillägg and the OB rate read only monthly_salary, so a standing tillägg row would be paid in full through sick leave. Put a standing raise on the employee\'s monthly_salary and explain the split with a text row.',
+  'account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping. A text row has no account: account_number is ignored.',
   'Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.',
 ]
 
@@ -94,7 +96,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id/recurring-lines',
   summary: 'List recurring payslip lines for an employee.',
   description:
-    'Returns the employee\'s standing monthly payslip rows (gross and net deductions such as a benefit bike bruttolöneavdrag, a union fee, or a net deduction for a benefit the employee pays for), newest valid_from first. Both active and deactivated lines are returned unless ?active filters them.',
+    'Returns the employee\'s standing monthly payslip rows (gross and net deductions such as a benefit bike bruttolöneavdrag, a union fee, or a net deduction for a benefit the employee pays for, and text rows explaining the payslip), newest valid_from first. Both active and deactivated lines are returned unless ?active filters them.',
   useWhen:
     'You need to see what the salary engine will derive for an employee every month, to reconcile with an HR system, or to find the employee_recurring_line_id to update or delete.',
   doNotUseFor:
@@ -173,11 +175,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id/recurring-lines',
   summary: 'Create a recurring payslip line for an employee.',
   description:
-    'Adds a standing monthly payslip row. From the next :calculate on, every salary run whose payment_date falls inside valid_from..valid_to derives a payslip line from it, with flags (taxable, avgift basis, gross vs net deduction) fixed by item_type. Amounts are kept to whole öre. Requires an Idempotency-Key header.',
+    'Adds a standing monthly payslip row. From the next :calculate on, every salary run whose payment_date falls inside valid_from..valid_to derives a payslip line from it, with flags (taxable, avgift basis, gross vs net deduction) fixed by item_type. Amounts are kept to whole öre. A text row (item_type text) carries words only (no amount, account or flags) and is printed under the base salary on every payslip, without reaching tax, AGI or the booking. Requires an Idempotency-Key header.',
   useWhen:
-    'An employee starts a benefit bike bruttolöneavdrag, a union fee, a monthly net deduction for a benefit they pay for, or any other deduction that repeats every month until further notice.',
+    'An employee starts a benefit bike bruttolöneavdrag, a union fee, a monthly net deduction for a benefit they pay for, or any other deduction that repeats every month until further notice; or every payslip should explain how the salary is built up (item_type text).',
   doNotUseFor:
-    'One-off deductions on a single payslip: add a line on the salary run instead. Additions (a monthly allowance paid in cash): not supported as recurring lines; add them per run. Taxable benefits in kind: use the employee benefits endpoints.',
+    'One-off deductions on a single payslip: add a line on the salary run instead. Additions (a personligt tillägg, a monthly allowance paid in cash): not supported as recurring lines; a standing raise goes on monthly_salary (PATCH /employees/{id}) and a one-off addition on the salary run. Taxable benefits in kind: use the employee benefits endpoints.',
   pitfalls: [
     ...RECURRING_LINE_PITFALLS,
     'valid_to must be on or after valid_from (inclusive); omit it for an open-ended line.',

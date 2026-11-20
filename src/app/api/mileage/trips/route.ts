@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateMileageTripSchema } from '@/lib/api/schemas'
 import { createTrip, listTrips } from '@/lib/mileage/mileage-service'
-
-ensureInitialized()
 
 export const GET = withRouteContext('mileage.trips.list', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)

@@ -74,6 +74,27 @@ export function classifyProxyRequest(
   return 'page'
 }
 
+/** The Supabase session cookie or one of its `.N` chunks (`sb-<ref>-auth-token`). */
+const SESSION_COOKIE_RE = /^sb-.+-auth-token(\.\d+)?$/
+
+/**
+ * Whether the proxy writes its "proxy completed" line for this request.
+ * An /api request carrying no Supabase session cookie (an MCP or /api/v1
+ * Bearer call, a cron, a webhook, the OAuth token endpoint) costs the proxy
+ * no network call: every phase reads 0 and the status is the pass-through
+ * 200, not the route's. Its line said nothing the route's own line does not
+ * (withRouteContext's "op completed", the extension dispatcher's "extension
+ * call completed") and was half of the MCP endpoint's log volume. Pages,
+ * RSC and prefetches always log, signed in or not.
+ */
+export function shouldLogProxyCompletion(
+  kind: ProxyRequestKind,
+  cookieNames: readonly string[],
+): boolean {
+  if (kind !== 'api') return true
+  return cookieNames.some((name) => SESSION_COOKIE_RE.test(name))
+}
+
 const NUMERIC_RE = /^\d+$/
 /** Prefixes whose tail is a secret (invite tokens, payslip links, PKCE). */
 const TOKEN_PREFIXES = ['/invite', '/payslip', '/auth']

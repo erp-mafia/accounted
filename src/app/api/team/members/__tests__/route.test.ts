@@ -162,6 +162,51 @@ describe('GET /api/team/members', () => {
     expect(body.data.invitations[0]).toMatchObject({ id: 'inv-1', email: 'ny@byra.se' })
   })
 
+  it('lists the team companies and which ones each limited member reaches', async () => {
+    enqueue({ data: [byraMembership('owner')] })
+    // roster: the caller (owner, every company) and a member limited to one
+    enqueue({
+      data: [
+        { id: 'tm-1', user_id: 'user-1', role: 'owner', joined_at: '2026-02-01', all_companies: true },
+        { id: 'tm-2', user_id: 'user-2', role: 'member', joined_at: '2026-02-02', all_companies: false },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'user-1', email: 'chef@byra.se' },
+        { id: 'user-2', email: 'konsult@byra.se' },
+      ],
+    })
+    enqueue({ data: [{ id: 'inv-1', email: 'ny@byra.se', role: 'member', company_ids: ['co-a'] }] })
+    // team companies
+    enqueue({ data: [{ id: 'co-a', name: 'Alfa AB' }, { id: 'co-b', name: 'Beta AB' }, { id: 'co-c', name: 'Gamma AB' }] })
+    // the limited member's memberships, one outside the team
+    enqueue({
+      data: [
+        { company_id: 'co-a', user_id: 'user-2', source: 'team' },
+        { company_id: 'co-b', user_id: 'user-2', source: 'direct' },
+        { company_id: 'co-elsewhere', user_id: 'user-2', source: 'direct' },
+      ],
+    })
+
+    const { body } = await parseJsonResponse<{
+      data: {
+        members: { id: string; all_companies: boolean; company_ids: string[]; direct_company_ids: string[] }[]
+        invitations: { company_ids: string[] | null }[]
+        companies: { id: string; name: string }[]
+      }
+    }>(await GET(makeReq()))
+
+    expect(body.data.companies.map((c) => c.id)).toEqual(['co-a', 'co-b', 'co-c'])
+    expect(body.data.members[0]).toMatchObject({ all_companies: true, company_ids: [], direct_company_ids: [] })
+    expect(body.data.members[1]).toMatchObject({
+      all_companies: false,
+      company_ids: ['co-a'],
+      direct_company_ids: ['co-b'],
+    })
+    expect(body.data.invitations[0]!.company_ids).toEqual(['co-a'])
+  })
+
   it('a byrå plain member gets no invitation list', async () => {
     enqueue({ data: [byraMembership('member')] })
     enqueue({

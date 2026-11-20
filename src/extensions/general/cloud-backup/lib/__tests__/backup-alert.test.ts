@@ -172,6 +172,20 @@ describe('sendBackupFailureAlert', () => {
     expect(options.text).toContain('https://app.test/import#cloud-backup')
   })
 
+  it('tells a grant without the Drive scope to tick the box when reconnecting', async () => {
+    await sendBackupFailureAlert(makeSupabase(), {
+      ...baseInput,
+      kind: 'needs_reauth',
+      errorMessage: null,
+      reauthReason: 'missing_scope',
+    })
+    const options = sendEmail.mock.calls[0][0]
+    expect(options.subject).toContain('pausad')
+    expect(options.text).toContain('ingen behörighet att spara filer')
+    expect(options.text).toContain('kryssa i rutan för Google Drive')
+    expect(options.text).not.toContain('gått ut eller återkallats')
+  })
+
   it('reports send failures without throwing', async () => {
     sendEmail.mockResolvedValue({ success: false, error: 'smtp down' })
     const result = await sendBackupFailureAlert(makeSupabase(), {

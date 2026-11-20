@@ -5,6 +5,7 @@ import {
   verifyChallengeToken,
 } from '@/extensions/general/whatsapp-inbox/lib/webhook-verify'
 import { whatsappInboxExtension } from '@/extensions/general/whatsapp-inbox'
+import { testRoutes } from '@/tests/helpers'
 
 const SECRET = 'meta-app-secret'
 
@@ -13,7 +14,7 @@ function sign(body: string, secret = SECRET): string {
 }
 
 function findRoute(method: string, path: string) {
-  return whatsappInboxExtension.apiRoutes!.find((r) => r.method === method && r.path === path)!
+  return testRoutes(whatsappInboxExtension).find((r) => r.method === method && r.path === path)!
 }
 
 describe('verifyMetaSignature', () => {

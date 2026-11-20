@@ -2,26 +2,23 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
-// Chips are pills (concept .chip): 99px radius, 11.5px, quiet padding.
+// Stil v3 tags: 22px rectangles (6px radius), 12px/500, a tint of their
+// tone, no border. Chips still mark exceptions only (convention 5): a normal
+// state is muted text, and green is for numbers and the confirmation chip.
 const badgeVariants = cva(
-  "inline-flex items-center rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium leading-none transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+  "inline-flex h-5.5 items-center gap-1 whitespace-nowrap rounded-md px-1.75 text-[12px] font-medium leading-4 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-1",
   {
     variants: {
       variant: {
-        default:
-          "border-transparent bg-primary/10 text-primary",
-        secondary:
-          "border-transparent bg-secondary text-secondary-foreground",
-        destructive:
-          "border-transparent bg-destructive/10 text-destructive",
-        outline:
-          "border-border text-foreground bg-transparent",
-        success:
-          "border-transparent bg-success/10 text-success",
-        // No amber fill: status colors are data, not chrome (convention 12).
-        // The exception reads through the ochre text on a hairline chip.
-        warning:
-          "border-border bg-transparent text-attn",
+        // A neutral exception (Utkast, Krediterad).
+        default: "bg-secondary/80 text-foreground/80",
+        secondary: "bg-secondary/80 text-foreground/80",
+        // Something not yet done (Ej skickad): a hairline, no fill.
+        outline: "bg-transparent text-foreground/80 shadow-[inset_0_0_0_0.5px_hsl(var(--line-strong))]",
+        // Needs attention (Förfallen, Delbetald): the amber tint, AA text.
+        warning: "bg-warning/12 text-attn",
+        // Wrong or reversed (Kredit, Avvisad).
+        destructive: "bg-destructive/8 text-destructive",
       },
     },
     defaultVariants: {

@@ -7,10 +7,12 @@
  * never a block: one bank account belongs to one legal entity, but the app
  * cannot know which of two companies is the right home for it, so the picker
  * shows every account the consent returned, names the company that books a
- * claimed one, and leaves the choice to the user (founder direction
+ * claimed one, and leaves the choice to the user (product direction
  * 2026-09-15, issue #2647). Hiding claimed accounts, which is what the picker
  * did before, left a user whose whole consent was claimed on a blank page.
  */
+
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 
 /** One entry of bank_connections.accounts_data, as far as the picker reads it. */
 export interface StoredPickerAccount {
@@ -32,6 +34,8 @@ export interface PickerAccount {
   name: string
   /** Account number for the trailing label: BBAN when the bank gives one, else IBAN. */
   nr: string
+  /** The account's identity for the ledger preview (lib/onboarding-books/ledger.ts). */
+  iban: string | null
   currency: string
   /** Ledger the account is already mirrored to, when it has one. */
   ledger: string | null
@@ -51,18 +55,22 @@ export interface PickerLabels {
 }
 
 /**
- * Map stored accounts to picker rows. Nothing is dropped; accounts another
- * company books sort last so the ones free to pick stay at the top, and the
- * order within each group is the bank's own.
+ * Map stored accounts to picker rows. Accounts another company books sort
+ * last so the ones free to pick stay at the top, and the order within each
+ * group is the bank's own. The one account dropped is a card account that
+ * only mirrors the main account (Svea's SVEA_MQ_Debit_B2B): it is never a
+ * choice, since its purchases already arrive on the main account and the
+ * selection save keeps it off whatever is sent.
  */
 export function toPickerAccounts(
   stored: StoredPickerAccount[],
   labels: PickerLabels,
 ): PickerAccount[] {
-  const rows = stored.map((a) => ({
+  const rows = stored.filter((a) => !isMirrorCardAccount(a)).map((a) => ({
     uid: a.uid,
     name: a.name || a.product || labels.account,
     nr: a.bban || a.iban || '',
+    iban: a.iban || null,
     currency: (a.currency || 'SEK').toUpperCase(),
     ledger: a.ledger_account ?? null,
     balance: typeof a.balance === 'number' ? a.balance : null,

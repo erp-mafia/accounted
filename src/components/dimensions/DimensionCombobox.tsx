@@ -1,17 +1,22 @@
 'use client'
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Loader2, Plus } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
+import { PlusIcon, SpinnerIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
+import { cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   DIMENSION_CODE_PATTERN,
   type DimensionValueDto,
 } from '@/components/dimensions/types'
 import { useDimensions } from '@/lib/reference-data/hooks'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { Badge } from '@/components/ui/badge'
 
-interface DimensionComboboxProps {
+interface DimensionComboboxBaseProps {
   /** SIE dimension number as a string ('1' = kostnadsställe, '6' = projekt). */
   sieDimNo: string
   /** Selected object code, or null when the line carries no value for this dim. */
@@ -20,7 +25,24 @@ interface DimensionComboboxProps {
   disabled?: boolean
   /** Extra classes merged into the trigger Input (callers pass `h-8` for dense rows). */
   className?: string
+  /**
+   * Offer "Skapa ny" for a typed code the registry lacks (default true). A
+   * report filter only reads the registry, so it passes false.
+   */
+  allowCreate?: boolean
 }
+
+/**
+ * Archived values are never suggested for tagging. A report filter must still
+ * reach them (a finished project stays reportable), so it opts in, and then
+ * names the marker an archived value carries in the list: the type makes an
+ * unmarked archived value impossible.
+ */
+type ArchivedValues =
+  | { includeArchived?: false; archivedLabel?: never }
+  | { includeArchived: true; archivedLabel: string }
+
+type DimensionComboboxProps = DimensionComboboxBaseProps & ArchivedValues
 
 /**
  * Searchable picker for dimension values: sibling of
@@ -34,20 +56,24 @@ interface DimensionComboboxProps {
  * lists are small). Only active values are offered: archived codes stay
  * pickable in history but are never suggested.
  *
- * Strings are hardcoded Swedish per the AccountCombobox convention: the
- * component mounts on the voucher editor (PR3), a stays-Swedish surface per
- * .claude/rules/i18n.md.
+ * Its chrome follows the user's language: besides the voucher form it mounts
+ * on invoices, supplier invoices, budgets, report filters and the account
+ * dialog. The values are the company's own codes and names.
  */
 export default function DimensionCombobox({
   sieDimNo,
+  includeArchived = false,
+  archivedLabel,
+  allowCreate = true,
   value,
   onChange,
   disabled,
   className,
 }: DimensionComboboxProps) {
+  const t = useTranslations('dimensions')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
   const [search, setSearch] = useState(value ?? '')
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(0)
   // Registry from the session cache (lib/reference-data): every combobox on
   // the page shares one entry, so opening a picker costs no request.
   const { dimensions, isLoading: registryLoading, error: registryError } = useDimensions()
@@ -62,8 +88,8 @@ export default function DimensionCombobox({
   )
   const dimensionId = dimension?.id ?? null
   const values = useMemo(
-    () => dimension?.values.filter((v) => v.is_active) ?? [],
-    [dimension],
+    () => dimension?.values.filter((v) => includeArchived || v.is_active) ?? [],
+    [dimension, includeArchived],
   )
   // The committed value's registry row, looked up in the FULL list: an
   // archived code stays readable in history even though it is never offered.
@@ -111,38 +137,14 @@ export default function DimensionCombobox({
   // Inline create is offered when the typed text is a valid new code.
   const createCandidate = useMemo(() => {
     const term = search.trim()
-    if (!term || !dimensionId) return null
+    if (!allowCreate || !term || !dimensionId) return null
     if (!DIMENSION_CODE_PATTERN.test(term)) return null
     if (values.some((v) => v.code.toLowerCase() === term.toLowerCase())) return null
     return term
-  }, [search, values, dimensionId])
+  }, [allowCreate, search, values, dimensionId])
 
   // Keyboard list: matching values first, the create affordance last.
   const optionCount = filteredValues.length + (createCandidate ? 1 : 0)
-
-  useEffect(() => {
-    setHighlightedIndex(0)
-  }, [filteredValues, createCandidate])
-
-  useEffect(() => {
-    if (!isOpen || !listRef.current) return
-    const highlighted = listRef.current.querySelector('[data-highlighted="true"]')
-    if (highlighted) highlighted.scrollIntoView({ block: 'nearest' })
-  }, [highlightedIndex, isOpen])
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent | TouchEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
-    }
-  }, [])
 
   const selectValue = useCallback(
     (code: string) => {
@@ -166,7 +168,7 @@ export default function DimensionCombobox({
         })
         const json = await res.json().catch(() => null)
         if (!res.ok) {
-          setCreateError(getErrorMessage(json, { locale: 'sv' }))
+          setCreateError(getErrorMessage(json, { locale }))
           return
         }
         const created: DimensionValueDto = json?.data ?? {
@@ -184,7 +186,7 @@ export default function DimensionCombobox({
         setIsCreating(false)
       }
     },
-    [dimensionId, isCreating, selectValue],
+    [dimensionId, isCreating, selectValue, locale],
   )
 
   const activateOption = useCallback(
@@ -198,34 +200,23 @@ export default function DimensionCombobox({
     [filteredValues, createCandidate, selectValue, createValue],
   )
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        openDropdown()
-        e.preventDefault()
-      }
-      return
-    }
+  const close = useCallback(() => setIsOpen(false), [])
+  const insideRefs = useMemo(() => [containerRef], [])
+  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+    count: optionCount,
+    isOpen,
+    open: openDropdown,
+    close,
+    activate: (index) => {
+      if (optionCount > 0) activateOption(index)
+    },
+    listRef,
+    insideRefs,
+  })
 
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        setHighlightedIndex((prev) => Math.min(prev + 1, optionCount - 1))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        setHighlightedIndex((prev) => Math.max(prev - 1, 0))
-        break
-      case 'Enter':
-        e.preventDefault()
-        if (optionCount > 0) activateOption(highlightedIndex)
-        break
-      case 'Escape':
-        e.preventDefault()
-        setIsOpen(false)
-        break
-    }
-  }
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [filteredValues, createCandidate, setHighlightedIndex])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearch(e.target.value)
@@ -272,7 +263,7 @@ export default function DimensionCombobox({
         onFocus={openDropdown}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
-        placeholder="Sök värde…"
+        placeholder={t('combobox_search')}
         disabled={disabled}
         className={`font-mono ${className ?? ''}`.trim()}
         autoComplete="off"
@@ -293,22 +284,26 @@ export default function DimensionCombobox({
       {isOpen && !disabled && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 min-w-[16rem] w-[max(100%,20rem)] max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
+          className={cn(
+            'absolute z-50 top-full left-0 mt-1 min-w-[16rem] w-[max(100%,20rem)] max-h-[300px] overflow-y-auto',
+            POPOVER_SURFACE_CLASS,
+            POPOVER_ENTER_CLASS,
+          )}
         >
           {loadState === 'loading' && (
             <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Laddar…
+              <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
+              {t('combobox_loading')}
             </div>
           )}
           {loadState === 'error' && (
             <p className="px-2 py-2 text-sm text-muted-foreground">
-              Kunde inte hämta värden.
+              {t('combobox_load_failed')}
             </p>
           )}
           {loadState === 'loaded' && optionCount === 0 && (
             <p className="px-2 py-2 text-sm text-muted-foreground">
-              Hittade inget värde som matchar.
+              {t('combobox_no_match')}
             </p>
           )}
           {loadState === 'loaded' &&
@@ -320,7 +315,7 @@ export default function DimensionCombobox({
                   type="button"
                   data-highlighted={isHighlighted}
                   className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-baseline gap-2 ${
-                    isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+                    isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60'
                   }`}
                   onMouseDown={(e) => {
                     e.preventDefault()
@@ -332,6 +327,11 @@ export default function DimensionCombobox({
                   <span className="flex-1 min-w-0 break-words text-muted-foreground">
                     {item.name !== item.code ? item.name : ''}
                   </span>
+                  {!item.is_active && archivedLabel ? (
+                    <Badge variant="outline" className="shrink-0 self-center font-normal">
+                      {archivedLabel}
+                    </Badge>
+                  ) : null}
                 </button>
               )
             })}
@@ -342,7 +342,7 @@ export default function DimensionCombobox({
               className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-center gap-2 border-t border-input ${
                 highlightedIndex === filteredValues.length
                   ? 'bg-primary/10 text-primary'
-                  : 'hover:bg-muted/50'
+                  : 'hover:bg-secondary/60'
               }`}
               onMouseDown={(e) => {
                 e.preventDefault()
@@ -351,11 +351,11 @@ export default function DimensionCombobox({
               onMouseEnter={() => setHighlightedIndex(filteredValues.length)}
             >
               {isCreating ? (
-                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                <SpinnerIcon className="h-3.5 w-3.5 shrink-0 animate-spin" />
               ) : (
-                <Plus className="h-3.5 w-3.5 shrink-0" />
+                <PlusIcon className="h-3.5 w-3.5 shrink-0" />
               )}
-              <span className="truncate">Skapa ny &quot;{createCandidate}&quot;</span>
+              <span className="truncate">{t('combobox_create', { code: createCandidate })}</span>
             </button>
           )}
           {createError && (

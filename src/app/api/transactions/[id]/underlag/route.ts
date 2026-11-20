@@ -11,7 +11,11 @@ import { readUnderlagFacts, type TransactionUnderlag } from '@/lib/transactions/
  * with it (invoice_inbox_items.matched_transaction_id). Returns the document
  * to show, where it came from, and the facts read off it (supplier, date,
  * totals, moms), so the review and the drawer can put the receipt next to
- * the booking and use its moms.
+ * the booking and use its moms. The facts are the inbox item's reading, or,
+ * for a document that never went through the inbox (attached from the
+ * drawer), the document's own extraction. The row itself (date, text,
+ * amount) comes with it, for the review of a samlingsverifikat, which holds
+ * only the ids of its rows.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.underlag.get',
@@ -20,7 +24,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: tx, error: txError } = await supabase
       .from('transactions')
-      .select('id, document_id')
+      .select('id, document_id, date, description, merchant_name, amount, currency')
       .eq('company_id', companyId)
       .eq('id', id)
       .maybeSingle()
@@ -41,21 +45,39 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const source: TransactionUnderlag['source'] = tx.document_id ? 'pinned' : item?.document_id ? 'matched' : null
 
     let document: TransactionUnderlag['document'] = null
+    let documentExtraction: unknown = null
     if (documentId) {
       const { data: doc, error: docError } = await supabase
         .from('document_attachments')
-        .select('id, file_name, mime_type')
+        .select('id, file_name, mime_type, extracted_data')
         .eq('company_id', companyId)
         .eq('id', documentId)
         .maybeSingle()
       if (docError) throw docError
-      document = doc ?? null
+      if (doc) {
+        const { extracted_data: extracted, ...shown } = doc
+        document = shown
+        documentExtraction = extracted
+      }
     }
 
-    const facts = readUnderlagFacts(item?.extracted_data)
+    const facts = readUnderlagFacts(item?.extracted_data ?? documentExtraction)
     if (facts && !facts.kind && item?.kind_hint) facts.kind = item.kind_hint
 
-    const data: TransactionUnderlag = { source, document, inbox_item_id: item?.id ?? null, facts }
+    const data: TransactionUnderlag = {
+      source,
+      document,
+      inbox_item_id: item?.id ?? null,
+      facts,
+      row: {
+        date: tx.date ?? null,
+        // The text the proposals name a bank row by (the counterparty, else the title).
+        text: tx.merchant_name || tx.description || null,
+        amount: typeof tx.amount === 'number' ? tx.amount : null,
+        // NULL is the legacy spelling of the column default.
+        currency: tx.currency ?? 'SEK',
+      },
+    }
     return NextResponse.json({ data })
   },
 )

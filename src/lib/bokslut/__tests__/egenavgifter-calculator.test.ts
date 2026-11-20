@@ -28,16 +28,17 @@ describe('calculateEgenavgifter', () => {
     expect(r.amount).toBe(40_000)
   })
 
-  it('honors prior-year add-back / actual deduct', () => {
-    // Net surplus = 200 000 + 30 000 (R40) − 25 000 (R41) = 205 000
-    // Schablon 25 % = 51 250 → floor → 51 250
-    const r = calculateEgenavgifter({
-      surplusBeforeEgenavgifter: 200_000,
-      category: 'full',
-      priorYearSchablonavdrag: 30_000,
-      priorYearActualCharged: 25_000,
-    })
+  it('takes the schablon of R42 as given: the R40/R41 avstämning is already in it', () => {
+    // R42 = 200 000 + 30 000 (R40) - 25 000 (R41) = 205 000, summed by the
+    // preview (ef-declaration-preview.test.ts). 25 % = 51 250.
+    const r = calculateEgenavgifter({ surplusBeforeEgenavgifter: 205_000, category: 'full' })
     expect(r.amount).toBe(51_250)
+    expect(r.computation).toMatchObject({ surplusBeforeEgenavgifter: 205_000, schablonavdrag: 51_250 })
+  })
+
+  it('drops the öre of the schablon (SFL 22 kap 1 §)', () => {
+    // 25 % of 100 003 = 25 000,75
+    expect(calculateEgenavgifter({ surplusBeforeEgenavgifter: 100_003 }).amount).toBe(25_000)
   })
 
   it('returns 0 amount on loss year and emits warning', () => {

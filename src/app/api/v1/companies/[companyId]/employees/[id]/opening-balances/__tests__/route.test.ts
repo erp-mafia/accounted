@@ -32,44 +32,10 @@ vi.mock('@supabase/supabase-js', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as getBalances, PUT as putBalances } from '../route'
 import { PUT as putBulk } from '../../../opening-balances/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const tableCalls: string[] = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    tableCalls,
-    from: vi.fn((table: string) => {
-      tableCalls.push(table)
-      return buildChain(table)
-    }),
-  }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -143,12 +109,12 @@ beforeEach(() => {
 describe('GET /employees/:id/opening-balances', () => {
   it('returns the row with lock state (happy path, unlocked)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_opening_balances: { data: SAMPLE_ROW, error: null },
         salary_run_employees: { data: [], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getBalances(
@@ -167,7 +133,7 @@ describe('GET /employees/:id/opening-balances', () => {
 
   it('reports locked with the blocking run id', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_opening_balances: { data: SAMPLE_ROW, error: null },
@@ -175,7 +141,7 @@ describe('GET /employees/:id/opening-balances', () => {
           data: [{ employee_id: EMPLOYEE_ID, salary_run: { id: RUN_ID, status: 'booked' } }],
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await getBalances(
@@ -191,11 +157,11 @@ describe('GET /employees/:id/opening-balances', () => {
 
   it('returns 404 when no balances are set', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_opening_balances: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await getBalances(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`),
@@ -206,10 +172,10 @@ describe('GET /employees/:id/opening-balances', () => {
 
   it('returns 404 EMPLOYEE_NOT_FOUND for an unknown employee', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await getBalances(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`),
@@ -224,7 +190,7 @@ describe('GET /employees/:id/opening-balances', () => {
 describe('PUT /employees/:id/opening-balances', () => {
   it('upserts and returns the row (happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: {
           data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
@@ -232,7 +198,7 @@ describe('PUT /employees/:id/opening-balances', () => {
         },
         salary_run_employees: { data: [], error: null },
         employee_opening_balances: { data: [SAMPLE_ROW], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await putBalances(
@@ -252,9 +218,9 @@ describe('PUT /employees/:id/opening-balances', () => {
 
   it('rejects vacation_days_taken_this_year below 0', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await putBalances(
       makeRequest(
@@ -268,9 +234,9 @@ describe('PUT /employees/:id/opening-balances', () => {
 
   it('rejects vacation_days_taken_this_year above 40', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await putBalances(
       makeRequest(
@@ -284,7 +250,7 @@ describe('PUT /employees/:id/opening-balances', () => {
 
   it('returns 409 OPENING_BALANCES_LOCKED when a booked run exists', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: {
           data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
@@ -294,7 +260,7 @@ describe('PUT /employees/:id/opening-balances', () => {
           data: [{ employee_id: EMPLOYEE_ID, salary_run: { id: RUN_ID, status: 'booked' } }],
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await putBalances(
@@ -312,9 +278,9 @@ describe('PUT /employees/:id/opening-balances', () => {
 
   it('rejects a cutover_date that is not the first of a month', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await putBalances(
       makeRequest(
@@ -328,9 +294,9 @@ describe('PUT /employees/:id/opening-balances', () => {
 
   it('rejects ytd_tax above ytd_gross', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await putBalances(
       makeRequest(
@@ -344,9 +310,9 @@ describe('PUT /employees/:id/opening-balances', () => {
 
   it('rejects saved days with an origin year outside the 5-year window', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await putBalances(
       makeRequest(
@@ -365,7 +331,7 @@ describe('PUT /employees/:id/opening-balances', () => {
   })
 
   it('dry-run validates without writing', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       employees: {
         data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
@@ -373,7 +339,7 @@ describe('PUT /employees/:id/opening-balances', () => {
       },
       salary_run_employees: { data: [], error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await putBalances(
       makeRequest(
@@ -385,7 +351,7 @@ describe('PUT /employees/:id/opening-balances', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
-    expect(supabaseMock.tableCalls).not.toContain('employee_opening_balances')
+    expect(supabaseMock.tables()).not.toContain('employee_opening_balances')
   })
 
   it('forces test keys into dry-run on this PUT too', async () => {
@@ -397,7 +363,7 @@ describe('PUT /employees/:id/opening-balances', () => {
       scopes: ['payroll:write'],
       mode: 'test',
     })
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       employees: {
         data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
@@ -405,7 +371,7 @@ describe('PUT /employees/:id/opening-balances', () => {
       },
       salary_run_employees: { data: [], error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await putBalances(
       makeRequest(
@@ -417,13 +383,13 @@ describe('PUT /employees/:id/opening-balances', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
-    expect(supabaseMock.tableCalls).not.toContain('employee_opening_balances')
+    expect(supabaseMock.tables()).not.toContain('employee_opening_balances')
   })
 })
 
 describe('PUT /employees/opening-balances (bulk)', () => {
   it('is atomic: one bad item fails everything with a per-item error list', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       // Only the first employee exists.
       employees: {
@@ -432,7 +398,7 @@ describe('PUT /employees/opening-balances (bulk)', () => {
       },
       salary_run_employees: { data: [], error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const otherId = '99999999-9999-4999-8999-999999999999'
     const res = await putBulk(
@@ -455,13 +421,13 @@ describe('PUT /employees/opening-balances (bulk)', () => {
     expect(itemErrors[0].index).toBe(1)
     expect(itemErrors[0].code).toBe('EMPLOYEE_NOT_FOUND')
     // Zero writes happened.
-    expect(supabaseMock.tableCalls).not.toContain('employee_opening_balances')
+    expect(supabaseMock.tables()).not.toContain('employee_opening_balances')
   })
 
   it('upserts all items in one call (happy path)', async () => {
     const secondId = '99999999-9999-4999-8999-999999999999'
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: {
           data: [
@@ -475,7 +441,7 @@ describe('PUT /employees/opening-balances (bulk)', () => {
           data: [SAMPLE_ROW, { ...SAMPLE_ROW, id: '11111111-1111-4111-8111-111111111111', employee_id: secondId }],
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await putBulk(
@@ -498,9 +464,9 @@ describe('PUT /employees/opening-balances (bulk)', () => {
 
   it('rejects duplicate employee_ids in the same request', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await putBulk(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/opening-balances`, {
@@ -526,7 +492,7 @@ describe('PUT /employees/opening-balances (bulk)', () => {
       scopes: ['payroll:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await putBulk(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/opening-balances`, {
@@ -540,7 +506,7 @@ describe('PUT /employees/opening-balances (bulk)', () => {
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await putBulk(
       new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/opening-balances`, {
         method: 'PUT',
@@ -565,12 +531,12 @@ describe('categorized vacation pools (Fortnox/Azets cutover)', () => {
 
   it('GET returns every pool, the as-of date, the förskottsskuld and a null net', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_opening_balances: { data: CATEGORIZED_ROW, error: null },
         salary_run_employees: { data: [], error: null },
-      }),
+      }).supabase,
     )
     const res = await getBalances(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`),
@@ -587,7 +553,7 @@ describe('categorized vacation pools (Fortnox/Azets cutover)', () => {
   })
 
   it('PUT accepts the pools with a null net and an as-of date before cutover', async () => {
-    const supabase = makeFlexibleSupabase({
+    const { supabase } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       employees: {
         data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
@@ -624,14 +590,14 @@ describe('categorized vacation pools (Fortnox/Azets cutover)', () => {
 
   it('PUT dry run previews the pools as they will be written, omitted ones at their defaults', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: {
           data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
           error: null,
         },
         salary_run_employees: { data: [], error: null },
-      }),
+      }).supabase,
     )
     const res = await putBalances(
       makeRequest(
@@ -653,9 +619,9 @@ describe('categorized vacation pools (Fortnox/Azets cutover)', () => {
 
   it('rejects an as-of date after the cutover date', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await putBalances(
       makeRequest(
@@ -669,9 +635,9 @@ describe('categorized vacation pools (Fortnox/Azets cutover)', () => {
 
   it('rejects a pool above 40 days and a negative förskottsskuld', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const over = await putBalances(
       makeRequest(
@@ -693,7 +659,7 @@ describe('categorized vacation pools (Fortnox/Azets cutover)', () => {
 
   it('bulk PUT carries the pools per item', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: {
           data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
@@ -701,7 +667,7 @@ describe('categorized vacation pools (Fortnox/Azets cutover)', () => {
         },
         salary_run_employees: { data: [], error: null },
         employee_opening_balances: { data: [CATEGORIZED_ROW], error: null },
-      }),
+      }).supabase,
     )
     const res = await putBulk(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/opening-balances`, {

@@ -13,9 +13,16 @@ vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 
+// The saved tax depreciation election (fiscal_periods.tax_depreciation_*).
+// Default: none, so the calculator picks the more favourable rule itself.
+vi.mock('@/lib/bokslut/assets/tax-depreciation-service', () => ({
+  loadTaxDepreciationView: vi.fn(),
+}))
+
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { proposeAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { loadTaxDepreciationView } from '@/lib/bokslut/assets/tax-depreciation-service'
 import { calculateOveravskrivningar } from '../reserves/overavskrivningar-calculator'
 
 const PERIOD = {
@@ -112,8 +119,21 @@ function mockPostedDepreciation(asset: Asset) {
   })
 }
 
+function noElection() {
+  return { status: 'needs_method', snapshot: null, isStale: false } as unknown as Awaited<ReturnType<typeof loadTaxDepreciationView>>
+}
+
+function election(snapshot: { method: 'rakenskapsenlig' | 'restvarde'; selectedRule: 'huvudregel_30' | 'kompletteringsregel_20' | null; closingTaxValue: number }, view: { status?: string; isStale?: boolean } = {}) {
+  return {
+    status: view.status ?? 'ready',
+    isStale: view.isStale ?? false,
+    snapshot: { openingTaxValue: 0, basis: 0, deduction: 0, calculation: null, ...snapshot },
+  } as unknown as Awaited<ReturnType<typeof loadTaxDepreciationView>>
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(loadTaxDepreciationView).mockResolvedValue(noElection())
 })
 
 describe('calculateOveravskrivningar', () => {
@@ -143,6 +163,89 @@ describe('calculateOveravskrivningar', () => {
       '8853',
       '2153',
     ])
+  })
+
+  // Räkenskapsenlig avskrivning requires the tax deduction to be what the
+  // books show (swedish-asset-accounting, references/depreciation.md: "tax
+  // depreciation = book depreciation"). With an election saved, the reserve
+  // follows the elected closing tax value, not the calculator's maximum.
+  describe('with a saved tax depreciation election', () => {
+    async function calculate() {
+      const asset = makeAsset()
+      vi.mocked(listAssets).mockResolvedValue([asset])
+      mockPostedDepreciation(asset)
+      mockTrialBalance([
+        row('1220', { period_debit: 100_000, closing_debit: 100_000 }),
+        row('1229', { period_credit: 20_000, closing_credit: 20_000 }),
+      ])
+      return calculateOveravskrivningar({
+        supabase: makeSupabase() as never,
+        companyId: 'company-1',
+        fiscalPeriod: PERIOD,
+        entityType: 'aktiebolag',
+      })
+    }
+
+    it('bridges book value to the elected closing tax value', async () => {
+      // Elected a smaller deduction than the 30-rule maximum: tax value 75 000.
+      vi.mocked(loadTaxDepreciationView).mockResolvedValue(
+        election({ method: 'rakenskapsenlig', selectedRule: 'huvudregel_30', closingTaxValue: 75_000 }),
+      )
+      const result = await calculate()
+      expect(result.status).toBe('ready')
+      expect(result.targetReserve).toBe(5_000)
+      expect(result.proposal?.signedAmount).toBe(5_000)
+    })
+
+    it('blocks when the election is restvärdeavskrivning (no book/tax match required)', async () => {
+      vi.mocked(loadTaxDepreciationView).mockResolvedValue(
+        election({ method: 'restvarde', selectedRule: null, closingTaxValue: 75_000 }),
+      )
+      const result = await calculate()
+      expect(result.status).toBe('blocked')
+      expect(result.warning).toMatch(/restvärdeavskrivning/)
+    })
+
+    it('blocks when the saved election no longer matches its basis', async () => {
+      vi.mocked(loadTaxDepreciationView).mockResolvedValue(
+        election({ method: 'rakenskapsenlig', selectedRule: 'huvudregel_30', closingTaxValue: 75_000 }, { isStale: true }),
+      )
+      const result = await calculate()
+      expect(result.status).toBe('blocked')
+      expect(result.warning).toMatch(/Spara om valet/)
+    })
+  })
+
+  it('applies räkenskapsenlig avskrivning to an ekonomisk förening exactly as to an AB (IL 18 kap.)', async () => {
+    const asset = makeAsset()
+    vi.mocked(listAssets).mockResolvedValue([asset])
+    mockPostedDepreciation(asset)
+    mockTrialBalance([
+      row('1220', { period_debit: 100_000, closing_debit: 100_000 }),
+      row('1229', { period_credit: 20_000, closing_credit: 20_000 }),
+    ])
+
+    const result = await calculateOveravskrivningar({
+      supabase: makeSupabase() as never,
+      companyId: 'company-1',
+      fiscalPeriod: PERIOD,
+      entityType: 'ekonomisk_forening',
+    })
+
+    expect(result.status).toBe('ready')
+    expect(result.targetReserve).toBe(10_000)
+  })
+
+  it('is not applicable to forms without juridisk-person dispositioner', async () => {
+    for (const entityType of ['enskild_firma', 'ideell_forening', 'handelsbolag']) {
+      const result = await calculateOveravskrivningar({
+        supabase: makeSupabase() as never,
+        companyId: 'company-1',
+        fiscalPeriod: PERIOD,
+        entityType,
+      })
+      expect(result.status, entityType).toBe('not_applicable')
+    }
   })
 
   it('requires a release when the existing reserve exceeds the lawful target', async () => {

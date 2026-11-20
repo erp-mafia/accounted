@@ -65,4 +65,20 @@ describe('dayValueSek', () => {
       dayValueSek({ ...MONTHLY_PROCENT, vacation_rule: 'sammaloneregeln', semestertillagg_rate: null }),
     ).toBe(1557.57)
   })
+
+  describe('a short week: the value is per paid day, the unit the ledger counts', () => {
+    const FOUR_DAYS: DayValueEmployee = { ...MONTHLY_PROCENT, employment_degree: 80, workdays_per_week: 4 }
+
+    it('sammalöneregeln spreads the dagslön of a day off over the paid days it uses', () => {
+      // 24000 / 17.33 per day off, over 1.25 paid days, + 24000 x 0.0043:
+      // 1107.91 + 103.20. Twenty days off and 25 paid days of tillägg come
+      // to the same 30 277 kr either way.
+      expect(dayValueSek({ ...FOUR_DAYS, vacation_rule: 'sammaloneregeln' })).toBe(1211.11)
+    })
+
+    it('procentregeln already divides by the paid days and is unchanged', () => {
+      // 24000 x 12 x 0.12 / 25 = 1382.4
+      expect(dayValueSek(FOUR_DAYS)).toBe(1382.4)
+    })
+  })
 })

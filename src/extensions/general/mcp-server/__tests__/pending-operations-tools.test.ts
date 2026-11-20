@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { OAUTH_MCP_KEY_NAME, TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
 const commitSpy = vi.fn()
 
@@ -70,6 +70,26 @@ describe('gnubok_list_pending_operations', () => {
     expect(result.has_more).toBe(false)
   })
 
+  it('carries task_state on every row, as the v1 endpoints answer it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'op-1', status: 'pending', rejection_category: null },
+        { id: 'op-2', status: 'committed', rejection_category: null },
+        { id: 'op-3', status: 'rejected', rejection_category: 'failed' },
+        { id: 'op-4', status: 'rejected', rejection_category: 'expired' },
+      ],
+      error: null,
+      count: 4,
+    })
+
+    const result = (await listTool.execute({ status: 'pending' }, 'company-1', 'user-1', supabase as never, {
+      type: 'api_key',
+    })) as { operations: Array<{ id: string; task_state: string }> }
+
+    expect(result.operations.map((op) => op.task_state)).toEqual(['working', 'completed', 'failed', 'cancelled'])
+  })
+
   it('signals has_more + next_offset when more rows exist beyond the page', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'op-1' }], error: null, count: 50 })
@@ -84,6 +104,129 @@ describe('gnubok_list_pending_operations', () => {
 
     expect(result.has_more).toBe(true)
     expect(result.next_offset).toBe(1)
+  })
+
+  it('names who staged each operation with the person it acted for, never the raw user id', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'op-1', status: 'pending', actor_type: 'api_key', actor_label: 'Claude (Anthropic)', user_id: 'user-1' },
+        { id: 'op-2', status: 'pending', actor_type: 'api_key', actor_label: OAUTH_MCP_KEY_NAME, user_id: 'user-gone' },
+        { id: 'op-3', status: 'pending', actor_type: 'service_account', actor_label: 'Lager', user_id: 'user-1' },
+      ],
+      error: null,
+      count: 3,
+    })
+    enqueue({ data: [{ id: 'user-1', email: 'jonas@example.com', full_name: 'Jonas Ek' }], error: null })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<Record<string, unknown>>
+    }
+
+    expect(result.operations.map((op) => op.proposed_by)).toEqual(['Claude åt Jonas Ek', 'AI-anslutning', 'Tjänstekontot Lager åt Jonas Ek'])
+    expect(result.operations.every((op) => !('user_id' in op))).toBe(true)
+    expect(findCalls('profiles', 'in')[0]).toEqual(['id', ['user-1', 'user-gone']])
+  })
+
+  it("returns each operation's agent_reason, why its stager proposes it", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'op-1', status: 'pending', agent_reason: 'Telia every month on 6212.' },
+        { id: 'op-2', status: 'pending', agent_reason: null },
+      ],
+      error: null,
+      count: 2,
+    })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<{ id: string; agent_reason: string | null }>
+    }
+
+    expect(result.operations.map((op) => op.agent_reason)).toEqual(['Telia every month on 6212.', null])
+    expect(String(findCalls('pending_operations', 'select')[0]?.[0])).toContain('agent_reason')
+    expect(String(findCalls('pending_operations', 'select')[0]?.[0])).not.toContain('params')
+  })
+
+  it("returns each operation's trace_id, the request that staged it", async () => {
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+    const first = createQueuedMockSupabase()
+    first.enqueue({ data: [{ id: 'op-1', status: 'pending', trace_id: traceId }, { id: 'op-2', status: 'pending', trace_id: null }], error: null, count: 2 })
+    const listed = (await listTool.execute({}, 'company-1', 'user-1', first.supabase as never, { type: 'api_key' })) as {
+      operations: Array<{ id: string; trace_id: string | null }>
+    }
+    expect(listed.operations.map((op) => op.trace_id)).toEqual([traceId, null])
+    expect(String(first.findCalls('pending_operations', 'select')[0]?.[0])).toContain('trace_id')
+  })
+
+  it("returns each operation's operation_number, the number the person sees, null on a proposal decided before numbers", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'op-2', status: 'pending', operation_number: 129 },
+        { id: 'op-1', status: 'pending', operation_number: 128 },
+        { id: 'op-0', status: 'pending', operation_number: null },
+      ],
+      error: null,
+      count: 3,
+    })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<{ id: string; operation_number: number | null }>
+    }
+
+    expect(result.operations.map((op) => op.operation_number)).toEqual([129, 128, null])
+    expect(String(findCalls('pending_operations', 'select')[0]?.[0])).toContain('operation_number')
+  })
+
+  // The code is live before the migration that adds the column runs. The
+  // retry drops that one column: agent_reason and trace_id are long applied,
+  // and a list without them for the length of the window would lose the why.
+  it('lists without operation_number while that column is not there yet, and keeps the rest', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { code: '42703', message: 'column pending_operations.operation_number does not exist' }, count: null })
+    enqueue({ data: [{ id: 'op-1', status: 'pending', agent_reason: 'Telia every month on 6212.' }], error: null, count: 1 })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<Record<string, unknown>>
+    }
+
+    expect(result.operations.map((op) => op.id)).toEqual(['op-1'])
+    expect(result.operations[0]).not.toHaveProperty('operation_number')
+    expect(result.operations[0]?.agent_reason).toBe('Telia every month on 6212.')
+    const selects = findCalls('pending_operations', 'select').map((args) => String(args[0]))
+    expect(selects).toHaveLength(2)
+    expect(selects[1]).not.toContain('operation_number')
+    expect(selects[1]?.replace(/\s/g, '')).toBe(selects[0]?.replace(/\s/g, '').replace('operation_number,', ''))
+  })
+
+  it('does not retry a failure that is not a missing column', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' }, count: null })
+
+    await expect(listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })).rejects.toThrow(
+      /Failed to list pending operations/,
+    )
+    expect(findCalls('pending_operations', 'select')).toHaveLength(1)
+  })
+
+  // Issue #3408: approve is never pre-ticked on consent, so the default
+  // connection lacks it; the widget reads can_approve to hide its buttons.
+  it('says whether the calling key can approve or reject', async () => {
+    const run = async (args: Record<string, unknown>) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [{ id: 'op-1' }], error: null, count: 1 })
+      return (await listTool.execute(args, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+        can_approve?: boolean
+      }
+    }
+
+    expect((await run({ __keyScopes: ['pending_operations:read', 'transactions:write'] })).can_approve).toBe(false)
+    expect(
+      (await run({ __keyScopes: ['pending_operations:read', 'pending_operations:approve'] })).can_approve,
+    ).toBe(true)
+    // Scopes unknown (not injected): no claim either way, the widget keeps its buttons.
+    expect(await run({})).not.toHaveProperty('can_approve')
   })
 })
 
@@ -121,9 +264,9 @@ describe('gnubok_approve_pending_operation', () => {
     expect(result.data?.invoice_id).toBe('inv-1')
   })
 
-  // No 'mcp_oauth' row: handleMcpRequest hardcodes actor.type='api_key' for
-  // ALL MCP traffic (the OAuth connector's access_token is a minted API key),
-  // so 'api_key' is the only agent-credential value a live request produces.
+  // handleMcpRequest sets actor.type='api_key' for ALL MCP traffic (the OAuth
+  // connector's access_token is a minted API key); the OAuth case is told
+  // apart by the key's reserved name, in the test below.
   it.each([
     { actorType: 'api_key', expected: 'api_key' },
     { actorType: 'user', expected: 'user_accept' },
@@ -149,6 +292,71 @@ describe('gnubok_approve_pending_operation', () => {
       })
     }
   )
+
+  // Who decided: a key minted by the OAuth sign-in commits as mcp_oauth, not
+  // api_key. handleMcpRequest marks it (oauthKey) from the reserved name
+  // OAUTH_MCP_KEY_NAME and then renames the label to the client's display
+  // name, so the label here is 'Claude (Anthropic)', not the reserved name
+  // (oauth-commit-actor.test.ts covers that rename end to end). The key's
+  // ceiling travels with it: the label must not lift the unattended limit.
+  it('labels an OAuth connector approval mcp_oauth and keeps its ceiling', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', risk_level: 'medium', params: {} }
+    enqueue({ data: op, error: null }) // fetch
+    commitSpy.mockResolvedValue({ status: 'committed' })
+
+    await approveTool.execute(
+      { operation_id: 'op-1' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key', label: 'Claude (Anthropic)', oauthKey: true, unattendedCommitLimit: 500 }
+    )
+
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({
+      commitMethod: 'api_key',
+      actor: { type: 'mcp_oauth', label: 'Claude (Anthropic)', unattendedCommitLimit: 500 },
+    })
+  })
+
+  // The reserved name alone, without the mark handleMcpRequest sets, is a
+  // display string: the stamp no longer reads it.
+  it('does not classify an approval by its label', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', risk_level: 'medium', params: {} }
+    enqueue({ data: op, error: null }) // fetch
+    commitSpy.mockResolvedValue({ status: 'committed' })
+
+    await approveTool.execute(
+      { operation_id: 'op-1' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key', label: OAUTH_MCP_KEY_NAME }
+    )
+
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({ actor: { type: 'api_key', label: OAUTH_MCP_KEY_NAME } })
+  })
+
+  it('keeps a hand-made API key as api_key', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', risk_level: 'medium', params: {} }
+    enqueue({ data: op, error: null }) // fetch
+    commitSpy.mockResolvedValue({ status: 'committed' })
+
+    await approveTool.execute(
+      { operation_id: 'op-1' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key', label: 'Bokföringsrobot' }
+    )
+
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({
+      commitMethod: 'api_key',
+      actor: { type: 'api_key', label: 'Bokföringsrobot' },
+    })
+  })
 
   it('refuses to approve a risk_level=high op without confirmed=true', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -199,6 +407,50 @@ describe('gnubok_approve_pending_operation', () => {
     expect(result.status).toBe('committed')
   })
 
+  it('refuses a collections handover or escalation even with confirmed=true: only a person approves it, in Accounted', async () => {
+    for (const [operation_type, params] of [
+      ['open_collection_case', { invoice_id: 'inv-1', expected_remaining: 100 }],
+      ['collection_case_action', { invoice_id: 'inv-1', action: 'approve_step' }],
+      ['collections_daily_batch', { batch_date: '2026-10-07', items: [], excluded: [] }],
+    ] as const) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1', operation_type, company_id: 'company-1', status: 'pending', risk_level: 'high', params }, error: null })
+      await expect(
+        approveTool.execute({ operation_id: 'op-1', confirmed: true }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+      ).rejects.toMatchObject({ code: 'COLLECTION_ATTESTATION_WEB_ONLY' })
+    }
+    expect(commitSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a rule for automatic booking with GRANT_NEEDS_PERSON, for every key and even with confirmed=true', async () => {
+    for (const actor of [
+      { type: 'api_key' as const },
+      { type: 'api_key' as const, oauthKey: true },
+      { type: 'api_key' as const, serviceAccountId: 'sa-1' },
+    ]) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({
+        data: { id: 'op-1', operation_type: 'create_grant', company_id: 'company-1', status: 'pending', risk_level: 'high', params: { counterparty_key: 'spotify' } },
+        error: null,
+      })
+      const refusal = approveTool.execute({ operation_id: 'op-1', confirmed: true }, 'company-1', 'user-1', supabase as never, actor)
+      await expect(refusal).rejects.toMatchObject({ code: 'GRANT_NEEDS_PERSON' })
+      await expect(refusal).rejects.toThrow(/Att göra/)
+    }
+    expect(commitSpy).not.toHaveBeenCalled()
+  })
+
+  it('approves a collections action that only serves the case', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'op-1', operation_type: 'collection_case_action', company_id: 'company-1', status: 'pending', risk_level: 'high', params: { invoice_id: 'inv-1', action: 'pause' } },
+      error: null,
+    })
+    commitSpy.mockResolvedValue({ status: 'committed' })
+    await approveTool.execute({ operation_id: 'op-1', confirmed: true }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+    expect(commitSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('throws when the operation is not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'not found' } })
@@ -229,7 +481,7 @@ describe('gnubok_approve_pending_operation', () => {
 describe('gnubok_reject_pending_operation', () => {
   it('flips status to rejected and never invokes the executor', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }], error: null }) // fetch
     enqueue({ data: [{ id: 'op-1' }], error: null }) // update CAS: returns rows
 
     const result = (await rejectTool.execute(
@@ -244,9 +496,42 @@ describe('gnubok_reject_pending_operation', () => {
     expect(commitSpy).not.toHaveBeenCalled()
   })
 
+  it('stores the category and reason in the rejection columns, where the dashboard keeps them', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }], error: null })
+    enqueue({ data: [{ id: 'op-1' }], error: null })
+
+    await rejectTool.execute(
+      { operation_id: 'op-1', category: 'wrong_category', reason: ' Ska vara 5410 ' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      status: 'rejected',
+      rejection_category: 'wrong_category',
+      rejection_reason: 'Ska vara 5410',
+    })
+  })
+
+  it('leaves the category empty when the user gave none, and refuses one outside the list', async () => {
+    const plain = createQueuedMockSupabase()
+    plain.enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }], error: null })
+    plain.enqueue({ data: [{ id: 'op-1' }], error: null })
+    await rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'user-1', plain.supabase as never)
+    expect(plain.findCalls('pending_operations', 'update')[0]?.[0]).not.toHaveProperty('rejection_category')
+
+    const bad = createQueuedMockSupabase()
+    await expect(
+      rejectTool.execute({ operation_id: 'op-1', category: 'expired' }, 'company-1', 'user-1', bad.supabase as never),
+    ).rejects.toThrow(/category must be one of/)
+    expect(bad.findCalls('pending_operations', 'update')).toEqual([])
+  })
+
   it('throws when the CAS update affects 0 rows (concurrent claim)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }], error: null }) // fetch
     enqueue({ data: [], error: null }) // update CAS: 0 rows (lost race)
 
     await expect(
@@ -256,19 +541,75 @@ describe('gnubok_reject_pending_operation', () => {
 
   it('throws 409-style error if the op is already resolved', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1', status: 'committed' }, error: null })
+    enqueue({ data: [{ id: 'op-1', status: 'committed', operation_type: 'x', risk_level: 'low' }], error: null })
 
     await expect(
       rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'user-1', supabase as never)
     ).rejects.toThrow(/already committed/i)
   })
 
+  it('says an unknown op may have posted and points at the ledger, not at a verifikat to reverse', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'op-1', status: 'unknown', operation_type: 'x', risk_level: 'low' }], error: null })
+
+    const message = await rejectTool
+      .execute({ operation_id: 'op-1' }, 'company-1', 'user-1', supabase as never)
+      .then(() => '', (err: Error) => err.message)
+    expect(message).toMatch(/resolved as unknown/)
+    expect(message).toMatch(/may or may not have posted/)
+    expect(message).toMatch(/Check the ledger/)
+    expect(message).not.toMatch(/approved explicitly|verifikat/)
+    expect(findCalls('pending_operations', 'update')).toEqual([])
+  })
+
   it('throws when the op is missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null, error: { message: 'not found' } })
+    enqueue({ data: [], error: null })
 
     await expect(
       rejectTool.execute({ operation_id: 'missing' }, 'company-1', 'user-1', supabase as never)
     ).rejects.toThrow(/not found/i)
+
+    // A malformed id fails the read with 22P02: still a plain not found.
+    const malformed = createQueuedMockSupabase()
+    malformed.enqueue({ data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid' } })
+    await expect(
+      rejectTool.execute({ operation_id: 'not-a-uuid' }, 'company-1', 'user-1', malformed.supabase as never)
+    ).rejects.toThrow(/not found/i)
+  })
+
+  it('records the agent actor in result_data, as the app rejections now do', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'x', risk_level: 'low' }], error: null })
+    enqueue({ data: [{ id: 'op-1' }], error: null })
+
+    await rejectTool.execute(
+      { operation_id: 'op-1', reason: 'fel konto' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key', id: 'key-1' },
+    )
+
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      result_data: { rejected_by: 'user-1', rejected_via: 'api_key', actor_id: 'key-1', reason: 'fel konto' },
+    })
+  })
+
+  it("records a service account's key as service_account, as the v1 reject does", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'x', risk_level: 'low' }], error: null })
+    enqueue({ data: [{ id: 'op-1' }], error: null })
+
+    await rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'sponsor-1', supabase as never, {
+      type: 'api_key',
+      id: 'key-sa',
+      label: 'Nattlig synk',
+      serviceAccountId: 'sa-1',
+    })
+
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      result_data: { rejected_by: 'sponsor-1', rejected_via: 'service_account', actor_id: 'key-sa' },
+    })
   })
 })

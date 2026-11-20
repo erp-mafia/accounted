@@ -18,7 +18,11 @@
 
 import { z } from 'zod'
 import type { ZodTypeAny } from 'zod'
-import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import type { V1RequiredScope } from '@/lib/auth/scopes'
+import { PendingOperationView } from '@/lib/pending-operations/view'
+import { MODULES, type ModuleId } from '@/lib/modules/manifest'
+import { getModule, moduleForV1Path } from '@/lib/modules/resolve'
+import { handleDeclarationFor, STAGED_PENDING_OPERATION_HANDLES, withHandleSchema } from './handles'
 import { API_V1_VERSION } from './version'
 
 /**
@@ -129,6 +133,14 @@ export interface EndpointDefinition {
   method: HttpMethod
   path: string
 
+  /**
+   * The module (lib/modules/manifest.ts) the endpoint belongs to, published
+   * as its OpenAPI tag and `x-module`. v1OperationHandler sets it from the
+   * operation id; a hand-written route leaves it out and resolves from its
+   * path (see endpointModule).
+   */
+  module?: ModuleId
+
   /** One-sentence summary; first sentence of the OpenAPI description. */
   summary: string
 
@@ -150,8 +162,11 @@ export interface EndpointDefinition {
     response: Record<string, unknown>
   }
 
-  /** Required scope; null for public endpoints. */
-  scope: ApiKeyScope | null
+  /**
+   * Required scope, read by withApiV1 on every request; 'authenticated' for
+   * an endpoint any valid key may call; null for a public endpoint.
+   */
+  scope: V1RequiredScope | null
 
   /** Action risk: informs whether the agent should confirm before calling. */
   risk: ActionRisk
@@ -164,6 +179,25 @@ export interface EndpointDefinition {
 
   /** True for write endpoints that accept ?dry_run=true. */
   dryRunSupported: boolean
+
+  /**
+   * True for writes that accept ?stage=true: instead of committing, the
+   * request creates a pending operation for approval (answered 202 with it)
+   * through POST /pending-operations/{id}/approve or the app. Set by
+   * v1OperationHandler for an operation write that stages over MCP
+   * (`mcp.stage`); withApiV1 refuses stage=true everywhere else.
+   */
+  stageSupported?: boolean
+
+  /**
+   * True for writes whose dry run answers a `preview_token` and whose commit
+   * accepts it back in the Preview-Token header, refusing with 409
+   * PREVIEW_STALE when the preview no longer holds (lib/operations/
+   * preview-token.ts). Set by v1OperationHandler for every operation write;
+   * withApiV1 refuses the header everywhere else, so a token is never
+   * silently ignored.
+   */
+  previewTokenSupported?: boolean
 
   /** Optional Zod schemas. */
   request?: {
@@ -211,9 +245,9 @@ const ENDPOINTS = new Map<string, EndpointDefinition>()
  *     ...
  *   })
  *
- * The wrapper does not depend on registration: scope resolution lives in
- * `lib/auth/scopes.ts` so a missing register() call only affects docs, not
- * runtime auth. CI test asserts every wrapped route appears in the registry.
+ * The definition is also the route's runtime contract: withApiV1 reads the
+ * required scope from it (getEndpointForOperation), so a route that never
+ * registers answers NOT_FOUND to every caller instead of running unscoped.
  */
 export function registerEndpoint(def: EndpointDefinition): void {
   const key = `${def.method} ${def.path}`
@@ -226,8 +260,30 @@ export function registerEndpoint(def: EndpointDefinition): void {
   ENDPOINTS.set(key, def)
 }
 
+/**
+ * The endpoint a withApiV1 handler serves: its operation id and the request's
+ * method. The route module registered it at load, before any request reached
+ * the handler. Undefined for a handler whose route never registered.
+ */
+export function getEndpointForOperation(operation: string, method: string): EndpointDefinition | undefined {
+  for (const def of ENDPOINTS.values()) {
+    if (def.operation === operation && def.method === method) return def
+  }
+  return undefined
+}
+
 export function listEndpoints(): EndpointDefinition[] {
   return Array.from(ENDPOINTS.values())
+}
+
+/**
+ * The module an endpoint belongs to: the one it declares (an operation-backed
+ * endpoint carries its operation's module), else the one that claims its
+ * path. Undefined only for a path no module claims, which the module
+ * coverage test (lib/modules/__tests__) fails on.
+ */
+export function endpointModule(def: Pick<EndpointDefinition, 'module' | 'path'>): ModuleId | undefined {
+  return def.module ?? moduleForV1Path(def.path)
 }
 
 
@@ -267,6 +323,7 @@ export interface JsonSchema {
   enum?: unknown[]
   const?: unknown
   format?: string
+  pattern?: string
   description?: string
   additionalProperties?: boolean | JsonSchema
   anyOf?: JsonSchema[]
@@ -418,20 +475,40 @@ function convertZod(schema: ZodTypeAny): JsonSchema {
   }
 }
 
+/**
+ * The JSON Schema of an endpoint's success body as clients receive it: the
+ * registered Zod schema plus the `handle` property the response layer stamps
+ * on the endpoints in V1_HANDLE_COVERAGE (./handles.ts). The spec and the
+ * docs builder both read this, so neither can publish a body without it.
+ */
+export function responseJsonSchema(def: Pick<EndpointDefinition, 'operation' | 'response'>): JsonSchema {
+  return withHandleSchema(zodToJsonSchema(def.response.success), handleDeclarationFor(def.operation))
+}
+
 // ──────────────────────────────────────────────────────────────────
 // OpenAPI 3.1 spec generation
 // ──────────────────────────────────────────────────────────────────
+
+interface OpenApiTag {
+  name: string
+  description: string
+  'x-display-name': string
+  'x-experimental': true
+}
 
 interface OpenApiSpec {
   openapi: '3.1.0'
   info: { title: string; version: string; description: string }
   servers: Array<{ url: string }>
-  components: { securitySchemes: Record<string, unknown> }
+  components: { schemas: Record<string, unknown>; securitySchemes: Record<string, unknown> }
   security: Array<Record<string, unknown[]>>
+  tags: OpenApiTag[]
   paths: Record<string, Record<string, unknown>>
 }
 
 const SCHEME_NAME = 'ApiKey'
+/** components.schemas entry for the 202 a staged write answers. */
+const STAGED_SCHEMA_NAME = 'StagedPendingOperation'
 
 export interface QueryParameter {
   name: string
@@ -466,13 +543,31 @@ export function queryParameters(def: EndpointDefinition): QueryParameter[] {
       schema: { type: 'string' },
     })
   }
+  // withApiV1 reads ?stage on every request and refuses it where unsupported.
+  if (def.stageSupported && !params.some((p) => p.name === 'stage')) {
+    params.push({
+      name: 'stage',
+      required: false,
+      description:
+        'true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision.',
+      schema: { type: 'string' },
+    })
+  }
   return params
 }
 
 export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
   const paths: OpenApiSpec['paths'] = {}
+  const usedModules = new Set<ModuleId>()
 
   for (const def of ENDPOINTS.values()) {
+    // The building block the endpoint belongs to (lib/modules/manifest.ts):
+    // one tag per operation, so a client or an agent can take the API one
+    // module at a time.
+    const moduleId = endpointModule(def)
+    const mod = moduleId ? getModule(moduleId) : undefined
+    if (mod) usedModules.add(mod.id)
+
     // OpenAPI path syntax: {param} instead of :param.
     const openApiPath = def.path.replace(/:([^/]+)/g, '{$1}')
 
@@ -489,7 +584,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       ? { [def.response.contentType]: { schema: { type: 'string', format: 'binary' } } }
       : {
           'application/json': {
-            schema: zodToJsonSchema(def.response.success),
+            schema: responseJsonSchema(def),
             example: def.example.response,
           },
         }
@@ -500,6 +595,16 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
     const successResponse = def.response.success === NoBodyResponse
       ? { '204': { description: 'No Content' } }
       : { '200': { description: 'Success', content: successContent } }
+    // ?stage=true answers 202 with the pending operation instead (one shared
+    // component, so 75 writes do not each inline the same schema).
+    const stagedResponse = def.stageSupported
+      ? {
+          '202': {
+            description: 'Staged for approval (stage=true): the pending operation, task_state working. Nothing was committed.',
+            content: { 'application/json': { schema: { $ref: `#/components/schemas/${STAGED_SCHEMA_NAME}` } } },
+          },
+        }
+      : {}
 
     // Path parameters, derived from the `:param` pattern itself so every
     // templated segment is declared even though routes don't register a
@@ -559,6 +664,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
 
     const operationDef: Record<string, unknown> = {
       operationId: def.operation,
+      ...(mod ? { tags: [mod.id] } : {}),
       summary: def.summary,
       description: [
         def.description,
@@ -571,11 +677,17 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       'x-idempotent': def.idempotent,
       'x-reversible': def.reversible,
       'x-dry-run-supported': def.dryRunSupported,
-      ...(def.scope ? { 'x-required-scope': def.scope } : {}),
+      ...(def.stageSupported ? { 'x-stage-supported': true } : {}),
+      ...(def.previewTokenSupported ? { 'x-preview-token-supported': true } : {}),
+      ...(mod ? { 'x-module': mod.id } : {}),
+      // 'authenticated' is not a scope: such an endpoint carries the global
+      // bearer requirement and no x-required-scope.
+      ...(def.scope && def.scope !== 'authenticated' ? { 'x-required-scope': def.scope } : {}),
       ...(parameters.length > 0 ? { parameters } : {}),
       ...(requestBody ? { requestBody } : {}),
       responses: {
         ...successResponse,
+        ...stagedResponse,
         '400': { description: 'Validation error', $ref: '#/components/responses/Error' },
         '401': { description: 'Unauthorized', $ref: '#/components/responses/Error' },
         '403': { description: 'Insufficient scope', $ref: '#/components/responses/Error' },
@@ -601,15 +713,32 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
     },
     servers: [{ url: serverUrl }],
     components: {
+      schemas: {
+        [STAGED_SCHEMA_NAME]: withHandleSchema(
+          zodToJsonSchema(dataEnvelope(PendingOperationView)),
+          STAGED_PENDING_OPERATION_HANDLES,
+        ),
+      },
       securitySchemes: {
         [SCHEME_NAME]: {
           type: 'http',
           scheme: 'bearer',
-          bearerFormat: 'gnubok_sk_<live|test>_<random>',
+          // Live keys are gnubok_sk_<random>, test keys gnubok_sk_test_<random>
+          // (generateApiKey in lib/auth/api-keys.ts): there is no live_ infix.
+          bearerFormat: 'gnubok_sk_[test_]<random>',
         },
       },
     },
     security: [{ [SCHEME_NAME]: [] }],
+    // One tag per module that has an endpoint, in manifest order (kernels first).
+    // Experimental until the per-company module switch settles the module
+    // boundaries: ids may still be split or renamed until then.
+    tags: MODULES.filter((m) => usedModules.has(m.id)).map((m) => ({
+      name: m.id,
+      description: m.summary,
+      'x-display-name': m.name,
+      'x-experimental': true as const,
+    })),
     paths,
   }
 }

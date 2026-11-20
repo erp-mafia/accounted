@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRightIcon } from '@/components/icons'
 import { contextRefToTarget } from '@/lib/agent/intents/route-mapping'
 import { cn } from '@/lib/utils'
 
@@ -30,7 +30,7 @@ export default function ContextChip({
   if (!target) return null
 
   const shape =
-    'inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground'
+    'inline-flex max-w-full items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground'
 
   // Not every context has a page to go to: the document inbox is an extension
   // route, and core cannot hardcode a path that exists only when the extension
@@ -48,12 +48,12 @@ export default function ContextChip({
       href={target.href}
       className={cn(
         shape,
-        'hover:bg-secondary hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'hover:bg-secondary/60 hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         className,
       )}
     >
       <span className="truncate">{target.label}</span>
-      <ArrowUpRight className="h-3 w-3 shrink-0" />
+      <ArrowUpRightIcon className="h-3 w-3 shrink-0" />
     </Link>
   )
 }

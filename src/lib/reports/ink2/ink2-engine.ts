@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
+import {
+  loadBuildingTaxAdjustment,
+  loadTaxAdjustmentSnapshot,
+  MEMBERSHIP_FEE_ACCOUNT,
+} from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
@@ -22,7 +26,10 @@ import {
   INK2R_SIGN_TWINS,
 } from './types'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
+import { computePeriodiseringsfondSchablonintakt } from './schablonintakt'
 
+import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
+import { companyIdentityFrom } from '@/lib/company/org-number'
 // Re-exported so existing importers (ne-engine, tests) keep their paths.
 export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
 
@@ -30,7 +37,12 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  * INK2 Declaration Engine
  *
  * Generates INK2 (huvudblankett), INK2R (räkenskapsschema), and INK2S
- * (skattemässiga justeringar) for aktiebolag tax reporting.
+ * (skattemässiga justeringar) for the juridiska personer that file INK2:
+ * aktiebolag and ekonomiska föreningar (usesInk2 in lib/company/entity-type).
+ * Association-specific INK2S items (tax-exempt membership fees on 4.5c and
+ * the matching non-deductible administration cost on 4.3c, Skatteverket
+ * "Deklarera för en ekonomisk förening") are entered through the generic
+ * manual adjustments until dedicated tagging ships.
  *
  * Account mappings follow the official BAS-to-SRU mapping from
  * bas.se/kontoplaner/sru/ and Skatteverket field code spec.
@@ -38,7 +50,8 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  * INK2R contains the full balance sheet + income statement.
  * INK2S auto-derives basic fields (result + tax → taxable result), as well as
  * periodiseringsfond and överavskrivningar when those have been posted via the
- * bokslut-dispositions calculators in lib/bokslut/.
+ * bokslut-dispositions calculators in lib/bokslut/, and the schablonintäkt on
+ * the opening periodiseringsfonder (4.6a) for räkenskapsår of whole months.
  *
  * Balances come from generateTrialBalance, never from a raw journal scan, and
  * the two sides of INK2R read DIFFERENT views of the same period:
@@ -52,9 +65,11 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  *     INK2S 7650/7651 and the taxable result. INK2 is always filed after
  *     bokslut, so that is the normal state, not an edge case.
  *
- * excludeFinalClosingEntry drops only fiscal_periods.closing_entry_id: tax,
- * depreciation and bokslutsdispositioner also carry source_type 'year_end' and
- * must stay on the form (7525, 7528).
+ * excludeFinalClosingEntry drops only the result transfer into equity
+ * (result_closing_entry_ids: the linked closing entry, or a resultatavslut
+ * booked in the previous system or by hand): tax, depreciation and
+ * bokslutsdispositioner also carry source_type 'year_end' and must stay on
+ * the form (7525, 7528).
  */
 
 /** One mapping per SRU code: pinned by a test in __tests__/ink2-engine.test.ts. */
@@ -193,25 +208,19 @@ function applySignReclassifications(
 }
 
 /**
- * Whether the resultatavslut has already moved årets resultat into 2099.
- *
- * Mirrors the predicate generateTrialBalance uses to drop the closing entry: a
- * reversed closing entry nets to zero against its storno and has therefore not
- * moved anything.
+ * The result still sitting on the result accounts (BAS class 3-8, 899x
+ * included), credit-positive: profit is positive. In the closed books this
+ * is the part of årets resultat that no resultatavslut has moved into
+ * equity yet.
  */
-async function isResultClosedIntoEquity(
-  supabase: SupabaseClient,
-  companyId: string,
-  closingEntryId: string | null | undefined,
-): Promise<boolean> {
-  if (!closingEntryId) return false
-  const { data } = await supabase
-    .from('journal_entries')
-    .select('status')
-    .eq('id', closingEntryId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  return (data as { status?: string } | null)?.status === 'posted'
+function resultOnResultAccounts(rows: TrialBalanceRow[]): number {
+  let net = 0
+  for (const row of rows) {
+    if (row.account_number >= '3' && row.account_number < '9') {
+      net += (Number(row.closing_credit) || 0) - (Number(row.closing_debit) || 0)
+    }
+  }
+  return Math.round(net * 100) / 100
 }
 
 /**
@@ -242,36 +251,47 @@ export async function generateINK2Declaration(
     .eq('company_id', companyId)
     .single()
 
-  // Resolve entity_type: prefer company_settings, fall back to companies table (NOT NULL, always reliable)
-  let entityType = settings?.entity_type
-  if (!entityType) {
-    const { data: company, error: companyError } = await supabase
-      .from('companies')
-      .select('entity_type')
-      .eq('id', companyId)
-      .single()
-    if (companyError) throw new Error(`Failed to resolve entity type: ${companyError.message}`)
-    entityType = company?.entity_type
-  }
+  const { orgNumber, entityType } = await companyIdentityFrom(supabase, companyId, settings)
 
-  if (entityType !== 'aktiebolag') {
-    throw new Error('INK2 declaration is only for aktiebolag (limited company)')
+  if (!isEntityType(entityType) || !usesInk2(entityType)) {
+    throw new Error(
+      'INK2 declaration is only for aktiebolag and ekonomisk förening (juridiska personer taxed under IL 65 kap. 10 §)',
+    )
   }
 
   // The balance sheet reads the closed books, the income statement the
   // pre-closing books. See the module docblock for why the two differ.
-  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, resultClosedIntoEquity] =
+  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, buildingTax] =
     await Promise.all([
-      loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+      loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, entityType),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
         closingEntry: 'exclude-final',
       }),
-      isResultClosedIntoEquity(supabase, companyId, period.closing_entry_id as string | null),
+      // INK2S 4.9: buildings, markanläggningar and mark on their tax plan.
+      loadBuildingTaxAdjustment(supabase, companyId, period as FiscalPeriod),
     ])
 
   const balanceSheetBalances = toSignedBalances(closedTrialBalance.rows)
   const incomeBalances = toSignedBalances(preClosingTrialBalance.rows)
+
+  // How much of årets resultat the books have already moved into equity. The
+  // two views differ by exactly the result transfers (ours, or one booked in
+  // the previous system or by hand), so what is still on the result accounts
+  // in the closed view is the part not yet in 2099. Read as an amount, not a
+  // closed/open flag: a partial transfer (an öresutjämning against 2099 in an
+  // open year) then moves exactly its own amount instead of switching the
+  // whole add-back off.
+  const unclosedResult = resultOnResultAccounts(closedTrialBalance.rows)
+  const resultTransferred =
+    Math.abs(resultOnResultAccounts(preClosingTrialBalance.rows) - unclosedResult) >= 0.01
+  // Fully closed: nothing left on the result accounts, and either a transfer
+  // was found or our own year-end run linked one. The link keeps the
+  // declared-versus-2099 alarm below alive when the pre-closing view fails to
+  // strip our closing (the two views are then identical).
+  const resultClosedIntoEquity =
+    Math.abs(unclosedResult) <= ROUNDING_TOLERANCE_KR
+    && (resultTransferred || Boolean(period.closing_entry_id))
 
   const accountNameMap = new Map<string, string>()
   for (const row of [...closedTrialBalance.rows, ...preClosingTrialBalance.rows]) {
@@ -412,10 +432,11 @@ export async function generateINK2Declaration(
 
   // During an open fiscal year 2099 has no balance yet: the result exists only
   // as the net of the income statement accounts, so add it to make the balance
-  // sheet tie out. Once the resultatavslut is posted, 7302 already carries it
-  // via 2099 and adding it again would double-count årets resultat.
-  const adjustedEquityLiabilities = resultClosedIntoEquity
-    ? totalEquityLiabilities
+  // sheet tie out. Once a resultatavslut is posted, 7302 already carries what
+  // it moved via 2099; only the remainder still on the result accounts (zero
+  // after a full closing) is added, so årets resultat is never counted twice.
+  const adjustedEquityLiabilities = resultTransferred
+    ? totalEquityLiabilities + truncateToWholeKronor(unclosedResult)
     : totalEquityLiabilities + aretsResultat
 
   // Fiscal year dates as YYYYMMDD
@@ -435,9 +456,23 @@ export async function generateINK2Declaration(
   // in full (IL 40 kap. 2 §); whatever the result cannot absorb becomes this
   // year's underskott on 4.16 and rolls forward again.
   const deficitCarryforward = Math.trunc(taxAdjustments.deficitCarryforward ?? 0)
+  // 4.9: the book depreciation and write-downs on fast egendom added back,
+  // the tax plan's deduction taken (IL 19-20 kap.), filed net.
+  const buildingAdjustment = Math.trunc(buildingTax.net)
+  // 4.6a: schablonintäkt on the periodiseringsfonder held at the start of the
+  // year (IL 30 kap. 6 a §). Never booked, so it is read off the opening
+  // balances; left at 0 with a warning when it cannot be settled (see
+  // ./schablonintakt).
+  const schablonintakt = computePeriodiseringsfondSchablonintakt(
+    closedTrialBalance.rows,
+    period.period_start as string,
+    period.period_end as string,
+  )
   const taxableResult =
     aretsResultat + taxAmount
     + nonDeductibleExpenses - nonTaxableIncome
+    + schablonintakt.amount
+    + buildingAdjustment
     - deficitCarryforward
 
   const ink2: INK2Rutor = {
@@ -456,14 +491,54 @@ export async function generateINK2Declaration(
     '7651': taxAmount, // Skatt (ej avdragsgill)
     '7653': nonDeductibleExpenses,
     '7754': nonTaxableIncome,
+    '7654': schablonintakt.amount,
+    '7666': buildingAdjustment > 0 ? buildingAdjustment : 0,
+    '7765': buildingAdjustment < 0 ? -buildingAdjustment : 0,
     '7763': deficitCarryforward,
     '7670': taxableResult >= 0 ? taxableResult : 0,
     '7770': taxableResult < 0 ? Math.abs(taxableResult) : 0,
   }
 
+  // An ekonomisk förening that deducts its membership fees (4.5c) must also
+  // add back the administration cost those fees cover (4.3c); the ledger
+  // cannot split that cost out, so it stays a manual figure.
+  const adjustmentItems = taxAdjustments.items ?? []
+  const membershipFees = adjustmentItems.find(
+    (item) => item.sourceKey === `account:${MEMBERSHIP_FEE_ACCOUNT}` && item.included && item.amount > 0,
+  )
+  const manualNonDeductible = adjustmentItems.find(
+    (item) => item.sourceKey === 'manual:non_deductible_expenses',
+  )
+  if (membershipFees && !(manualNonDeductible && manualNonDeductible.amount > 0)) {
+    warnings.push(
+      `Medlemsavgifter ${Math.trunc(membershipFees.amount)} kr har tagits upp som ej skattepliktiga (INK2S 4.5c). De administrationskostnader som avgifterna täcker är inte avdragsgilla och ska anges som ytterligare ej avdragsgilla kostnader (INK2S 4.3c) i bokslutets skattemässiga justeringar.`,
+    )
+  }
+
+  warnings.push(...schablonintakt.warnings)
+  warnings.push(...buildingTax.warnings)
+
+  // The underskottsregister's spärrar are netted into the 4.14 a deducted
+  // above: the taxable result is right, but Skatteverket's form takes the
+  // whole deficit on 4.14 a with the reductions on 4.14 b and 4.14 c (4.14 c
+  // also on 1.2), which this form does not carry yet.
+  const lossRegisterRow = taxAdjustments.lossRegister?.overridden ? null : taxAdjustments.lossRegister?.row
+  if (lossRegisterRow && (lossRegisterRow.amountBlockReduction > 0 || lossRegisterRow.groupBlockReduction > 0)) {
+    warnings.push(
+      `Underskottsregistret har spärrade belopp, så punkt 4.14 a visar underskottet netto (${deficitCarryforward} kr). I deklarationen ska 4.14 a vara ${Math.trunc(lossRegisterRow.broughtForward)} kr, 4.14 b ${Math.trunc(lossRegisterRow.amountBlockReduction)} kr och 4.14 c ${Math.trunc(lossRegisterRow.groupBlockReduction)} kr (4.14 c även i punkt 1.2). Ange dem i Skatteverkets e-tjänst.`,
+    )
+  }
+
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
     warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
+  } else if (resultTransferred && Math.abs(unclosedResult) > ROUNDING_TOLERANCE_KR) {
+    // A closed year whose resultatavslut (typically one imported from the
+    // previous system) moved only part of the result into equity. The
+    // add-back above keeps the balance sheet tied, so say it out loud.
+    warnings.push(
+      `Räkenskapsåret är stängt men ${truncateToWholeKronor(unclosedResult)} kr av årets resultat finns kvar på resultatkontona och har inte förts över till eget kapital. Kontrollera bokslutsverifikationen innan deklarationen lämnas in.`,
+    )
   }
 
   if (totalAssets === 0 && totalEquityLiabilities === 0 && ink2r['7410'] === 0) {
@@ -514,7 +589,8 @@ export async function generateINK2Declaration(
     },
     companyInfo: {
       companyName: settings?.company_name || 'Okänt företag',
-      orgNumber: settings?.org_number || null,
+      orgNumber,
+      entityType,
       addressLine1: settings?.address_line1 || null,
       postalCode: settings?.postal_code || null,
       city: settings?.city || null,

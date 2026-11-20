@@ -6,6 +6,7 @@ import {
   findMatchingTemplates,
   getTemplateById,
 } from '../booking-templates'
+import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
 
 /**
  * The templates added 2026-09-10 for the accounts that twelve months of bank
@@ -88,9 +89,15 @@ describe('measured-gap templates', () => {
     expect(BOOKING_TEMPLATES.some((t) => t.debit_account.startsWith('4'))).toBe(true)
   })
 
-  it('the owner and placement templates are AB only', () => {
-    for (const id of ['share_capital_deposit', 'shareholder_contribution', 'dividend_paid', 'capital_insurance_deposit', 'securities_purchase']) {
+  it('the owner templates are AB only; placements belong to every juridisk person', () => {
+    for (const id of ['share_capital_deposit', 'shareholder_contribution', 'dividend_paid']) {
       expect(getTemplateById(id)!.entity_applicability, id).toBe('aktiebolag')
+    }
+    // Kapitalförsäkring and securities are placements of the company's own
+    // money: an ekonomisk förening makes them like an AB; an enskild firma
+    // books them privately.
+    for (const id of ['capital_insurance_deposit', 'securities_purchase']) {
+      expect(getTemplateById(id)!.entity_applicability, id).toEqual(['aktiebolag', 'ekonomisk_forening'])
     }
   })
 })
@@ -129,6 +136,12 @@ describe('matcher finds the gap templates from bank text', () => {
     expect(top('TILLVÄXTVERKET PROJEKTBIDRAG', 50000)).toBe('grant_received')
   })
 
+  it('routes a gym to Friskvård, but not a massage, which its own rule puts at 25 % against the 6 % it books (PostHog PH 118)', () => {
+    expect(top('NORDIC WELLNESS GBG', -499)).toBe('personnel_wellness')
+    const massage = makeTransaction({ description: 'IDROTTSMASSAGE STHLM', original_description: 'IDROTTSMASSAGE STHLM', merchant_name: null, amount: -1000 })
+    expect(findMatchingTemplates(massage).map((m) => m.template.id)).not.toContain('personnel_wellness')
+  })
+
   it('leaves the default fixture (a grocery store) without a refreshments match', () => {
     // Grocery names are deliberately not keywords: for an enskild firma an
     // ICA row is more often private than personalfika.
@@ -141,7 +154,11 @@ describe('gap templates book the VAT they promise', () => {
 
   it('EU goods: cost on 4515 with fiktiv moms 2614/2645 and no extra basis pair', () => {
     const t = getTemplateById('goods_purchase_eu')!
-    const r = buildMappingResultFromTemplate(t, makeTransaction({ amount: -1000 }), ab)
+    // As the booking door settles it: 4515 reports ruta 20 itself.
+    const r = reconcileRcBasisWithCostLines(
+      buildMappingResultFromTemplate(t, makeTransaction({ amount: -1000 }), ab),
+      new Map(),
+    )
     expect(r.debit_account).toBe('4515')
     const acc = accounts(r.vat_lines)
     expect(acc).toContain('2614')

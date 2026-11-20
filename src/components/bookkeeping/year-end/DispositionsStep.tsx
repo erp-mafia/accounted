@@ -1,19 +1,28 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { StepBar } from '@/components/ui/step-bar'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ArrowRight, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react'
+import { ArrowRightIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { AttnLine } from '@/components/ui/attn-line'
 import { DepreciationPanel } from './DepreciationPanel'
 import { EfDeclarationSection } from './EfDeclarationSection'
+import { DeferredTaxCard } from './DeferredTaxCard'
+import { LossCarryforwardRegister, LossRegisterDeficitHint } from './LossCarryforwardRegister'
 import type {
+  BolagsskattBasis,
   DispositionsProposal,
   ProposedDisposition,
   DispositionKind,
@@ -21,6 +30,8 @@ import type {
 } from '@/lib/bokslut/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { filesIncomeReturn, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
+import { parseAmountInput } from '@/lib/money'
+import { explainZeroedTax } from '@/lib/bokslut/zeroed-tax'
 
 interface DispositionsStepProps {
   periodId: string
@@ -39,7 +50,8 @@ interface TaxAdjustmentDraft {
   nonTaxableIncome: string
   /** INK2S 4.14 a: outnyttjat underskott från föregående beskattningsår. */
   deficitCarryforward: string
-  detectedAccounts: { '6992': boolean; '8423': boolean }
+  /** Keyed by account number; the detected list depends on the legal form. */
+  detectedAccounts: Record<string, boolean>
 }
 
 /**
@@ -60,6 +72,8 @@ export function DispositionsStep({
   onNavigationBlockedChange,
 }: DispositionsStepProps) {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
+  const t = useTranslations('dispositions_tax_basis')
   const [proposal, setProposal] = useState<DispositionsProposal | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -202,24 +216,16 @@ export function DispositionsStep({
   // ---- Render branches ----
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-3">
-          <Skeleton className="h-6 w-1/3" />
-          <Skeleton className="h-20 w-full" />
-          <Skeleton className="h-20 w-full" />
-        </CardContent>
-      </Card>
+      <LateReveal className="space-y-3">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-20 w-full" />
+      </LateReveal>
     )
   }
 
   if (fetchError) {
-    return (
-      <Card>
-        <CardContent className="p-6">
-          <p className="text-destructive">{fetchError}</p>
-        </CardContent>
-      </Card>
-    )
+    return <LoadError title={fetchError} onRetry={() => void loadProposals()} />
   }
 
   if (!proposal) return null
@@ -228,13 +234,15 @@ export function DispositionsStep({
     (item) => item.status === 'needs_correction',
   ) ?? false
 
-  // Three-way by capability, never by form name. Depreciation applies to
-  // every form (skattemässig hanteras separat). A form that files an NE
-  // return replaces the corporate dispositioner with the NE-bilaga
-  // declaration section; a form with neither (ideell förening today) gets
-  // a note that nothing further is prepared for it yet.
+  // By capability, never by form name. Depreciation applies to every form
+  // (skattemässig hanteras separat). A form that files an NE return replaces
+  // the corporate dispositioner with the NE-bilaga declaration section; a
+  // form that files INK3 (ideell förening) is pointed at the INK3 underlag,
+  // where its tax adjustments and taxable/exempt split are prepared; a form
+  // with neither gets a note that nothing further is prepared for it yet.
   if (!supportsCorporateTaxDispositions(proposal.entityType)) {
     const fiscalYear = parseInt(proposal.fiscalPeriod.period_end.slice(0, 4), 10)
+    const incomeReturn = filesIncomeReturn(proposal.entityType)
     return (
       <div className="space-y-6">
         <DepreciationPanel
@@ -242,15 +250,31 @@ export function DispositionsStep({
           onPosted={() => void loadProposals()}
           onTaxDirtyChange={setTaxDepreciationDirty}
         />
-        {filesIncomeReturn(proposal.entityType) === 'NE' ? (
+        {incomeReturn === 'NE' ? (
           <EfDeclarationSection
             fiscalPeriodId={periodId}
             bookedSurplus={proposal.netResultBefore}
             fiscalYear={fiscalYear}
           />
+        ) : incomeReturn === 'INK3' ? (
+          <Card>
+            <CardContent className="text-sm text-muted-foreground">
+              Inga bokslutsdispositioner bokförs för den här företagsformen. Skattemässiga
+              justeringar och fördelningen mellan skattefri och skattepliktig verksamhet görs i
+              underlaget för inkomstdeklaration 3, som också visar vad som ska skrivas in i
+              Skatteverkets e-tjänst. Avskrivningarna ovan bokförs som vanligt; gå vidare för att
+              förhandsgranska bokslutet.{' '}
+              <Link
+                href="/reports/ink3-declaration"
+                className="text-foreground underline underline-offset-2"
+              >
+                Öppna INK3-underlaget
+              </Link>
+            </CardContent>
+          </Card>
         ) : (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="text-sm text-muted-foreground">
               Inga bokslutsdispositioner eller deklarationsjusteringar förbereds för den här
               företagsformen ännu. Avskrivningarna ovan bokförs som vanligt; gå vidare för att
               förhandsgranska bokslutet.
@@ -262,18 +286,15 @@ export function DispositionsStep({
             Spara eller återställ ändringarna i skattemässig avskrivning innan du lämnar steget.
           </p>
         )}
-        <div className="flex justify-between">
+        <StepBar>
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
             onClick={onBack}
             disabled={taxDepreciationDirty}
           >
-            ← Tillbaka
+            Tillbaka
           </Button>
           <Button
-            variant="outline"
-            size="sm"
             onClick={onContinue}
             disabled={taxDepreciationDirty}
             title={
@@ -282,9 +303,9 @@ export function DispositionsStep({
                 : undefined
             }
           >
-            Nästa: Förhandsgranska →
+            Nästa: Förhandsgranska
           </Button>
-        </div>
+        </StepBar>
       </div>
     )
   }
@@ -296,24 +317,21 @@ export function DispositionsStep({
         onPosted={() => void loadProposals()}
         onTaxDirtyChange={setTaxDepreciationDirty}
       />
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Bokslutsdispositioner</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Resultat före dispositioner:{' '}
-            <span className="tabular-nums font-medium">
-              {formatCurrency(proposal.netResultBefore)}
-            </span>
-            . Justera beloppen och bocka av de dispositioner du vill boka.
-          </p>
-        </CardHeader>
-      </Card>
+      {/* The figure the dispositions start from, as one meta line; the
+          instructions live behind the wizard's "?". */}
+      <p className="px-1 text-xs text-muted-foreground">
+        Resultat före dispositioner:{' '}
+        <span className="tabular-nums text-foreground">
+          {formatCurrency(proposal.netResultBefore)}
+        </span>
+      </p>
 
       {proposal.taxAdjustments && (
         <TaxAdjustmentsCard
           snapshot={proposal.taxAdjustments}
           draft={taxAdjustmentDraft}
           taxProposal={proposal.proposals.find((item) => item.kind === 'bolagsskatt')}
+          taxBasis={proposal.taxBasis}
           saving={savingAdjustments}
           error={adjustmentError}
           onChange={setTaxAdjustmentDraft}
@@ -321,14 +339,32 @@ export function DispositionsStep({
         />
       )}
 
-      {proposal.warnings?.map((warning) => (
-        <Card key={warning}>
-          <CardContent className="p-4 text-sm text-attn flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-            <span>{warning}</span>
-          </CardContent>
-        </Card>
-      ))}
+      {/* The underskottsregister (IL 40 kap.) next to the 4.14 a it
+          prefills: present only while BOLAGET_COMPANY_IDS opens it. */}
+      {proposal.taxAdjustments?.lossRegister && (
+        <LossCarryforwardRegister periodId={periodId} onSaved={() => void loadProposals()} />
+      )}
+
+      {proposal.deferredTax && (
+        <DeferredTaxCard
+          periodId={periodId}
+          snapshot={proposal.deferredTax}
+          onSaved={(next) => {
+            setProposal(next)
+            setUi(createUiState(next))
+          }}
+        />
+      )}
+
+      {/* Attention is ochre sentences, not cards (conventions 6 and 12):
+          every disposition warning in one block. */}
+      {proposal.warnings && proposal.warnings.length > 0 && (
+        <div role="status" className="space-y-1 px-1">
+          {proposal.warnings.map((warning) => (
+            <AttnLine key={warning}>{warning}</AttnLine>
+          ))}
+        </div>
+      )}
 
       {(proposal.completedDispositions ?? []).map((completed) => (
         <Card key={`completed-${completed.kind}`}>
@@ -336,17 +372,17 @@ export function DispositionsStep({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <CardTitle className="text-base">{completed.label}</CardTitle>
-                <Badge
-                  variant={completed.status === 'booked' ? 'success' : 'warning'}
-                  className="mt-2 gap-1"
-                >
-                  {completed.status === 'booked' ? (
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                  ) : (
-                    <AlertTriangle className="h-3.5 w-3.5" />
-                  )}
-                  {completed.status === 'booked' ? 'Redan bokförd' : 'Behöver rättas'}
-                </Badge>
+                {completed.status === 'booked' ? (
+                  <span className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <CheckCircleIcon className="h-3.5 w-3.5" />
+                    Redan bokförd
+                  </span>
+                ) : (
+                  <Badge variant="warning" className="mt-2 gap-1">
+                    <ExclamationTriangleIcon className="h-3.5 w-3.5" />
+                    Behöver rättas
+                  </Badge>
+                )}
               </div>
               <p className="font-display text-2xl tabular-nums shrink-0">
                 {formatCurrency(completed.amount)}
@@ -366,7 +402,7 @@ export function DispositionsStep({
       {proposal.proposals.length === 0
         && (proposal.completedDispositions ?? []).length === 0 && (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="text-sm text-muted-foreground">
               Inga bokslutsdispositioner behöver bokföras utifrån det aktuella underlaget.
             </CardContent>
           </Card>
@@ -380,6 +416,9 @@ export function DispositionsStep({
           <ProposalCard
             key={key}
             proposal={p}
+            description={
+              p.kind === 'bolagsskatt' ? zeroedTaxDescription(proposal.taxBasis, t) : undefined
+            }
             accept={sel.accept}
             overrideAmount={sel.overrideAmount}
             lockedSkip={sel.lockedSkip}
@@ -394,7 +433,7 @@ export function DispositionsStep({
 
       {postError && (
         <Card>
-          <CardContent className="p-4 text-sm text-destructive">{postError}</CardContent>
+          <CardContent className="text-sm text-destructive">{postError}</CardContent>
         </Card>
       )}
 
@@ -404,35 +443,34 @@ export function DispositionsStep({
         </p>
       )}
 
-      <div className="flex justify-between">
+      <StepBar>
         <Button
-          variant="outline"
-          size="sm"
+          variant="ghost"
           onClick={onBack}
           disabled={posting || taxDepreciationDirty}
         >
-          ← Tillbaka
+          Tillbaka
         </Button>
         <Button
           onClick={handleCommit}
-          disabled={posting || hasCorrectionRequired || taxDepreciationDirty}
+          disabled={!canWrite || hasCorrectionRequired || taxDepreciationDirty}
+          loading={posting}
           title={
-            taxDepreciationDirty
+            lockedTitle ??
+            (taxDepreciationDirty
               ? 'Spara ändringarna i skattemässig avskrivning innan du fortsätter.'
-              : undefined
+              : undefined)
           }
         >
           {posting ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
-            </>
+            'Bokför…'
           ) : (
             <>
-              Bokför valda dispositioner <ArrowRight className="ml-1 h-4 w-4" />
+              Bokför valda dispositioner <ArrowRightIcon className="h-4 w-4" />
             </>
           )}
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -441,6 +479,7 @@ function TaxAdjustmentsCard({
   snapshot,
   draft,
   taxProposal,
+  taxBasis,
   saving,
   error,
   onChange,
@@ -449,37 +488,41 @@ function TaxAdjustmentsCard({
   snapshot: TaxAdjustmentSnapshot
   draft: TaxAdjustmentDraft
   taxProposal?: ProposedDisposition
+  taxBasis?: BolagsskattBasis
   saving: boolean
   error: string | null
   onChange: (draft: TaxAdjustmentDraft) => void
   onSave: () => void
 }) {
+  const { canWrite, lockedTitle } = useViewerLock()
   const detected = snapshot.items.filter(
     (item) => item.source === 'detected' && item.accountNumber && item.amount > 0,
   )
+  const t = useTranslations('dispositions_tax_basis')
   const computation = taxProposal?.computation
+  // The proposals the preview counts on but has not booked: they lead from
+  // the result in the books to the result after dispositions (accounted#180).
+  const pending = taxBasis?.pending ?? []
 
   return (
     <Card>
       <CardHeader>
+        {/* What återläggningar do (and do not) touch lives behind the
+            wizard's "?" on this step. */}
         <CardTitle className="text-base">Skattemässiga justeringar</CardTitle>
-        <p className="text-sm text-muted-foreground">
-          Återläggningar påverkar skatten och INK2, men skapar ingen egen verifikation och ändrar
-          inte en redan bokförd periodiseringsfond.
-        </p>
       </CardHeader>
       <CardContent className="space-y-5">
         {detected.length > 0 && (
           <div className="space-y-3">
             <Label>Upptäckt i bokföringen</Label>
             {detected.map((item) => {
-              const account = item.accountNumber as '6992' | '8423'
+              const account = item.accountNumber as string
               return (
                 <div key={item.sourceKey} className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <Checkbox
                       id={`tax-adjustment-${account}`}
-                      checked={draft.detectedAccounts[account]}
+                      checked={draft.detectedAccounts[account] ?? false}
                       onCheckedChange={(checked) =>
                         onChange({
                           ...draft,
@@ -547,11 +590,25 @@ function TaxAdjustmentsCard({
               efter en flytt från ett annat system. Dras av från årets skattemässiga resultat
               (INK2S punkt 4.14 a).
             </p>
+            <LossRegisterDeficitHint register={snapshot.lossRegister} />
           </div>
         </div>
 
         {computation && (
           <div className="rounded-lg bg-muted/50 p-4 text-sm space-y-1">
+            {taxBasis && pending.length > 0 && (
+              <>
+                <CalculationRow label={t('booked_result')} amount={taxBasis.bookedResultBeforeTax} />
+                {pending.map((item) => (
+                  <CalculationRow
+                    key={`${item.kind}:${item.label}`}
+                    label={item.label}
+                    amount={Math.abs(item.resultEffect)}
+                    prefix={item.resultEffect > 0 ? '+' : '-'}
+                  />
+                ))}
+              </>
+            )}
             <CalculationRow label="Resultat efter dispositioner" amount={numberValue(computation.resultBeforeTax)} />
             <CalculationRow label="Ej avdragsgilla kostnader" amount={numberValue(computation.nonDeductibleExpenses)} prefix="+" />
             <CalculationRow label="Ej skattepliktiga intäkter" amount={numberValue(computation.nonTaxableIncome)} prefix="-" />
@@ -564,8 +621,7 @@ function TaxAdjustmentsCard({
         )}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
-        <Button type="button" variant="outline" onClick={onSave} disabled={saving}>
-          {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button type="button" variant="outline" onClick={onSave} loading={saving} disabled={!canWrite} title={lockedTitle}>
           Spara och räkna om
         </Button>
       </CardContent>
@@ -594,12 +650,15 @@ function CalculationRow({
 
 function ProposalCard({
   proposal,
+  description,
   accept,
   overrideAmount,
   lockedSkip,
   onChange,
 }: {
   proposal: ProposedDisposition
+  /** Replaces the server's description (the 0 kr bolagsskatt, in the user's language). */
+  description?: string
   accept: boolean
   overrideAmount: number | undefined
   lockedSkip: boolean
@@ -614,10 +673,10 @@ function ProposalCard({
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
             <CardTitle className="text-base">{proposal.label}</CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">{proposal.description}</p>
+            <p className="text-sm text-muted-foreground mt-1">{description ?? proposal.description}</p>
             {proposal.required && (
               <Badge variant="warning" className="mt-2 gap-1">
-                <AlertTriangle className="h-3.5 w-3.5" /> Obligatorisk
+                <ExclamationTriangleIcon className="h-3.5 w-3.5" /> Obligatorisk
               </Badge>
             )}
           </div>
@@ -672,6 +731,28 @@ function ProposalCard({
   )
 }
 
+/**
+ * The 0 kr bolagsskatt card in the user's language: the proposals that take
+ * the tax to 0 kr, with what each takes off the result, the tax without them
+ * and the way to pay tax this year. Undefined when no proposal zeroes it.
+ */
+function zeroedTaxDescription(
+  basis: BolagsskattBasis | undefined,
+  t: ReturnType<typeof useTranslations<'dispositions_tax_basis'>>,
+): string | undefined {
+  const zeroed = explainZeroedTax(basis)
+  if (!zeroed) return undefined
+  const list = zeroed.zeroedBy
+    .map((item) => `${item.label} (${item.resultEffect > 0 ? '+' : '-'}${formatCurrency(Math.abs(item.resultEffect))})`)
+    .join(', ')
+  const sentences = [t('zeroed_by', { list })]
+  if (zeroed.taxWithout !== null) {
+    sentences.push(t('zeroed_without', { amount: formatCurrency(zeroed.taxWithout) }))
+  }
+  if (zeroed.canSkip) sentences.push(t('zeroed_skip'))
+  return sentences.join(' ')
+}
+
 function isOverridable(proposal: ProposedDisposition): boolean {
   // Bolagsskatt and SLP are derived from posted entries: overriding the amount
   // would silently break the journal posting (the calculator would still
@@ -719,6 +800,12 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
       case 'sarskild_loneskatt':
         items.push({ kind: 'sarskild_loneskatt' })
         break
+      case 'uppskjuten_skatt_kap29':
+        items.push({ kind: 'uppskjuten_skatt_kap29' })
+        break
+      case 'fond_for_utvecklingsutgifter':
+        items.push({ kind: 'fond_for_utvecklingsutgifter' })
+        break
       case 'periodiseringsfond_avsattning':
         items.push({
           kind: 'periodiseringsfond_avsattning',
@@ -752,7 +839,7 @@ const emptyTaxDraft: TaxAdjustmentDraft = {
   nonDeductibleExpenses: '0',
   nonTaxableIncome: '0',
   deficitCarryforward: '0',
-  detectedAccounts: { '6992': false, '8423': false },
+  detectedAccounts: {},
 }
 
 function createUiState(proposal: DispositionsProposal): UiState {
@@ -781,22 +868,23 @@ function createTaxAdjustmentDraft(
   const manualDeficit = snapshot.items.find(
     (item) => item.sourceKey === 'manual:deficit_carryforward',
   )
-  const account6992 = snapshot.items.find((item) => item.sourceKey === 'account:6992')
-  const account8423 = snapshot.items.find((item) => item.sourceKey === 'account:8423')
+  const detectedAccounts: Record<string, boolean> = {}
+  for (const item of snapshot.items) {
+    if (item.source === 'detected' && item.accountNumber) {
+      detectedAccounts[item.accountNumber] = Boolean(item.included)
+    }
+  }
   return {
     nonDeductibleExpenses: String(manualNonDeductible?.amount ?? 0),
     nonTaxableIncome: String(manualNonTaxable?.amount ?? 0),
     deficitCarryforward: String(manualDeficit?.amount ?? 0),
-    detectedAccounts: {
-      '6992': Boolean(account6992?.included),
-      '8423': Boolean(account8423?.included),
-    },
+    detectedAccounts,
   }
 }
 
 function parseNonNegativeAmount(value: string): number {
-  const parsed = Number(value.replace(',', '.'))
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+  const parsed = parseAmountInput(value)
+  return parsed !== null && parsed >= 0 ? parsed : 0
 }
 
 function numberValue(value: unknown): number {

@@ -1,16 +1,21 @@
 'use client'
 
-import { useState, useRef } from 'react'
-import { useTranslations } from 'next-intl'
+import { useState } from 'react'
+import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FileDropzone } from '@/components/ui/file-dropzone'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Upload, Trash2 } from 'lucide-react'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { ArrowUpTrayIcon, SpinnerIcon, TrashIcon } from '@/components/icons'
 import {
   SettingsGroup,
   SettingsRow,
 } from '@/components/settings/SettingsRows'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
+
+const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+const LOGO_ACCEPT = LOGO_TYPES.join(',')
 
 interface LogoUploadProps {
   logoUrl: string | null
@@ -19,17 +24,16 @@ interface LogoUploadProps {
 
 export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [isUploading, setIsUploading] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [preview, setPreview] = useState<string | null>(logoUrl)
-  const [isDragging, setIsDragging] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
 
-  const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
   function validateAndUpload(file: File) {
-    if (!ALLOWED_TYPES.includes(file.type)) {
+    if (!LOGO_TYPES.includes(file.type)) {
       toast({ title: t('logo_disallowed_type_title'), description: t('logo_disallowed_type_description'), variant: 'destructive' })
       return
     }
@@ -55,7 +59,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
       const result = await response.json()
 
       if (!response.ok) {
-        throw new Error(result.error || t('logo_upload_failed_default'))
+        throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('logo_upload_failed_default') }))
       }
 
       setPreview(result.data.logo_url)
@@ -76,39 +80,22 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
 
     try {
       const response = await fetch('/api/settings/logo', { method: 'DELETE' })
-      if (!response.ok) throw new Error()
+      if (!response.ok) {
+        const result = await response.json().catch(() => null)
+        throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('logo_delete_failed') }))
+      }
 
       setPreview(null)
       onUpdate(null)
-      if (inputRef.current) inputRef.current.value = ''
-    } catch {
-      toast({ title: t('logo_delete_failed'), variant: 'destructive' })
+    } catch (error) {
+      toast({
+        title: t('logo_delete_failed'),
+        description: error instanceof Error ? getUserErrorMessage(error) : undefined,
+        variant: 'destructive',
+      })
     }
 
     setIsDeleting(false)
-  }
-
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    validateAndUpload(file)
-  }
-
-  function handleDrop(e: React.DragEvent<HTMLButtonElement>) {
-    e.preventDefault()
-    setIsDragging(false)
-    const file = e.dataTransfer.files?.[0]
-    if (file) validateAndUpload(file)
-  }
-
-  function handleDragOver(e: React.DragEvent<HTMLButtonElement>) {
-    e.preventDefault()
-    setIsDragging(true)
-  }
-
-  function handleDragLeave(e: React.DragEvent<HTMLButtonElement>) {
-    e.preventDefault()
-    setIsDragging(false)
   }
 
   return (
@@ -116,65 +103,53 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
       <SettingsRow label={t('logo_heading')} help={t('logo_help')}>
         {preview ? (
           <>
-            <span className="inline-flex rounded-lg border border-border bg-muted/30 p-2">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={preview}
-                alt={t('logo_alt')}
-                className="max-h-10 max-w-32 object-contain"
-              />
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => inputRef.current?.click()}
-              disabled={isUploading}
-              className="text-muted-foreground hover:text-foreground"
+            {/* The logo itself is the change control: click it, or drop a new one on it. */}
+            <FileDropzone
+              onFile={validateAndUpload}
+              accept={LOGO_ACCEPT}
+              disabled={!canWrite || isUploading}
+              label={t('logo_change')}
+              className="inline-flex items-center gap-2 border p-2 text-sm text-muted-foreground"
             >
-              {isUploading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
-              {t('logo_change')}
-            </Button>
+              <span className="inline-flex rounded-sm bg-muted/30">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={preview}
+                  alt={t('logo_alt')}
+                  className="max-h-10 max-w-32 object-contain"
+                />
+              </span>
+              {isUploading ? <SpinnerIcon className="h-4 w-4 animate-spin" /> : <span className="px-1">{t('logo_change')}</span>}
+            </FileDropzone>
             <Button
               variant="outline"
-              size="sm"
               onClick={handleDelete}
-              disabled={isDeleting}
+              loading={isDeleting}
+              disabled={!canWrite}
+              title={lockedTitle}
               className="text-muted-foreground hover:text-destructive"
             >
-              {isDeleting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-2 h-3.5 w-3.5" />}
+              {!isDeleting && <TrashIcon className="h-3.5 w-3.5" />}
               {t('logo_remove')}
             </Button>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onDragEnter={handleDragOver}
-            onDragLeave={handleDragLeave}
-            disabled={isUploading}
-            className={`inline-flex min-h-10 items-center gap-2 rounded-lg border border-dashed px-4 py-2 text-sm text-muted-foreground transition-colors duration-150 disabled:opacity-50 ${
-              isDragging ? 'border-foreground bg-muted/40' : 'border-border hover:bg-muted/20'
-            }`}
+          <FileDropzone
+            onFile={validateAndUpload}
+            accept={LOGO_ACCEPT}
+            disabled={!canWrite || isUploading}
+            label={t('logo_pick_or_drop')}
+            className="inline-flex min-h-10 items-center gap-2 border px-4 py-2 text-sm text-muted-foreground"
           >
             {isUploading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
             ) : (
-              <Upload className="h-4 w-4 text-muted-foreground/60" />
+              <ArrowUpTrayIcon className="h-4 w-4 text-muted-foreground" />
             )}
             {isUploading ? t('logo_uploading') : t('logo_pick_or_drop')}
-          </button>
+          </FileDropzone>
         )}
       </SettingsRow>
-
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        className="hidden"
-        onChange={handleFileChange}
-      />
     </SettingsGroup>
   )
 }

@@ -1,12 +1,11 @@
 import Link from 'next/link'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { isSelfHosted } from '@/lib/env/public-flags'
 
 /**
  * Inline paywall note for a feature that is visible but not entitled.
- * The feature stays on screen (conversion surface: never hide, disable
- * with an upsell), this note explains why it's disabled and links to
+ * The feature stays on screen, disabled; this note explains why and links to
  * /settings/billing. Copy mirrors CAPABILITY_BLOCKED_MESSAGE_SV.
  *
  * On a SELF-HOST the note never mentions a subscription or links to the
@@ -19,11 +18,11 @@ export function UpgradeNote({ children, className }: { children?: React.ReactNod
   const frame = (content: React.ReactNode) => (
     <div
       className={cn(
-        'flex items-start gap-2.5 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground',
+        'flex items-start gap-2.5 rounded-lg bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground bg-control shadow-raised',
         className,
       )}
     >
-      <Lock className="h-4 w-4 mt-0.5 shrink-0" />
+      <LockClosedIcon className="h-4 w-4 mt-0.5 shrink-0" />
       <span>{content}</span>
     </div>
   )

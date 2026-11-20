@@ -228,6 +228,7 @@ describe('mapSupplierInvoice: VAT', () => {
         taxTotal: { taxAmount: { value: 250, currencyCode: 'SEK' } },
         lines: [{
           id: '1',
+          accountNumber: '4010',
           lineExtensionAmount: { value: 1000, currencyCode: 'SEK' },
           taxPercent: 25,
         }],
@@ -242,8 +243,12 @@ describe('mapSupplierInvoice: VAT', () => {
     const { items } = mapSupplierInvoice(
       supplierDto({
         currencyCode: 'EUR',
+        // Rows are held to their header, so the header is this line's own.
+        taxTotal: { taxAmount: { value: 19, currencyCode: 'EUR' } },
+        legalMonetaryTotal: { payableAmount: { value: 119, currencyCode: 'EUR' } },
         lines: [{
           id: '1',
+          accountNumber: '4010',
           lineExtensionAmount: { value: 100, currencyCode: 'EUR' },
           taxPercent: 19,
         }],
@@ -309,7 +314,7 @@ describe('mapSalesInvoice: free-text rows', () => {
   it('does not let a text row state a 0 % rate beside the priced rows', () => {
     // Fortnox ships "5 st M, 8 st L" as a row with Total 0 and VAT 0. Counting
     // that as a stated rate made the invoice "mixed" and nulled the header
-    // rate on roughly half of the Loftux and Clearstoq registers.
+    // rate on roughly half of two migrated registers.
     const { invoice } = mapSalesInvoice(
       salesDto({
         lines: [

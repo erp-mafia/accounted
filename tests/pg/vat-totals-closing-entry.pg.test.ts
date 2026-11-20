@@ -26,6 +26,8 @@ import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
 import {
   insertAuthUser,
+  insertPostedBankJournalEntry,
+  insertTransaction,
   insertCompany,
   insertCompanyMember,
   insertFiscalPeriod,
@@ -75,6 +77,13 @@ async function insertEntry(params: {
   reversesId?: string | null
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
+  if (params.sourceType === 'bank_transaction' && (params.status ?? 'posted') === 'posted') {
+    const amount = Math.round(params.lines.filter(line => line.account === '1930').reduce((sum, line) => sum + line.debit - line.credit, 0) * 100) / 100
+    const transactionId = await insertTransaction({ ...params, date: params.entryDate, amount })
+    return insertPostedBankJournalEntry({ ...params, transactionId,
+      lines: params.lines.map(line => ({ accountNumber: line.account, debitAmount: line.debit, creditAmount: line.credit })),
+    })
+  }
   const id = randomUUID()
   const status = params.status ?? 'posted'
   const client = await getPool().connect()

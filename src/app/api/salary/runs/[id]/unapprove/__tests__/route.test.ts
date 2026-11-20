@@ -8,7 +8,7 @@ import {
 } from '@/tests/helpers'
 
 // The route is wrapped in withRouteContext (auth via requireAuth, company via
-// getActiveCompanyId, write gate via requireWritePermission) — mock those.
+// getActiveCompanyId, write gate via requireWritePermission) - mock those.
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({
@@ -69,10 +69,11 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(404)
-    expect(body.error).toContain('hittades inte')
+    // Structured envelope since the rules moved to lib/salary/run-status-recall.ts (shared with v1/MCP).
+    expect(body.error.code).toBe('SALARY_RUN_NOT_FOUND')
   })
 
   it('returns 400 when the run is not approved (e.g. already paid)', async () => {
@@ -85,10 +86,12 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toContain('godkänd')
+    // Structured envelope since the rules moved to lib/salary/run-status-recall.ts (shared with v1/MCP).
+    expect(body.error.code).toBe('SALARY_RUN_UNAPPROVE_NOT_APPROVED')
+    expect(body.error.message).toContain('godkänd')
   })
 
   it('returns 409 when the AGI declaration has been submitted to Skatteverket', async () => {
@@ -97,16 +100,82 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: approvedRun },                              // salary_runs lookup
-      { data: { id: 'agi-1', status: 'submitted' } },     // agi_declarations lookup
+      { data: [{ id: 'agi-1', status: 'submitted' }] },   // agi_declarations lookup
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(409)
-    expect(body.error).toContain('Skatteverket')
+    // Structured envelope since the rules moved to lib/salary/run-status-recall.ts (shared with v1/MCP).
+    expect(body.error.code).toBe('SALARY_RUN_UNAPPROVE_AGI_FILED')
+    expect(body.error.message).toContain('Skatteverket')
     expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
+  // accounted#58: the read of the run's AGI declarations failed open. A failed
+  // read now refuses, and a run with more than one declaration is judged on
+  // all of them (.single() read two rows as none).
+  it('refuses with 500 and writes nothing when the AGI declaration read fails', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                                                  // salary_runs lookup
+      { data: null, error: { code: '57014', message: 'statement timeout' } }, // agi_declarations lookup
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('SALARY_RUN_UNAPPROVE_FAILED')
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when any of several AGI declarations of the run is filed', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                     // salary_runs lookup
+      { data: [
+        { id: 'agi-1', status: 'generated' },
+        { id: 'agi-2', status: 'pending_signature' },
+      ] },                                       // agi_declarations lookup
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_UNAPPROVE_AGI_FILED')
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('recalls a run with several unfiled declarations and deletes none of them', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                       // salary_runs lookup
+      { data: [
+        { id: 'agi-1', status: 'generated' },
+        { id: 'agi-2', status: 'generated' },
+      ] },                                         // agi_declarations lookup
+      { data: { id: 'run-1', status: 'review' } }, // salary_runs update
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(findCall('agi_declarations', 'delete')).toBeUndefined()
   })
 
   it('returns 409 when the run itself is stamped agi_submitted_at', async () => {
@@ -115,7 +184,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: { ...approvedRun, agi_submitted_at: '2026-07-01T10:00:00Z' } }, // run lookup
-      { data: null, error: { message: 'No rows' } },                          // agi lookup
+      { data: [] },                                                           // agi lookup (none)
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
@@ -125,22 +194,44 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
     expect(status).toBe(409)
   })
 
+  it('returns 409 SALARY_RUN_IN_BANK_PAYMENT when a bank payment of the run is live', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                            // salary_runs lookup
+      { data: [] },                                     // agi_declarations lookup (none)
+      // salary_run_recall_guard_bank_payments refuses the update
+      { data: null, error: { code: '23514', message: 'salary run has bank payments', hint: 'salary_run_in_bank_payment' } },
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_IN_BANK_PAYMENT')
+    expect(body.error.message).toMatch(/Lönen betalas via banken/)
+  })
+
   it('returns 409 when the run transitions concurrently between read and update', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)
 
     enqueueMany([
       { data: approvedRun },                            // salary_runs lookup
-      { data: null, error: { message: 'No rows' } },    // agi_declarations lookup
+      { data: [] },                                     // agi_declarations lookup (none)
       { data: null, error: { code: 'PGRST116', message: 'no rows returned' } }, // update matched 0 rows
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(409)
-    expect(body.error).toContain('ändrats')
+    // Structured envelope since the rules moved to lib/salary/run-status-recall.ts (shared with v1/MCP).
+    expect(body.error.code).toBe('SALARY_RUN_STATUS_CHANGED')
+    expect(body.error.message).toContain('ändrats')
     expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
@@ -150,7 +241,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: approvedRun },                          // salary_runs lookup
-      { data: null, error: { message: 'No rows' } },  // agi_declarations lookup (none)
+      { data: [] },                                   // agi_declarations lookup (none)
       { data: { id: 'run-1', status: 'review' } },    // salary_runs update
     ])
 
@@ -178,7 +269,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: approvedRun },                          // salary_runs lookup
-      { data: { id: 'agi-1', status: 'generated' } }, // agi_declarations lookup
+      { data: [{ id: 'agi-1', status: 'generated' }] }, // agi_declarations lookup
       { data: { id: 'run-1', status: 'review' } },    // salary_runs update
       { data: [{ id: 'agi-1' }] },                    // agi_declarations delete
     ])
@@ -193,6 +284,34 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
       expect.objectContaining({
         type: 'salary_run.approval_reverted',
         payload: expect.objectContaining({ deletedAgiDeclarationId: 'agi-1' }),
+      }),
+    )
+  })
+
+  it("keeps a correction run's unfiled declaration: it is the period's row, taken over from the original", async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { ...approvedRun, is_correction: true } }, // salary_runs lookup
+      { data: [{ id: 'agi-1', status: 'generated' }] },  // agi_declarations lookup
+      { data: { id: 'run-1', status: 'review' } },       // salary_runs update
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { status: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('review')
+    // The row carries the period's tax payment tracking; the cleared
+    // agi_generated_at makes the panel and the submit regenerate its XML.
+    expect(findCall('agi_declarations', 'delete')).toBeUndefined()
+    expect(findCall('salary_runs', 'update')?.[0]).toMatchObject({ agi_generated_at: null })
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'salary_run.approval_reverted',
+        payload: expect.objectContaining({ deletedAgiDeclarationId: null }),
       }),
     )
   })

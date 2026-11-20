@@ -16,15 +16,30 @@ const call = (body: unknown) =>
     params: Promise.resolve({ id: ID }),
   } as never)
 
+// The resolver reports the caller's role on the facts object it is handed;
+// withRouteContext's write guard reads it from there.
+function asRole(role: string) {
+  ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockImplementation(async (_s: unknown, _u: unknown, resolved?: { role?: string }) => {
+    if (resolved) resolved.role = role
+    return 'company-1'
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
-  ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
+  asRole('member')
 })
 
 describe('POST /api/arkiv/findings/[id]', () => {
+  it('is 403 for a viewer and writes nothing', async () => {
+    asRole('viewer')
+    expect((await parseJsonResponse(await call({ resolution: 'dismissed' }))).status).toBe(403)
+    expect(findCall('arkiv_findings', 'update')).toBeUndefined()
+  })
+
   it('rejects a resolution it does not know', async () => {
     expect((await parseJsonResponse(await call({ resolution: 'ignored' }))).status).toBe(400)
   })

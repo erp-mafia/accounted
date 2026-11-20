@@ -639,17 +639,17 @@ describe('commit_opening_balance_replacement', () => {
       `SELECT
          has_function_privilege(
            'authenticated',
-           'public.commit_opening_balance_replacement(uuid,uuid,uuid,uuid,date,text,text,jsonb,text,text)',
+           'public.commit_opening_balance_replacement(uuid,uuid,uuid,uuid,date,text,text,jsonb,text,text,uuid[],text)',
            'EXECUTE'
          ) AS authenticated_can,
          has_function_privilege(
            'service_role',
-           'public.commit_opening_balance_replacement(uuid,uuid,uuid,uuid,date,text,text,jsonb,text,text)',
+           'public.commit_opening_balance_replacement(uuid,uuid,uuid,uuid,date,text,text,jsonb,text,text,uuid[],text)',
            'EXECUTE'
          ) AS service_role_can,
          has_function_privilege(
            'anon',
-           'public.commit_opening_balance_replacement(uuid,uuid,uuid,uuid,date,text,text,jsonb,text,text)',
+           'public.commit_opening_balance_replacement(uuid,uuid,uuid,uuid,date,text,text,jsonb,text,text,uuid[],text)',
            'EXECUTE'
          ) AS anon_can`,
     )

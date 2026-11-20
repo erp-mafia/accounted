@@ -1,4 +1,10 @@
-import { HOSTED_MAX_UPLOAD_BYTES, isShrinkableImage } from './upload-size'
+import {
+  DOCUMENT_MAX_UPLOAD_BYTES,
+  HOSTED_MAX_UPLOAD_BYTES,
+  documentTooLargeMessage,
+  exceedsHostedUploadLimit,
+  isShrinkableImage,
+} from './upload-size'
 
 /**
  * Re-encode an oversized photo in the browser so it fits the platform's
@@ -69,4 +75,23 @@ export async function shrinkImageForUpload(
 function jpegName(name: string): string {
   const base = name.replace(/\.[^.]+$/, '') || 'underlag'
   return `${base}.jpg`
+}
+
+export type PreparedUpload = { ok: true; file: File } | { ok: false; message: string }
+
+/**
+ * The gate every document upload goes through before it leaves the browser
+ * (postDocumentForm then sends it inline or straight to Storage). A photo over
+ * the platform ceiling is still shrunk: the archive keeps a faithful copy
+ * either way, and a smaller one is cheaper to keep for seven years. What is
+ * refused here is only a file over the archive's own ceiling, with its size,
+ * instead of a refusal from the route after the bytes were sent (crm#203: a
+ * phone photo replacing a voucher's underlag failed as a bare "network error").
+ */
+export async function prepareDocumentUpload(file: File): Promise<PreparedUpload> {
+  const prepared = exceedsHostedUploadLimit(file.size) ? await shrinkImageForUpload(file) : file
+  if (prepared.size > DOCUMENT_MAX_UPLOAD_BYTES) {
+    return { ok: false, message: documentTooLargeMessage(prepared.size) }
+  }
+  return { ok: true, file: prepared }
 }

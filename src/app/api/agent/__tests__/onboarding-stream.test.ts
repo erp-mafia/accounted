@@ -1,5 +1,5 @@
 /**
- * Tests for POST /api/agent/onboarding/stream — auth surface only.
+ * Tests for POST /api/agent/onboarding/stream - auth surface only.
  *
  * The composer pipeline itself is exercised via lib tests; here we lock in
  * the guard order: 401, membership 403, and the viewer refusal (the pipeline
@@ -24,7 +24,7 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 }))
 vi.mock('@/lib/entitlements/keys', () => ({ CAPABILITY: { ai: 'ai' } }))
 
-// Pipeline internals — never reached in these tests, stubbed so the module loads.
+// Pipeline internals - never reached in these tests, stubbed so the module loads.
 vi.mock('@/lib/agent/composer/inputs', () => ({
   gatherComposerInputs: vi.fn(),
   inputsToSourceSignals: vi.fn(),
@@ -53,6 +53,7 @@ function mockAuth(userId: string | null, membership: { role: string } | null) {
   mockCreateClient.mockResolvedValue({
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: userId ? { id: userId } : null } }),
+      mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) },
     },
     from: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnThis(),
@@ -87,6 +88,6 @@ describe('POST /api/agent/onboarding/stream', () => {
     const req = createMockRequest('/api/agent/onboarding/stream', { method: 'POST', body: {} })
     const { status, body } = await parseJsonResponse<{ error: string }>(await POST(req))
     expect(status).toBe(403)
-    expect(body.error).toContain('läsbehörighet')
+    expect(body.error).toMatchObject({ code: 'FORBIDDEN', details: { code: 'ROLE_READ_ONLY' } })
   })
 })

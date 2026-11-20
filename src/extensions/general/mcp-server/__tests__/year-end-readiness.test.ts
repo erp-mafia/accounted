@@ -15,10 +15,16 @@ vi.mock('@/lib/core/bookkeeping/year-end-service', () => ({
   previewYearEndClosing: vi.fn(),
 }))
 
+vi.mock('@/lib/bokslut/dispositions-proposal-builder', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bokslut/dispositions-proposal-builder')>()),
+  bolagsskattOnLedger: vi.fn(),
+}))
+
 import {
   validateYearEndReadiness,
   previewYearEndClosing,
 } from '@/lib/core/bookkeeping/year-end-service'
+import { bolagsskattOnLedger } from '@/lib/bokslut/dispositions-proposal-builder'
 
 describe('gnubok_year_end_readiness: registration', () => {
   it('is registered in the tools array', () => {
@@ -63,10 +69,32 @@ describe('gnubok_year_end_readiness: registration', () => {
     'period_already_closed',
     'period_locked',
     'closing_entry_exists',
+    // Same reasoning as period_locked: the message says what releases the
+    // year (finish or undo the SIE import), and tools/list has no room.
+    'sie_import_unfinished',
+    // A year's dates only a person can settle: nothing to pre-check.
+    'next_period_not_calendar_year',
+    'next_period_overlaps',
+    // period_locked for the other lock: the message names the lock date and
+    // the way out, and the blocker carries the remediation with its tool.
+    'company_lock_date',
   ])
+
+  it('maps the company lock date codes to the company_lock_date kind', () => {
+    expect(YEAR_END_BLOCKER_KIND.COMPANY_LOCK_DATE).toBe('company_lock_date')
+    expect(YEAR_END_BLOCKER_KIND.COMPANY_LOCK_DATE_CHECK_FAILED).toBe('company_lock_date')
+  })
 
   it('maps the PERIOD_LOCKED readiness code to the period_locked kind', () => {
     expect(YEAR_END_BLOCKER_KIND.PERIOD_LOCKED).toBe('period_locked')
+  })
+
+  // Both directions of a prior result on the result account share one kind
+  // (the description budget names every kind verbatim); the message says
+  // which way to correct.
+  it('maps an over-disposed prior result to the prior_result_left kind', () => {
+    expect(YEAR_END_BLOCKER_KIND.PRIOR_RESULT_OVER_DISPOSED).toBe('prior_result_left')
+    expect(YEAR_END_BLOCKER_KIND.PRIOR_RESULT_NOT_DISPOSED).toBe('prior_result_left')
   })
 
   it('names every actionable blocker kind the tool can emit', () => {
@@ -76,7 +104,7 @@ describe('gnubok_year_end_readiness: registration', () => {
     )
     // Guards the summarizing itself: if a kind stops being period-state, or a
     // new one appears, it has to show up in the description.
-    expect(actionable.length).toBe(8)
+    expect(actionable.length).toBe(9)
     for (const kind of actionable) {
       expect(tool.description, `blocker kind ${kind} missing from description`).toContain(kind)
     }
@@ -112,6 +140,35 @@ function makeMockSupabase(period: Record<string, unknown> | null) {
       }),
     }),
   } as never
+}
+
+/**
+ * The period read ends in .single(); the draft list (agent feedback seq
+ * 978933) is awaited after .order().limit(). Records the draft query's
+ * filters so a test can assert it lists only this period's drafts.
+ */
+function makeMockSupabaseWithDrafts(
+  period: Record<string, unknown> | null,
+  drafts: Array<Record<string, unknown>>,
+) {
+  const draftFilters: Array<[string, unknown]> = []
+  let draftLimit: number | undefined
+  const from = vi.fn((table: string) => {
+    const chain: Record<string, unknown> = {}
+    chain.select = vi.fn(() => chain)
+    chain.eq = vi.fn((column: string, value: unknown) => {
+      if (table === 'journal_entries') draftFilters.push([column, value])
+      return chain
+    })
+    chain.order = vi.fn(() => chain)
+    chain.limit = vi.fn((n: number) => {
+      draftLimit = n
+      return Promise.resolve({ data: drafts, error: null })
+    })
+    chain.single = vi.fn().mockResolvedValue({ data: period, error: null })
+    return chain
+  })
+  return { supabase: { from } as never, draftFilters, draftLimit: () => draftLimit, from }
 }
 
 describe('gnubok_year_end_readiness: execute', () => {
@@ -151,16 +208,19 @@ describe('gnubok_year_end_readiness: execute', () => {
     })
 
     const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
-    const supabase = makeMockSupabase({
-      id: 'period-1',
-      name: '2026',
-      period_start: '2026-01-01',
-      period_end: '2026-12-31',
-      is_closed: false,
-      locked_at: null,
-      closing_entry_id: null,
-      continuity_verified: true,
-    })
+    const { supabase } = makeMockSupabaseWithDrafts(
+      {
+        id: 'period-1',
+        name: '2026',
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        is_closed: false,
+        locked_at: null,
+        closing_entry_id: null,
+        continuity_verified: true,
+      },
+      [],
+    )
 
     const result = (await tool.execute(
       { fiscal_period_id: 'period-1' },
@@ -181,6 +241,45 @@ describe('gnubok_year_end_readiness: execute', () => {
     ])
     expect(kinds).not.toContain('other')
     expect(result.summary).toMatch(/Inte klart/)
+  })
+
+  it('hands the company lock date blocker to the agent with the tool that moves the date', async () => {
+    const message =
+      'Bokföringen är låst till och med 2026-12-31, och bokslutet bokförs på räkenskapsårets sista dag (2026-12-31). Flytta först tillbaka låsdatumet under Inställningar → Bokföring. Om automatisk låsning är på: stäng av den medan bokslutet görs, annars kan datumet låsas igen nästa natt'
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: false,
+      blockers: [{ code: 'COMPANY_LOCK_DATE', message }],
+      errors: [message],
+      warnings: [],
+      draftCount: 0,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const supabase = makeMockSupabase({
+      id: 'period-1',
+      name: '2026',
+      period_start: '2026-01-01',
+      period_end: '2026-12-31',
+      is_closed: false,
+      locked_at: null,
+      closing_entry_id: null,
+      continuity_verified: true,
+    })
+
+    const result = (await tool.execute({ fiscal_period_id: 'period-1' }, 'company-1', 'user-1', supabase)) as {
+      ready: boolean
+      blockers: Array<{ kind: string; message: string; remediation?: { description: string; tool?: string } }>
+    }
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers).toHaveLength(1)
+    expect(result.blockers[0]).toMatchObject({ kind: 'company_lock_date', message })
+    expect(result.blockers[0].remediation?.tool).toBe('gnubok_update_bookkeeping_lock')
+    expect(result.blockers[0].remediation?.description).toMatch(/auto_lock_period_days: null/)
   })
 
   it('falls back to the wording heuristic for an unmapped blocker code', async () => {
@@ -282,5 +381,195 @@ describe('gnubok_year_end_readiness: execute', () => {
 
     expect(result.preview).not.toBeNull()
     expect(result.preview?.net_result).toBe(12345)
+  })
+
+  // Feedback seq 707985: the preview discloses the omföring the close books in
+  // the next period, including when it will skip it (built by
+  // previewYearEndClosing; the tool passes it through untouched).
+  it('passes the disclosed omföring through in the preview', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: true,
+      blockers: [],
+      errors: [],
+      warnings: [],
+      draftCount: 0,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+    const resultAppropriation = {
+      from_account: '2069',
+      to_account: '2068',
+      amount: 0,
+      direction: 'profit',
+      entry_date: '2025-01-01',
+      skipped_reason: 'already_disposed',
+      disposed_by: ['A1172'],
+    }
+    vi.mocked(previewYearEndClosing).mockResolvedValue({ netResult: 35059.47, resultAppropriation } as never)
+
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const supabase = makeMockSupabase({
+      id: 'period-1', name: '2024',
+      period_start: '2024-01-01', period_end: '2024-12-31',
+      is_closed: false, locked_at: null, closing_entry_id: null, continuity_verified: true,
+    })
+
+    const result = (await tool.execute(
+      { fiscal_period_id: 'period-1', include_preview: true },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { resultAppropriation?: unknown } | null }
+
+    expect(result.preview?.resultAppropriation).toEqual(resultAppropriation)
+  })
+
+  // Agent feedback seq 978933: readiness reported draft_count=1 and nothing an
+  // agent could act on. It now lists the drafts by id, so each one can be
+  // cancelled with gnubok_cancel_draft_entry or committed.
+  it('lists the drafts behind DRAFT_ENTRIES by id, capped at 20, for this period only', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: false,
+      blockers: [{ code: 'DRAFT_ENTRIES', message: '2 utkast måste bokföras eller raderas innan bokslut' }],
+      errors: ['2 utkast måste bokföras eller raderas innan bokslut'],
+      warnings: [],
+      draftCount: 2,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+    const mock = makeMockSupabaseWithDrafts(
+      {
+        id: 'period-1', name: '2026',
+        period_start: '2026-01-01', period_end: '2026-12-31',
+        is_closed: false, locked_at: null, closing_entry_id: null, continuity_verified: true,
+      },
+      [
+        { id: 'draft-1', voucher_series: 'A', entry_date: '2026-03-01', description: 'Hyra mars', source_type: 'manual', created_at: '2026-03-01T08:00:00Z' },
+        { id: 'draft-2', voucher_series: 'A', entry_date: '2026-04-01', description: 'Hyra april', source_type: 'manual', created_at: '2026-04-01T08:00:00Z' },
+      ],
+    )
+
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const result = (await tool.execute(
+      { fiscal_period_id: 'period-1' },
+      'company-1', 'user-1', mock.supabase,
+    )) as {
+      draft_count: number
+      drafts: Array<Record<string, unknown>>
+      blockers: Array<{ kind: string; remediation?: { tool?: string } }>
+    }
+
+    expect(result.draft_count).toBe(2)
+    expect(result.blockers[0]).toMatchObject({
+      kind: 'draft_entries',
+      remediation: { tool: 'gnubok_cancel_draft_entry' },
+    })
+    expect(result.drafts).toEqual([
+      { journal_entry_id: 'draft-1', voucher_series: 'A', entry_date: '2026-03-01', description: 'Hyra mars', source_type: 'manual', created_at: '2026-03-01T08:00:00Z' },
+      { journal_entry_id: 'draft-2', voucher_series: 'A', entry_date: '2026-04-01', description: 'Hyra april', source_type: 'manual', created_at: '2026-04-01T08:00:00Z' },
+    ])
+    expect(mock.draftFilters).toEqual(
+      expect.arrayContaining([
+        ['company_id', 'company-1'],
+        ['fiscal_period_id', 'period-1'],
+        ['status', 'draft'],
+      ]),
+    )
+    expect(mock.draftLimit()).toBe(20)
+  })
+
+  it('skips the draft read and answers an empty list when there are no drafts', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: true,
+      blockers: [],
+      errors: [],
+      warnings: [],
+      draftCount: 0,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+    const mock = makeMockSupabaseWithDrafts(
+      {
+        id: 'period-1', name: '2026',
+        period_start: '2026-01-01', period_end: '2026-12-31',
+        is_closed: false, locked_at: null, closing_entry_id: null, continuity_verified: true,
+      },
+      [],
+    )
+
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const result = (await tool.execute(
+      { fiscal_period_id: 'period-1' },
+      'company-1', 'user-1', mock.supabase,
+    )) as { drafts: unknown[] }
+
+    expect(result.drafts).toEqual([])
+    expect(mock.from).not.toHaveBeenCalledWith('journal_entries')
+  })
+})
+
+/**
+ * crm#1726: the readiness preview said bolagsskattMissing for a profit year
+ * whose tax, with its ej skattepliktiga intäkter and underskott, is 0 kr. The
+ * web preview drops the flag on that real state (accounted#180); so does the
+ * tool now.
+ */
+describe('gnubok_year_end_readiness: bolagsskattMissing is real state only', () => {
+  const ready = () =>
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: true,
+      blockers: [],
+      errors: [],
+      warnings: [],
+      draftCount: 0,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+  const run = async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const supabase = makeMockSupabase({
+      id: 'period-1', name: '2025',
+      period_start: '2025-01-01', period_end: '2025-12-31',
+      is_closed: false, locked_at: null, closing_entry_id: null, continuity_verified: true,
+    })
+    return (await tool.execute(
+      { fiscal_period_id: 'period-1', include_preview: true },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { bolagsskattMissing?: boolean } | null }
+  }
+
+  beforeEach(() => {
+    vi.mocked(bolagsskattOnLedger).mockReset()
+    ready()
+    vi.mocked(previewYearEndClosing).mockResolvedValue({ netResult: 50_000, bolagsskattMissing: true } as never)
+  })
+
+  it('drops the flag when the tax on the ledger is 0 kr', async () => {
+    vi.mocked(bolagsskattOnLedger).mockResolvedValue(0)
+    const result = await run()
+    expect(result.preview?.bolagsskattMissing).toBe(false)
+    expect(bolagsskattOnLedger).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1')
+  })
+
+  it('keeps the flag when the ledger carries tax', async () => {
+    vi.mocked(bolagsskattOnLedger).mockResolvedValue(10_300)
+    expect((await run()).preview?.bolagsskattMissing).toBe(true)
+  })
+
+  it('keeps the flag when the tax check fails', async () => {
+    vi.mocked(bolagsskattOnLedger).mockRejectedValue(new Error('trial balance unavailable'))
+    expect((await run()).preview?.bolagsskattMissing).toBe(true)
+  })
+
+  it('does not compute the tax when the preview raises no tax line', async () => {
+    vi.mocked(previewYearEndClosing).mockResolvedValue({ netResult: -100, bolagsskattMissing: false } as never)
+    await run()
+    expect(bolagsskattOnLedger).not.toHaveBeenCalled()
   })
 })

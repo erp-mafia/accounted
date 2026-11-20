@@ -9,7 +9,11 @@
  * original run's journal entries are cancelled with storno reversals through
  * `reverseEntry()` (the bookkeeping engine assigns the reversal voucher
  * numbers atomically) and a fresh draft run for the same period replaces it.
- * Both the original and the correction stay visible in the journal.
+ * Both the original and the correction stay visible in the journal. The
+ * stornos go through the posting port (reverseJournalEntry): while
+ * POSTING_EVENTS is shadow or strict, the run's correction is one business
+ * event (salaryRunCorrectionBusinessEvent) linked to every storno before its
+ * voucher number is drawn.
  *
  * Order of operations (identical to the dashboard route it replaces):
  *
@@ -17,14 +21,20 @@
  *      not found / not booked / already corrected.
  *   2. Storno every journal entry the run points at, in the fixed order
  *      salary, avgifter, vacation, pension. An entry a concurrent call
- *      already reversed (EntryAlreadyReversedError) is skipped.
+ *      already reversed (EntryAlreadyReversedError) is skipped. An entry
+ *      someone corrected with storno + rättelse is reversed already, but its
+ *      pay lives on in the rättelse: that posted rättelse is stornoed in its
+ *      place (postedRattelserOf), or the correction run books the period a
+ *      second time.
  *   3. Mark the original run `corrected`.
  *   4. Revoke the original's emailed payslip links (they now show "ersatt").
  *   5. Insert the correction run: same period, payment date, deviation
  *      period and voucher series, `is_correction = true`, `corrects_run_id`.
  *   6. Copy the original roster and line items onto the correction run so
- *      the operator edits a populated draft (provenance columns survive so a
- *      recalculation does not derive benefits/recurring rows a second time).
+ *      the operator edits a populated draft: every column but identity,
+ *      timestamps, the parent link, the calculation proof and the utlägg
+ *      claim link (provenance survives so a recalculation does not derive
+ *      engine rows a second time).
  *   7. Sync the vacation ledger for the affected employees (non-fatal).
  *
  * Failure states (there is no transaction around steps 2-6; the caller
@@ -51,17 +61,26 @@
  *     correction and nothing is lost. Any other DB error (`DB_ERROR`, stage
  *     `insert_correction_run`) leaves the same state; the operator creates
  *     the correction run by hand (POST /salary-runs with the same period).
- *   - Roster copy or vacation-ledger failure after step 5 is non-fatal:
- *     the correction run exists and the caller gets `ok: true` with
- *     `warnings`; the operator re-attaches missing employees.
+ *   - Roster copy failure in step 6 (`DB_ERROR`, stage `copy_roster`): the
+ *     correction run is deleted again (a fresh draft, nothing references
+ *     it), which leaves the step 5 insert-failure state; calling the verb
+ *     again resumes at step 5. Should that delete fail too, the half-copied
+ *     draft remains: delete it (it is a draft) and call again.
+ *   - Vacation-ledger failure in step 7 is non-fatal: the caller gets
+ *     `ok: true` with `warnings`.
  *
  * Every query filters by company_id (defense in depth alongside RLS: the
  * v1 surface runs on a service-role client).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { CannotReverseNonPostedError, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
+import { isCachedDefaultAccount } from '@/lib/salary/account-mapping'
 import { revokeLinksForRun } from '@/lib/salary/payslips/links'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 
@@ -110,7 +129,11 @@ export interface CorrectSalaryRunPreview {
     deviation_period_start: string | null
     deviation_period_end: string | null
   }
-  /** Original journal entries the live call would storno, in reversal order. */
+  /**
+   * Journal entries the live call would storno, in reversal order: the run's
+   * posted entries, and for one already corrected with storno + rättelse the
+   * posted rättelse that replaced it.
+   */
   entries_to_reverse: string[]
   /** The draft the live call would insert. */
   correction_run: {
@@ -131,11 +154,15 @@ export type CorrectSalaryRunLiveResult = {
   dryRun: false
   originalRunId: string
   correctionRun: CorrectionSalaryRunRow
-  /** Original entries that are reversed after this call (including ones a concurrent call reversed first). */
+  /**
+   * Entries that are reversed after this call: the run's own (including ones
+   * a concurrent call reversed first) and any posted rättelse of them it
+   * stornoed in their place.
+   */
   reversedEntryIds: string[]
   /** ISO timestamp taken when the original was marked `corrected`. */
   stampedAt: string
-  /** Non-fatal problems after the correction run existed (roster copy, ledger sync). */
+  /** Non-fatal problems after the correction run existed (status flip, ledger sync). */
   warnings: string[]
 }
 
@@ -170,7 +197,7 @@ export type CorrectSalaryRunFailure =
        */
       ok: false
       code: 'DB_ERROR'
-      stage: 'load_run' | 'insert_correction_run'
+      stage: 'load_run' | 'insert_correction_run' | 'copy_roster'
       error: unknown
     }
   | {
@@ -208,6 +235,34 @@ export interface CorrectSalaryRunArgs {
 /** Postgres unique_violation. */
 const UNIQUE_VIOLATION = '23505'
 
+/**
+ * The business event of a salary run's correction (kind ledger.storno, role
+ * reversal), for the posting port: ONE event for the stornos of every
+ * verifikat of the run, recorded while POSTING_EVENTS is shadow or strict and
+ * never built while it is off. Pure. The subject is the corrected run; the
+ * act is dated the day the correction is made, as the removal of an utlägg
+ * is. No party, no amount and no rule version: a storno mirrors the run's own
+ * lines, the run names its employees, and the correction run booked later
+ * records its own payroll.salary_paid event. Each storno call passes the same
+ * idempotency key, so the first records the event and every later storno of
+ * the run, in this call or in a retry, is linked to that same event.
+ */
+export function salaryRunCorrectionBusinessEvent(
+  runId: string,
+  occurredOn: string,
+  linkBasis: LinkBasisColumns,
+): BusinessEventDraft {
+  return {
+    kind: 'ledger.storno',
+    occurredOn,
+    subject: { type: 'salary_run', id: runId },
+    evidence: { link_basis: linkBasis.link_basis, link_evidence: linkBasis.link_evidence ?? undefined },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    jurisdiction: 'SE',
+    idempotencyKey: `ledger.storno:salary_run:${runId}`,
+  }
+}
+
 function entryIdsOf(run: CorrectableSalaryRunRow): string[] {
   return [
     run.salary_entry_id,
@@ -217,8 +272,175 @@ function entryIdsOf(run: CorrectableSalaryRunRow): string[] {
   ].filter((id): id is string => Boolean(id))
 }
 
+/** Deepest rättelse-of-a-rättelse chain followed; real chains are one or two long. */
+const MAX_RATTELSE_DEPTH = 10
+
+/**
+ * The posted rättelser that replace `entryId`. Correcting a run verifikat with
+ * storno + rättelse (storno-service: the original is reversed and a new
+ * verifikat carries correction_of_id = the original) leaves the run pointing at
+ * the reversed original while the pay lives on in the rättelse. A rättelse can
+ * itself be corrected, so the chain is followed down to what is posted now.
+ */
+async function postedRattelserOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryId: string,
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: unknown }> {
+  const posted: string[] = []
+  let frontier = [entryId]
+  for (let depth = 0; depth < MAX_RATTELSE_DEPTH && frontier.length > 0; depth++) {
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .select('id, status')
+      .eq('company_id', companyId)
+      .in('correction_of_id', frontier)
+    if (error) return { ok: false, error }
+    const rows = (data || []) as Array<{ id: string; status: string }>
+    posted.push(...rows.filter((row) => row.status === 'posted').map((row) => row.id))
+    frontier = rows.filter((row) => row.status === 'reversed').map((row) => row.id)
+  }
+  return { ok: true, ids: posted }
+}
+
+/** An entry that is already reversed: by a concurrent call, an earlier attempt or a user's storno. */
+function isAlreadyReversed(err: unknown): boolean {
+  return (
+    err instanceof EntryAlreadyReversedError ||
+    (err instanceof CannotReverseNonPostedError && err.currentStatus === 'reversed')
+  )
+}
+
+/**
+ * What the live call would storno, for the preview: each posted run entry, and
+ * for a reversed one the posted rättelser that replace it. Read-only.
+ */
+async function entriesToReverse(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryIds: string[],
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: unknown }> {
+  if (entryIds.length === 0) return { ok: true, ids: [] }
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id, status')
+    .eq('company_id', companyId)
+    .in('id', entryIds)
+  if (error) return { ok: false, error }
+  const statusById = new Map(((data || []) as Array<{ id: string; status: string }>).map((row) => [row.id, row.status]))
+  const ids: string[] = []
+  for (const entryId of entryIds) {
+    if (statusById.get(entryId) !== 'reversed') {
+      ids.push(entryId)
+      continue
+    }
+    const replacements = await postedRattelserOf(supabase, companyId, entryId)
+    if (!replacements.ok) return replacements
+    ids.push(...replacements.ids)
+  }
+  return { ok: true, ids }
+}
+
 function correctionNotes(run: CorrectableSalaryRunRow): string {
   return `Korrigering av lönekörning ${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+}
+
+/**
+ * Copies `row` without its own identity and timestamps (the database assigns
+ * fresh ones) and without the `omit` columns. Everything else is copied as
+ * it is, so a column added to the table later survives the correction
+ * without anyone remembering to list it here.
+ */
+function copyColumns(row: Record<string, unknown>, omit: string[]): Record<string, unknown> {
+  const skip = new Set(['id', 'created_at', 'updated_at', ...omit])
+  return Object.fromEntries(Object.entries(row).filter(([column]) => !skip.has(column)))
+}
+
+type RosterRow = Record<string, unknown> & {
+  employee_id: string
+  employee?: { employment_type?: string | null } | null
+  line_items?: Array<Record<string, unknown>>
+}
+
+/**
+ * Step 6: the original roster (snapshots, overrides, AGI flags) and every
+ * line item onto the correction run, one bulk insert each, uncalculated.
+ * Line provenance (calculation_source, source_benefit_id,
+ * source_recurring_line_id) must survive: without it a recalculation treats
+ * the copied engine rows as manual pay and derives them a second time.
+ *
+ * A line account the original run cached as a default (isCachedDefaultAccount,
+ * the backfill migration's rule) is not carried either: the correction books
+ * on the default resolved at its own booking, like any unbooked run.
+ *
+ * source_expense_claim_id is the one line column not carried: a partial unique
+ * index keeps a claim on one payslip line, the original run's line keeps it,
+ * and the original salary verifikat's payout batch already settled the
+ * claim. The copied line still repays the amount on its 2820 account.
+ */
+async function copyRosterToCorrection(
+  supabase: SupabaseClient,
+  companyId: string,
+  originalRunId: string,
+  correctionRunId: string,
+): Promise<{ ok: true; roster: RosterRow[] } | { ok: false; error: unknown }> {
+  const { data: originalEmployees, error: rosterError } = await supabase
+    .from('salary_run_employees')
+    .select('*, employee:employees(employment_type), line_items:salary_line_items(*)')
+    .eq('salary_run_id', originalRunId)
+    .eq('company_id', companyId)
+  if (rosterError) return { ok: false, error: rosterError }
+
+  const roster = (originalEmployees || []) as RosterRow[]
+  if (roster.length === 0) return { ok: true, roster }
+
+  // calculation_breakdown stays behind: it is the proof that the engine ran
+  // against this run's inputs, and approve and book refuse a row without it
+  // (calculation-state.ts). The correction has not been calculated yet.
+  const { data: copiedEmployees, error: employeeError } = await supabase
+    .from('salary_run_employees')
+    .insert(
+      roster.map((sre) => ({
+        ...copyColumns(sre, ['salary_run_id', 'employee', 'line_items', 'calculation_breakdown']),
+        salary_run_id: correctionRunId,
+        company_id: companyId,
+      })),
+    )
+    .select('id, employee_id')
+  if (employeeError) return { ok: false, error: employeeError }
+
+  // UNIQUE (salary_run_id, employee_id): one copied row per employee.
+  const copiedIdByEmployee = new Map(
+    ((copiedEmployees || []) as Array<{ id: string; employee_id: string }>).map((sre) => [sre.employee_id, sre.id]),
+  )
+  const lineItems: Array<Record<string, unknown>> = []
+  for (const sre of roster) {
+    const copiedId = copiedIdByEmployee.get(sre.employee_id)
+    if (!copiedId) {
+      return { ok: false, error: new Error(`employee ${sre.employee_id} was not copied to the correction run`) }
+    }
+    const employmentType = sre.employee?.employment_type || 'employee'
+    for (const li of sre.line_items || []) {
+      const cachedDefault = isCachedDefaultAccount(
+        li.item_type as string,
+        li.account_number as string | null,
+        employmentType,
+      )
+      lineItems.push({
+        ...copyColumns(li, ['salary_run_employee_id']),
+        salary_run_employee_id: copiedId,
+        company_id: companyId,
+        source_expense_claim_id: null,
+        ...(cachedDefault ? { account_number: null } : {}),
+      })
+    }
+  }
+  if (lineItems.length === 0) return { ok: true, roster }
+
+  const { error: lineError } = await supabase.from('salary_line_items').insert(lineItems)
+  if (lineError) return { ok: false, error: lineError }
+
+  return { ok: true, roster }
 }
 
 export function correctSalaryRun(
@@ -295,6 +517,11 @@ export async function correctSalaryRun(
   const entryIds = entryIdsOf(originalRun)
 
   if (args.dryRun) {
+    // Reading the run's verifikat is part of loading the run.
+    const toReverse = resume ? { ok: true as const, ids: [] } : await entriesToReverse(supabase, companyId, entryIds)
+    if (!toReverse.ok) {
+      return { ok: false, code: 'DB_ERROR', stage: 'load_run', error: toReverse.error }
+    }
     return {
       ok: true,
       dryRun: true,
@@ -309,7 +536,7 @@ export async function correctSalaryRun(
           deviation_period_start: originalRun.deviation_period_start ?? null,
           deviation_period_end: originalRun.deviation_period_end ?? null,
         },
-        entries_to_reverse: resume ? [] : entryIds,
+        entries_to_reverse: toReverse.ids,
         correction_run: {
           period_year: originalRun.period_year,
           period_month: originalRun.period_month,
@@ -332,31 +559,48 @@ export async function correctSalaryRun(
   const warnings: string[] = []
   const stampedAt = new Date().toISOString()
   if (!resume) {
+  const correctedOn = todayIsoStockholm()
+  const storno = (entryId: string) =>
+    postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      // Built only while the port is on: off, reverseEntry gets the call it always did.
+      event: () => salaryRunCorrectionBusinessEvent(runId, correctedOn, linkBasisColumns('user_created')),
+      role: 'reversal',
+    })
+  const reversalFailed = (entryId: string, err: unknown, index: number): CorrectSalaryRunFailure => ({
+    ok: false,
+    code: 'REVERSAL_FAILED',
+    error: err,
+    details: {
+      entry_id: entryId,
+      reversed_entry_ids: [...reversedEntryIds],
+      remaining_entry_ids: entryIds.slice(index + 1),
+    },
+  })
   for (const [index, entryId] of entryIds.entries()) {
     try {
-      await reverseEntry(supabase, companyId, userId, entryId)
+      await storno(entryId)
     } catch (err) {
-      // Already reversed: by a concurrent call (EntryAlreadyReversedError) or
-      // by an earlier attempt of this verb that failed further down the loop
-      // (the entry is then in status 'reversed'). Either way the outcome is
-      // the one we want, so a retry resumes instead of dead-ending.
-      if (
-        err instanceof EntryAlreadyReversedError ||
-        (err instanceof CannotReverseNonPostedError && err.currentStatus === 'reversed')
-      ) {
-        reversedEntryIds.push(entryId)
-        continue
+      if (!isAlreadyReversed(err)) return reversalFailed(entryId, err, index)
+      // Already reversed: by a concurrent call, by an earlier attempt of this
+      // verb that failed further down the loop, or by a user's storno +
+      // rättelse. In the last case the pay lives on in the rättelse, so it is
+      // stornoed in the original's place; the first two leave none to find.
+      const replacements = await postedRattelserOf(supabase, companyId, entryId)
+      if (!replacements.ok) return reversalFailed(entryId, replacements.error, index)
+      reversedEntryIds.push(entryId)
+      for (const replacementId of replacements.ids) {
+        try {
+          await storno(replacementId)
+        } catch (replacementErr) {
+          if (!isAlreadyReversed(replacementErr)) return reversalFailed(replacementId, replacementErr, index)
+        }
+        reversedEntryIds.push(replacementId)
       }
-      return {
-        ok: false,
-        code: 'REVERSAL_FAILED',
-        error: err,
-        details: {
-          entry_id: entryId,
-          reversed_entry_ids: [...reversedEntryIds],
-          remaining_entry_ids: entryIds.slice(index + 1),
-        },
-      }
+      continue
     }
     reversedEntryIds.push(entryId)
   }
@@ -418,64 +662,20 @@ export async function correctSalaryRun(
   }
   const correctionRun = correctionRow as CorrectionSalaryRunRow
 
-  // 6. Copy the roster (with the engine's snapshot columns) and line items.
-  const { data: originalEmployees, error: rosterError } = await supabase
-    .from('salary_run_employees')
-    .select('*, line_items:salary_line_items(*)')
-    .eq('salary_run_id', runId)
-    .eq('company_id', companyId)
-  if (rosterError) {
-    warnings.push(`roster copy skipped: ${rosterError.message}`)
+  // 6. Copy the roster and line items. A failure removes the correction run
+  //    again: the state is then the one an insert failure in step 5 leaves,
+  //    and calling the verb again resumes there. A correction draft missing
+  //    employees or lines would otherwise be booked as if it were complete.
+  const copy = await copyRosterToCorrection(supabase, companyId, runId, correctionRun.id)
+  if (!copy.ok) {
+    await supabase
+      .from('salary_runs')
+      .delete()
+      .eq('id', correctionRun.id)
+      .eq('company_id', companyId)
+    return { ok: false, code: 'DB_ERROR', stage: 'copy_roster', error: copy.error }
   }
-
-  const roster = (originalEmployees || []) as Array<Record<string, unknown>>
-  for (const origEmp of roster) {
-    const { data: newSre } = await supabase
-      .from('salary_run_employees')
-      .insert({
-        salary_run_id: correctionRun.id,
-        employee_id: origEmp.employee_id,
-        company_id: companyId,
-        employment_degree: origEmp.employment_degree,
-        monthly_salary: origEmp.monthly_salary,
-        salary_type: origEmp.salary_type,
-        hours_worked: origEmp.hours_worked,
-        tax_table_number: origEmp.tax_table_number,
-        tax_column: origEmp.tax_column,
-      })
-      .select()
-      .single()
-
-    if (!newSre) {
-      warnings.push(`employee ${String(origEmp.employee_id)} was not copied to the correction run`)
-      continue
-    }
-
-    const lineItems = (origEmp.line_items || []) as Array<Record<string, unknown>>
-    for (const li of lineItems) {
-      await supabase.from('salary_line_items').insert({
-        salary_run_employee_id: (newSre as { id: string }).id,
-        company_id: companyId,
-        item_type: li.item_type,
-        description: li.description,
-        quantity: li.quantity,
-        unit_price: li.unit_price,
-        amount: li.amount,
-        is_taxable: li.is_taxable,
-        is_avgift_basis: li.is_avgift_basis,
-        is_vacation_basis: li.is_vacation_basis,
-        is_gross_deduction: li.is_gross_deduction,
-        is_net_deduction: li.is_net_deduction,
-        account_number: li.account_number,
-        sort_order: li.sort_order,
-        // Provenance must survive the copy: without these back-links a
-        // recalculation of the correction run treats the copied derived
-        // rows as manual and step 8d/8d3 derives them a second time.
-        source_benefit_id: li.source_benefit_id ?? null,
-        source_recurring_line_id: li.source_recurring_line_id ?? null,
-      })
-    }
-  }
+  const roster = copy.roster
 
   // 7. Vacation ledger sync: the original flipped to 'corrected', so its
   //    vacation_days_taken drop out of the recomputed taken_days. Non-fatal:

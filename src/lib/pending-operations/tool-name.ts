@@ -10,7 +10,7 @@ const TOOL_NAME_PREFIX = 'gnubok_'
 
 /**
  * MCP tool name -> bare operation_type. A name without the prefix is already
- * a bare operation_type (or a non-gnubok tool) and passes through unchanged.
+ * a bare operation_type (or a tool outside this namespace) and passes through unchanged.
  */
 export function operationTypeFromToolName(toolName: string): string {
   return toolName.startsWith(TOOL_NAME_PREFIX)

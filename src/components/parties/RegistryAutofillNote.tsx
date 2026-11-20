@@ -3,7 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { describeFilledFields } from '@/lib/parties/registry-form-fill'
 import { listSv } from '@/lib/parties/registry-summary'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import type { RegistryAutofillState } from './use-registry-autofill'
 
 /**
@@ -21,7 +21,7 @@ export function RegistryAutofillNote({ state }: { state: RegistryAutofillState }
       text = t('autofill_looking')
       break
     case 'not_found':
-      text = t('autofill_not_found', { org: formatOrgNumber(state.orgNumber) })
+      text = t('autofill_not_found', { org: formatOrgNumberDisplay(state.orgNumber) })
       break
     case 'found':
       text = t('autofill_found', { name: state.name })

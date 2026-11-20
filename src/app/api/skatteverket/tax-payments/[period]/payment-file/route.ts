@@ -1,16 +1,23 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
-import { resolveBatchDebtor } from '@/lib/payments/batch-service'
+import { paysThroughSwedbankIso2, resolveBatchDebtor, supplierPain001Debtor } from '@/lib/payments/batch-service'
+import { NORDEA_AGREEMENT_ID_MISSING_SV, NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
+import { payingAccountMissingSv } from '@/lib/payments/paying-account'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import { parseEntityType } from '@/lib/company/entity-type'
+import { bankFileIdOrg, readCompanyOrgNumber } from '@/lib/company/org-number'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
-import { getBranding } from '@/lib/branding/service'
 import { roundOre } from '@/lib/money'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declaration'
+import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
+import { nextBankDayIso, previousBankDayIso } from '@/lib/payments/bank-days'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Generate the payment file for paying skatt + arbetsgivaravgifter for a
@@ -28,10 +35,14 @@ ensureInitialized()
  * requireWrite: this GET mutates state (stamps tax_payment_file_generated_at
  * on the AGI declaration), so it retains the non-viewer role gate the
  * hand-rolled version enforced.
+ *
+ * An unfiled declaration of a month in which another live run is also paid
+ * out holds one run's totals: no file pays it (AGI_PAYMENT_PERIOD_CONFLICT,
+ * crm#1768), and nothing is stamped.
  */
 export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   'tax_payment.payment_file',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId }, { params }) => {
   const { period } = await params
   const periodMatch = /^(\d{4})-(\d{2})$/.exec(period)
   if (!periodMatch) {
@@ -53,7 +64,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   const { data: agi } = await supabase
     .from('agi_declarations')
-    .select('id, total_tax, total_avgifter')
+    .select('id, status, salary_run_id, total_tax, total_avgifter')
     .eq('company_id', companyId)
     .eq('period_year', periodYear)
     .eq('period_month', periodMonth)
@@ -64,6 +75,25 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       { error: `Ingen AGI för perioden ${period}. Generera AGI först.` },
       { status: 404 }
     )
+  }
+
+  // One run's totals while another live run is paid out in the month: the
+  // file would leave that run's skatt and avgifter unpaid. A failed read
+  // refuses too (thrown: the wrapper answers it).
+  const check = await readAgiPaymentPeriodConflict(supabase, companyId, {
+    salary_run_id: agi.salary_run_id ?? null,
+    status: agi.status,
+    period_year: periodYear,
+    period_month: periodMonth,
+  })
+  if (!check.ok) throw check.error
+  if (check.conflict) {
+    return errorResponseFromCode(check.conflict.code, log, {
+      requestId,
+      details: check.conflict.details,
+      messageSv: check.conflict.messageSv,
+      messageEn: check.conflict.messageEn,
+    })
   }
 
   // Declarations generated since the whole-krona change store the declared
@@ -90,7 +120,8 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     .eq('id', companyId)
     .single()
 
-  if (!company || !company.org_number) {
+  const orgNumber = company ? await readCompanyOrgNumber(supabase, companyId) : null
+  if (!company || !orgNumber) {
     return NextResponse.json(
       { error: 'Organisationsnummer saknas för företaget.' },
       { status: 400 }
@@ -100,29 +131,49 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   // The reference is the company's twelve-digit identity plus a Luhn check
   // digit (13 digits), not the ten-digit form: Skatteverket rejects the short
   // one. Skatteverket's own reported OCR wins when the skattekonto has been
-  // synced; the derived value is the fallback.
-  //
-  // The entity_type collapse below is total, not a guess at a default:
-  // companies.entity_type is NOT NULL with CHECK IN ('enskild_firma',
-  // 'aktiebolag'), so there is no third value and no null to mis-tag. It
-  // matters because it picks the prefix: a personnummer must keep its century
-  // where an organisationsnummer takes "16", and getting that wrong yields a
-  // Luhn-valid OCR for the wrong taxpayer.
+  // synced; the derived value is the fallback. The form picks the prefix: a
+  // personnummer keeps its century where an organisationsnummer takes "16",
+  // and getting that wrong yields a Luhn-valid OCR for the wrong taxpayer.
   let ocr: string
   try {
     ocr = await resolveSkattekontoOcr(
       supabase,
       companyId,
-      company.org_number,
-      company.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag',
+      orgNumber,
+      parseEntityType(company.entity_type),
     )
   } catch (err) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
   }
 
-  // Payment date = AGI deadline, which is the 12th of the following month
-  // (17th in Jan/Aug for ≤40 MSEK turnover, but we play safe with 12th here).
-  const paymentDate = computeTaxPaymentDate(periodYear, periodMonth)
+  // The money leaves the bank the banking day before the period's due day
+  // (getAgiPaymentDueDate), so it is booked on the skattekonto when the due
+  // day comes: the day Betala via banken picks for the same payment
+  // (lib/payments/orders/prepare-skattekonto.ts). A file made after that day
+  // leaves on the first banking day from today. The file used to spell out
+  // the 12th of every month itself: a Saturday or Sunday whenever the 12th
+  // was one, and the due day itself, with no margin, in every other month.
+  const { data: taxSettings, error: taxSettingsError } = await supabase
+    .from('company_settings')
+    .select('vat_registered, vat_taxable_base_over_40m')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  // Thrown, not read as "a small company": above 40 MSEK the due day differs
+  // (the wrapper answers the failure).
+  if (taxSettingsError) throw taxSettingsError
+  const dueDate = getAgiPaymentDueDate(periodYear, periodMonth, {
+    vat_registered: taxSettings?.vat_registered === true,
+    vat_taxable_base_over_40m: taxSettings?.vat_taxable_base_over_40m === true,
+  })
+  if (!dueDate) {
+    return NextResponse.json(
+      { error: 'Ogiltig period. Använd YYYY-MM (t.ex. 2026-04).' },
+      { status: 400 }
+    )
+  }
+  const dayBeforeDue = previousBankDayIso(dueDate)
+  const today = todayIsoStockholm()
+  const paymentDate = dayBeforeDue < today ? nextBankDayIso(today) : dayBeforeDue
 
   let fileContent: Buffer
   let filename: string
@@ -130,37 +181,54 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   if (format === 'pain001') {
     // The paying company resolves exactly like a supplier payment batch:
-    // IBAN + BIC (derived when possible) + org number, with the company
-    // bankgiro riding along so the BG payee is debited BGNR-to-BGNR where
-    // the bank's MIG demands it (Swedbank Validex rule 219).
+    // the paying account (the primary bank account, the one salaries are
+    // booked on: lib/payments/paying-account.ts) with its IBAN and BIC, plus
+    // the org number, with the company bankgiro riding along so the BG payee
+    // is debited BGNR-to-BGNR where the bank's MIG demands it (Swedbank
+    // Validex rule 219).
     const debtorResolution = await resolveBatchDebtor(supabase, companyId)
+    // A Swedbank company's file takes Swedbank's ISO 2.0 form, which pays to
+    // bank accounts only, and Skatteverket is paid on its bankgiro: no file
+    // Swedbank would accept, with or without the ids saved (crm#1156).
+    if (paysThroughSwedbankIso2(debtorResolution)) {
+      return NextResponse.json(
+        {
+          error:
+            'Swedbanks ISO 2.0-avtal betalar bara till bankkonton, och Skatteverket tar bara emot betalningar på bankgiro. Betala skatten i internetbanken.',
+        },
+        { status: 400 },
+      )
+    }
     if (!debtorResolution.ok) {
-      const message = {
-        iban: 'Företagets IBAN saknas i företagsinställningar. Fyll i det under Inställningar → Fakturering för att skapa betalfil (ISO 20022).',
-        bic: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturering för att skapa betalfilen.',
-        org_number: 'Organisationsnummer saknas för företaget.',
-      }[debtorResolution.missing]
+      const { missing, account } = debtorResolution
+      const message =
+        (missing === 'iban' || missing === 'bic') && account
+          ? payingAccountMissingSv(missing, account)
+          : {
+              iban: 'Företagets IBAN saknas. Fyll i det under Inställningar → Fakturor för att skapa betalfil (ISO 20022).',
+              bic: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturor för att skapa betalfilen.',
+              org_number: 'Organisationsnummer saknas för företaget.',
+              swedbank_ids: 'Swedbank kräver ditt SignerID och avtals-id (Corporate Pay) i betalfilen. Fyll i dem under Inställningar → Fakturor.',
+              nordea_signer_id: NORDEA_SIGNER_ID_MISSING_SV,
+              nordea_agreement_id: NORDEA_AGREEMENT_ID_MISSING_SV,
+            }[missing]
       return NextResponse.json({ error: message }, { status: 400 })
     }
     const { debtor } = debtorResolution
 
     // Deterministic per period, like the salary pain.001 MsgId: re-downloads
     // reuse the id, so bank-side duplicate detection (keyed on MsgId) still
-    // catches the same period being uploaded twice.
-    const orgDigits = company.org_number.replace(/\D/g, '')
-    const messageId = `${getBranding().appName.toUpperCase()}-SKATT-${orgDigits}-${period}`
+    // catches the same period being uploaded twice. Short enough (24) that
+    // the generator's -P1 / -TX0001 suffixes never cut the period away: a
+    // brand-prefixed id was 34 characters, so every month's EndToEndId came
+    // out the same, and Swedbank refuses an EndToEndId repeated within 90
+    // days (MIG 2.0 PmtId/EndToEndId).
+    const messageId = `SKATT-${period}-${bankFileIdOrg(company.org_number, orgNumberKey(orgNumber))}`
 
     let xml: string
     try {
       xml = generateSupplierPain001(
-        {
-          name: debtor.name,
-          orgNumber: debtor.org_number,
-          iban: debtor.iban,
-          bic: debtor.bic,
-          bankgiro: debtor.bankgiro,
-          city: debtor.city,
-        },
+        supplierPain001Debtor(debtor),
         [
           {
             payee: { type: 'bankgiro', bankgiro: SKATTEKONTO_BANKGIRO.replace(/\D/g, '') },
@@ -192,7 +260,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       return NextResponse.json(
         // Same wording as the salary LB route: the settings overview shows a
         // registry bankgiro that this route does not read.
-        { error: 'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturering för att skapa betalfilen.' },
+        { error: 'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturor för att skapa betalfilen.' },
         { status: 400 }
       )
     }
@@ -236,24 +304,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   // Buffer is not assignable to BodyInit under the strict build tsconfig
   // (Buffer<ArrayBufferLike>); the repo convention is a Uint8Array view.
-  return new Response(new Uint8Array(fileContent), {
-    headers: {
-      'Content-Type': contentType,
-      'Content-Disposition': `attachment; filename="${filename}"`,
-    },
-  })
+  return fileResponse(new Uint8Array(fileContent), { filename: filename, contentType: contentType })
   },
   { requireWrite: true },
 )
-
-/**
- * Tax payment deadline = the 12th of the month *following* the AGI period.
- * (Skatteverket also accepts the 17th in Jan/Aug for turnover ≤40 MSEK, but
- * the conservative date is the 12th: money must be on the Skattekonto by
- * then to avoid kostnadsränta.)
- */
-function computeTaxPaymentDate(periodYear: number, periodMonth: number): string {
-  const deadlineMonth = periodMonth === 12 ? 1 : periodMonth + 1
-  const deadlineYear = periodMonth === 12 ? periodYear + 1 : periodYear
-  return `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-12`
-}

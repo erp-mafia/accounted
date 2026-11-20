@@ -244,6 +244,27 @@ describe('generateIncomeStatement', () => {
     expect(report.net_result).toBe(221000)
   })
 
+  it('excludes an omföring through 8990 like one through 8999 (årets resultat is 8990-8999)', async () => {
+    // Imported ledgers from some systems close the year's result through 8990
+    // (Resultat) instead of 8999. Read as a financial item, that debit zeroes
+    // the year: the resultaträkning reported 0 kr for those years.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 370000, closing_debit: 0 }),
+        makeRow({ account_number: '5010', account_name: 'Rent', account_class: 5, closing_debit: 149000, closing_credit: 0 }),
+        makeRow({ account_number: '8990', account_name: 'Resultat', account_class: 8, closing_debit: 221000, closing_credit: 0 }),
+      ],
+      totalDebit: 370000,
+      totalCredit: 370000,
+      isBalanced: true,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    expect(report.financial_sections).toEqual([])
+    expect(report.net_result).toBe(221000)
+  })
+
   it('still includes legitimate class 8 accounts (8310 interest, 8410 interest expense)', async () => {
     // Sanity check the 8999 exclusion is narrow: other class 8 accounts
     // (interest income, interest expense, tax) must still appear.
@@ -420,5 +441,79 @@ describe('generateIncomeStatement with a fromDate range', () => {
     // (absent) roll-forward, so closing-column sums are expected here.
     expect(report.total_revenue).toBe(15000)
     expect(report.total_expenses).toBe(7000)
+  })
+})
+
+describe('statutory RR lines', () => {
+  it('reads the pre-bokslut trial balance that definitions.basis describes', async () => {
+    mockTrialBalance.mockResolvedValue({ rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true })
+
+    await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    // definitions.basis tells callers every year_end entry is excluded. When
+    // #1051 stage 2 moves this to 'exclude-final', rewrite the basis with it.
+    expect(mockTrialBalance).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'period-1',
+      expect.objectContaining({ closingEntry: 'exclude-all-year-end' }),
+    )
+  })
+
+  it('splits class 3 into nettoomsättning, aktiverat arbete and övriga rörelseintäkter', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '3001', account_class: 3, closing_credit: 100000 }),
+        makeRow({ account_number: '3401', account_class: 3, closing_credit: 2500 }),
+        makeRow({ account_number: '3740', account_class: 3, closing_debit: 0.4 }),
+        makeRow({ account_number: '3840', account_class: 3, closing_credit: 8000 }),
+        makeRow({ account_number: '3973', account_class: 3, closing_credit: 1200.55 }),
+        makeRow({ account_number: '4010', account_class: 4, closing_debit: 30000 }),
+        makeRow({ account_number: '5010', account_class: 5, closing_debit: 12000 }),
+        makeRow({ account_number: '7010', account_class: 7, closing_debit: 25000 }),
+        makeRow({ account_number: '7832', account_class: 7, closing_debit: 4000 }),
+        makeRow({ account_number: '8410', account_class: 8, closing_debit: 700 }),
+        makeRow({ account_number: '8910', account_class: 8, closing_debit: 8000 }),
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    expect(report.nettoomsattning).toBe(102499.6)
+    expect(report.aktiverat_arbete).toBe(8000)
+    expect(report.ovriga_rorelseintakter).toBe(1200.55)
+    expect(report.total_revenue).toBe(111700.15)
+    expect(
+      roundOre(report.nettoomsattning! + report.aktiverat_arbete! + report.ovriga_rorelseintakter!),
+    ).toBe(report.total_revenue)
+    expect(report.total_expenses).toBe(71000)
+    expect(report.rorelseresultat).toBe(40700.15)
+    expect(report.net_result).toBe(32000.15)
+    expect(report.definitions!.nettoomsattning.accounts).toBe('3000-3799')
+    expect(report.definitions!.total_revenue.accounts).toBe('3000-3999')
+  })
+
+  it('uses period movements for ranged reports', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '3001', account_class: 3, period_credit: 500, closing_credit: 9000 }),
+        makeRow({ account_number: '3990', account_class: 3, period_credit: 50, closing_credit: 900 }),
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1', {
+      fromDate: '2026-03-01',
+      toDate: '2026-03-31',
+    })
+
+    expect(report.nettoomsattning).toBe(500)
+    expect(report.ovriga_rorelseintakter).toBe(50)
+    expect(report.rorelseresultat).toBe(550)
   })
 })

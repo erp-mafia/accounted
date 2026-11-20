@@ -3,6 +3,7 @@ import type {
   VatCheckAccountTotals,
 } from './vat-declaration-checks'
 import { roundOre } from '@/lib/money'
+import { reverseChargeBasisAccounts } from '@/lib/vat/moms-box-mapping'
 import type { VatDeclarationRutor } from '@/types'
 
 /**
@@ -81,18 +82,27 @@ export type RcBasisGapScan =
   | { status: 'scanned'; gapCount: number }
 
 /**
- * The reverse-charge basis accounts grouped by momssats. One column per rate
- * across the five purchase-type families (EU goods, EU services, non-EU
- * services, domestic goods RC, domestic services RC). This is the single
- * source for the per-rate downgrade evidence, and rc-basis-gaps.ts derives
- * its flat account set from it, so the scan and the evidence can never
- * disagree about which accounts carry RC basis.
+ * The reverse-charge basis accounts grouped by momssats: per rate, the five
+ * purchase-type families (EU goods, EU services, non-EU services, domestic
+ * goods RC, domestic services RC) from VAT_ACCOUNT_TABLE. Import basis
+ * (4545-4547, ruta 50) is not reverse charge and stays out. The per-rate
+ * downgrade evidence reads this, and rc-basis-gaps.ts derives its flat account
+ * set from it, so the scan and the evidence cannot disagree.
  */
-export const RC_BASIS_ACCOUNTS_BY_RATE = {
-  r25: ['4515', '4535', '4531', '4415', '4425'],
-  r12: ['4516', '4536', '4532', '4416', '4426'],
-  r6: ['4517', '4537', '4533', '4417', '4427'],
-} as const
+export const RC_BASIS_ACCOUNTS_BY_RATE: Readonly<Record<'r25' | 'r12' | 'r6', readonly string[]>> = {
+  r25: reverseChargeBasisAccounts(0.25),
+  r12: reverseChargeBasisAccounts(0.12),
+  r6: reverseChargeBasisAccounts(0.06),
+}
+
+/** The momssats a static RC basis account books its basis at (4531 is 25 %), read from the groups above; null for any other account. */
+export function rcBasisAccountRate(account: string): 0.25 | 0.12 | 0.06 | null {
+  const isIn = (accounts: readonly string[]) => accounts.includes(account)
+  if (isIn(RC_BASIS_ACCOUNTS_BY_RATE.r25)) return 0.25
+  if (isIn(RC_BASIS_ACCOUNTS_BY_RATE.r12)) return 0.12
+  if (isIn(RC_BASIS_ACCOUNTS_BY_RATE.r6)) return 0.06
+  return null
+}
 
 /** Net debit balance of the RC basis accounts, one figure per momssats. */
 export interface RcBasisTotalsByRate {
@@ -159,15 +169,31 @@ export interface RcGapDowngradeEvidence {
  * both the per-voucher scan and the aggregate basis/moms identity once, say, a
  * refund's basis reduction sits in reversed history. Blocking on that made the
  * red state unfixable: every correction the user (or support) booked joined
- * the blocklist it was meant to clear. (First hit in production 2026-08:
+ * the blocklist it was meant to clear. (First hit in seen 2026-08:
  * a 323 kr refund correction chain left a company permanently blocked.)
  *
  * So when the basis booked at each momssats matches the fiktiv moms declared
  * at that sats, the per-voucher list stays visible as a worklist (same
- * RC_BASIS_MISSING code) but stops gating "Skicka": at that point the flagged
- * vouchers are corrections whose basis is elsewhere in the period at the same
- * sats, and the declaration is not under-reporting. With any per-rate
- * mismatch the ERROR tier still applies.
+ * RC_BASIS_MISSING code) but stops gating "Skicka": the flagged vouchers' basis
+ * is elsewhere in the period at the same sats, and the rutor are not
+ * under-reporting. With any per-rate mismatch the ERROR tier still applies.
+ *
+ * Which voucher is the rättelse differs by case, so the message names
+ * neither: in the 2026-08 case the flagged vouchers were moms-only
+ * corrections, in crm#1171 they are the original purchases (most of them
+ * got their fiktiv moms through a Fortnox rättelse imported by SIE) and the
+ * basis was added by one collective rättelseverifikat with no link to them. Neither carries a
+ * link the scan could follow (no correction_of_id, no rättelse log row on the
+ * correcting side), so the downgrade stays on the per-rate identity, the only
+ * evidence that speaks to the rutor.
+ *
+ * It stays a WARNING rather than going silent because the identity cannot
+ * tell a basis that belongs to these purchases from two offsetting mistakes
+ * (one purchase without basis, another without fiktiv moms): both balance the
+ * period. A person checks it once and marks it reviewed
+ * (src/lib/vat/check-reviews.ts); the review lapses when the figures change.
+ * Korrigera on these rows would add the basis a second time, so the message
+ * says so.
  */
 export function rcBasisGapAdvisoryFinding(gapCount: number): VatDeclarationCheck {
   const subject = gapCount === 1 ? '1 verifikation' : `${gapCount} verifikationer`
@@ -176,11 +202,11 @@ export function rcBasisGapAdvisoryFinding(gapCount: number): VatDeclarationCheck
     status: 'WARNING',
     message:
       `${subject} i perioden har fiktiv moms (2614/2624/2634) utan eget basbelopp ` +
-      'på 44xx/45xx. Periodens underlag stämmer dock per momssats: basbeloppen ' +
-      'på 44xx/45xx motsvarar den fiktiva momsen i ruta 30-32, så detta är ' +
-      'normalt rättelseverifikat vars basbelopp redan finns i ett annat ' +
-      'verifikat. Kontrollera listan nedan; är raderna rättelser behöver du ' +
-      'inte göra något och kan lämna in som vanligt.',
+      'på 44xx/45xx. Periodens underlag stämmer per momssats, så basbeloppet finns ' +
+      'i ett annat verifikat i perioden, till exempel ett rättelseverifikat som lade ' +
+      'till det i efterhand. Kontrollera att det basbeloppet avser just de här ' +
+      'inköpen. Stämmer det kan du markera varningen som granskad och lämna in som ' +
+      'vanligt. Korrigera inte verifikationerna i listan: då räknas basbeloppet två gånger.',
     rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
   }
 }
@@ -208,6 +234,49 @@ export function rcBasisGapFinding(gapCount: number): VatDeclarationCheck {
       `(ruta 30-32) redovisas; Skatteverket avvisar annars med felkod FK004. ${remedy}`,
     rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
   }
+}
+
+/**
+ * The part of rutor 20-24 the gate buckets at no momssats: the basis on
+ * accounts whose momskod reports ruta 20-24 while their momssats is none of
+ * 25, 12 and 6 %. rutorFromTotals counts such an account's box and
+ * rcBasisTotalsByRate skips it, while both read every other basis account
+ * alike, so it is exactly the difference between the two halves of the
+ * evidence. Zero for evidence that is not numeric (it can arrive as JSON).
+ */
+function unratedRcBasis({ rutor, rcBasisByRate }: RcGapDowngradeEvidence): number {
+  const declared = [rutor.ruta20, rutor.ruta21, rutor.ruta22, rutor.ruta23, rutor.ruta24]
+  const bucketed = [rcBasisByRate.r25, rcBasisByRate.r12, rcBasisByRate.r6]
+  if (![...declared, ...bucketed].every(Number.isFinite)) return 0
+  const sum = (figures: number[]) => figures.reduce((total, figure) => total + figure, 0)
+  return roundOre(sum(declared) - sum(bucketed))
+}
+
+/**
+ * Said beside the blocking reverse-charge findings when part of rutor 20-24
+ * is bucketed at no momssats (unratedRcBasis). That basis lifts the box past
+ * the fiktiv moms (RC_OUTPUT_MISSING) while its verifikat stays short at its
+ * own sats (RC_BASIS_MISSING), so the two alternate however the ledger is
+ * corrected, and Korrigera refuses such a verifikat (crm#1096): the fix is the
+ * account's Standard moms (or its momskod) in the kontoplan.
+ */
+const UNRATED_BASIS_POINTER =
+  ' Obs: en del av ruta 20-24 kommer från konton som har en momskod för omvänd ' +
+  'skattskyldighet men ingen Standard moms på 25, 12 eller 6 %, så det basbeloppet kan inte ' +
+  'knytas till någon fiktiv moms. Välj samma sats som den fiktiva momsen under Standard moms ' +
+  'på de kontona i kontoplanen (eller ta bort momskoden om kontot inte ska redovisas i ruta 20-24) ' +
+  'innan du korrigerar.'
+
+function pointAtUnratedBasis(
+  findings: VatDeclarationCheck[],
+  evidence: RcGapDowngradeEvidence | undefined,
+): VatDeclarationCheck[] {
+  if (!evidence || Math.abs(unratedRcBasis(evidence)) <= 0.5) return findings
+  return findings.map((finding) =>
+    finding.status === 'ERROR' && (finding.code === 'RC_BASIS_MISSING' || finding.code === 'RC_OUTPUT_MISSING')
+      ? { ...finding, message: `${finding.message}${UNRATED_BASIS_POINTER}` }
+      : finding,
+  )
 }
 
 /**
@@ -239,6 +308,14 @@ export function withRcBasisGapFindings(
   checks: VatDeclarationCheck[],
   scan: RcBasisGapScan,
   evidence?: RcGapDowngradeEvidence,
+): VatDeclarationCheck[] {
+  return pointAtUnratedBasis(foldRcBasisGapScan(checks, scan, evidence), evidence)
+}
+
+function foldRcBasisGapScan(
+  checks: VatDeclarationCheck[],
+  scan: RcBasisGapScan,
+  evidence: RcGapDowngradeEvidence | undefined,
 ): VatDeclarationCheck[] {
   // The aggregate check already says this, and already blocks; don't say it
   // twice, and don't stack a "could not check" note on top of a live finding.

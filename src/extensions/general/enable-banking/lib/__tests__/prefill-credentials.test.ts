@@ -28,41 +28,58 @@ const HANDELSBANKEN_BANKID: AuthMethod = {
 }
 
 describe('companyIdDigits', () => {
+  it('reads the 12-digit form as the same number', () => {
+    expect(companyIdDigits({ org_number: '165544556672', entity_type: 'aktiebolag' })).toBe('5544556672')
+  })
+
   it('strips the hyphen from an organisationsnummer', () => {
-    expect(companyIdDigits({ org_number: '556809-8239', entity_type: 'aktiebolag' })).toBe('5568098239')
-    expect(companyIdDigits({ org_number: '5568098239', entity_type: 'aktiebolag' })).toBe('5568098239')
+    expect(companyIdDigits({ org_number: '554455-6672', entity_type: 'aktiebolag' })).toBe('5544556672')
+    expect(companyIdDigits({ org_number: '5544556672', entity_type: 'aktiebolag' })).toBe('5544556672')
   })
 
-  it('reduces a sole trader personnummer with century to the 10-digit form', () => {
-    expect(companyIdDigits({ org_number: '19850101-1234', entity_type: 'enskild_firma' })).toBe('8501011234')
-    expect(companyIdDigits({ org_number: '198501011234', entity_type: 'enskild_firma' })).toBe('8501011234')
-  })
-
-  it('returns null when the number is missing or not 10 digits', () => {
+  it('returns null when the number is missing or reads as none', () => {
     expect(companyIdDigits({ org_number: null, entity_type: 'aktiebolag' })).toBeNull()
     expect(companyIdDigits({ org_number: '', entity_type: 'aktiebolag' })).toBeNull()
     expect(companyIdDigits({ org_number: '12345', entity_type: 'aktiebolag' })).toBeNull()
-    // Twelve digits on a company is not a personnummer with century.
-    expect(companyIdDigits({ org_number: '165568098239', entity_type: 'aktiebolag' })).toBeNull()
+    expect(companyIdDigits({ org_number: '835544556672', entity_type: 'aktiebolag' })).toBeNull()
   })
 })
 
 describe('buildPrefilledCredentials', () => {
   it('prefills companyId for a method that declares it, never the personnummer', () => {
     expect(
-      buildPrefilledCredentials(HANDELSBANKEN_BANKID, { org_number: '556809-8239', entity_type: 'aktiebolag' }),
-    ).toEqual({ companyId: '5568098239' })
+      buildPrefilledCredentials(HANDELSBANKEN_BANKID, { org_number: '554455-6672', entity_type: 'aktiebolag' }),
+    ).toEqual({ companyId: '5544556672' })
+  })
+
+  it('sends nothing for a sole trader: the person types the personnummer in the format the bank asks for', () => {
+    // Nordea business wants 12 digits, Handelsbanken 10; a prefilled field is
+    // locked on the page, so a wrong guess would block the connection.
+    expect(
+      buildPrefilledCredentials(HANDELSBANKEN_BANKID, { org_number: '8501011234', entity_type: 'enskild_firma' }),
+    ).toBeUndefined()
+    expect(
+      buildPrefilledCredentials(HANDELSBANKEN_BANKID, { org_number: '850101-1234', entity_type: 'enskild_firma' }),
+    ).toBeUndefined()
+    expect(
+      buildPrefilledCredentials(HANDELSBANKEN_BANKID, { org_number: '198501011234', entity_type: 'enskild_firma' }),
+    ).toBeUndefined()
+    expect(
+      buildPrefilledCredentials(HANDELSBANKEN_BANKID, { org_number: '19850101-1234', entity_type: 'enskild_firma' }),
+    ).toBeUndefined()
   })
 
   it('sends nothing when the method declares no companyId credential', () => {
     const swedbank: AuthMethod = { name: 'BANKID', approach: 'DECOUPLED', hidden_method: true }
-    expect(buildPrefilledCredentials(swedbank, { org_number: '556809-8239', entity_type: 'aktiebolag' })).toBeUndefined()
-    expect(buildPrefilledCredentials(undefined, { org_number: '556809-8239', entity_type: 'aktiebolag' })).toBeUndefined()
+    expect(buildPrefilledCredentials(swedbank, { org_number: '554455-6672', entity_type: 'aktiebolag' })).toBeUndefined()
+    expect(buildPrefilledCredentials(undefined, { org_number: '554455-6672', entity_type: 'aktiebolag' })).toBeUndefined()
   })
 
   it('sends nothing when the value would fail the page template', () => {
     expect(buildPrefilledCredentials(HANDELSBANKEN_BANKID, { org_number: null, entity_type: 'aktiebolag' })).toBeUndefined()
     expect(buildPrefilledCredentials(HANDELSBANKEN_BANKID, { org_number: '55-68', entity_type: 'aktiebolag' })).toBeUndefined()
+    const twelveDigits: AuthMethod = { name: 'X', credentials: [{ name: 'companyId', template: '^\\d{12}$' }] }
+    expect(buildPrefilledCredentials(twelveDigits, { org_number: '554455-6672', entity_type: 'aktiebolag' })).toBeUndefined()
   })
 
   it('treats an unparsable template as no constraint', () => {
@@ -70,8 +87,8 @@ describe('buildPrefilledCredentials', () => {
       name: 'X',
       credentials: [{ name: 'companyId', template: '(' }],
     }
-    expect(buildPrefilledCredentials(method, { org_number: '5568098239', entity_type: 'aktiebolag' })).toEqual({
-      companyId: '5568098239',
+    expect(buildPrefilledCredentials(method, { org_number: '5544556672', entity_type: 'aktiebolag' })).toEqual({
+      companyId: '5544556672',
     })
   })
 })

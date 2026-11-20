@@ -1,22 +1,31 @@
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { bankBookingContext, booksBankLineInBankDirection, booksForeignAmountAsKronor } from '@/lib/bookkeeping/bank-booking-context'
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { bankLineBookingBusinessEvent, bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
 import { resolveCashAccountVoucherSeries } from '@/lib/bookkeeping/cash-account-voucher-series'
 import { guardBookedCounterLines } from '@/lib/cash-accounts/service'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { isCashAccountBusy, retryWhileCashAccountBusy } from '@/lib/bookkeeping/cash-account-busy'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
-import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { detectKonteringBookingDuplicate } from '@/lib/transactions/skattekonto-tax-double'
+import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { duplicateCheck, passed, type DecisionCheck, type DuplicateVerdict } from '@/lib/suggestion-log/checks'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { formatCurrency } from '@/lib/utils'
 import type { Transaction } from '@/types'
-
-ensureInitialized()
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
+import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.book',
@@ -25,7 +34,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const validation = await validateBody(request, BookTransactionSchema)
     if (!validation.success) return validation.response
-    const { fiscal_period_id, entry_date, description, lines, force, expected_duplicate_transaction_id, expected_duplicate_journal_entry_id } = validation.data
+    const { fiscal_period_id, entry_date, description, lines, force, expected_duplicate_transaction_id, expected_duplicate_journal_entry_id, acknowledged_warnings } = validation.data
 
     // Fetch transaction (validates ownership)
     const { data: transaction, error: fetchError } = await supabase
@@ -39,13 +48,24 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
     }
 
-    // Reject if already booked
-    if (transaction.journal_entry_id) {
-      return NextResponse.json(
-        { error: 'Transaction already has a journal entry' },
-        { status: 409 }
-      )
+    // Reject if already booked: the pointer OR a bank_line voucher link names a
+    // posted verifikat (a bulk-booked, split or correction-relinked row has a
+    // NULL pointer). A stale pointer at a reversed verifikat does not block;
+    // the locked UPDATE below replaces exactly that observed value.
+    const bookable = await assertTransactionBookable(supabase, companyId, transaction)
+    if (!bookable.ok) {
+      return errorResponseFromCode(bookable.code, log, {
+        requestId,
+        details: {
+          journal_entry_id: bookable.journalEntryId,
+          via: bookable.via,
+          ...(bookable.voucher ? { voucher: bookable.voucher } : {}),
+        },
+      })
     }
+    // The guards this booking runs, in order, for its decision record.
+    const checks: DecisionCheck[] = [passed('already_booked')]
+    let duplicateVerdict: DuplicateVerdict = { kind: 'clear' }
 
     // Booking-time duplicate guard: if another transaction with the same
     // date+amount+account is already booked, booking this one would double-count
@@ -54,7 +74,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // match-invoice soft-duplicate guard.
     const dupLog = log
     try {
-      const candidate = await detectBookingDuplicate(supabase, companyId, {
+      const candidate = await detectKonteringBookingDuplicate(supabase, companyId, {
         id,
         date: transaction.date,
         amount: transaction.amount,
@@ -65,6 +85,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         amount_sek: transaction.amount_sek ?? null,
         exchange_rate: transaction.exchange_rate ?? null,
         cash_account_id: transaction.cash_account_id ?? null,
+        // Provider identity: two entries of one feed the ids tell apart are
+        // never twins (crm#1271, crm#1312).
+        external_id: transaction.external_id ?? null,
+        import_source: transaction.import_source ?? null,
+        bank_connection_id: transaction.bank_connection_id ?? null,
+        provider_transaction_id: transaction.provider_transaction_id ?? null,
+        bank_file_import_id: transaction.bank_file_import_id ?? null,
+        // The lines this booking posts: a tax account booked straight from
+        // the bank after the skattekonto booked the same tax warns too
+        // (issue #50, lib/transactions/skattekonto-tax-double.ts).
+        counter_lines: lines.map((line) => ({
+          account_number: line.account_number,
+          net: Number(line.debit_amount || 0) - Number(line.credit_amount || 0),
+        })),
       })
       if (!force) {
         if (candidate) {
@@ -93,6 +127,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           },
         })
       } else {
+        duplicateVerdict = {
+          kind: 'forced',
+          journal_entry_id: candidate.journal_entry_id ?? null,
+          transaction_id: candidate.transaction_id ?? null,
+        }
         dupLog.warn('booking-time duplicate guard bypassed', {
           reason: 'force=true',
           transactionId: id,
@@ -143,7 +182,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         })
       }
       dupLog.warn('booking-time duplicate detection failed (continuing)', err as Error)
+      duplicateVerdict = { kind: 'detection_failed' }
     }
+    checks.push(duplicateCheck(duplicateVerdict))
 
     // A 19xx counter line that is a twin of the transaction's own cash account
     // (same IBAN, same currency: the other ledger of one connection, or a
@@ -167,6 +208,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         details: { accountNumber: refusedLedger },
       })
     }
+    checks.push(passed('counter_legs'))
+
+    // Importmoms on 2615/2625/2635 with no ruta 50 line: the shape a
+    // company's own mall books when its fiktiv moms sits on the import
+    // account (#83). Refused while no draft exists, naming what to change.
+    const importVat = await refuseImportVatWithoutBase(supabase, companyId, lines)
+    if (importVat) {
+      return errorResponseFromCode(importVat.code, log, {
+        requestId,
+        messageSv: importVat.messageSv,
+        messageEn: importVat.messageEn,
+        details: importVat.details,
+      })
+    }
 
     // Series: the dialog's explicit pick wins; otherwise the bank account the
     // row will sit on after this booking (the live sibling when the guard
@@ -181,17 +236,85 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         repointCashAccountId ?? (transaction as Transaction).cash_account_id,
       ))
 
-    // Create journal entry via the engine
+    const settlementAccount = await resolveSettlementAccount(
+      supabase, companyId, repointCashAccountId ?? transaction.cash_account_id, log, transaction.currency,
+    )
+
+    // The commit trigger refuses a bank line on the wrong side with a bare
+    // name; say which account and which side while no draft exists yet.
+    if (!booksBankLineInBankDirection(lines, settlementAccount, transaction.amount)) {
+      const withdrawal = transaction.amount < 0
+      const amount = formatCurrency(Math.abs(transaction.amount), transaction.currency)
+      return errorResponseFromCode('TRANSACTION_BOOK_BANK_LINE_DIRECTION', log, {
+        requestId,
+        messageSv: withdrawal
+          ? `Transaktionen är ett uttag på ${amount} från bankkontot, så konto ${settlementAccount} ska stå i kredit. Lägg beloppet i kredit på ${settlementAccount}, eller kontrollera transaktionen om pengarna i själva verket kom in på kontot.`
+          : `Transaktionen är en insättning på ${amount} till bankkontot, så konto ${settlementAccount} ska stå i debet. Lägg beloppet i debet på ${settlementAccount}, eller kontrollera transaktionen om pengarna i själva verket gick ut från kontot.`,
+        messageEn: withdrawal
+          ? `The transaction is a withdrawal of ${amount} from the bank account, so account ${settlementAccount} must be credited. Credit ${settlementAccount}, or check the transaction if the money in fact came into the account.`
+          : `The transaction is a deposit of ${amount} into the bank account, so account ${settlementAccount} must be debited. Debit ${settlementAccount}, or check the transaction if the money in fact left the account.`,
+        details: { settlement_account: settlementAccount, required_side: withdrawal ? 'credit' : 'debit' },
+      })
+    }
+    checks.push(passed('bank_line_direction'))
+
+    // A foreign row with no SEK value: the dialog prefills its foreign amount
+    // as kronor when the rate is missing, and the lines are posted as they
+    // come. Refuse that signature before any draft; kronor typed from the
+    // bank statement still book (accounted#58).
+    if (booksForeignAmountAsKronor(lines, settlementAccount, transaction)) {
+      const amount = formatCurrency(Math.abs(transaction.amount), transaction.currency)
+      return errorResponseFromCode('TX_MISSING_SEK_VALUE', log, {
+        requestId,
+        messageSv: `Transaktionen är på ${amount} men saknar SEK-belopp och växelkurs, och bankraden på konto ${settlementAccount} står på beloppet i ${transaction.currency} som om det vore kronor. Ange beloppet i kronor enligt kontoutdraget, eller hämta växelkursen för transaktionsdatumet och försök igen.`,
+        messageEn: `The transaction is ${amount} but has neither a SEK amount nor an exchange rate, and the bank line on account ${settlementAccount} carries the ${transaction.currency} amount as if it were SEK. Enter the SEK amount from the bank statement, or fetch the exchange rate for the transaction date and retry.`,
+        details: { currency: transaction.currency, settlement_account: settlementAccount },
+      })
+    }
+
+    // The lines are the person's own: the booking-time VAT and revenue
+    // warnings apply (lib/bookkeeping/voucher-warnings-guard.ts). Duplicates
+    // are this door's own guard above, so only the plausibility half runs.
+    const voucherGuard = await runVoucherWarningsGuard(supabase, companyId, { entry_date, description, lines }, log, {
+      acknowledged: acknowledged_warnings,
+      checkDuplicates: false,
+    })
+    if (!voucherGuard.ok) {
+      return errorResponseFromCode(voucherGuard.code, log, { requestId, details: voucherGuard.details })
+    }
+
+    // What was on offer, taken before the booking.
+    const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, [id])
+
+    // The storno of a verifikat this door posted and could not link to the
+    // bank line: ledger.storno of the bank line, system_derived (no one chose
+    // it), dated the day, while POSTING_EVENTS is on.
+    const stornoEvent = () => bankLineStornoBusinessEvent(id, todayIsoStockholm(), linkBasisColumns('system_derived'))
+
+    // Create the journal entry through the posting port (step 2e): it hands
+    // the input to the engine unchanged and, while POSTING_EVENTS is shadow
+    // or strict, records bank.categorized of the bank line first, linked to
+    // the draft before a voucher number is drawn.
     let journalEntry
     try {
-      journalEntry = await createJournalEntry(supabase, companyId, user.id, {
-        fiscal_period_id,
-        entry_date,
-        description,
-        source_type: 'bank_transaction',
-        source_id: id,
-        lines,
-        ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
+      journalEntry = await postingPort.postJournalEntry({
+        supabase,
+        companyId,
+        userId: user.id,
+        // The person booked this verifikat from the bank line, on their own rows.
+        event: () => bankLineBookingBusinessEvent(transaction as Transaction, { linkBasis: linkBasisColumns('user_created') }),
+        input: {
+          fiscal_period_id,
+          entry_date,
+          description,
+          source_type: 'bank_transaction',
+          source_id: id,
+          bank_booking_context: [bankBookingContext(transaction, settlementAccount, repointCashAccountId)],
+          lines,
+          ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
+        },
+        // The voucher carries the rules its decision was made under.
+        rubricVersion: suggestionSnapshot.ruleVersion,
       })
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)
@@ -204,21 +327,46 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         { status: 400 }
       )
     }
+    await recordVoucherWarningsAcknowledged({
+      companyId,
+      userId: user.id,
+      journalEntryId: journalEntry.id,
+      warnings: voucherGuard.acknowledged,
+      door: 'bank_row_booking',
+      log,
+    })
 
-    // Link transaction to the journal entry
-    const { data: updateResult, error: updateError } = await supabase
-      .from('transactions')
-      .update({
-        journal_entry_id: journalEntry.id,
-        is_business: true,
-        is_ignored: false,
-        category: 'uncategorized',
-        ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .select('*')
+    // Link transaction to the journal entry. CAS on the pointer value read
+    // above (NULL, or a stale pointer at a reversed verifikat), like the
+    // categorize core: a concurrent booking that changed it wins.
+    const linkTransaction = async () => {
+      const linkQuery = supabase
+        .from('transactions')
+        .update({
+          journal_entry_id: journalEntry.id,
+          is_business: true,
+          is_ignored: false,
+          category: 'uncategorized',
+          ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
+          // The person booked this verifikat from the bank line.
+          ...linkBasisColumns('user_created'),
+        })
+        .eq('id', id)
+        .eq('company_id', companyId)
+      return await (transaction.journal_entry_id
+        ? linkQuery.eq('journal_entry_id', transaction.journal_entry_id)
+        : linkQuery.is('journal_entry_id', null)
+      ).select('*')
+    }
+    // The link's guard refuses with CASH_ACCOUNT_OPERATION_BUSY while another
+    // booking of the company is being numbered, and changes nothing: tried
+    // again before the posted verifikat is given up, as categorize does. A
+    // storno refused by the same lock left the verifikat posted beside a row
+    // that still read open, which the person then booked again (#203).
+    const { data: updateResult, error: updateError } = await retryWhileCashAccountBusy(
+      linkTransaction,
+      (outcome) => isCashAccountBusy(outcome.error),
+    )
 
     if (updateError) {
       await reverseOrphanedJournalEntry(
@@ -227,6 +375,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         user.id,
         journalEntry.id,
         'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        stornoEvent,
       )
       return errorResponse(updateError, log, { requestId })
     }
@@ -241,6 +390,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         user.id,
         journalEntry.id,
         'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        stornoEvent,
       )
       return errorResponseFromCode('TX_CATEGORIZE_RACE', log, { requestId })
     }
@@ -250,6 +400,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // A hunt- or hand-matched inbox item is consumed by this booking even
     // though the dialog never saw it: link its underlag to the verifikat and
     // stamp it so it leaves the active inbox (best-effort, logged inside).
+    await recordDecisions(supabase, suggestionSnapshot, [{
+      transactionId: id,
+      final: finalFromLines(journalEntry.id, linesOf(journalEntry), [settlementAccount]),
+      checks,
+    }], user.id)
+
     await propagateUnderlagForBookedTransaction(supabase, companyId, id, journalEntry.id)
 
     // Emit event (non-blocking)

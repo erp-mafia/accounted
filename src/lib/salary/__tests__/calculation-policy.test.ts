@@ -24,6 +24,7 @@ describe('SalaryCalculationPolicySchema', () => {
       leave_context: 'all_registered',
       net_rounding: 'up',
       one_off_tax_rounding: 'truncate',
+      vacation_day_value: 'daily_divisor',
     })
     expect(DEFAULT_SALARY_CALCULATION_POLICY).toEqual(SalaryCalculationPolicySchema.parse({}))
   })

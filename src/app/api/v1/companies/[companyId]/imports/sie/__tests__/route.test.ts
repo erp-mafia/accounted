@@ -28,39 +28,19 @@ const { submitSIEJobMock } = vi.hoisted(() => ({
   submitSIEJobMock: vi.fn(),
 }))
 
-vi.mock('@/lib/import/sie-jobs', () => ({ submitSIEJob: submitSIEJobMock }))
+vi.mock('@/lib/import/sie-jobs', async (load) => ({
+  ...await load<typeof import('@/lib/import/sie-jobs')>(), submitSIEJob: submitSIEJobMock,
+}))
 vi.mock('next/server', async (load) => ({...await load<typeof import('next/server')>(), after:vi.fn()}))
 vi.mock('@/lib/import/sie-job-worker', () => ({runSIEWorker:vi.fn()}))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
@@ -82,9 +62,9 @@ const VALID_SIE = [
   '}',
 ].join('\n')
 
-function makeRequest(options?: Record<string, unknown>): Request {
+function makeRequest(options?: Record<string, unknown>, content = VALID_SIE): Request {
   const fd = new FormData()
-  fd.append('file', new File([VALID_SIE], 'bok.se', { type: 'application/octet-stream' }))
+  fd.append('file', new File([content], 'bok.se', { type: 'application/octet-stream' }))
   if (options) fd.append('options', JSON.stringify(options))
   return new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/imports/sie`, {
     method: 'POST',
@@ -93,8 +73,8 @@ function makeRequest(options?: Record<string, unknown>): Request {
   })
 }
 
-function callRoute(options?: Record<string, unknown>) {
-  return POST(makeRequest(options), {
+function callRoute(options?: Record<string, unknown>, content?: string) {
+  return POST(makeRequest(options, content), {
     params: Promise.resolve({ companyId: COMPANY_ID }),
   })
 }
@@ -112,10 +92,10 @@ beforeEach(() => {
     id: 'op-1', job_state: 'queued', fiscal_period_id: 'fp-1',
   })
   mockServiceClient.mockReturnValue(
-    makeFlexibleSupabase({
+    createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       sie_account_mappings: { data: [], error: null },
-    }),
+    }).supabase,
   )
 })
 
@@ -140,6 +120,16 @@ describe('POST /imports/sie', () => {
     expect(m1930.sourceName).toBe('Företagskonto Swedbank')
   })
 
+  it('names the v1 door and the API key for the import\'s arrival', async () => {
+    await callRoute()
+    expect(submitSIEJobMock.mock.calls[0][7]).toBe('sie_file')
+    expect(submitSIEJobMock.mock.calls[0][8]).toEqual({
+      source: 'sie',
+      via: 'partner_api',
+      fetchedBy: { type: 'api_key', user_id: 'user-1', api_key_id: 'ak_1', label: 'Unnamed API key' },
+    })
+  })
+
   it('defaults updateAccountNames to true', async () => {
     await callRoute()
 
@@ -152,6 +142,23 @@ describe('POST /imports/sie', () => {
 
     const options = submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>
     expect(options.updateAccountNames).toBe(false)
+  })
+
+  // The job's own options schema on every door (decision 5, 2026-10-13):
+  // vouchers the file gives no series go to B as on the dashboard and MCP
+  // (this route defaulted to A), series up to 16 characters, and
+  // markImportedNoDocRequired accepted.
+  it('leaves voucherSeries to the job (series B for series-less vouchers), as the dashboard does', async () => {
+    await callRoute()
+    const options = submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>
+    expect(options.voucherSeries).toBeUndefined()
+    expect(options).toMatchObject({ createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true })
+  })
+
+  it('accepts the job options the dashboard has: a longer series and markImportedNoDocRequired', async () => {
+    const res = await callRoute({ voucherSeries: 'IMP', markImportedNoDocRequired: true })
+    expect(res.status).toBe(202)
+    expect(submitSIEJobMock.mock.calls[0][5]).toMatchObject({ voucherSeries: 'IMP', markImportedNoDocRequired: true })
   })
 
   it('rejects unknown options keys (schema stays strict)', async () => {
@@ -172,5 +179,91 @@ describe('POST /imports/sie', () => {
     // Undefined lets job preparation pick a series the file's own vouchers
     // do not use, instead of a hardcoded default that could collide.
     expect(options.openingBalanceSeries).toBeUndefined()
+  })
+
+  it('passes confirmOrgNumberMismatch through and leaves it undefined by default', async () => {
+    await callRoute({ confirmOrgNumberMismatch: true })
+    expect(submitSIEJobMock.mock.calls[0][5]).toMatchObject({ confirmOrgNumberMismatch: true })
+
+    submitSIEJobMock.mockClear()
+    await callRoute()
+    expect((submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>).confirmOrgNumberMismatch).toBeUndefined()
+  })
+
+  // #63: submitSIEJob drops the unused definitions' mappings when it is true.
+  it('passes onlyUsedAccounts through, leaves it undefined by default and refuses a non-boolean', async () => {
+    await callRoute({ onlyUsedAccounts: true })
+    expect(submitSIEJobMock.mock.calls[0][5]).toMatchObject({ onlyUsedAccounts: true })
+
+    submitSIEJobMock.mockClear()
+    await callRoute()
+    expect((submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>).onlyUsedAccounts).toBeUndefined()
+
+    submitSIEJobMock.mockClear()
+    const res = await callRoute({ onlyUsedAccounts: 'yes' })
+    expect(res.status).toBe(400)
+    expect(submitSIEJobMock).not.toHaveBeenCalled()
+  })
+
+  it('answers another organisation\'s file with 409 and both numbers', async () => {
+    submitSIEJobMock.mockRejectedValueOnce(new SIEJobValidationError('mismatch', 'SIE_IMPORT_ORG_NUMBER_MISMATCH', {
+      file_org_number: '5566778899', company_org_number: '5599887766', file_company_name: 'Import AB',
+    }))
+
+    const res = await callRoute()
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SIE_IMPORT_ORG_NUMBER_MISMATCH')
+    expect(body.error.details).toMatchObject({ file_org_number: '5566778899', company_org_number: '5599887766' })
+  })
+
+  // Issue #108: an append is the job's option; its refusal names the vouchers.
+  it('passes an append with its duplicate choice and series map through to the job', async () => {
+    const res = await callRoute({ onExistingPeriod: 'append', includePossibleDuplicates: true, seriesMap: { K: 'A' } })
+    expect(res.status).toBe(202)
+    expect(submitSIEJobMock.mock.calls[0][5]).toMatchObject({
+      onExistingPeriod: 'append', includePossibleDuplicates: true, seriesMap: { K: 'A' },
+    })
+  })
+
+  it('answers an append refusal with 409, its sentence and the vouchers in details', async () => {
+    const { userFacing } = await import('@/lib/errors/user-facing')
+    const sentence = '1 av filens verifikationer har samma nummer som bokförda verifikationer men annat innehåll: A1.'
+    submitSIEJobMock.mockRejectedValueOnce(userFacing(new SIEJobValidationError(sentence, 'SIE_IMPORT_APPEND_CONFLICT', {
+      conflicts: [{ sourceId: 'A1', voucher: 'A1' }],
+    }), 'SIE_IMPORT_APPEND_CONFLICT'))
+
+    const res = await callRoute({ onExistingPeriod: 'append' })
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toMatchObject({ code: 'SIE_IMPORT_APPEND_CONFLICT', message: sentence })
+    expect(body.error.details).toEqual({ conflicts: [{ sourceId: 'A1', voucher: 'A1' }] })
+  })
+
+  // #3312: the dashboard upload's class 9 decision, not suggestMappings alone.
+  const WITH_OBS = VALID_SIE.replace('#KONTO 6110 "Kontorsmaterial"', '#KONTO 6110 "Kontorsmaterial"\n#KONTO 9999 "OBS-konto"') +
+    '\n#VER A 2 20240120 "Okänd inbetalning"\n{\n#TRANS 1930 {} 500.00\n#TRANS 9999 {} -500.00\n}'
+
+  it('maps a class 9 account carrying amounts to 2999 instead of refusing it as unmapped', async () => {
+    const res = await callRoute(undefined, WITH_OBS)
+
+    expect(res.status).toBe(202)
+    const mappings = submitSIEJobMock.mock.calls[0][4] as Array<{ sourceAccount: string; targetAccount: string; matchType: string }>
+    expect(mappings.find((m) => m.sourceAccount === '9999')).toMatchObject({ targetAccount: '2999', matchType: 'class' })
+  })
+
+  it('replaces a stored class 9 target for an account carrying amounts', async () => {
+    mockServiceClient.mockReturnValue(createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      sie_account_mappings: { data: [{ source_account: '9999', source_name: 'OBS-konto', target_account: '9999', confidence: 1, match_type: 'exact' }], error: null },
+    }).supabase)
+
+    const res = await callRoute(undefined, WITH_OBS)
+
+    expect(res.status).toBe(202)
+    const mappings = submitSIEJobMock.mock.calls[0][4] as Array<{ sourceAccount: string; targetAccount: string }>
+    expect(mappings.find((m) => m.sourceAccount === '9999')?.targetAccount).toBe('2999')
   })
 })

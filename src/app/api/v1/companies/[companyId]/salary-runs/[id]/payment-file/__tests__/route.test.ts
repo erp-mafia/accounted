@@ -137,6 +137,7 @@ function employee(overrides: Partial<{
   first_name: string
   clearing_number: string | null
   bank_account_number: string | null
+  specification_number: number | null
 }> = {}) {
   return {
     employee_id: overrides.employee_id ?? EMPLOYEE_ID,
@@ -148,6 +149,7 @@ function employee(overrides: Partial<{
       last_name: 'Andersson',
       clearing_number: 'clearing_number' in overrides ? overrides.clearing_number : '6000',
       bank_account_number: 'bank_account_number' in overrides ? overrides.bank_account_number : '1234567',
+      specification_number: 'specification_number' in overrides ? overrides.specification_number : 1,
     },
   }
 }
@@ -318,6 +320,50 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(stampCalls(calls)).toHaveLength(0)
   })
 
+  it('names the paying account in a 422 when the primary has no IBAN and the company has other accounts (crm#1483)', async () => {
+    const account = (overrides: Record<string, unknown>) => ({
+      name: null,
+      currency: 'SEK',
+      enabled: true,
+      iban: null,
+      payee_iban: null,
+      bic: null,
+      clearing_number: null,
+      bank_name: null,
+      bank_connection_id: null,
+      bank_connection: null,
+      ...overrides,
+    })
+    const { supabase, calls } = makeRecordingSupabase(
+      happyTables({
+        // Read in order: the primary, then every account of the company.
+        cash_accounts: [
+          { data: { id: 'ca-1930', ledger_account: '1930', enabled: true, currency: 'SEK' } },
+          {
+            data: [
+              account({ id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930' }),
+              account({ id: 'ca-1931', name: 'Sparkonto', ledger_account: '1931', payee_iban: 'SE7150000000058391234567' }),
+            ],
+          },
+        ],
+      }),
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ format: 'pain001' }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS')
+    expect(body.error.details).toMatchObject({
+      problem: 'iban_missing',
+      account: { cash_account_id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930', iban_last4: null },
+    })
+    expect(stampCalls(calls)).toHaveLength(0)
+  })
+
   it('returns 422 MISSING_BANK_DETAILS with problem bankgiro_missing for bg_lb without a bankgiro', async () => {
     mockServiceClient.mockReturnValue(
       makeRecordingSupabase(
@@ -354,13 +400,38 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(stampCalls(calls)).toHaveLength(0)
   })
 
-  it('returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID naming the employee, never the account number', async () => {
-    // Invented number. A 5-digit clearing with a 10-digit account needs 11
-    // positions in the 10-wide Bankgirot LB account field.
+  it('carries a 5-digit Swedbank clearing with a 10-digit account in a real LB file (crm#174)', async () => {
+    // Invented numbers: the support-ticket shape, which the old TK54 layout
+    // refused with 422 bg_lb_account_too_long.
     const { supabase, calls } = makeRecordingSupabase(
       happyTables({
         salary_run_employees: {
           data: [employee({ clearing_number: '8327-9', bank_account_number: '9612345678' })],
+        },
+      }),
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ format: 'bg_lb' }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.format).toBe('bg_lb')
+    expect(body.data.employee_count).toBe(1)
+    // TK40: clearing 8327, then the 11 account digits (5th clearing digit +
+    // account) zero-filled to the 12-wide field.
+    expect(body.data.content).toContain('\r\n4000000000188327099612345678')
+    expect(stampCalls(calls)).toHaveLength(1)
+  })
+
+  it('returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID naming the employee, never the account number', async () => {
+    // Accepted by the old 5-11 digit entry rule; names no payable account.
+    const { supabase, calls } = makeRecordingSupabase(
+      happyTables({
+        salary_run_employees: {
+          data: [employee({ clearing_number: '5037', bank_account_number: '96123456789' })],
         },
       }),
     )
@@ -377,12 +448,11 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(body.error.details.format).toBe('bg_lb')
     expect(body.error.details.employee_count).toBe(1)
     expect(body.error.details.employees).toEqual([
-      { employee_id: EMPLOYEE_ID, name: 'Anna Andersson', problem: 'bg_lb_account_too_long' },
+      { employee_id: EMPLOYEE_ID, name: 'Anna Andersson', problem: 'account_format' },
     ])
     expect(body.error.details.message).toContain('Anna Andersson')
-    expect(body.error.details.message).toContain('pain.001')
-    expect(text).not.toContain('9612345678')
-    expect(text).not.toContain('996')
+    expect(body.error.details.message).toContain('Rätta bankuppgifterna')
+    expect(text).not.toContain('96123456789')
     expect(stampCalls(calls)).toHaveLength(0)
   })
 
@@ -449,6 +519,13 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(body.data.total_amount).toBe(25000)
     expect(body.data.currency).toBe('SEK')
     expect(typeof body.data.generated_at).toBe('string')
+    // No cash accounts: the file pays from the settings IBAN, on the historical 1930.
+    expect(body.data.paying_account).toEqual({
+      cash_account_id: null,
+      name: null,
+      ledger_account: '1930',
+      iban_last4: '7466',
+    })
 
     // The real generator ran: debtor IBAN (whitespace stripped), SALA batch,
     // the employee's clearing as SESBA member id and the account as BBAN.
@@ -552,12 +629,16 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(body.data.total_amount).toBe(25000)
 
     const lb: string = body.data.content
-    // Öppningspost (TK 11) with the sender bankgiro, one TK 54 payment record
-    // carrying the employee's clearing + account, slutpost (TK 29), CRLF.
+    // Öppningspost (TK11) with the sender bankgiro, one TK40 kontonummerpost
+    // carrying the employee's clearing + account followed by its TK14 payment
+    // record, slutsummapost (TK29), CRLF.
     expect(lb.startsWith('11')).toBe(true)
     expect(lb).toContain('50501055')
-    // TK 54: 4-digit clearing followed by the account zero-padded to 10 digits.
-    expect(lb).toContain('\r\n5460000001234567')
+    // TK40: "0000", the utbetalningsnummer (specification number 1 + Luhn digit),
+    // the 4-digit clearing, then the account zero-filled to 12 digits.
+    expect(lb).toContain('\r\n4000000000186000000001234567')
+    // TK14: the same utbetalningsnummer, zero-filled to 10.
+    expect(lb).toContain('\r\n140000000018')
     expect(lb).toContain('\r\n29')
     expect(lb.endsWith('\r\n')).toBe(true)
 
@@ -601,6 +682,7 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(body.data.preview.filename).toBe('pain001_lon_2026-05.xml')
     expect(body.data.preview.employee_count).toBe(1)
     expect(body.data.preview.total_amount).toBe(25000)
+    expect(body.data.preview.paying_account).toMatchObject({ ledger_account: '1930', iban_last4: '7466' })
     expect(Array.isArray(body.data.preview.warnings)).toBe(true)
     expect(body.data.preview).not.toHaveProperty('content')
     expect(body.data.preview).not.toHaveProperty('generated_at')
@@ -623,5 +705,58 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(res.status).toBeGreaterThanOrEqual(400)
     const body = await res.json()
     expect(body.error.code).not.toBe('SALARY_RUN_NOT_FOUND')
+  })
+
+  // crm#1219: a new version only with the confirmation, the same rule as the run page.
+  it('returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED and builds nothing without the confirmation', async () => {
+    const { supabase, calls } = makeRecordingSupabase(happyTables())
+    mockServiceClient.mockReturnValue(supabase)
+
+    for (const body of [{ new_version: true }, { new_version: true, confirm_previous_not_approved: false }]) {
+      const res = await paymentFile(makeRequest(URL, { body: JSON.stringify(body) }), detailParams(COMPANY_ID, RUN_ID))
+      expect(res.status).toBe(422)
+      expect((await res.json()).error.code).toBe('SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED')
+    }
+    expect(calls.filter((c) => ['salary_runs', 'salary_payment_files'].includes(c.table))).toHaveLength(0)
+  })
+
+  it('returns the next version with new ids when confirmed, and the run version on a plain call', async () => {
+    const { supabase, calls } = makeRecordingSupabase(happyTables({ salary_runs: { data: { ...approvedRun, payment_file_version: 1 } } }))
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ new_version: true, confirm_previous_not_approved: true }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.version).toBe(2)
+    expect(body.data.filename).toBe('pain001_lon_2026-05_v2.xml')
+    expect(body.data.content).toContain('<MsgId>LON-5560000000-2026-05-V2</MsgId>')
+    expect(body.data.content).toContain('<EndToEndId>LON-5560000000-2026-05-V2-TX0001</EndToEndId>')
+    expect(archiveCalls(calls)[0].args[0]).toMatchObject({ version: 2, previous_not_approved_confirmed: true })
+
+    const later = makeRecordingSupabase(happyTables({ salary_runs: { data: { ...approvedRun, payment_file_version: 2 } } }))
+    mockServiceClient.mockReturnValue(later.supabase)
+    const plain = await paymentFile(
+      makeRequest(URL, { headers: { 'Idempotency-Key': 'b2aaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    const plainBody = await plain.json()
+    expect(plainBody.data.version).toBe(2)
+    expect(plainBody.data.content).toContain('<MsgId>LON-5560000000-2026-05-V2</MsgId>')
+    expect(archiveCalls(later.calls)[0].args[0]).toMatchObject({ version: 2, previous_not_approved_confirmed: false })
+  })
+
+  it('returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED for a Bankgirot LB file', async () => {
+    const { supabase } = makeRecordingSupabase(happyTables())
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ format: 'bg_lb', new_version: true, confirm_previous_not_approved: true }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(422)
+    expect((await res.json()).error.code).toBe('SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED')
   })
 })

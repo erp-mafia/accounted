@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createLogger } from '@/lib/logger'
@@ -11,13 +10,18 @@ import {
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
-import { updateDraftEntry } from '@/lib/bookkeeping/engine'
+import { updateDraftJournalEntry } from '@/lib/core/bookkeeping/journal-entry-edits'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { reanchorOrphanedSupplierInvoiceDocuments } from '@/lib/core/documents/supplier-invoice-underlag'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import {
+  SIE_DELETE_BLOCK_CODE,
+  readSieDeleteBlock,
+  sieDeleteBlockFromDbError,
+} from '@/lib/core/bookkeeping/voucher-delete-guard'
 
 const logger = createLogger('journal-entries')
-
-ensureInitialized()
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.get',
@@ -46,7 +50,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.delete',
-  async (_request, { supabase, companyId, user }, { params }) => {
+  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
 
   // Registers that hang on a verifikat live outside the GL, and their FKs are
@@ -60,13 +64,25 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   //     second revert of a part payment wipes the payment that should stand.
   //   - customer invoice payments: the TS sync below. Their remaining_amount
   //     is the ROT/RUT customer share defined once in
-  //     lib/invoices/customer-share.ts, which is not duplicated into SQL.
+  //     lib/bookkeeping/customer-share.ts, which is not duplicated into SQL.
   const { data: entryBefore } = await supabase
     .from('journal_entries')
-    .select('id, source_type, source_id')
+    .select('id, source_type, source_id, import_batch_id, reverses_id')
     .eq('id', id)
     .eq('company_id', companyId)
     .single()
+
+  // An SIE-imported verifikat, or the storno of an undone SIE import, is
+  // never deletable: the database refuses it (retain_sie_batch_entry,
+  // retain_sie_undo_reversal). Refuse here, before anything is read or
+  // reverted, with a typed 409 that names the way out (PH 212, crm#1438).
+  const sieBlock = entryBefore ? await readSieDeleteBlock(supabase, companyId, entryBefore) : null
+  if (sieBlock) {
+    return errorResponseFromCode(SIE_DELETE_BLOCK_CODE[sieBlock], log, {
+      requestId,
+      details: { entry_id: id },
+    })
+  }
 
   const customerPaymentEntry =
     entryBefore && isCustomerPaymentSourceType(entryBefore.source_type) ? entryBefore : null
@@ -99,6 +115,15 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   })
 
   if (error) {
+    // The same refusals raised by the triggers themselves (the state changed
+    // since the read above): an expected answer, not a failure.
+    const raisedBlock = sieDeleteBlockFromDbError(error)
+    if (raisedBlock) {
+      return errorResponseFromCode(SIE_DELETE_BLOCK_CODE[raisedBlock], log, {
+        requestId,
+        details: { entry_id: id },
+      })
+    }
     logger.error('delete_last_voucher failed', { entryId: id, error })
     return NextResponse.json(
       { error: getErrorMessage(error, { context: 'journal_entry', statusCode: 400 }) },
@@ -146,29 +171,30 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 /**
  * PATCH: edit a DRAFT verifikat in place (header + lines). Only drafts are
  * editable; updateDraftEntry rejects committed entries with a 409, and the DB
- * immutability trigger is the backstop.
+ * immutability trigger is the backstop. Rules in
+ * lib/core/bookkeeping/journal-entry-edits.ts, shared with the v1 operation
+ * journal-entries.update-draft.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.update',
-  async (request, { supabase, companyId, user }, { params }) => {
+  async (request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
     const validation = await validateBody(request, CreateJournalEntrySchema)
     if (!validation.success) return validation.response
 
-    try {
-      const entry = await updateDraftEntry(supabase, companyId, user.id, id, validation.data)
-      return NextResponse.json({ data: entry })
-    } catch (err) {
-      const typed = bookkeepingErrorResponse(err)
-      if (typed) return typed
-      // Untyped errors map to Swedish via getErrorMessage: the raw message is
-      // logged here and must never reach the user verbatim (issue #337).
-      logger.error('failed to update draft journal entry', { entryId: id, error: err })
-      return NextResponse.json(
-        { error: getErrorMessage(err, { context: 'journal_entry' }) },
-        { status: 400 },
-      )
+    const outcome = await updateDraftJournalEntry(
+      { supabase, companyId, userId: user.id, log },
+      id,
+      validation.data,
+    )
+    if (!outcome.ok) {
+      // Typed bookkeeping errors keep the envelope this route has always
+      // answered (the entry form reads its details).
+      const typed = outcome.error ? bookkeepingErrorResponse(outcome.error) : null
+      return typed ?? sessionFailureResponse(outcome, log, requestId)
     }
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

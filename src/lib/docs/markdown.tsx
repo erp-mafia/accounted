@@ -30,7 +30,7 @@ export function DocsMarkdown({ source, className }: DocsMarkdownProps) {
             <h1 className="font-display text-4xl tracking-tight mb-6 mt-2">{children}</h1>
           ),
           h2: ({ children }) => (
-            <h2 className="font-display text-2xl tracking-tight mt-12 mb-4 pb-2 border-b border-border">
+            <h2 className="font-display text-2xl tracking-tight mt-12 mb-4 pb-2 border-b-hairline">
               {children}
             </h2>
           ),
@@ -97,14 +97,14 @@ export function DocsMarkdown({ source, className }: DocsMarkdownProps) {
             </div>
           ),
           thead: ({ children }) => (
-            <thead className="border-b border-border">{children}</thead>
+            <thead className="border-b-hairline">{children}</thead>
           ),
           th: ({ children }) => (
             <th className="text-left px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               {children}
             </th>
           ),
-          td: ({ children }) => <td className="px-3 py-2 align-top border-b border-border">{children}</td>,
+          td: ({ children }) => <td className="px-3 py-2 align-top border-b-hairline">{children}</td>,
         }}
       >
         {source}

@@ -48,38 +48,12 @@ vi.mock('@/lib/webhooks/url-guard', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { POST as retryDelivery } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
+import { createIdempotencyKeysFake } from '@/tests/idempotency-fake'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockUrlGuard = validateWebhookUrl as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const WEBHOOK_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -117,6 +91,8 @@ const ACTIVE_WEBHOOK = {
   webhook_url: 'https://example.com/hooks',
   active: true,
   disabled_at: null,
+  verified_at: '2026-05-15T12:00:00Z',
+  verification_grace_ends_at: null,
 }
 
 beforeEach(() => {
@@ -139,14 +115,14 @@ beforeEach(() => {
 describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
   it('re-enqueues a dead delivery as a fresh pending row', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: [
           { data: DEAD_DELIVERY, error: null }, // lookup
           { data: { id: NEW_DELIVERY_ID }, error: null }, // insert
         ],
         company_members: { data: { company_id: COMPANY_ID }, error: null },
         webhooks: { data: ACTIVE_WEBHOOK, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -160,6 +136,84 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
     const body = await res.json()
     expect(body.data.webhook_delivery_id).toBe(NEW_DELIVERY_ID)
     expect(body.data.status).toBe('pending')
+  })
+
+  it('honours Idempotency-Key: a repeat answers the first retry and queues no second delivery', async () => {
+    // The wrapper cannot replay here (no :companyId in the URL); the handler
+    // does, keyed by the delivery's company once the company gate passed.
+    const idempotency = createIdempotencyKeysFake()
+    const mock = createTableMockSupabase({
+      webhook_deliveries: [
+        { data: DEAD_DELIVERY, error: null }, // first call: lookup
+        { data: { id: NEW_DELIVERY_ID }, error: null }, // first call: insert
+        { data: DEAD_DELIVERY, error: null }, // second call: lookup
+      ],
+      company_members: { data: { company_id: COMPANY_ID }, error: null },
+      webhooks: { data: ACTIVE_WEBHOOK, error: null },
+    })
+    const tableFrom = mock.supabase.from
+    mock.supabase.from = vi.fn((table: string) =>
+      table === 'idempotency_keys' ? (idempotency.table() as never) : tableFrom(table),
+    ) as typeof tableFrom
+    ;(mock.supabase as unknown as { rpc: typeof idempotency.rpc }).rpc = idempotency.rpc
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const call = () =>
+      retryDelivery(
+        makeRequest(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'retry-once' },
+        }),
+        idParams(DELIVERY_ID),
+      )
+
+    const first = await call()
+    expect(first.status).toBe(200)
+    const firstBody = await first.json()
+
+    const second = await call()
+    expect(second.status).toBe(200)
+    expect(second.headers.get('Idempotent-Replayed')).toBe('true')
+    expect((await second.json()).data.webhook_delivery_id).toBe(firstBody.data.webhook_delivery_id)
+
+    expect(mock.payloads('webhook_deliveries', 'insert')).toHaveLength(1)
+    expect(idempotency.rows).toHaveLength(1)
+    expect(idempotency.rows[0]).toMatchObject({ company_id: COMPANY_ID, key: 'retry-once', scope: 'api_route' })
+  })
+
+  it('stores no refusal under the key: a retry after the delivery became retryable is judged again', async () => {
+    const idempotency = createIdempotencyKeysFake()
+    const mock = createTableMockSupabase({
+      webhook_deliveries: [
+        { data: { ...DEAD_DELIVERY, status: 'pending' }, error: null }, // first call: not retryable yet
+        { data: DEAD_DELIVERY, error: null }, // second call: lookup
+        { data: { id: NEW_DELIVERY_ID }, error: null }, // second call: insert
+      ],
+      company_members: { data: { company_id: COMPANY_ID }, error: null },
+      webhooks: { data: ACTIVE_WEBHOOK, error: null },
+    })
+    const tableFrom = mock.supabase.from
+    mock.supabase.from = vi.fn((table: string) =>
+      table === 'idempotency_keys' ? (idempotency.table() as never) : tableFrom(table),
+    ) as typeof tableFrom
+    ;(mock.supabase as unknown as { rpc: typeof idempotency.rpc }).rpc = idempotency.rpc
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const call = () =>
+      retryDelivery(
+        makeRequest(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'retry-later' },
+        }),
+        idParams(DELIVERY_ID),
+      )
+
+    expect((await call()).status).toBe(400)
+    expect(idempotency.rows).toHaveLength(0)
+    const second = await call()
+    expect(second.status).toBe(200)
+    expect(second.headers.get('Idempotent-Replayed')).toBeNull()
+    expect(idempotency.rows[0]).toMatchObject({ key: 'retry-later', state: 'completed' })
   })
 
   it('requires payroll:read for salary_run.* / agi.* retries (elevated-scope gate)', async () => {
@@ -176,13 +230,13 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
       mode: 'live',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: {
           data: { ...DEAD_DELIVERY, event_type: 'salary_run.booked' },
           error: null,
         },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -200,10 +254,10 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('refuses to retry a live delivery (pending/in_flight/failed)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: { ...DEAD_DELIVERY, status: 'failed' }, error: null },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -221,11 +275,11 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('returns 404 NOT_FOUND when the caller is not a member of the delivery company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: DEAD_DELIVERY, error: null },
         // Non-member → 404, not 403, so we don't leak delivery existence.
         company_members: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -240,14 +294,14 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('refuses to retry against a disabled webhook', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: DEAD_DELIVERY, error: null },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
         webhooks: {
           data: { ...ACTIVE_WEBHOOK, active: false, disabled_at: '2026-05-15T11:00:00Z' },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -269,11 +323,11 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
       detail: '10.0.0.1 is private',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: DEAD_DELIVERY, error: null },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
         webhooks: { data: ACTIVE_WEBHOOK, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -291,9 +345,9 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('returns 404 NOT_FOUND when the delivery does not exist', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -308,11 +362,11 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('returns 404 NOT_FOUND when the original webhook has been deleted', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: DEAD_DELIVERY, error: null },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
         webhooks: { data: null, error: null }, // webhook deleted between dead and retry
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -323,5 +377,119 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
     )
 
     expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/v1/webhook-deliveries/:id/retry: per-key company access', () => {
+  // The URL carries no companyId, so the company comes from the delivery row.
+  // A key's company allowlist and per-company read-only access must hold here
+  // exactly as they do on /companies/{companyId}/... routes.
+  const OTHER_COMPANY_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+
+  function keyWith(extra: Record<string, unknown>) {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: OTHER_COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['webhooks:manage'],
+      mode: 'live',
+      ...extra,
+    })
+  }
+
+  function happySupabase(role = 'owner') {
+    const client = createTableMockSupabase({
+      webhook_deliveries: [
+        { data: DEAD_DELIVERY, error: null }, // lookup
+        { data: { id: NEW_DELIVERY_ID }, error: null }, // insert
+      ],
+      company_members: { data: { company_id: COMPANY_ID, role }, error: null },
+      webhooks: { data: ACTIVE_WEBHOOK, error: null },
+    }).supabase
+    mockServiceClient.mockReturnValue(client)
+    return client
+  }
+
+  function retry() {
+    return retryDelivery(
+      makeRequest(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, { method: 'POST' }),
+      idParams(DELIVERY_ID),
+    )
+  }
+
+  function deliveryTableCalls(client: ReturnType<typeof createTableMockSupabase>['supabase']): number {
+    return client.from.mock.calls.filter(([t]) => t === 'webhook_deliveries').length
+  }
+
+  it('answers 404 NOT_FOUND for a delivery of a member company outside the key allowlist, and enqueues nothing', async () => {
+    keyWith({ allowedCompanyIds: [OTHER_COMPANY_ID], readOnlyCompanyIds: null })
+    const client = happySupabase()
+
+    const res = await retry()
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+    // Indistinguishable from an unknown delivery id: the delivery's company
+    // is not named to a key that cannot reach it.
+    expect(JSON.stringify(body.error.details ?? {})).not.toContain(COMPANY_ID)
+    // Only the lookup ran: no insert, no webhook read.
+    expect(deliveryTableCalls(client)).toBe(1)
+    expect(client.from).not.toHaveBeenCalledWith('webhooks')
+  })
+
+  it('retries a delivery of a company inside the key allowlist (case-insensitive)', async () => {
+    keyWith({ allowedCompanyIds: [OTHER_COMPANY_ID, COMPANY_ID.toUpperCase()], readOnlyCompanyIds: null })
+    const client = happySupabase()
+
+    const res = await retry()
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.webhook_delivery_id).toBe(NEW_DELIVERY_ID)
+    expect(deliveryTableCalls(client)).toBe(2)
+  })
+
+  it('retries for a key without an allowlist (every membership reachable)', async () => {
+    keyWith({ allowedCompanyIds: null, readOnlyCompanyIds: null })
+    happySupabase()
+
+    const res = await retry()
+
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses a key with read-only access to the delivery company with 403 CONNECTION_READ_ONLY', async () => {
+    keyWith({ allowedCompanyIds: [COMPANY_ID], readOnlyCompanyIds: [COMPANY_ID] })
+    const client = happySupabase()
+
+    const res = await retry()
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('CONNECTION_READ_ONLY')
+    expect(deliveryTableCalls(client)).toBe(1)
+  })
+
+  it('refuses a viewer membership with 403 ROLE_READ_ONLY', async () => {
+    keyWith({ allowedCompanyIds: null, readOnlyCompanyIds: null })
+    const client = happySupabase('viewer')
+
+    const res = await retry()
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('ROLE_READ_ONLY')
+    expect(deliveryTableCalls(client)).toBe(1)
+  })
+
+  it('returns 401 without a bearer token', async () => {
+    const res = await retryDelivery(
+      new Request(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, { method: 'POST' }),
+      idParams(DELIVERY_ID),
+    )
+    expect(res.status).toBe(401)
   })
 })

@@ -1,6 +1,19 @@
+---
+audience: developer
+---
+
 # Swedish E-Invoicing Market, Providers and Pricing
 
 This reference covers (a) which Access Points and service providers operate in Sweden, (b) how the dominant Swedish accounting platforms (Fortnox, Visma, Bokio, SpeedLedger, Björn Lundén, Hogia) wire their Peppol layers, almost all white-label, (c) per-document pricing benchmarks, (d) the post-2022 industry consolidation pattern.
+
+## Contents
+
+- Major Swedish Access Points and service providers
+- Qvalia public pricing (EUR, read from qvalia.com/pricing 2026-09-21)
+- SME pricing benchmarks (April 2026)
+- How Swedish accounting platforms wire Peppol
+- Industry consolidation post-2022
+- Authoritative source list
 
 ## Major Swedish Access Points and service providers
 
@@ -51,8 +64,6 @@ API note (2026-09): Qvalia's Partner API now documents HMAC-signed webhooks with
 ## How Swedish accounting platforms wire Peppol
 
 **The dominant SME accounting platforms in Sweden all white-label two intermediaries.** Fortnox, Bokio and SpeedLedger funnel through **Crediflow**. Visma eEkonomi/SPCS/Administration/Business funnel through **Visma Autoinvoice (Maventa)**, which is itself a certified Peppol AP. None operate their own Peppol AP, except Hogia.
-
-This concentration is a strategic opening for any new platform: **building native Peppol disintermediates the entire value chain** and removes a markup baked into incumbent pricing.
 
 ### Fortnox
 
@@ -108,20 +119,7 @@ Pattern: **bigger players are bundling tax + invoicing + AP automation + complia
 | ~2020 | Visma Group acquires InExchange (Factorum AB) |
 | 2019-2020 | Ropo Capital acquires Colligent Inkasso, Posti Messaging Scandinavia |
 
-**Reseller dependency risk is now real**, Pagero is a TR division, Basware is PE-owned, both will eventually re-price upward. Build optionality into the stack via a clean `SendClient` abstraction with dual-vendor capability.
-
-## Choosing an Access Point partner, decision framework
-
-For a new Swedish accounting/fintech product, the practical menu:
-
-1. **Storecove**, best DX, single API across Peppol + IT SDI + FR PA + PL KSeF + BE + DE. Free 30-day sandbox. Effective rate €0.05-€0.30/invoice. **Best fit when multi-mandate is needed.**
-2. **Qvalia**, transparent EUR pricing, ISO 27001, Swedish-headquartered, partner and multi-tenant API. Since September 2026 the API documents signed webhooks, idempotent submission and a defined status lifecycle, which closes most of the DX gap to Storecove for Peppol-only flows. Accounted's contracted Access Point.
-3. **InExchange**, heaviest Swedish installed base, but partial vendor lock-in via Visma Group ownership.
-4. **Visma Autoinvoice / Maventa**, only worth it if already integrating Visma ecosystem.
-5. **Pagero / Basware**, enterprise-only, not SME-friendly post-acquisition.
-6. **Own Oxalis-NG AP**, only for receive at low volume (€100/mo Hetzner + €4,400 yr-1 OpenPeppol fees). For send, only economic above ~25k invoices/month.
-
-**Build vs buy break-even:** reseller cost of ~€0.10/invoice (mid-volume Storecove) versus own-AP fixed cost of ~€30k/year (membership + cert + ops) breaks even at **~300,000 invoices/year sent through your customers**, equivalent to ~3,000-5,000 active SME customers each sending 50-100 invoices/month. **For receive there is no economic case to build initially**, Storecove free receive or own Oxalis on a small VPS dominate.
+Pagero is now a Thomson Reuters division and Basware is private-equity owned. A clean `SendClient` abstraction keeps a second vendor possible.
 
 ## Authoritative source list
 

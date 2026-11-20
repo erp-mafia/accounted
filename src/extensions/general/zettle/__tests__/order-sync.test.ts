@@ -4,7 +4,6 @@ import {
   fromMinor,
   mapLineItems,
   mapPurchaseToWebshopRows,
-  parseBackfillFrom,
   purchaseQualifiesAsPaidSale,
   purchaseQualifiesAsRefund,
   resolveWindowStartIso,
@@ -12,6 +11,7 @@ import {
   zettlePurchaseExternalId,
   zettleStoreScope,
 } from '../lib/order-sync'
+import { parseBackfillFrom } from '@/lib/feed-sync/cursor-window'
 import { MAX_BACKFILL_YEARS } from '../types'
 import type { ZettleConnection, ZettlePurchase } from '../types'
 
@@ -42,6 +42,36 @@ function sale(overrides: Partial<ZettlePurchase> = {}): ZettlePurchase {
 }
 
 describe('zettle order-sync mapping', () => {
+  describe('a service charge', () => {
+    const withCharge = (grossMinor: number, rate: number): ZettlePurchase => ({
+      amount: grossMinor,
+      products: [],
+      groupedVatAmounts: {},
+      serviceCharge: { title: 'Serviceavgift', amount: grossMinor, vatPercentage: rate, quantity: '1' },
+    } as unknown as ZettlePurchase)
+
+    it('splits as every other gross amount does, VAT first', () => {
+      // 1,26 kr at 12 % holds 0,135 kr of VAT: 0,14 kr VAT, 1,12 kr net.
+      expect(mapLineItems(withCharge(126, 12))).toEqual([
+        expect.objectContaining({ total: 1.12, total_tax: 0.14, vat_rate: 12 }),
+      ])
+    })
+
+    it('keeps its whole gross at no rate', () => {
+      expect(mapLineItems(withCharge(126, 0))).toEqual([
+        expect.objectContaining({ total: 1.26, total_tax: 0, vat_rate: 0 }),
+      ])
+    })
+  })
+
+  it('a product row\'s VAT is the exact VAT on its net: 2,75 kr at 6 % is 0,17 kr', () => {
+    const purchase = {
+      amount: 292,
+      products: [{ name: 'Bok', quantity: '1', rowTaxableAmount: 275, vatPercentage: 6 }],
+    } as unknown as ZettlePurchase
+    expect(mapLineItems(purchase)).toEqual([expect.objectContaining({ total: 2.75, total_tax: 0.17 })])
+  })
+
   it('freezes the external_id template', () => {
     expect(zettleStoreScope('org-abc')).toBe('org-abc')
     expect(zettlePurchaseExternalId('org-abc', 'p-1')).toBe('zettle_org-abc_purchase_p-1')
@@ -206,6 +236,19 @@ describe('zettle order-sync mapping', () => {
     expect(fromMinor(12500)).toBe(125)
     expect(fromMinor(-50)).toBe(-0.5)
   })
+
+  it('dates a purchase on the Swedish day, not the UTC day (#58)', () => {
+    const conn = { id: 'conn-1', organization_name: 'Caféet' }
+    // Winter time: 23:30 UTC on 31 October is 00:30 on 1 November in Stockholm.
+    const [winter] = mapPurchaseToWebshopRows(conn, 'org-1', sale({ created: '2026-10-31T23:30:00.000+0000' }))
+    expect(winter).toMatchObject({ order_date: '2026-11-01', paid_date: '2026-11-01' })
+    // Summer time: 22:30 UTC on 31 August is 00:30 on 1 September.
+    const [summer] = mapPurchaseToWebshopRows(conn, 'org-1', sale({ created: '2026-08-31T22:30:00.000Z' }))
+    expect(summer).toMatchObject({ order_date: '2026-09-01', paid_date: '2026-09-01' })
+    // 21:30 UTC is still 23:30 on 31 August there.
+    const [evening] = mapPurchaseToWebshopRows(conn, 'org-1', sale({ created: '2026-08-31T21:30:00.000+0000' }))
+    expect(evening).toMatchObject({ order_date: '2026-08-31', paid_date: '2026-08-31' })
+  })
 })
 
 const CONNECTED_AT = '2026-09-09T10:00:00.000Z'
@@ -272,26 +315,27 @@ describe('zettle sync window', () => {
   })
 })
 
+// Zettle's backfill bound through the shared parser (its private copy is gone).
 describe('parseBackfillFrom', () => {
   const now = new Date('2026-09-14T12:00:00.000Z')
 
   it('accepts a plain date and pins it to midnight UTC', () => {
-    expect(parseBackfillFrom('2026-01-01', now)).toEqual({ iso: '2026-01-01T00:00:00.000Z' })
+    expect(parseBackfillFrom('2026-01-01', MAX_BACKFILL_YEARS, now)).toEqual({ iso: '2026-01-01T00:00:00.000Z' })
   })
 
   it('rejects anything that is not a YYYY-MM-DD string', () => {
-    expect(parseBackfillFrom(undefined, now)).toEqual({ error: 'invalid' })
-    expect(parseBackfillFrom('2026-1-1', now)).toEqual({ error: 'invalid' })
-    expect(parseBackfillFrom(20260101, now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom(undefined, MAX_BACKFILL_YEARS, now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom('2026-1-1', MAX_BACKFILL_YEARS, now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom(20260101, MAX_BACKFILL_YEARS, now)).toEqual({ error: 'invalid' })
   })
 
   it('rejects a day that does not exist instead of rolling it over', () => {
     // Date.parse turns 2026-02-31T00:00:00Z into 3 March.
-    expect(parseBackfillFrom('2026-02-31', now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom('2026-02-31', MAX_BACKFILL_YEARS, now)).toEqual({ error: 'invalid' })
   })
 
   it('rejects a future start date', () => {
-    expect(parseBackfillFrom('2026-09-15', now)).toEqual({ error: 'future' })
+    expect(parseBackfillFrom('2026-09-15', MAX_BACKFILL_YEARS, now)).toEqual({ error: 'future' })
   })
 
   it('caps how far back a backfill may reach', () => {
@@ -299,7 +343,7 @@ describe('parseBackfillFrom', () => {
     floor.setUTCFullYear(floor.getUTCFullYear() - MAX_BACKFILL_YEARS)
     const justInside = new Date(floor.getTime() + 86_400_000).toISOString().slice(0, 10)
     const tooOld = new Date(floor.getTime() - 2 * 86_400_000).toISOString().slice(0, 10)
-    expect(parseBackfillFrom(justInside, now)).toHaveProperty('iso')
-    expect(parseBackfillFrom(tooOld, now)).toEqual({ error: 'too_old' })
+    expect(parseBackfillFrom(justInside, MAX_BACKFILL_YEARS, now)).toHaveProperty('iso')
+    expect(parseBackfillFrom(tooOld, MAX_BACKFILL_YEARS, now)).toEqual({ error: 'too_old' })
   })
 })

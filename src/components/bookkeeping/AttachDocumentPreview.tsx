@@ -1,12 +1,21 @@
 'use client'
 
-import { ArrowDown, AlertTriangle } from 'lucide-react'
+import { useTranslations } from 'next-intl'
+import { ArrowDownIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { isUuid } from '@/lib/invariants/uuid'
 import { DocumentViewButton } from './DocumentViewButton'
+import DocumentViewerPane from './DocumentViewerPane'
 
 interface AttachDocumentPreviewProps {
   data: Record<string, unknown>
   params: Record<string, unknown>
+  /**
+   * The Granskning drawer: the document renders inside the review instead of
+   * behind a button that opens a new tab, so the pairing can be judged in
+   * place (crm#1003). Confirm dialogs and the chat card stay compact.
+   */
+  detail?: boolean
 }
 
 /**
@@ -14,7 +23,7 @@ interface AttachDocumentPreviewProps {
  * the transaction and the document side by side so the reviewer can confirm
  * the pairing without cross-referencing IDs.
  */
-export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewProps) {
+export function AttachDocumentPreview({ data, params, detail = false }: AttachDocumentPreviewProps) {
   const txDescription = (data.transaction_description as string) || '-'
   const txAmount = data.transaction_amount as number | undefined
   const txCurrency = (data.transaction_currency as string) || 'SEK'
@@ -26,7 +35,14 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
   const docCurrency = (data.document_currency as string) || txCurrency
   const docInvoiceDate = data.document_invoice_date as string | undefined
 
+  const t = useTranslations('pending')
   const willOverwrite = data.will_overwrite_existing === true
+  // The pinned document stays underlag (its inbox item is matched to the
+  // row): this one is added beside it, nothing is replaced (crm#1479).
+  const addsToExisting = !willOverwrite && data.adds_to_existing === true
+  // The row is already booked and its document is the verifikat's underlag:
+  // this one joins that verifikat, the posted entry does not change.
+  const addsToVerifikat = addsToExisting && data.adds_to_verifikat === true
   const existingDocName = data.existing_document_file_name as string | undefined
   // Fail safe: if the staging tool didn't explicitly assert the existing doc
   // is NOT räkenskapsinformation (i.e. `=== false`), treat overwrite as a
@@ -35,7 +51,8 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
   const existingIsAccounting =
     willOverwrite && data.existing_document_is_rakenskapsinformation !== false
 
-  const documentId = params.document_id as string | undefined
+  const documentId = isUuid(params.document_id) ? params.document_id : null
+  const docMimeType = typeof data.document_mime_type === 'string' ? data.document_mime_type : null
 
   return (
     <div className="space-y-3 text-sm">
@@ -57,7 +74,7 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
           {typeof docAmount === 'number' && (
             <Row label="Belopp" value={formatCurrency(docAmount, docCurrency)} tabular />
           )}
-          {documentId && (
+          {documentId && !detail && (
             <div className="pt-1">
               <DocumentViewButton documentId={documentId} />
             </div>
@@ -65,14 +82,23 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
         </PreviewCard>
       </div>
 
+      {documentId && detail && (
+        <DocumentViewerPane
+          documentId={documentId}
+          mime={docMimeType}
+          fileName={docFileName === '-' ? null : docFileName}
+          className="h-[56vh]"
+        />
+      )}
+
       <div className="flex items-center justify-center text-xs text-muted-foreground">
-        <ArrowDown className="h-3.5 w-3.5 mr-1" />
+        <ArrowDownIcon className="h-3.5 w-3.5 mr-1" />
         kopplas till transaktionen
       </div>
 
       {willOverwrite && existingIsAccounting && (
-        <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="bg-destructive/8 flex items-start gap-2 rounded-lg p-3 text-sm text-destructive">
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <p className="font-medium">Ersätter räkenskapsinformation</p>
             <p className="mt-1 text-xs">
@@ -84,8 +110,19 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
           </div>
         </div>
       )}
+      {addsToExisting && (
+        <div className="rounded-lg p-2 text-xs text-muted-foreground bg-control shadow-raised">
+          {addsToVerifikat
+            ? existingDocName
+              ? t('attach_adds_to_verifikat', { file: existingDocName })
+              : t('attach_adds_to_verifikat_unnamed')
+            : existingDocName
+              ? t('attach_adds_to_existing', { file: existingDocName })
+              : t('attach_adds_to_existing_unnamed')}
+        </div>
+      )}
       {willOverwrite && !existingIsAccounting && (
-        <div className="rounded-lg border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
+        <div className="rounded-lg p-2 text-xs text-muted-foreground bg-control shadow-raised">
           Ersätter befintligt dokument{existingDocName ? `: ${existingDocName}` : ''}.
         </div>
       )}
@@ -95,8 +132,8 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
 
 function PreviewCard({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-border p-3 space-y-1.5">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <div className="rounded-lg p-3 space-y-1.5 bg-control shadow-raised">
+      <p className="text-xs font-medium text-muted-foreground">
         {label}
       </p>
       {children}

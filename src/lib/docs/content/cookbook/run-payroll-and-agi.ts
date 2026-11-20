@@ -6,7 +6,7 @@ This is the operational companion to the [Salary-runs reference](/docs/api/refer
 
 ## What you'll need
 
-- A test API key with \`payroll:read\` AND \`payroll:write\` scopes. \`payroll:write\` is required for every state transition; \`payroll:read\` covers the read paths plus the elevated-scope gate on the webhook \`salary_run.*\` subscription.
+- A **live** API key with \`payroll:read\` AND \`payroll:write\` scopes. A test key (\`gnubok_sk_test_*\`) only previews: every write that supports a dry run is forced into one, and a write without dry-run support answers \`403 TEST_KEY_WRITE_BLOCKED\`, so it cannot run this flow. \`payroll:write\` is required for every state transition; \`payroll:read\` covers the read paths plus the elevated-scope gate on the webhook \`salary_run.*\` subscription.
 - At least one employee on file with the payroll fields set (\`monthly_salary\` or \`hourly_rate\`, \`tax_table_number\`, \`tax_column\`, \`f_skatt_status\`). \`GET /employees\` masks personnummer to \`ÅÅÅÅMMDDXXXX\`; \`GET /employees/{id}\` returns the full value (deliberate drill-in, GDPR Art.5(1)(c)).
 - An open fiscal period covering the salary date.
 
@@ -15,8 +15,8 @@ This is the operational companion to the [Salary-runs reference](/docs/api/refer
 \`POST /salary-runs\` opens an **empty** run in \`draft\` status: it takes only the period + payment metadata (\`period_year\`, \`period_month\`, \`payment_date\`, optional \`voucher_series\` and \`notes\`). Attach each employee with \`POST /salary-runs/{id}/employees\` (body \`{ "employee_id": "..." }\`, plus \`hours_worked\` for hourly staff) before you \`:calculate\`. The attach snapshots the employee's pay config onto the run and seeds the base salary line; one-off components (bonus, deduction, reimbursement) go through \`POST /salary-runs/{id}/employees/{employeeId}/lines\` while the run is still a draft. Line edits never recompute tax: always \`:calculate\` afterwards.
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -54,8 +54,8 @@ Totals are 0 until you calculate.
 \`POST /salary-runs/{id}/calculate\` runs the full Swedish tax engine: skattetabell lookup per employee, sociala avgifter at the current rate (31.42% for 2026), age-adjusted reductions per Prop. 2025/26:66 (the youth-reduction band is **18-22 years old at the start of 2026**: i.e. employees **born 2003-2007** for the 2026 income year, NOT a blanket "under-25"; the elder reduction applies at **67+ from 2026**, not 66+), förmånsbeskattning, semesterlöneskuld, OB-tillägg, traktamente.
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/calculate" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/calculate" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
@@ -84,11 +84,11 @@ The \`review\` status is a soft hold: the math is done but no journal entries ar
 
 ## 3. Approve (review → approved)
 
-\`POST /salary-runs/{id}/approve\` validates and locks the run for payment. \`PATCH\` on a salary run is **draft-only** (\`SALARY_RUN_PATCH_NOT_DRAFT\`): once a run leaves \`draft\` it can no longer be edited, and there is no \`:unapprove\`. Correcting a booked run is done via the forthcoming \`:correct\` verb (storno-then-rebook).
+\`POST /salary-runs/{id}/approve\` validates and locks the run for payment. \`PATCH\` on a salary run is **draft-only** (\`SALARY_RUN_PATCH_NOT_DRAFT\`): once a run leaves \`draft\` it can no longer be edited. \`POST /salary-runs/{id}/unapprove\` takes an approved run back to review and \`POST /salary-runs/{id}/revert\` a run in review back to draft; a booked run is corrected with \`POST /salary-runs/{id}/correct\` (storno, then a correction run).
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/approve" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/approve" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
@@ -100,32 +100,32 @@ Missing email is a **non-blocking warning** (lönebesked can't be sent automatic
 
 ## 4. Pay, then mark paid (approved → paid)
 
-The bank file comes from the API too. \`POST /salary-runs/{id}/payment-file\` with \`{ "format": "pain001" }\` (or \`"bg_lb"\`; omitted = the company's \`preferred_payment_format\`) returns the ISO 20022 pain.001 XML inline as \`data.content\` with a \`data.filename\`, plus the employee count, the total and any warnings. It needs the company's IBAN and BIC (bankgiro for LB) and each employee's clearing and account number, and the run must be approved. Write the content to disk and upload it in the bank's file channel; generating it does not change the run's state. Dry-run it first to see the preview without stamping the run.
+The bank file comes from the API too. \`POST /salary-runs/{id}/payment-file\` with \`{ "format": "pain001" }\` (or \`"bg_lb"\`; omitted = the company's \`preferred_payment_format\`) returns the ISO 20022 pain.001 XML inline as \`data.content\` with a \`data.filename\`, plus the employee count, the total, \`data.paying_account\` and any warnings. A pain.001 pays from the account the salary is booked on: a booked run's verifikat account, otherwise the company's primary bank account, which \`:book\` will credit (\`data.paying_account\` names it). It needs that account's IBAN and a BIC (bankgiro for LB) and each employee's clearing and account number, and the run must be approved. Write the content to disk and upload it in the bank's file channel; generating it does not change the run's state. Dry-run it first to see the preview without stamping the run.
 
 After the bank transfer settles (or you mark it on the same day for cash-method shops), tell Accounted:
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/mark-paid" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/mark-paid" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
-This step records the payment event but does NOT post the journal entry yet: that's step 5. The split is deliberate: the \`mark-paid\` step gives integrators a hook to confirm the bank-side leg landed before locking the GL side. It is a **bodyless POST**: \`paid_at\` is stamped server-side to the current UTC timestamp (the API does not accept a body-supplied date, to keep the BFL audit trail clean).
+This step records the payment event but does NOT post the journal entry yet: that's step 5. The split is deliberate: the \`mark-paid\` step gives integrators a hook to confirm the bank-side leg landed before locking the GL side. The body is optional: \`paid_at\` is stamped server-side to the current UTC timestamp (the API does not accept a body-supplied date, to keep the BFL audit trail clean). A run whose \`payment_date\` is after today needs \`{ "confirm_payment_date_ahead": true }\` here and on \`:book\`, else \`422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED\`.
 
 ## 5. Book (paid → booked)
 
-\`POST /salary-runs/{id}/book\` is the engine-touching step. It posts **2-4 verifikationer** atomically — always the salary and avgifter entries, plus a semesterlöneskuld-accrual entry and/or a löneväxling-pension entry when those apply:
+\`POST /salary-runs/{id}/book\` is the engine-touching step. It posts **1-4 verifikationer** (none for a nollkörning): the salary entry, the avgifter entry when the run has arbetsgivaravgifter, plus a semesterlöneskuld-accrual entry and/or a löneväxling-pension entry when those apply. Every entry is validated before the first is posted:
 
-- Verifikation 1: Bruttolön: debit → 7210 / 7220 / 7240 (Löner tjänstemän / företagsledare / styrelsearvoden, by \`employment_type\`), credit → 2710 (Personalskatt, avdragen skatt) + 1930 (utbetalning)
+- Verifikation 1: Bruttolön: debit → 7210 / 7010 / 7220 / 7240 (Löner tjänstemän / kollektivanställda / företagsledare / styrelsearvoden, by \`employment_type\` and the employee's \`personnel_category\`), credit → 2710 (Personalskatt, avdragen skatt) + the company's primary bank account (utbetalning: the ledger account of its primary cash account, 1930 for a company that never changed it)
 - Verifikation 2: Arbetsgivaravgifter: debit → 7510 (Lagstadgade sociala avgifter, exact öre), credit → 2731 (Avräkning sociala avgifter: whole kronor, the amount Skatteverket computes from the declared underlag and draws) + 3740 (Öres- och kronutjämning: the remainder, when the exact cost differs)
-- Verifikation 3 (if semesterlöneskuld): debit → 7290 (Förändring semesterlöneskuld) + 7519 (sociala avgifter på semester), credit → 2920 (Upplupna semesterlöner) + 2940 (Upplupna sociala avgifter)
+- Verifikation 3 (if semesterlöneskuld): debit → 7290 / 7090 (Förändring semesterlöneskuld, tjänstemän / kollektivanställda) + 7519 (sociala avgifter på semester), credit → 2920 (Upplupna semesterlöner) + 2940 (Upplupna sociala avgifter)
 - Verifikation 4 (if löneväxling): debit → 7410 (Pensionsförsäkringspremier) + 7533 (Särskild löneskatt på pensionskostnader), credit → 2740 (Skuld pensionsförsäkringar) + 2514 (Beräknad särskild löneskatt); pension = löneväxling × 1.058
 
 The 2731 series is the **employer-contributions-payable** liability per BAS 2026: not to be confused with 2615 (utgående moms vid import, unrelated to payroll). The arbetsgivardeklaration cycle posts the payable on book day and clears it via 1930 when the bank transfer to Skatteverket settles.
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/book" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/book" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
@@ -156,15 +156,15 @@ Response:
 }
 \`\`\`
 
-If \`book\` fails partway (e.g. period locked while waiting for the bank-side confirmation), the route is strict-mode v1: no partial commits. The state stays at \`paid\` and the response carries the \`PERIOD_LOCKED\` error code with the offending period.
+If \`book\` fails partway (e.g. period locked while waiting for the bank-side confirmation), a refusal found in validation posts nothing: the state stays at \`paid\` and the response carries the \`PERIOD_LOCKED\` error code with the offending period. After a transient failure partway through posting, call \`:book\` again: it adopts the vouchers already posted instead of posting them twice.
 
 ## 6. Generate the AGI XML
 
 \`POST /salary-runs/{id}/generate-agi\` produces the arbetsgivardeklaration på individnivå XML for the period. Skatteverket requires AGI monthly; the XML is embedded in the JSON response: no separate file endpoint.
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/generate-agi" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/generate-agi" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
@@ -182,7 +182,6 @@ Response:
       "totalTax": 24300.00,
       "totalAvgifterBasis": 80000.00,
       "totalAvgifterAmount": 25136.00,
-      "totalSjuklonekostnad": 0,
       "avgifterByCategory": { "standard": { "basis": 80000.00, "amount": 25136.00 } }
     },
     "xml": "<?xml version=\\"1.0\\" encoding=\\"UTF-8\\"?><Skatteverket omrade=\\"Arbetsgivardeklaration\\">…</Skatteverket>",
@@ -224,11 +223,11 @@ Each transition is idempotent on \`Idempotency-Key\`. Retrying a transition that
 
 ## Förmånsbeskattning
 
-When an employee has bilförmån / fri kost / friskvård, the förmånsvärde is configured on the employee's benefit records: it is **not** passed on the run-creation request (\`POST /salary-runs\` takes only period + payment metadata). When you \`:calculate\`, the engine adds the förmånsvärde to bruttolön for the avgifts-basis (2731) and produces a separate förmåner line on the AGI. \`bilförmån_värde\` follows Skatteverkets schablon for 2026; supply the figure directly: the API does not compute it from car make / model / year.
+When an employee has bilförmån / fri kost / friskvård, the förmånsvärde is configured on the employee's benefit records: it is **not** passed on the run-creation request (\`POST /salary-runs\` takes only period + payment metadata). When you \`:calculate\`, the engine adds the förmånsvärde to bruttolön for the avgifts-basis (2731) and produces a separate förmåner line on the AGI. A \`car\` benefit's \`monthly_value\` follows Skatteverkets schablon for 2026; supply the figure directly: the API does not compute it from car make / model / year.
 
 ## Common pitfalls
 
-- **\`PATCH\`/\`DELETE\` are draft-only.** Both require \`draft\` status (\`SALARY_RUN_PATCH_NOT_DRAFT\` / \`SALARY_RUN_DELETE_NOT_DRAFT\`). There is no revert-to-draft and no \`:unapprove\`; a booked run is corrected via the forthcoming \`:correct\` verb (storno-then-rebook), not by editing or deleting.
+- **\`PATCH\`/\`DELETE\` are draft-only.** Both require \`draft\` status (\`SALARY_RUN_PATCH_NOT_DRAFT\` / \`SALARY_RUN_DELETE_NOT_DRAFT\`). Take a run back first (\`:unapprove\` from approved to review, \`:revert\` from review to draft); a booked run is corrected with \`:correct\` (storno, then a correction run), not by editing or deleting.
 - **AGI period vs run period.** The AGI declaration covers \`(period_year, period_month)\`: the same period as the run, not the payment date. A run paid on 2026-06-02 for May still files as the May AGI.
 - **Absence registered in the pay month but the run reads the previous month.** With \`previous_month\` (or explicit dates), September's run deducts August's absence only. Days registered in September land on the October run. Check \`deviation_period_start\`/\`deviation_period_end\` on the run before you register.
 - **F-skatt verification is the integrator's job.** The API trusts \`employee.f_skatt_status\` (\`a_skatt\` | \`f_skatt\` | \`fa_skatt\` | \`not_verified\`) to be in sync with the employee's live Skatteverket registration. A wrong status produces a non-compliant AGI; check the F-skattsedel before payroll runs. \`not_verified\` employees are surfaced as a non-blocking warning on \`:calculate\` (30% skatteavdrag and full avgifter are applied until verified).

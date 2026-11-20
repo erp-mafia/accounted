@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { mapSalesInvoice, mapSupplierInvoice, resolveSupplierSettlement } from '../entity-mapper'
-import type { SalesInvoiceDto, SupplierInvoiceDto, InvoiceStatusCode, PartyDto, PaymentStatusDto } from '@/lib/providers/dto'
+import { mapSalesInvoice, mapSupplierInvoice } from '../entity-mapper'
+import { mapFortnoxToSalesInvoice } from '@/lib/providers/fortnox/mapper'
+import type { SalesInvoiceDto, SupplierInvoiceDto, InvoiceStatusCode, PartyDto } from '@/lib/providers/dto'
 
 /**
  * Guards the status/paid consistency hardening in mapSupplierInvoice: the
@@ -127,10 +128,10 @@ describe('mapSupplierInvoice: status/paid consistency', () => {
     expect(inv.paid_at).toBeNull()
   })
 
-  it('a partial payment carries the provider payment date when there is one', () => {
+  it('a partial payment carries no paid date, as natively: paid_at is the day it was paid in full', () => {
     const inv = map({ status: 'booked', paid: false, balance: 300, total: 1000, lastPaymentDate: '2026-02-05' })
     expect(inv.status).toBe('partially_paid')
-    expect(inv.paid_at).toBe('2026-02-05')
+    expect(inv.paid_at).toBeNull()
   })
 
   it('credit note with zero balance stays credited: never flipped to paid', () => {
@@ -172,7 +173,7 @@ describe('mapSupplierInvoice: status/paid consistency', () => {
 })
 
 /**
- * Company 5208b894 (Visma, 2026-09-10): 582 supplier invoices imported, 0
+ * A company migrated from Visma (2026-09-10): 582 supplier invoices imported, 0
  * open, although Visma reported 53 as unpaid. The mapper combined two
  * independent signals with OR (`paid || balance <= 0`), so a zero balance
  * beside an explicit unpaid enum forced 'paid'. When the flag came from the
@@ -221,6 +222,58 @@ describe('mapSupplierInvoice: an explicit unpaid enum is never overridden by a z
     const inv = mapSales({ status: 'booked', paid: false, balance: 0, total: 1000, source: 'enum' })
     expect(inv.status).toBe('sent')
     expect(inv.remaining_amount).toBe(1000)
+    expect(inv.paid_amount).toBe(0)
+    expect(inv.paid_at).toBeNull()
+  })
+})
+
+/**
+ * A customer invoice the customer had paid part of landed as 'sent' beside a
+ * non-zero paid_amount, a state no native invoice is ever in: a native part
+ * payment sets 'partially_paid' and leaves paid_at empty until the invoice is
+ * fully paid (settle-invoice-payment.ts). Provider-neutral: the DTO is the
+ * same for every provider.
+ */
+describe('mapSalesInvoice: a part-paid open invoice is partially_paid', () => {
+  it.each(['sent', 'booked', 'overdue'] as InvoiceStatusCode[])(
+    'lifecycle %s with 0 < paid < total → partially_paid, paid_at null',
+    (status) => {
+      const inv = mapSales({ status, paid: false, balance: 300, total: 1000, lastPaymentDate: '2026-02-05' })
+      expect(inv.status).toBe('partially_paid')
+      expect(inv.paid_amount).toBe(700)
+      expect(inv.remaining_amount).toBe(300)
+      expect(inv.paid_at).toBeNull()
+    },
+  )
+
+  it('the same from a Visma-style enum flag beside a positive balance', () => {
+    const inv = mapSales({ status: 'overdue', paid: false, balance: 0.5, total: 1000, source: 'enum' })
+    expect(inv.status).toBe('partially_paid')
+    expect(inv.paid_amount).toBe(999.5)
+    expect(inv.remaining_amount).toBe(0.5)
+  })
+
+  it('a fully paid invoice stays paid', () => {
+    const inv = mapSales({ status: 'paid', paid: true, balance: 0, total: 1000, lastPaymentDate: '2026-02-05' })
+    expect(inv.status).toBe('paid')
+    expect(inv.paid_at).toBe('2026-02-05')
+  })
+
+  it('an unpaid invoice keeps its lifecycle status', () => {
+    expect(mapSales({ status: 'sent', paid: false, balance: 1000, total: 1000 }).status).toBe('sent')
+    expect(mapSales({ status: 'overdue', paid: false, balance: 1000, total: 1000 }).status).toBe('overdue')
+  })
+
+  it('an unissued or cancelled invoice is never turned into partially_paid', () => {
+    expect(mapSales({ status: 'draft', paid: false, balance: 1000, total: 1000 }).status).toBe('draft')
+    expect(mapSales({ status: 'cancelled', paid: false, balance: 300, total: 1000 }).status).toBe('cancelled')
+  })
+
+  it('a credit note is never partially_paid', () => {
+    const dto = makeSalesDto({ status: 'sent', paid: false, balance: 300, total: 1000 })
+    dto.invoiceTypeCode = '381'
+    const inv = mapSalesInvoice(dto, 'user-1', 'company-1', 'customer-1').invoice
+    expect(inv.status).toBe('credited')
     expect(inv.paid_amount).toBe(0)
     expect(inv.paid_at).toBeNull()
   })
@@ -280,78 +333,6 @@ describe('mapSupplierInvoice: a zero total is an amount-less record, not a settl
 })
 
 /**
- * The settlement rule is exported so the repair pass
- * (refresh-migrated-payment-state.ts) reads a provider's payment fields
- * exactly as the import did. Two copies would drift and the repair would then
- * contradict the import it repairs.
- */
-describe('resolveSupplierSettlement', () => {
-  const balanceStatus = (paid: boolean, balance: number, lastPaymentDate?: string): PaymentStatusDto => ({
-    paid,
-    balance: { value: balance, currencyCode: 'SEK' },
-    lastPaymentDate,
-    source: 'balance',
-  })
-
-  it('settles a fully paid invoice and dates it from the provider payment date', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0, '2026-02-05'), 1000)).toEqual({
-      status: 'paid',
-      paidAmount: 1000,
-      remainingAmount: 0,
-      paidAt: '2026-02-05',
-    })
-  })
-
-  it('leaves paidAt null when the provider names no payment date: unknown is not the issue date', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0), 1000)).toEqual({
-      status: 'paid',
-      paidAmount: 1000,
-      remainingAmount: 0,
-      paidAt: null,
-    })
-  })
-
-  it('normalises an empty payment date string to null rather than writing it', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0, ''), 1000).paidAt).toBeNull()
-  })
-
-  it('reports a partial payment as partially_paid with both amounts', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 300), 1000)).toMatchObject({
-      status: 'partially_paid',
-      paidAmount: 700,
-      remainingAmount: 300,
-    })
-  })
-
-  it('says nothing about a still-open invoice, so the caller keeps its lifecycle status', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 1000), 1000)).toEqual({
-      status: null,
-      paidAmount: 0,
-      remainingAmount: 1000,
-      paidAt: null,
-    })
-  })
-
-  it('never settles a zero total', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0), 0).status).toBeNull()
-  })
-
-  it('never lets a zero balance override an explicit unpaid enum', () => {
-    const enumStatus: PaymentStatusDto = {
-      paid: false,
-      balance: { value: 0, currencyCode: 'SEK' },
-      source: 'enum',
-    }
-    expect(resolveSupplierSettlement(enumStatus, 1000)).toEqual({
-      status: null,
-      paidAmount: 0,
-      remainingAmount: 1000,
-      paidAt: null,
-    })
-  })
-})
-
-/**
  * #2719: every Fortnox-migrated paid invoice carried paid_at = invoice_date.
  * The Fortnox mapper builds paymentStatus as { paid, balance } and never sets
  * lastPaymentDate (Visma and WINT do), and both mappers fell back to the
@@ -399,5 +380,34 @@ describe('paid_at is the provider payment date or null, never the issue date (#2
     const supplier = map({ status: 'paid', paid: true, balance: 0, total: 1000 })
     expect(sales.paid_at).not.toBe(sales.invoice_date)
     expect(supplier.paid_at).not.toBe(supplier.invoice_date)
+  })
+})
+
+/**
+ * crm#1245: a Fortnox invoice saved but never sent or booked. Its detail form
+ * states Sent false and Booked false; a zero Balance must not make it paid,
+ * and its rows and VAT come over as on any hydrated invoice.
+ */
+describe('mapSalesInvoice: an unissued Fortnox draft', () => {
+  const draft = {
+    DocumentNumber: '4711', InvoiceDate: '2026-10-20', DueDate: '2026-11-19', Currency: 'SEK',
+    CustomerName: 'Kund AB', Sent: false, Booked: false, Cancelled: false,
+    Total: 1250, Net: 1000, TotalVAT: 250, Balance: 0, VATIncluded: false,
+    InvoiceRows: [
+      { RowId: 1, Description: 'Konsulttimmar', DeliveredQuantity: '8', Price: 100, Total: 800, VAT: 25, AccountNumber: 3041 },
+      { RowId: 2, Description: 'Resa', DeliveredQuantity: '1', Price: 200, Total: 200, VAT: 25, AccountNumber: 3041 },
+    ],
+  }
+
+  it('lands as a draft with nothing paid, its rows in order and 25 % VAT', () => {
+    const mapped = mapSalesInvoice(mapFortnoxToSalesInvoice(draft), 'user-1', 'company-1', 'customer-1')
+    expect(mapped.invoice.status).toBe('draft')
+    expect(mapped.invoice.paid_amount).toBe(0)
+    expect(mapped.invoice.remaining_amount).toBe(1250)
+    expect(mapped.invoice.paid_at).toBeNull()
+    expect(mapped.invoice.vat_rate).toBe(25)
+    expect(mapped.invoice.vat_amount).toBe(250)
+    expect(mapped.items.map((item) => [item.sort_order, item.description, item.vat_amount]))
+      .toEqual([[1, 'Konsulttimmar', 200], [2, 'Resa', 50]])
   })
 })

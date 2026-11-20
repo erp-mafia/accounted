@@ -105,6 +105,7 @@ BEGIN
   ASSERT (SELECT subtotal=1000 AND vat_amount=250 AND total=1250 AND status='paid' AND registration_journal_entry_id IS NULL
     AND paid_at='2026-02-03T12:00:00Z' AND document_id IS NULL FROM supplier_invoices WHERE id=invoice),'header or paid date incorrect';
   ASSERT (SELECT count(*)=1 FROM supplier_invoice_payments WHERE supplier_invoice_id=invoice AND payment_date='2026-02-03'),'payment date not from voucher';
+  ASSERT (SELECT link_basis='import_carried_over' FROM supplier_invoice_payments WHERE supplier_invoice_id=invoice),'payment row claims a person chose an imported pair';
   ASSERT (SELECT count(*)=1 FROM supplier_invoice_items WHERE supplier_invoice_id=invoice),'rows missing';
   ASSERT (SELECT count(*)=1 FROM processing_history WHERE aggregate_id=invoice AND event_type='SupplierInvoiceCompleted'),'completion event missing';
   repeated:=complete_bokio_supplier_invoice(company,consent,invoice,run,s,expected,plan,false);
