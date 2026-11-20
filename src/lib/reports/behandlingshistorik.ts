@@ -349,6 +349,12 @@ export const AUDITED_TABLES = [
   // stands in for an attester away, for which days. It decides who may
   // release a payment while the period runs.
   'company_attest_substitutes',
+  // Bank-anchor moves (migration 20261120180000, #2407): a bank row's booking
+  // moved to another verifikat or released (correction, delete of a
+  // correction, storno), on the pointer and on the junction. A first booking
+  // writes nothing: the verifikat is its record.
+  'transactions',
+  'transaction_voucher_links',
 ] as const
 
 /**
@@ -870,7 +876,7 @@ interface NormaliseContext {
   rattelseMetadataAt: Map<string, number[]>
   entryById: Map<string, EntryRow>
   /**
-   * The verifikat skattekonto link rows name, read by id whatever their
+   * The verifikat link rows (skattekonto, bank anchors) name, read by id whatever their
    * period (fetchLinkedEntries). Absent when nothing was looked up.
    */
   linkedEntryById?: Map<string, LinkedEntryRow>
@@ -2237,9 +2243,72 @@ export function auditRowToEvent(
       return employeePayAuditEvent(row)
     case 'skattekonto_transactions':
       return skattekontoLinkAuditEvent(row, ctx)
+    case 'transactions':
+    case 'transaction_voucher_links':
+      return bankAnchorAuditEvent(row, ctx)
     default:
       return null
   }
+}
+
+const BANK_LINK_ROLE_LABEL: Record<string, string> = {
+  bank_line: 'bankrad',
+  clearing: 'clearing',
+  other: 'övrigt',
+}
+
+/**
+ * A bank row's booking moved to another verifikat or released (triggers
+ * audit_transactions_anchor and audit_transaction_voucher_links_*, migration
+ * 20261120180000, #2407): a correction moves it to the correction, deleting
+ * a correction moves it back, a storno releases it. The pointer
+ * (transactions) and the junction (transaction_voucher_links, with its role
+ * and allocated amount) are logged apart, as each moved. A first booking
+ * writes no row.
+ */
+function bankAnchorAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandlingshistorikEvent | null {
+  const isLink = row.table_name === 'transaction_voucher_links'
+  if (row.action !== 'UPDATE' && !(isLink && row.action === 'DELETE')) return null
+  const before = row.old_state ?? {}
+  const after = row.new_state ?? {}
+  const oldEntry = str(before.journal_entry_id)
+  const newEntry = row.action === 'DELETE' ? null : str(after.journal_entry_id)
+  if (!oldEntry || oldEntry === newEntry) return null
+
+  const details: string[] = [
+    newEntry
+      ? `Verifikat: ${linkedEntryLabel(oldEntry, ctx)} → ${linkedEntryLabel(newEntry, ctx)}`
+      : `Verifikat: ${linkedEntryLabel(oldEntry, ctx)}`,
+  ]
+  let object: string | null = null
+  if (isLink) {
+    const transactionId = str(before.transaction_id)
+    if (transactionId) details.push(`Bankhändelse: ${transactionId}`)
+    const role = str(before.role)
+    if (role) details.push(`Roll: ${BANK_LINK_ROLE_LABEL[role] ?? role}`)
+    const allocated = Number(before.allocated_amount)
+    if (before.allocated_amount !== null && before.allocated_amount !== undefined && Number.isFinite(allocated)) {
+      details.push(`Belopp: ${fmtAmount(allocated)}`)
+    }
+  } else {
+    const state = row.new_state ?? before
+    object = [str(state.date), str(state.description)].filter(Boolean).join(' ') || null
+    const amount = Number(state.amount)
+    if (state.amount !== null && state.amount !== undefined && Number.isFinite(amount)) {
+      details.push(`Belopp: ${fmtAmount(amount)} ${str(state.currency) ?? 'SEK'}`)
+    }
+  }
+
+  const prefix = isLink ? 'bank_link' : 'bank_transaction'
+  return auditEvent(row, {
+    category: 'verifikation',
+    code: newEntry ? `${prefix}.moved` : `${prefix}.released`,
+    event: isLink
+      ? newEntry ? 'Bankkoppling flyttad till annat verifikat' : 'Bankkoppling borttagen'
+      : newEntry ? 'Bankhändelse flyttad till annat verifikat' : 'Bankhändelsens koppling till verifikat borttagen',
+    object,
+    details,
+  })
 }
 
 /**
@@ -3340,11 +3409,18 @@ async function fetchLedgerHistory(
   }
 }
 
-/** The verifikat ids the window's skattekonto link rows name, before and after. */
-export function skattekontoLinkedEntryIds(rows: AuditLogEntry[]): string[] {
+/** The audit tables whose rows name a verifikat they were linked to or moved from. */
+const LINK_AUDIT_TABLES: ReadonlySet<string> = new Set([
+  'skattekonto_transactions',
+  'transactions',
+  'transaction_voucher_links',
+])
+
+/** The verifikat ids the window's link rows (skattekonto, bank anchors) name, before and after. */
+export function linkedEntryIds(rows: AuditLogEntry[]): string[] {
   const ids = new Set<string>()
   for (const row of rows) {
-    if (row.table_name !== 'skattekonto_transactions') continue
+    if (!LINK_AUDIT_TABLES.has(row.table_name ?? '')) continue
     for (const state of [row.old_state, row.new_state]) {
       const id = str(state?.journal_entry_id)
       if (id) ids.add(id)
@@ -3357,7 +3433,7 @@ export function skattekontoLinkedEntryIds(rows: AuditLogEntry[]): string[] {
 const LINKED_ENTRY_CHUNK = 100
 
 /**
- * The verifikat skattekonto rows were linked to or unlinked from, by id: a
+ * The verifikat skattekonto and bank rows were linked to or moved from, by id: a
  * link made this year may name last year's verifikat, which the period's
  * entries do not hold. A deleted draft is simply missing from the result.
  */
@@ -3714,8 +3790,8 @@ export async function generateBehandlingshistorik(
     raw.push(rattelseEvent(row, entryById))
   }
 
-  const linkedEntryIds = skattekontoLinkedEntryIds(auditRows)
-  const linkedEntryById = linkedEntryIds.length > 0 ? await fetchLinkedEntries(supabase, companyId, linkedEntryIds) : undefined
+  const linkedIds = linkedEntryIds(auditRows)
+  const linkedEntryById = linkedIds.length > 0 ? await fetchLinkedEntries(supabase, companyId, linkedIds) : undefined
   const ctx: NormaliseContext = { rattelseMetadataAt, entryById, linkedEntryById }
   for (const row of auditRows) {
     const ev = auditRowToEvent(row, ctx)
