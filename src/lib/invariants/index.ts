@@ -36,10 +36,15 @@ export {
 export {
   stripOrgNumberFormatting,
   orgNumberKey,
+  partyOrgKey,
+  sameOrgNumber,
+  swedishNumberKind,
+  isLegalPersonOrgNumber,
   isOrgNumberShaped,
   normalizeOrgNumber,
   isValidOrgNumber,
   hasInvalidOrgNumberCheckDigit,
   formatOrgNumberDisplay,
+  FilingIdentityError,
   toRedovisare12,
 } from './org-number'

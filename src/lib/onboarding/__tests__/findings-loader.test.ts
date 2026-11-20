@@ -64,7 +64,20 @@ describe('findings figures', () => {
     expect(findings.books).toMatchObject({
       revenue: 1000.01, result: -250.4, periodName: '2026', vatBalance: 2500, missingUnderlag: 7, lastEntryDate: '2026-06-30',
     })
-    expect(findings.skv.ledger1630).toBe(-120)
+    expect(findings.skv.ledgerSkattekonto).toBe(-120)
+    expect(findings.skv.skattekontoAccount).toBe('1630')
+  })
+
+  it('reads the skattekonto on 2012 for an enskild firma that runs it there', async () => {
+    enqueueReads({
+      summary: {
+        period_name: '2026', revenue: 0, result: 0, vat_balance: 0,
+        ledger_1630: 0, skattekonto_account: '2012', ledger_skattekonto: '500.004',
+      },
+    })
+    const findings = await loadBooksFindings(client, 'company-1', '2026-09-14', 'user-1')
+    expect(findings.skv.skattekontoAccount).toBe('2012')
+    expect(findings.skv.ledgerSkattekonto).toBe(500)
   })
 
   it('shows zero balances, not null, for books with nothing on 26xx or 1630', async () => {
@@ -72,7 +85,7 @@ describe('findings figures', () => {
     const findings = await loadBooksFindings(client, 'company-1', '2026-09-14', 'user-1')
     expect(findings.books.revenue).toBe(0)
     expect(findings.books.vatBalance).toBe(0)
-    expect(findings.skv.ledger1630).toBe(0)
+    expect(findings.skv.ledgerSkattekonto).toBe(0)
   })
 
   it('leaves period figures null when only empty or future periods exist', async () => {
@@ -85,7 +98,7 @@ describe('findings figures', () => {
     enqueueReads({ entries: 0 })
     const findings = await loadBooksFindings(client, 'company-1', '2026-09-14', 'user-1')
     expect(findings.books).toMatchObject({ entries: 0, revenue: null, result: null, periodName: null, vatBalance: null, missingUnderlag: 0 })
-    expect(findings.skv.ledger1630).toBeNull()
+    expect(findings.skv.ledgerSkattekonto).toBeNull()
     expect(findings.books.periods).toEqual([{ name: '2026', start: '2026-01-01', end: '2026-12-31', isClosed: false, continuityVerified: null }])
   })
 

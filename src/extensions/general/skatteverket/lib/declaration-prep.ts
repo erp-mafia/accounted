@@ -1,7 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { VatPeriodType } from '@/types'
+import type { VatDeclaration, VatPeriodType } from '@/types'
 import { calculateVatDeclaration, resolvePeriodDates } from '@/lib/reports/vat-declaration'
-import { rutorToMomsuppgift, formatRedovisare, formatRedovisningsperiod } from './mappers'
+import { generateAgiDeclaration } from '@/lib/salary/agi/generate-declaration'
+import { agiFiledForRun } from '@/lib/salary/agi-submission-state'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { createLogger } from '@/lib/logger'
+import { companyRedovisare } from '@/lib/company/org-number'
+import { rutorToMomsuppgift, formatRedovisningsperiod } from './mappers'
 import type { SkatteverketMomsuppgift } from '../types'
 
 /**
@@ -22,6 +28,12 @@ export interface VatDeclarationPrep {
   redovisare: string
   redovisningsperiod: string
   momsuppgift: SkatteverketMomsuppgift
+  /**
+   * The declaration the momsuppgift was mapped from. Every filing path hands
+   * it to vatFilingVerdict (lib/reports/vat-close-check.ts) before its first
+   * Skatteverket call, so the verdict judges exactly the figures filed.
+   */
+  declaration: VatDeclaration
 }
 
 export interface AgiUnderlagPrep {
@@ -34,25 +46,17 @@ export interface AgiUnderlagPrep {
 }
 
 /**
- * Resolve a company's 12-digit "redovisare" string from company_settings.
- * Shared by the VAT and AGI paths and by the status tools that only need the
- * identifier (no momsuppgift / XML compute).
+ * A company's 12-digit "redovisare" string. Shared by the VAT and AGI paths
+ * and by the status tools that only need the identifier (no momsuppgift / XML
+ * compute).
  */
 export async function resolveRedovisare(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<string> {
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('org_number, entity_type')
-    .eq('company_id', companyId)
-    .single()
-
-  if (!settings?.org_number) {
-    throw new Error('Organisationsnummer saknas i företagsinställningar')
-  }
-
-  return formatRedovisare(settings.org_number, settings.entity_type)
+  const redovisare = await companyRedovisare(supabase, companyId)
+  if (!redovisare) throw new Error('Organisationsnummer saknas i företagsinställningar')
+  return redovisare
 }
 
 /** YYYYMM, the only shape Skatteverket accepts as a redovisningsperiod. */
@@ -126,14 +130,130 @@ export async function buildMomsuppgift(
 
   const momsuppgift = rutorToMomsuppgift(declaration.rutor)
 
-  return { redovisare, redovisningsperiod, momsuppgift }
+  return { redovisare, redovisningsperiod, momsuppgift, declaration }
+}
+
+/** Salary run statuses an AGI may be submitted from (finalised payroll only). */
+const AGI_SUBMITTABLE_RUN_STATUSES: readonly string[] = ['review', 'approved', 'paid', 'booked']
+
+const agiRefreshLog = createLogger('skatteverket/agi-refresh')
+
+export type AgiRefreshResult =
+  | {
+      ok: true
+      /**
+       * replaced: the fresh generation differed and is now the stored
+       * underlag; unchanged: the stored underlag already matched; filed: the
+       * run's declaration carries its kvittens and is left alone; skipped:
+       * nothing to refresh (no such run, or not submittable: buildAgiUnderlag
+       * refuses it).
+       */
+      outcome: 'replaced' | 'unchanged' | 'filed' | 'skipped'
+    }
+  | {
+      ok: false
+      code: string
+      httpStatus: number
+      error: string
+      details?: Record<string, unknown>
+    }
+
+/**
+ * Bring the run's stored AGI underlag up to date before it is posted to
+ * Skatteverket. Every submit path (the panel's one-click chain and its
+ * advanced "Skicka in underlag", and MCP gnubok_agi_submit at approval) runs
+ * this through submitAgiUnderlag, so what is filed is what the generator
+ * produces from today's data, never an XML stored before a generator fix
+ * (crm#1265: FK001 missing on an IU without withheld tax).
+ *
+ * The run's declaration is regenerated through the one generator
+ * (generateAgiDeclaration, with all its refusals) unless it is already filed:
+ * a filed declaration is never touched, and a correction after filing goes
+ * through a correction run. When the fresh generation says the same as the
+ * stored one nothing is written; when it differs the fresh one replaces the
+ * stored one (logged) and is what buildAgiUnderlag then reads and posts, so
+ * the stored XML is always the XML that was sent.
+ */
+export async function refreshAgiUnderlag(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  salaryRunId: string,
+): Promise<AgiRefreshResult> {
+  if (!salaryRunId) return { ok: true, outcome: 'skipped' }
+
+  const { data: run } = await supabase
+    .from('salary_runs')
+    .select('status, agi_generated_at, agi_submitted_at')
+    .eq('id', salaryRunId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const runRow = run as { status: string; agi_generated_at: string | null; agi_submitted_at: string | null } | null
+  if (!runRow || !AGI_SUBMITTABLE_RUN_STATUSES.includes(runRow.status)) {
+    return { ok: true, outcome: 'skipped' }
+  }
+  if (runRow.agi_submitted_at) return { ok: true, outcome: 'filed' }
+
+  const { data: declaration } = await supabase
+    .from('agi_declarations')
+    .select('id, status, submitted_at')
+    .eq('company_id', companyId)
+    .eq('salary_run_id', salaryRunId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const declarationRow = declaration as { id: string; status: string; submitted_at: string | null } | null
+  if (agiFiledForRun(runRow, declarationRow)) return { ok: true, outcome: 'filed' }
+
+  const result = await generateAgiDeclaration({
+    supabase,
+    companyId,
+    userId,
+    // The contact e-mail falls back to the profile's; a session e-mail is
+    // not available on every submit path (MCP approval).
+    userEmail: null,
+    salaryRunId,
+    log: agiRefreshLog,
+    requestId: randomUUID(),
+    writeOnlyIfChanged: true,
+  })
+  if (!result.ok) {
+    const details =
+      typeof result.details === 'object' && result.details !== null
+        ? (result.details as Record<string, unknown>)
+        : undefined
+    const entry = getErrorEntry(result.code)
+    const message =
+      typeof details?.message === 'string'
+        ? details.message
+        : entry?.message_sv ?? `AGI kunde inte genereras (${result.code}).`
+    return {
+      ok: false,
+      code: result.code,
+      httpStatus: result.status ?? entry?.httpStatus ?? 500,
+      error: message,
+      ...(details ? { details } : {}),
+    }
+  }
+  if (result.filed) return { ok: true, outcome: 'filed' }
+  if (result.unchanged) return { ok: true, outcome: 'unchanged' }
+
+  agiRefreshLog.info('AGI underlag regenerated before submit: stored XML replaced', {
+    companyId,
+    salaryRunId,
+    agiDeclarationId: result.agiDeclarationId,
+    previousDeclarationId: declarationRow?.id ?? null,
+    previousStatus: declarationRow?.status ?? null,
+  })
+  return { ok: true, outcome: 'replaced' }
 }
 
 /**
  * Load the AGI XML for a salary run from agi_declarations.xml_content
- * (built by app/api/salary/runs/[id]/agi/xml/route.ts via generateAGIXml),
+ * (built by generateAgiDeclaration, lib/salary/agi/generate-declaration.ts),
  * alongside the formatted arbetsgivare/period strings used downstream by the
- * granskningsunderlag and kvittenser calls.
+ * granskningsunderlag and kvittenser calls. The submit paths run
+ * refreshAgiUnderlag first, so the stored XML is current when it is posted.
  *
  * Body lifted verbatim from the former loadAGIXml: including the salary-run
  * status guard (per BFL 5 kap and SFL 26 kap, AGI must reflect finalised
@@ -160,7 +280,7 @@ export async function buildAgiUnderlag(
     throw new Error('Lönekörning hittades inte')
   }
 
-  if (!['review', 'approved', 'paid', 'booked'].includes(run.status)) {
+  if (!AGI_SUBMITTABLE_RUN_STATUSES.includes(run.status)) {
     throw new Error('AGI kan bara skickas till Skatteverket efter granskning')
   }
 

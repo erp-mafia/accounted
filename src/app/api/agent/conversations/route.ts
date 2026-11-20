@@ -43,7 +43,7 @@ export const GET = withRouteContext('agent.conversations.list', async (request, 
       'id, intent_id, context_ref, title, pinned, archived, last_message_at, last_message_preview, created_at',
     )
     .eq('company_id', companyId)
-    // Conversations are user-scoped within a company — one member must not
+    // Conversations are user-scoped within a company - one member must not
     // see another's (see [id]/route.ts). The RLS policy is company-scoped,
     // so this filter is what actually prevents cross-member leakage of
     // titles and last_message_preview snippets.

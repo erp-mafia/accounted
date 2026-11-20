@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { attachOpenExpenseClaims } from '@/lib/salary/expense-claim-lines'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 /**
  * "Lägg till öppna utlägg": put every registered, unscheduled expense claim

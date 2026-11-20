@@ -8,9 +8,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 export function InvoiceEditorShellSkeleton() {
   return (
     <div className="@container flex min-h-dvh flex-col md:h-full md:min-h-0" aria-busy="true" aria-live="polite">
-      <div className="flex min-h-12 items-center gap-2 border-b border-border px-4 md:px-6">
+      <div className="flex min-h-12 items-center gap-2 border-b-hairline px-4 md:px-6">
         <Skeleton className="h-4 w-48" />
-        <Skeleton className="ml-auto h-8 w-36 rounded-full" />
+        <Skeleton className="ml-auto h-8 w-36 rounded-md" />
       </div>
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 space-y-4 px-4 pt-6 md:px-6 @min-[900px]:w-[560px] @min-[900px]:flex-none @min-[900px]:border-r @min-[900px]:border-border">

@@ -12,17 +12,19 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { CheckCircle2, AlertTriangle } from 'lucide-react'
+import { CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import Link from 'next/link'
 import type { YearEndResult, ContinuityDiscrepancy } from '@/types'
-import { formatCurrency } from '@/lib/utils'
+import { formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import {
   isEntityType,
   preparesArsredovisning,
+  preparesForenklatArsbokslut,
   resultClosingAccounts,
 } from '@/lib/company/entity-type'
+import { StatementReconciliationPanel } from './StatementReconciliationPanel'
 
 interface ResultStepProps {
   result: YearEndResult
@@ -49,6 +51,10 @@ export function ResultStep({ result }: ResultStepProps) {
       ? `(${closing.closing} → ${closing.priorYearCarry})`
       : null
   const offersArsredovisning = form !== null && preparesArsredovisning(form)
+  // A form that closes with a förenklat årsbokslut instead (ideell förening,
+  // BFNAR 2010:1) is offered that document the same way.
+  const offersForenklatArsbokslut = form !== null && preparesForenklatArsbokslut(form) !== null
+  const offersDocument = offersArsredovisning || offersForenklatArsbokslut
   const disabledLink = !acknowledged ? 'pointer-events-none opacity-50' : ''
 
   // If the wizard reached ResultStep, executeYearEndClosing already enforced
@@ -58,9 +64,9 @@ export function ResultStep({ result }: ResultStepProps) {
     <div className="space-y-6">
       <div className="space-y-4 py-6 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success/10">
-            <CheckCircle2 className="h-7 w-7 text-success" />
+            <CheckCircleIcon className="h-7 w-7 text-success" />
           </div>
-          <h2 className="font-display text-2xl">Bokslutet är klart</h2>
+          <h2 className="text-2xl">Bokslutet är klart</h2>
           <p className="text-muted-foreground">
             Perioden är stängd och en ny räkenskapsperiod har skapats.
           </p>
@@ -68,7 +74,7 @@ export function ResultStep({ result }: ResultStepProps) {
 
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Resultat</h3>
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">Resultat</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
         <div className="space-y-3 px-1 pt-2 text-sm">
@@ -106,7 +112,7 @@ export function ResultStep({ result }: ResultStepProps) {
 
       {result.resultAppropriationFailed && (
         <div className="flex items-start gap-3 px-1 py-2 text-destructive">
-            <AlertTriangle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
             <p className="text-sm">
               <span className="font-medium">
                 Omföringen av föregående års resultat{carryLabel ? ` ${carryLabel}` : ''} kunde
@@ -137,6 +143,8 @@ export function ResultStep({ result }: ResultStepProps) {
         />
       )}
 
+      <StatementReconciliationPanel periodId={result.closingEntry.fiscal_period_id} />
+
       <section className="space-y-4 px-1">
           <label className="flex items-start gap-3 cursor-pointer">
             <Checkbox
@@ -152,8 +160,9 @@ export function ResultStep({ result }: ResultStepProps) {
             </span>
           </label>
 
-          {/* The primary action is the årsredovisning only for a form that
-              prepares one; every other form's next step is the reports. */}
+          {/* The primary action is the year-end document for a form that
+              prepares one (årsredovisning or förenklat årsbokslut); every
+              other form's next step is the reports. */}
           <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
             <Button variant="outline" asChild disabled={!acknowledged}>
               <Link
@@ -165,7 +174,7 @@ export function ResultStep({ result }: ResultStepProps) {
                 Till bokföringen
               </Link>
             </Button>
-            <Button variant={offersArsredovisning ? 'outline' : 'default'} asChild disabled={!acknowledged}>
+            <Button variant={offersDocument ? 'outline' : 'default'} asChild disabled={!acknowledged}>
               <Link
                 href="/reports"
                 aria-disabled={!acknowledged}
@@ -187,6 +196,18 @@ export function ResultStep({ result }: ResultStepProps) {
                 </Link>
               </Button>
             )}
+            {offersForenklatArsbokslut && (
+              <Button asChild disabled={!acknowledged}>
+                <Link
+                  href={`/bookkeeping/year-end/forenklat-arsbokslut?period=${result.closingEntry.fiscal_period_id}`}
+                  aria-disabled={!acknowledged}
+                  tabIndex={acknowledged ? undefined : -1}
+                  className={disabledLink}
+                >
+                  Skapa förenklat årsbokslut
+                </Link>
+              </Button>
+            )}
           </div>
       </section>
     </div>
@@ -195,7 +216,7 @@ export function ResultStep({ result }: ResultStepProps) {
 
 function ResultRow({ label, value, href }: { label: string; value: string; href?: string }) {
   return (
-    <div className="flex items-center justify-between border-b border-border last:border-b-0 pb-3 last:pb-0">
+    <div className="flex items-center justify-between border-b-hairline last:border-b-0 pb-3 last:pb-0">
       <span className="text-muted-foreground">{label}</span>
       {href ? (
         <Link href={href} className="font-medium tabular-nums text-primary hover:underline">
@@ -233,15 +254,15 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
   return (
     <section>
       <div className="mb-3 flex items-center justify-between gap-2 px-1">
-        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">IB/UB-avstämning</h3>
+        <h3 className="font-sans text-xs font-medium text-muted-foreground">IB/UB-avstämning</h3>
         {hasIssues ? (
           <Badge variant="destructive" className="gap-1">
-            <AlertTriangle className="h-3 w-3" />
+            <ExclamationTriangleIcon className="h-3 w-3" />
             Avvikelser
           </Badge>
         ) : (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <CheckCircle2 className="h-3.5 w-3.5" />
+            <CheckCircleIcon className="h-3.5 w-3.5" />
             Stämmer
           </span>
         )}
@@ -264,7 +285,7 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
               if (rows.length === 0) return null
               return (
                 <div key={klass}>
-                  <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                  <h3 className="font-sans text-xs font-medium text-muted-foreground mb-2">
                     Klass {klass}: {klass === 1 ? 'Tillgångar' : 'Skulder & eget kapital'}
                   </h3>
                   <Table>
@@ -289,13 +310,13 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
                               </span>
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {formatCurrency(d.previous_ub_net)}
+                              {formatRowAmount(d.previous_ub_net)}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {formatCurrency(d.current_ib_net)}
+                              {formatRowAmount(d.current_ib_net)}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {formatCurrency(d.difference)}
+                              {formatRowAmount(d.difference)}
                             </TableCell>
                             <TableCell className="text-right">
                               {overTol ? (

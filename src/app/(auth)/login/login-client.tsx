@@ -6,26 +6,31 @@ import Image from 'next/image'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { AttnLine } from '@/components/ui/attn-line'
 import {
-  Mail,
-  ArrowLeft,
-  KeyRound,
-  ExternalLink,
-  CircleAlert,
-  Eye,
-  EyeOff,
-} from 'lucide-react'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
+  ArrowTopRightOnSquareIcon,
+  EnvelopeIcon,
+  ExclamationCircleIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  KeyIcon,
+} from '@/components/icons'
+import {
+  STANDALONE_LINK_CLASS,
+  StandaloneHeading,
+  StandaloneOr,
+  StandalonePage,
+  StandaloneBelowLine,
+  StandaloneStack,
+} from '@/components/standalone/StandalonePage'
+import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import { useBranding } from '@/lib/branding/brand-context'
-import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
@@ -45,12 +50,24 @@ import {
 } from '@/lib/auth/turnstile'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
-import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
 import {
-  isSessionAuthMethod,
-  setSessionAuthMethodHint,
+  LOGIN_METHOD_PARAM,
+  loginMethodFromParam,
+  persistLoginMethodHint,
+  resolveInitialLoginMethod,
+  type LoginMethod,
+} from '@/lib/auth/login-method'
+import { takeLoginEmailHandoff } from '@/lib/auth/login-email-handoff'
+import {
+  SESSION_ENDED_REASON,
+  SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
+import {
+  signInWithPassword,
+  startSsoSignIn,
+  verifyOtp,
+} from '@/lib/auth/session-client'
 import type { GoTrueAuthSettings } from '@/lib/auth/gotrue-providers'
 
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
@@ -107,8 +124,15 @@ export function LoginClient({
   const reasonParam = searchParams.get('reason')
   const timeoutReason: SessionTimeoutReason | null =
     reasonParam === 'idle' || reasonParam === 'absolute' ? reasonParam : null
-  const methodParam = searchParams.get('method')
-  const requestedMethod = isSessionAuthMethod(methodParam) ? methodParam : 'password'
+  // The proxy found a session in the browser that had ended (signed out on
+  // another device, removed, its refresh token refused).
+  const sessionEnded = reasonParam === SESSION_ENDED_REASON
+  // "Logga ut från alla enheter" that the auth server did not confirm.
+  const everywhereUnconfirmed = reasonParam === SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON
+  // The panel a link asked for: the timeout redirect, or a page that knows
+  // which method will work (the signup page's "Logga in" for an address that
+  // already has an account opens the e-mail form).
+  const requestedMethod = loginMethodFromParam(searchParams.get(LOGIN_METHOD_PARAM))
   // Post-login destination, set e.g. by the MCP OAuth authorize endpoint
   // (/login?next=/api/mcp-oauth/authorize?...). Sanitized to a same-origin
   // relative path; '/' means no explicit destination.
@@ -117,30 +141,45 @@ export function LoginClient({
   // yet must be able to sign up without losing that destination (issue
   // #1814). The register page re-sanitises it through safeReturnTo.
   const registerHref = nextPath === '/' ? '/register' : `/register?next=${encodeURIComponent(nextPath)}`
-  const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   // Per-request brand merged over getBranding() defaults (WL-12): identical
   // values on default hosts, brand values on branded hosts.
   const branding = useBranding()
   const tAuth = useTranslations('auth')
-  const tCommon = useTranslations('common')
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
 
-  // Which method owns the panel. A session-timeout re-login follows the method
-  // that timed out; otherwise the cookie hint wins; a fresh visitor starts on
-  // BankID (the Swedish default) when it is enabled.
-  const [method, setMethod] = useState<LoginMethod>(() => {
-    if (!bankIdEnabled) return 'email'
-    if (timeoutReason) return requestedMethod === 'bankid' ? 'bankid' : 'email'
-    if (initialMethod) return initialMethod
-    return 'bankid'
-  })
+  // Which method owns the panel: a session-timeout re-login follows the
+  // method that timed out; otherwise a requested method, then the cookie
+  // hint; a fresh visitor starts on BankID (the Swedish default) when it is
+  // enabled. Only the first panel: each method's sign-in is unchanged.
+  const [method, setMethod] = useState<LoginMethod>(() =>
+    resolveInitialLoginMethod({
+      bankIdEnabled,
+      passwordLoginEnabled,
+      timedOut: timeoutReason !== null,
+      requested: requestedMethod,
+      remembered: initialMethod,
+    }),
+  )
   const prevMethodRef = useRef(method)
 
+  // An address the signup page left for this form (it already has an
+  // account): filled in, with the caret in the password field. A prefill
+  // only, never submitted. Read after mount because it lives in the tab's
+  // sessionStorage, which the server render cannot see.
   useEffect(() => {
-    if (timeoutReason) resetAnalyticsIdentity()
-  }, [timeoutReason])
+    const handedOff = takeLoginEmailHandoff()
+    if (!handedOff) return
+    setEmail((current) => current || handedOff)
+    passwordInputRef.current?.focus()
+  }, [])
+
+  // An ended session is a sign-out the user did not make here: the previous
+  // identity goes, as after a timeout, so a shared device starts clean.
+  useEffect(() => {
+    if (timeoutReason || sessionEnded) resetAnalyticsIdentity()
+  }, [timeoutReason, sessionEnded])
 
   // After a failed credentials attempt, put the caret back in the password
   // field with the old value selected so the user can retype immediately.
@@ -181,24 +220,20 @@ export function LoginClient({
     setFormError(null)
     setIsLoading(true)
     try {
-      const ssoDomain = process.env.NEXT_PUBLIC_SSO_DOMAIN
-      const ssoProviderId = process.env.NEXT_PUBLIC_SSO_PROVIDER_ID
-      const params = ssoProviderId
-        ? { providerId: ssoProviderId }
-        : ssoDomain
-          ? { domain: ssoDomain }
-          : null
-      if (!params) {
+      // The server starts the flow (its PKCE verifier is an HttpOnly cookie)
+      // and resolves the provider from NEXT_PUBLIC_SSO_PROVIDER_ID or
+      // NEXT_PUBLIC_SSO_DOMAIN; the callback on this origin finishes it.
+      const { url, error } = await startSsoSignIn(nextPath)
+      if (error?.code === 'sso_not_configured') {
         setFormError({ kind: 'oauth', message: tAuth('saml_no_domain') })
         return
       }
-      const { error } = await supabase.auth.signInWithSSO({
-        ...params,
-        options: { redirectTo: `${window.location.origin}/auth/callback?flow=oauth&next=${encodeURIComponent(nextPath)}` },
-      })
-      if (error) {
+      if (error || !url) {
         setFormError({ kind: 'oauth', message: getErrorMessage(error, { context: 'auth', locale: errorLocale }) })
+        return
       }
+      window.location.assign(url)
+      return
     } catch (error) {
       setFormError({
         kind: 'oauth',
@@ -266,18 +301,19 @@ export function LoginClient({
 
     if (result.tokenHash && result.type) {
       try {
-        const { error } = await supabase.auth.verifyOtp({
+        // The server exchanges the one-time link and sets the HttpOnly
+        // session cookie (it also records the BankID sign-in method).
+        const { error } = await verifyOtp({
           token_hash: result.tokenHash,
-          type: result.type as 'magiclink',
+          type: 'magiclink',
         })
 
         if (error) {
-          console.error('[login] BankID verifyOtp failed', error)
+          console.error('[login] BankID verifyOtp failed', error.code ?? error.status)
           setFormError({ kind: 'bankid', message: tAuth('login_failed_bankid') })
           return
         }
 
-        setSessionAuthMethodHint('bankid')
         persistLoginMethodHint('bankid')
 
         // Check for pending invite token
@@ -288,18 +324,19 @@ export function LoginClient({
 
         if (nextPath !== '/') {
           // An explicit destination (e.g. the MCP OAuth consent page, raw
-          // HTML from a route handler) outranks the company picker.
+          // HTML from a route handler) outranks the default landing.
           window.location.assign(nextPath)
           return
         }
 
-        // Byrå staff on their byrå's home domain land in the cockpit
-        // (WL-14). Everyone else keeps the picker: landing on
-        // /select-company after BankID is deliberate, so the user sees
-        // fresh CompanyRoles fetched during this session's enrichment
-        // (and any failure inside the helper degrades to it).
-        const dest = await resolvePostLoginDestination()
-        router.push(dest === '/clients' ? '/clients' : '/select-company')
+        // The same landing as every other sign-in (crm#1034): byrå staff on
+        // their byrå's home domain land in the cockpit (WL-14), everyone
+        // else on '/', which opens the active company. A user without a
+        // company is sent on by the middleware, to the BankID picker when
+        // this login stored engagements. Engagements not yet in Accounted
+        // wait under "Lägg till företag": as a stop on the way in, a company
+        // the user chose not to add came back at every sign-in.
+        router.push(await resolvePostLoginDestination())
         router.refresh()
       } catch (error) {
         console.error('[login] BankID complete error', error)
@@ -327,10 +364,10 @@ export function LoginClient({
     const passwordValue = (formData.get('password') as string) || password
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { error, mfaRequired } = await signInWithPassword({
         email: emailValue,
         password: passwordValue,
-        options: captchaTokenOptions(passwordCaptchaToken),
+        captchaToken: captchaTokenOptions(passwordCaptchaToken).captchaToken ?? null,
       })
 
       if (error) {
@@ -353,13 +390,11 @@ export function LoginClient({
         return
       }
 
-      setSessionAuthMethodHint('password')
       persistLoginMethodHint('email')
 
-      // Check MFA status
-      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-
-      if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
+      // The server answers whether the new session still owes an MFA step-up
+      // (verified factor, AAL1 session), from GoTrue's own reply.
+      if (mfaRequired) {
         router.push(
           nextPath === '/'
             ? '/mfa/verify'
@@ -474,82 +509,58 @@ export function LoginClient({
     const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
 
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up space-y-8">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <Mail className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl tracking-tight">{tAuth('email_sent_title')}</h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              {showResetPassword
-                ? tAuth.rich('email_sent_body_reset', {
-                    email,
-                    strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
-                  })
-                : tAuth.rich('email_sent_body_login', {
-                    email,
-                    strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
-                  })}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              {showResetPassword ? tAuth('email_sent_hint_reset') : tAuth('email_sent_hint_login')}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {webmailHint && (
-              <Button className="w-full" asChild>
-                <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
-                  {tAuth(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
-                    provider: webmailHint.name,
-                  })}
-                  <ExternalLink className="ml-2 h-4 w-4" />
-                </a>
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              className="w-full text-muted-foreground"
-              onClick={() => {
-                setIsEmailSent(false)
-                setShowResetPassword(false)
-              }}
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              {tCommon('back')}
+      <StandalonePage>
+        <StandaloneHeading
+          title={tAuth('email_sent_title')}
+          sub={
+            showResetPassword
+              ? tAuth.rich('email_sent_body_reset', {
+                  email,
+                  strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+                })
+              : tAuth.rich('email_sent_body_login', {
+                  email,
+                  strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+                })
+          }
+        />
+        <StandaloneStack>
+          <p className="text-sm text-foreground">
+            {showResetPassword ? tAuth('email_sent_hint_reset') : tAuth('email_sent_hint_login')}
+          </p>
+          {webmailHint && (
+            <Button variant="outline" size="lg" className="w-full" asChild>
+              <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
+                {tAuth(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
+                  provider: webmailHint.name,
+                })}
+                <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+              </a>
             </Button>
-          </div>
-        </div>
-      </div>
+          )}
+          <Button
+            variant="ghost"
+            size="lg"
+            className="w-full"
+            onClick={() => {
+              setIsEmailSent(false)
+              setShowResetPassword(false)
+            }}
+          >
+            {tAuth('back_to_login')}
+          </Button>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
   // Reset password form
   if (showResetPassword) {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up">
-          <div className="text-center mb-10">
-            <div className="flex justify-center mb-4">
-              <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-                <KeyRound className="h-7 w-7 text-primary" />
-              </div>
-            </div>
-            <h1 className="text-2xl tracking-tight">{tAuth('reset_title')}</h1>
-            <p className="text-muted-foreground text-sm mt-2">
-              {tAuth('reset_subtitle')}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-6">
-            <form onSubmit={handleResetPassword} className="space-y-4">
+      <StandalonePage>
+        <StandaloneHeading title={tAuth('reset_title')} sub={tAuth('reset_subtitle')} />
+        <StandaloneStack>
+            <form onSubmit={handleResetPassword} className="flex flex-col gap-3">
               {formError && <AuthFormError message={formError.message} />}
               <div className="space-y-2">
                 <Label htmlFor="email">{tAuth('email_label')}</Label>
@@ -590,18 +601,11 @@ export function LoginClient({
                 )}
               </Button>
             </form>
-          </div>
-
-          <Button
-            variant="ghost"
-            className="w-full mt-4 text-muted-foreground"
-            onClick={closeResetForm}
-          >
-            <ArrowLeft className="mr-2 h-4 w-4" />
+          <Button variant="ghost" size="lg" className="w-full" onClick={closeResetForm}>
             {tAuth('back_to_login')}
           </Button>
-        </div>
-      </div>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
@@ -616,19 +620,52 @@ export function LoginClient({
   const hasSecondaryMethods = chipCount > 0
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <header className="text-center mb-8">
-          <h1 className="sr-only">{tAuth('login_title')}</h1>
-          <BrandWordmark size="hero" />
-        </header>
+    <StandalonePage
+      hero
+      below={
+        <>
+        {passwordLoginEnabled && registrationEnabled && (
+          <StandaloneBelowLine>
+            {tAuth('login_new_here')}{' '}
+            <Link href={registerHref} className={STANDALONE_LINK_CLASS}>
+              {tAuth('no_account')}
+            </Link>
+          </StandaloneBelowLine>
+        )}
 
-        <div className="rounded-xl border border-border bg-background p-6">
+        <StandaloneBelowLine>
+          {tAuth('terms_prefix')}{' '}
+          {/* The in-app legal pages (host-relative, so they work on branded
+              byrå domains too). New tab: don't lose login state. */}
+          <a href="/terms" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {tAuth('terms_link')}
+          </a>{' '}
+          {tAuth('terms_and')}{' '}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {tAuth('privacy_link')}
+          </a>
+          .
+        </StandaloneBelowLine>
+          <SourceCodeFooter />
+        </>
+      }
+    >
+          <StandaloneHeading title={tAuth('login_title')} hidden />
           {timeoutReason && (
             <div role="alert" className="mb-4">
               <AttnLine>
                 {timeoutReason === 'idle' ? tAuth('session_idle') : tAuth('session_absolute')}
               </AttnLine>
+            </div>
+          )}
+          {sessionEnded && (
+            <div role="alert" className="mb-4">
+              <AttnLine>{tAuth('session_ended')}</AttnLine>
+            </div>
+          )}
+          {everywhereUnconfirmed && (
+            <div role="alert" className="mb-4">
+              <AttnLine>{tAuth('sign_out_everywhere_unconfirmed')}</AttnLine>
             </div>
           )}
           {callbackError === 'auth_error' && (
@@ -691,7 +728,7 @@ export function LoginClient({
             {method === 'bankid' && bankIdEnabled ? (
               <BankIdAuth mode="login" hero onComplete={handleBankIdComplete} />
             ) : method === 'email' && passwordLoginEnabled ? (
-              <form onSubmit={handlePasswordLogin} className="space-y-4">
+              <form onSubmit={handlePasswordLogin} className="flex flex-col gap-3">
                 <div className="space-y-2">
                   <Label htmlFor="email">{tAuth('email_label')}</Label>
                   <Input
@@ -710,16 +747,7 @@ export function LoginClient({
                   />
                 </div>
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="password">{tAuth('password_label')}</Label>
-                    <button
-                      type="button"
-                      onClick={openResetForm}
-                      className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
-                    >
-                      {tAuth('forgot_password')}
-                    </button>
-                  </div>
+                  <Label htmlFor="password">{tAuth('password_label')}</Label>
                   <div className="relative">
                     <Input
                       ref={passwordInputRef}
@@ -743,18 +771,18 @@ export function LoginClient({
                       aria-pressed={showPassword}
                     >
                       {showPassword ? (
-                        <EyeOff className="h-4 w-4" aria-hidden="true" />
+                        <EyeSlashIcon className="h-4 w-4" aria-hidden="true" />
                       ) : (
-                        <Eye className="h-4 w-4" aria-hidden="true" />
+                        <EyeIcon className="h-4 w-4" aria-hidden="true" />
                       )}
                     </button>
                   </div>
                   {formLevelError && (
-                    <p
+                    <div
                       role="alert"
                       className="animate-fade-in flex items-start gap-2 pt-1 text-[13px] leading-5 text-destructive"
                     >
-                      <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <ExclamationCircleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                       <span>
                         {formLevelError.message}
                         {formLevelError.kind === 'invalid_credentials' && failedAttempts >= 2 && (
@@ -770,8 +798,15 @@ export function LoginClient({
                           </>
                         )}
                       </span>
-                    </p>
+                    </div>
                   )}
+                  {/* The way forward sits under the field and its error, in
+                      the same place whether or not the sign-in failed. */}
+                  <p className="text-xs">
+                    <button type="button" onClick={openResetForm} className={STANDALONE_LINK_CLASS}>
+                      {tAuth('forgot_password')}
+                    </button>
+                  </p>
                 </div>
                 <TurnstileChallenge
                   ref={passwordTurnstileRef}
@@ -809,7 +844,7 @@ export function LoginClient({
                       loading={isLoading}
                     >
                       {!isLoading && (
-                        <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                        <KeyIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                       )}
                       {tAuth('continue_with_provider', { provider: 'SAML' })}
                     </Button>
@@ -825,7 +860,7 @@ export function LoginClient({
                   loading={isLoading}
                 >
                   {!isLoading && (
-                    <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <KeyIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   )}
                   {tAuth('continue_with_provider', { provider: 'SAML' })}
                 </Button>
@@ -839,21 +874,15 @@ export function LoginClient({
 
           {hasPrimaryMethod && hasSecondaryMethods && (
             <>
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border" />
-                </div>
-                <div className="relative flex justify-center">
-                  <span className="bg-background px-3 text-xs text-muted-foreground">
-                    {tAuth('or_divider')}
-                  </span>
-                </div>
+              <div className="my-3">
+                <StandaloneOr>{tAuth('or_divider')}</StandaloneOr>
               </div>
               <div className={chipCount === 2 ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
                 {showBankIdChip && (
                   <Button
                     type="button"
                     variant="outline"
+                    size="lg"
                     className="w-full gap-2"
                     onClick={() => switchMethod('bankid')}
                   >
@@ -864,7 +893,7 @@ export function LoginClient({
                       height={18}
                       className="dark:invert"
                     />
-                    BankID
+                    {chipCount === 2 ? 'BankID' : tAuth('continue_with_provider', { provider: 'BankID' })}
                   </Button>
                 )}
                 {providers.map((provider) => (
@@ -880,10 +909,11 @@ export function LoginClient({
                   <Button
                     type="button"
                     variant="outline"
+                    size="lg"
                     className="w-full gap-2"
                     onClick={() => switchMethod('email')}
                   >
-                    <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <EnvelopeIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     {tAuth('method_email_chip')}
                   </Button>
                 )}
@@ -891,12 +921,13 @@ export function LoginClient({
                   <Button
                     type="button"
                     variant="outline"
+                    size="lg"
                     className="w-full"
                     onClick={handleSamlLogin}
                     loading={isLoading}
                   >
                     {!isLoading && (
-                      <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                      <KeyIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     )}
                     {tAuth('continue_with_provider', { provider: 'SAML' })}
                   </Button>
@@ -904,49 +935,7 @@ export function LoginClient({
               </div>
             </>
           )}
-        </div>
 
-        {passwordLoginEnabled && registrationEnabled && (
-          <p className="mt-6 text-center text-[13px] text-muted-foreground">
-            {tAuth('login_new_here')}{' '}
-            <Link
-              href={registerHref}
-              className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
-            >
-              {tAuth('no_account')}
-            </Link>
-          </p>
-        )}
-
-        <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
-          {tAuth('terms_prefix')}{' '}
-          {/* The platform's terms live on the marketing site; the privacy
-              policy is the in-app /privacy page (host-relative, so it works
-              on branded byrå domains too). New tab: don't lose login state. */}
-          <a
-            href="https://accounted.se/terms"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {tAuth('terms_link')}
-          </a>{' '}
-          {tAuth('terms_and')}{' '}
-          <a
-            href="/privacy"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {tAuth('privacy_link')}
-          </a>
-          .
-        </p>
-
-        {/* AGPL section 13 source offer (WL-06): renders on both default and
-            branded hosts; never gate this on a brand. */}
-        <SourceCodeFooter className="mt-4" />
-      </div>
-    </div>
+    </StandalonePage>
   )
 }

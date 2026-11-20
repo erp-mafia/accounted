@@ -29,7 +29,7 @@ export function isPersonPayer(choice: PayerChoice | null | undefined): choice is
  * a caller with the form in reach uses ownerFallbackName(form) so a förening
  * member is labelled "Medlem", not "Ägare".
  */
-import { isEntityType, legalFormGlossary, ownerSettlementAccount } from '@/lib/company/entity-type'
+import { ENTITY_TYPES, isEntityType, legalFormGlossary, ownerSettlementAccount } from '@/lib/company/entity-type'
 
 export const OWNER_FALLBACK_NAME = 'Ägare'
 
@@ -41,6 +41,46 @@ export const OWNER_FALLBACK_NAME = 'Ägare'
  */
 export function ownerFallbackName(entityType: string | null | undefined): string {
   return isEntityType(entityType) ? legalFormGlossary(entityType).owner : OWNER_FALLBACK_NAME
+}
+
+/**
+ * The labels a claim gets when nobody typed a name: every form's glossary
+ * noun, the shared constant, and the English one the Utlägg page writes
+ * (expense_claims.owner_fallback_name in en.json). Lowercased.
+ */
+const FALLBACK_LABELS: ReadonlySet<string> = new Set(
+  [...ENTITY_TYPES.map((form) => legalFormGlossary(form).owner), OWNER_FALLBACK_NAME, 'Owner'].map((label) =>
+    label.toLowerCase(),
+  ),
+)
+
+/** The fields of an expense claim row that lastOwnerClaimantName reads. */
+export interface ClaimantHistoryRow {
+  employee_id?: string | null
+  claimant_name?: string | null
+  created_at?: string | null
+}
+
+/**
+ * The name "Jag, privat" opens with: the one the company's most recently
+ * registered owner claim was typed under. Without it the field starts empty
+ * every time, people type their name on every receipt (PH 101), and a
+ * receipt left empty becomes "Ägare" beside the typed name, so one owner is
+ * two people to pay on Att göra (claims group by name: there is no
+ * employee row for the owner). Null when no owner claim has a typed name;
+ * the field then stays empty with the fallback label as its placeholder.
+ */
+export function lastOwnerClaimantName(claims: readonly ClaimantHistoryRow[]): string | null {
+  let latest: { name: string; at: number } | null = null
+  for (const claim of claims) {
+    if (claim.employee_id) continue
+    const name = claim.claimant_name?.trim()
+    if (!name || FALLBACK_LABELS.has(name.toLowerCase())) continue
+    const at = claim.created_at ? Date.parse(claim.created_at) : Number.NaN
+    const when = Number.isNaN(at) ? Number.NEGATIVE_INFINITY : at
+    if (!latest || when > latest.at) latest = { name, at: when }
+  }
+  return latest?.name ?? null
 }
 
 export type ExpenseLiabilityAccount = '2893' | '2820' | '2018' | '2890'

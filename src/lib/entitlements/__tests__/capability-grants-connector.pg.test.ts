@@ -17,12 +17,18 @@ async function clearGrants(companyId: string): Promise<void> {
   await getPool().query(`DELETE FROM public.capability_grants WHERE company_id = $1`, [companyId])
 }
 
-async function rpc(companyId: string, key: string): Promise<boolean> {
-  const { rows } = await getPool().query<{ ok: boolean }>(
-    `SELECT public.company_has_capability($1, $2) AS ok`,
-    [companyId, key],
+// The grant rows the capability gate reads (company_capability_grant_rows);
+// connectorOnly is the self-host read, which sees the connector sync's rows only.
+async function grantRows(
+  companyId: string,
+  key: string,
+  connectorOnly = false,
+): Promise<Array<{ source: string; expires_at: Date | null }>> {
+  const { rows } = await getPool().query<{ source: string; expires_at: Date | null }>(
+    `SELECT source, expires_at FROM public.company_capability_grant_rows($1, ARRAY[$2]::text[], $3)`,
+    [companyId, key, connectorOnly],
   )
-  return rows[0].ok
+  return rows
 }
 
 describe('capability_grants.source = connector', () => {
@@ -34,7 +40,9 @@ describe('capability_grants.source = connector', () => {
        VALUES ($1, 'bank_sync', 'connector', $2)`,
       [companyId, future()],
     )
-    expect(await rpc(companyId, 'bank_sync')).toBe(true)
+    expect(await grantRows(companyId, 'bank_sync', true)).toEqual([
+      expect.objectContaining({ source: 'connector' }),
+    ])
 
     await expect(
       getPool().query(
@@ -100,6 +108,6 @@ describe('capability_grants.source = connector', () => {
        VALUES ($1, 'bank_sync', 'manual', NULL)`,
       [companyId],
     )
-    expect(await rpc(companyId, 'bank_sync')).toBe(true)
+    expect(await grantRows(companyId, 'bank_sync')).toEqual([{ source: 'manual', expires_at: null }])
   })
 })

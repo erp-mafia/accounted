@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { usageRow, withAiMeter, withMetering, recordAiUsage, type AiUsageRow } from '../meter'
+import { usageRow, withAiMeter, withMetering, recordAiUsage, AiSwitchedOffError, isAiSwitchedOffError, type AiUsageRow } from '../meter'
 import type { AiService } from '../types'
 
 const usage = { inputTokens: 1200, outputTokens: 300, cacheCreationInputTokens: null, cacheReadInputTokens: 800 }
@@ -39,5 +39,43 @@ describe('the AI meter: every model call leaves a row with its tokens', () => {
     expect(record).not.toHaveBeenCalled()
     const failing = { from: () => ({ insert: async () => { throw new Error('down') } }) }
     await expect(recordAiUsage(usageRow(undefined, 'cheap', 'm', usage), failing as never)).resolves.toBeUndefined()
+  })
+})
+
+describe('the AI meter keeps the company switch: a company that switched AI off never reaches the model', () => {
+  const off = (companyId: string) => async (id: string) => id === companyId
+
+  it('refuses generateText and generateStructured for that company, before the model is called', async () => {
+    const service = fakeService()
+    const record = vi.fn(async () => undefined)
+    const ai = withMetering(service, record, off('co-off'))
+    await expect(ai.generateText({ tier: 'assistant', prompt: 'p', maxTokens: 10, meter: { feature: 'ask', companyId: 'co-off' } })).rejects.toBeInstanceOf(AiSwitchedOffError)
+    await expect(
+      ai.generateStructured({ tier: 'cheap', prompt: 'p', maxTokens: 10, schema: { name: 's', jsonSchema: {} }, meter: { feature: 'arkiv_classify', companyId: 'co-off' } }),
+    ).rejects.toSatisfy(isAiSwitchedOffError)
+    expect(service.generateText).not.toHaveBeenCalled()
+    expect(service.generateStructured).not.toHaveBeenCalled()
+    expect(record).not.toHaveBeenCalled()
+  })
+
+  it('answers a document read as skipped, and reads the company from the surrounding scope', async () => {
+    const service = fakeService()
+    const ai = withMetering(service, async () => undefined, off('co-off'))
+    const out = await withAiMeter({ feature: 'document_read', companyId: 'co-off' }, () =>
+      ai.extractFromDocument({ document: { kind: 'text', text: 'x' }, system: 's', instruction: 'i', maxTokens: 10 }),
+    )
+    expect(out).toEqual({ ok: false, skipped: 'ai_switched_off' })
+    expect(service.extractFromDocument).not.toHaveBeenCalled()
+  })
+
+  it('lets every other company and an unlabelled call through', async () => {
+    const service = fakeService()
+    const switchedOff = vi.fn(off('co-off'))
+    const ai = withMetering(service, async () => undefined, switchedOff)
+    await ai.generateText({ tier: 'assistant', prompt: 'p', maxTokens: 10, meter: { feature: 'ask', companyId: 'co-on' } })
+    await ai.generateText({ tier: 'assistant', prompt: 'p', maxTokens: 10 })
+    expect(service.generateText).toHaveBeenCalledTimes(2)
+    // No company, nothing to ask.
+    expect(switchedOff).toHaveBeenCalledTimes(1)
   })
 })

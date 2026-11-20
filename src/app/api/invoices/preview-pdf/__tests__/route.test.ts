@@ -75,7 +75,7 @@ function previewRequest(body: unknown) {
 describe('POST /api/invoices/preview-pdf', () => {
   const user = { id: 'user-1', email: 'owner@example.test' }
   const customer = makeCustomer({ id: CUSTOMER_ID, name: 'Kund ÅÄÖ AB' })
-  const company = makeCompanySettings({ company_name: 'Oppy Sverige', bankgiro: '123-4567' })
+  const company = makeCompanySettings({ company_name: 'Exempelbolaget Sverige', bankgiro: '123-4567' })
   const validBody = {
     customer_id: customer.id,
     invoice_number: '2621',
@@ -116,6 +116,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     ['an impossible date', { ...validBody, invoice_date: '2026-13-45' }],
     ['a customer id that is not a uuid', { ...validBody, customer_id: 'customer-1' }],
     ['an unknown document type', { ...validBody, document_type: 'receipt' }],
+    ['a delivery country that is not an ISO code', { ...validBody, delivery_address: { city: 'Exempelstad', country: 'Norge' } }],
   ])('returns 400 for %s, before reading or rendering anything', async (_label, body) => {
     const response = await previewRequest(body)
 
@@ -149,7 +150,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(response.headers.get('X-Invoice-Missing')).toBeNull()
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-      .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+      .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
   })
 
   it('reports the page count of the rendered PDF', async () => {
@@ -184,10 +185,34 @@ describe('POST /api/invoices/preview-pdf', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('X-Invoice-Missing')).toBeNull()
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-      .toBe('Oppy Sverige x Kund ÅÄÖ AB Offert nr OF-001 20260721.pdf')
+      .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Offert nr OF-001 20260721.pdf')
     const { invoice } = lastRenderProps()
     expect(invoice.document_type).toBe('quote')
     expect(invoice.valid_until).toBe('2026-08-20')
+  })
+
+  it('prints the delivery address the editor is filling in, and none while its fields are empty (crm#1547)', async () => {
+    const fields = { name: 'Exempelbutiken Centrum', address_line1: 'Provgatan 12', address_line2: '', postal_code: '', city: '', country: '' }
+    enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
+
+    const response = await previewRequest({ ...validBody, delivery_address: fields })
+
+    expect(response.status).toBe(200)
+    expect(lastRenderProps().invoice.delivery_address).toEqual({
+      name: 'Exempelbutiken Centrum',
+      address_line1: 'Provgatan 12',
+      address_line2: null,
+      postal_code: null,
+      city: null,
+      country: null,
+    })
+
+    enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
+    const empty = Object.fromEntries(Object.keys(fields).map((key) => [key, '']))
+    expect((await previewRequest({ ...validBody, delivery_address: empty })).status).toBe(200)
+    expect(lastRenderProps().invoice.delivery_address).toBeNull()
   })
 
   it('leaves valid_until null on non-quote documents', async () => {
@@ -787,7 +812,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     // A bankgiro with a valid check digit and an org number: auto prints the
     // bank-app code to a business customer.
     const qrCompany = makeCompanySettings({
-      company_name: 'Oppy Sverige',
+      company_name: 'Exempelbolaget Sverige',
       org_number: '5566778899',
       bankgiro: '5050-1055',
     })
@@ -815,6 +840,18 @@ describe('POST /api/invoices/preview-pdf', () => {
       expect(response.headers.get('X-Invoice-Qr')).toBe('none:no_swish')
       expect(lastRenderProps().invoice.qr_mode).toBe('swish')
       expect((invoicePdfMock.mock.calls.at(-1)?.[0] as { paymentQr: unknown }).paymentQr).toBeNull()
+    })
+
+    it('previews what the issued invoice will say for a customer with an Autogiro mandate: debited, no code', async () => {
+      enqueue({ data: qrCompany, error: null })
+      enqueue({ data: customer, error: null })
+      enqueue({ data: { payer_number: '5501' }, error: null })
+      const response = await previewRequest(validBody)
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('X-Invoice-Qr')).toBe('none:autogiro')
+      expect(lastRenderProps().invoice.autogiro_payer_number).toBe('5501')
+      expect(findCall('autogiro_mandates', 'eq')).toBeDefined()
     })
 
     it('inherits the company default when qr_mode is null or empty', async () => {
@@ -858,5 +895,58 @@ describe('POST /api/invoices/preview-pdf', () => {
 
     expect(response.status).toBe(500)
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+  })
+
+  // crm#1084: the preview prints the article number the saved line would
+  // carry, read from the company's own article like the write path.
+  describe('article number column', () => {
+    const ARTICLE_ID = '6f1c2a3e-0000-4000-8000-0000000000a1'
+    const articleLine = { ...validBody.items[0], article_id: ARTICLE_ID }
+
+    it('gives an article line its number when the company prints article numbers', async () => {
+      enqueue({ data: { ...company, invoice_show_article_number: true }, error: null })
+      enqueue({ data: customer, error: null })
+      enqueue({ data: [{ id: ARTICLE_ID, article_number: 'A-100' }], error: null })
+
+      const response = await previewRequest({ ...validBody, items: [articleLine, validBody.items[0]] })
+
+      expect(response.status).toBe(200)
+      const { items } = lastRenderProps()
+      expect(items.map((item) => item.article_number)).toEqual(['A-100', null])
+      expect(findCall('articles', 'eq')).toEqual(['company_id', 'company-1'])
+    })
+
+    it('reads no articles while the setting is off', async () => {
+      enqueue({ data: company, error: null })
+      enqueue({ data: customer, error: null })
+
+      const response = await previewRequest({ ...validBody, items: [articleLine] })
+
+      expect(response.status).toBe(200)
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('articles')
+      expect(lastRenderProps().items[0].article_number).toBeNull()
+    })
+
+    it('previews without the number when the article read fails', async () => {
+      enqueue({ data: { ...company, invoice_show_article_number: true }, error: null })
+      enqueue({ data: customer, error: null })
+      enqueue({ data: null, error: { message: 'connection reset' } })
+
+      const response = await previewRequest({ ...validBody, items: [articleLine] })
+
+      expect(response.status).toBe(200)
+      expect(lastRenderProps().items[0].article_number).toBeNull()
+    })
+
+    it('previews a line whose article link is not a uuid as a line without a number, reading no articles', async () => {
+      enqueue({ data: { ...company, invoice_show_article_number: true }, error: null })
+      enqueue({ data: customer, error: null })
+
+      const response = await previewRequest({ ...validBody, items: [{ ...articleLine, article_id: 'art-1' }] })
+
+      expect(response.status).toBe(200)
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('articles')
+      expect(lastRenderProps().items[0]).toMatchObject({ article_id: null, article_number: null })
+    })
   })
 })

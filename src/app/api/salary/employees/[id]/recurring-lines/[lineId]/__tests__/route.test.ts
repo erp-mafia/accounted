@@ -29,6 +29,12 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { PATCH, DELETE } from '../route'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const params = { params: Promise.resolve({ id: 'emp-1', lineId: 'line-1' }) } as never
 
 function patch(body: unknown) {
@@ -108,6 +114,7 @@ describe('PATCH /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
     expect(Object.keys(update?.[0] as Record<string, unknown>).sort()).toEqual([
       'account_number',
       'amount',
+      'benefit_type',
       'description',
       'is_active',
       'metadata',

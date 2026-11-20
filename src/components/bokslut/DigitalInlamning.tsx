@@ -19,10 +19,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import {
   Select,
   SelectContent,
@@ -32,18 +35,19 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
+import { expandPersonnummerTo12 } from '@/lib/invariants/personal-number-shape'
 import {
-  ExternalLink,
-  FileDown,
-  Loader2,
-  RefreshCcw,
-  SearchCheck,
-  Send,
-  ShieldCheck,
-} from 'lucide-react'
+  ArrowPathIcon,
+  ArrowTopRightOnSquareIcon,
+  DocumentArrowDownIcon,
+  MagnifyingGlassIcon,
+  PaperAirplaneIcon,
+  ShieldCheckIcon,
+} from '@/components/icons'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { CONNECTED_FILING_PUBLIC_RELEASED } from '@/lib/bokslut/arsredovisning/capabilities'
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
+import { certificateRole } from '@/lib/bokslut/ixbrl/certificate-role'
 
 /** Inlämningen till Bolagsverket väntar på avtal + organisationscertifikat
  *  (M0). Tills dess visas hela digital inlämning-sektionen blurrad med en
@@ -76,6 +80,7 @@ interface KontrolleraUtfall {
 interface SubmissionRow {
   id: string
   status: string
+  handling_typ?: 'arsredovisning_komplett' | 'arsredovisning_kompletteras' | 'revisionsberattelse'
   environment: string
   kontrollsumma: string | null
   sha256_checksumma: string | null
@@ -114,27 +119,6 @@ type SubmitOutcome =
   | { outcome: 'uploaded'; submissionId: string; url: string; utfall: KontrolleraUtfall[] }
   | { outcome: 'state_unknown'; submissionId: string; url: string | null; message: string }
 
-/**
- * Normalize a Swedish personnummer to the 12-digit ÅÅÅÅMMDDNNNN form the
- * Bolagsverket token API requires. 10-digit input gets its century inferred:
- * a 2-digit year greater than the current year's last two digits → 19xx,
- * otherwise 20xx; the '+' separator (person 100+ years) shifts one more
- * century back. Returns null when the input is neither 10 nor 12 digits.
- */
-function normalizePnr(raw: string): string | null {
-  const trimmed = raw.trim()
-  const digits = trimmed.replace(/\D/g, '')
-  if (digits.length === 12) return digits
-  if (digits.length !== 10) return null
-  const now = new Date()
-  const currentCentury = Math.floor(now.getFullYear() / 100)
-  const currentYy = now.getFullYear() % 100
-  const yy = Number(digits.slice(0, 2))
-  let century = yy > currentYy ? currentCentury - 1 : currentCentury
-  if (trimmed.includes('+')) century -= 1
-  return `${century}${digits}`
-}
-
 const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secondary' | 'warning' | 'destructive' | 'outline' | null }> = {
   draft: { label: 'Utkast', variant: 'outline' },
   kontrollerad: { label: 'Kontrollerad', variant: 'secondary' },
@@ -152,15 +136,21 @@ const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secon
 
 export function DigitalInlamning({ periodId }: { periodId: string }) {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const tStudio = useTranslations('annualReportStudio')
+  const tCommon = useTranslations('common')
   const ixbrlUrl = `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/ixbrl`
 
   const [showPreview, setShowPreview] = useState(false)
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<ValidateResponse | null>(null)
 
-  // Extension availability: probe the status route; 404 = not enabled.
-  const [extensionActive, setExtensionActive] = useState<boolean | null>(null)
+  // Extension availability: probe the status route; 404 = not enabled. While
+  // filing is "Kommer snart" nothing is probed (the section is inert), so the
+  // state starts settled instead of on a spinner nobody can act on.
+  const [extensionActive, setExtensionActive] = useState<boolean | null>(
+    INLAMNING_COMING_SOON ? false : null,
+  )
   const [filingEnabled, setFilingEnabled] = useState(false)
   const [environment, setEnvironment] = useState<string>('test')
 
@@ -171,7 +161,19 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const [efternamn, setEfternamn] = useState('')
   const [roll, setRoll] = useState('Styrelseledamot')
   const [epost, setEpost] = useState('')
+  // notifieringEpostadresser (API 2.1): the revisor, told that a
+  // revisionsberättelse is expected when the årsredovisning is kompletteras.
+  const [revisorEpost, setRevisorEpost] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // The revisionsberättelse, uploaded as its own handling after the
+  // årsredovisning went up as kompletteras.
+  const [rbFile, setRbFile] = useState<File | null>(null)
+  const [rbPnr, setRbPnr] = useState('')
+  const [rbFornamn, setRbFornamn] = useState('')
+  const [rbEfternamn, setRbEfternamn] = useState('')
+  const [rbEpost, setRbEpost] = useState('')
+  const [rbSubmitting, setRbSubmitting] = useState(false)
+  const [rbKvittens, setRbKvittens] = useState<{ url: string } | null>(null)
   const [avtal, setAvtal] = useState<{ text: string; andrad: string; accepted: boolean } | null>(null)
   const [utfall, setUtfall] = useState<KontrolleraUtfall[] | null>(null)
   const [kvittens, setKvittens] = useState<{ url: string } | null>(null)
@@ -198,7 +200,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
     if (!signer) return
     setFornamn(signer.first_name)
     setEfternamn(signer.last_name)
-    setRoll(signer.role)
+    setRoll(certificateRole(signer.role))
   }, [selectedVersionId, versions])
 
   const loadSubmissions = useCallback(async () => {
@@ -244,6 +246,11 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   }, [periodId])
 
   useEffect(() => {
+    void loadVersions()
+    // Coming soon: no Bolagsverket call at all. The extension is not enabled
+    // on hosted, so every visit to the ÅR page used to cost a 404 on the
+    // status route, for a section the user cannot reach.
+    if (INLAMNING_COMING_SOON) return
     let cancelled = false
     fetch('/api/extensions/ext/bolagsverket/status')
       .then(async (res) => {
@@ -276,7 +283,6 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       .catch(() => {
         if (!cancelled) setExtensionActive(false)
       })
-    void loadVersions()
     return () => {
       cancelled = true
     }
@@ -304,8 +310,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const handleSubmit = async (opts: { ignoreWarnings?: boolean } = {}) => {
     // The Bolagsverket token API needs 12 digits (ÅÅÅÅMMDDNNNN); 10-digit
     // input is normalized client-side with a century pivot.
-    const normalizedAvsandare = normalizePnr(avsandarePnr)
-    const normalizedPnr = normalizePnr(pnr)
+    const normalizedAvsandare = expandPersonnummerTo12(avsandarePnr)
+    const normalizedPnr = expandPersonnummerTo12(pnr)
     if (!normalizedAvsandare || !normalizedPnr) {
       toast({ title: 'Ange personnummer med 10 eller 12 siffror', variant: 'destructive' })
       return
@@ -335,6 +341,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             roll,
             epost: epost.trim(),
           },
+          ...(revisorEpost.trim() ? { notifiering_epost: [revisorEpost.trim()] } : {}),
           ...(avtal?.accepted ? { accepted_avtalstext_andrad: avtal.andrad } : {}),
           ...(opts.ignoreWarnings ? { ignore_warnings: true } : {}),
         }),
@@ -392,6 +399,75 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
     }
   }
 
+  const handleSubmitRevisionsberattelse = async (opts: { ignoreWarnings?: boolean } = {}) => {
+    const normalizedAvsandare = expandPersonnummerTo12(avsandarePnr)
+    const normalizedRevisor = expandPersonnummerTo12(rbPnr)
+    if (!normalizedAvsandare || !normalizedRevisor) {
+      toast({ title: tStudio('revisor_filing.pnr_invalid'), variant: 'destructive' })
+      return
+    }
+    if (!rbFile || !rbFornamn.trim() || !rbEfternamn.trim() || !rbEpost.trim()) {
+      toast({ title: tStudio('revisor_filing.missing_fields'), variant: 'destructive' })
+      return
+    }
+    setRbSubmitting(true)
+    setUtfall(null)
+    try {
+      const bytes = new Uint8Array(await rbFile.arrayBuffer())
+      let binary = ''
+      for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+      }
+      const res = await fetch('/api/extensions/ext/bolagsverket/revisionsberattelse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fiscal_period_id: periodId,
+          avsandare_pnr: normalizedAvsandare,
+          undertecknare: {
+            pnr: normalizedRevisor,
+            fornamn: rbFornamn.trim(),
+            efternamn: rbEfternamn.trim(),
+            epost: rbEpost.trim(),
+          },
+          fil: btoa(binary),
+          ...(avtal?.accepted ? { accepted_avtalstext_andrad: avtal.andrad } : {}),
+          ...(opts.ignoreWarnings ? { ignore_warnings: true } : {}),
+        }),
+      })
+      const body = await res.json()
+      if (body?.error) {
+        toast({ title: tStudio('revisor_filing.failed'), description: getUserErrorMessage(body.error), variant: 'destructive' })
+        return
+      }
+      const result = body.data as SubmitOutcome
+      if (result.outcome === 'avtal_required') {
+        setAvtal({ text: result.avtalstext, andrad: result.avtalstextAndrad, accepted: false })
+        return
+      }
+      if (result.outcome === 'kontrollera_stopped') {
+        setUtfall(result.utfall)
+        void loadSubmissions()
+        return
+      }
+      if (result.outcome === 'state_unknown') {
+        void loadSubmissions()
+        toast({ title: tStudio('revisor_filing.state_unknown'), description: result.message, variant: 'destructive' })
+        return
+      }
+      if (result.outcome === 'uploaded') {
+        setRbKvittens({ url: result.url })
+        setAvtal(null)
+        void loadSubmissions()
+        toast({ title: tStudio('revisor_filing.uploaded') })
+      }
+    } catch {
+      toast({ title: tStudio('revisor_filing.failed'), variant: 'destructive' })
+    } finally {
+      setRbSubmitting(false)
+    }
+  }
+
   const handlePollEvents = async () => {
     setPollingEvents(true)
     try {
@@ -431,7 +507,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       {/* Steg: Granska & validera */}
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Digital inlämning: granska &amp; validera (iXBRL)</h3>
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">Digital inlämning: granska &amp; validera (iXBRL)</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
         <p className="px-1 text-sm text-muted-foreground">
@@ -445,11 +521,11 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             </Button>
             <Button variant="outline" asChild>
               <a href={downloadUrl}>
-                <FileDown className="mr-2 h-4 w-4" /> Ladda ner tekniskt iXBRL-underlag
+                <DocumentArrowDownIcon className="mr-2 h-4 w-4" /> Ladda ner tekniskt iXBRL-underlag
               </a>
             </Button>
             <Button onClick={() => void handleValidate()} loading={validating}>
-              {!validating && <SearchCheck className="mr-2 h-4 w-4" />}
+              {!validating && <MagnifyingGlassIcon className="h-4 w-4" />}
               Validera
             </Button>
           </div>
@@ -458,7 +534,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             <iframe
               src={previewUrl}
               title="Förhandsgranskning av årsredovisning (iXBRL)"
-              className="w-full h-[640px] rounded-lg border border-border bg-white"
+              className="w-full h-[640px] rounded-lg bg-white shadow-raised"
             />
           )}
 
@@ -466,7 +542,9 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 {validation.ok ? (
-                  <span className="text-xs text-muted-foreground">Klar för inlämning</span>
+                  // Accounted's own checks only: Bolagsverket validates the
+                  // file again when it is submitted, so never claim more.
+                  <span className="text-xs text-muted-foreground">Inga fel i Accounteds kontroller</span>
                 ) : (
                   <Badge variant="destructive">{validation.error_count} fel</Badge>
                 )}
@@ -497,7 +575,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       {/* Steg: Skicka in */}
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Skicka in till Bolagsverket</h3>
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">Skicka in till Bolagsverket</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
         <p className="px-1 text-sm text-muted-foreground">
@@ -507,10 +585,10 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         </p>
         <div className="space-y-4 px-1 pt-4 text-sm">
           {extensionActive === null && (
-            <p className="text-muted-foreground">
-              <Loader2 className="inline h-4 w-4 animate-spin mr-2" />
-              Kontrollerar anslutningen till Bolagsverket …
-            </p>
+            <LateReveal className="space-y-2" aria-label="Kontrollerar anslutningen till Bolagsverket">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-4 w-1/2" />
+            </LateReveal>
           )}
 
           {extensionActive === false && (
@@ -527,7 +605,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  <ExternalLink className="mr-2 h-4 w-4" /> Lämna in hos Bolagsverket
+                  <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> Lämna in hos Bolagsverket
                 </a>
               </Button>
             </div>
@@ -559,7 +637,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     if (signer) {
                       setFornamn(signer.first_name)
                       setEfternamn(signer.last_name)
-                      setRoll(signer.role)
+                      setRoll(certificateRole(signer.role))
                     }
                   }}
                 >
@@ -648,9 +726,10 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     <SelectTrigger id="di-roll">
                       <SelectValue />
                     </SelectTrigger>
+                    {/* The roles Bolagsverket accepts on the fastställelseintyg
+                        (a styrelseordförande signs as Styrelseledamot). */}
                     <SelectContent>
                       <SelectItem value="Styrelseledamot">Styrelseledamot</SelectItem>
-                      <SelectItem value="Styrelseordförande">Styrelseordförande</SelectItem>
                       <SelectItem value="Verkställande direktör">Verkställande direktör</SelectItem>
                     </SelectContent>
                   </Select>
@@ -666,14 +745,25 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     onChange={(event) => setEpost(event.target.value)}
                   />
                 </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="di-revisor-epost">{tStudio('revisor_filing.revisor_email_label')}</Label>
+                  <Input
+                    id="di-revisor-epost"
+                    type="email"
+                    placeholder="revisor@byra.se"
+                    value={revisorEpost}
+                    onChange={(event) => setRevisorEpost(event.target.value)}
+                  />
+                </div>
               </div>
+              <p className="text-xs text-muted-foreground">{tStudio('revisor_filing.revisor_email_help')}</p>
               <p className="text-xs text-muted-foreground">
                 Personnumren skickas till Bolagsverket för att skapa eget utrymme och bjuda
                 in undertecknaren. De sparas inte i Accounted och skrivs inte till loggar.
               </p>
 
               {registryInformation && (
-                <div className="border-t border-border pt-3 text-xs">
+                <div className="border-t-hairline pt-3 text-xs">
                   <p className="font-medium">Grunduppgifter från Bolagsverket</p>
                   <p className="mt-1 text-muted-foreground">
                     {registryInformation.namn}
@@ -749,14 +839,16 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 <Button
                  
                   onClick={() => void handleSubmit()}
+                  title={lockedTitle}
                   disabled={
+                    !canWrite ||
                     blockingErrors ||
                     !selectedVersionId ||
                     (avtal !== null && !avtal.accepted)
                   }
                   loading={submitting}
                 >
-                  {!submitting && <Send className="mr-2 h-4 w-4" />}
+                  {!submitting && <PaperAirplaneIcon className="h-4 w-4" />}
                   {avtal ? 'Godkänn villkoren och skicka in' : 'Kontrollera och skicka in'}
                 </Button>
                 {utfall && utfall.length > 0 && !utfallHasErrors && (
@@ -764,7 +856,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                    
                     variant="outline"
                     onClick={() => void handleSubmit({ ignoreWarnings: true })}
-                    disabled={submitting}
+                    disabled={!canWrite || submitting}
+                    title={lockedTitle}
                   >
                     Skicka in trots varningar
                   </Button>
@@ -772,20 +865,103 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </div>
 
               {kvittens && (
-                <div className="space-y-2 border-t border-border pt-4">
+                <div className="space-y-2 border-t-hairline pt-4">
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-success" />
+                    <ShieldCheckIcon className="h-4 w-4 text-success" />
                     <p className="font-medium">Uppladdad till eget utrymme</p>
                   </div>
                   <p className="text-muted-foreground text-xs">
                     Undertecknaren har fått e-post från Bolagsverket och signerar
                     fastställelseintyget där. Ärendet startar först efter signering.
                   </p>
-                  <Button variant="outline" size="sm" asChild>
+                  <Button variant="outline" asChild>
                     <a href={kvittens.url} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="mr-2 h-4 w-4" /> Signera hos Bolagsverket
+                      <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> Signera hos Bolagsverket
                     </a>
                   </Button>
+                </div>
+              )}
+
+              {/* The revisionsberättelse as its own handling (API 2.1), once the
+                  årsredovisning is uploaded as kompletteras. The revisor can
+                  also file it from their own software; this is for a file the
+                  revisor handed over. */}
+              {submissions.some(
+                (row) =>
+                  row.handling_typ === 'arsredovisning_kompletteras' &&
+                  ['uploaded', 'inkommen', 'forelagd', 'komplettering'].includes(row.status),
+              ) && (
+                <div className="space-y-3 border-t-hairline pt-4">
+                  <p className="font-medium">{tStudio('revisor_filing.title')}</p>
+                  <p className="text-xs text-muted-foreground">{tStudio('revisor_filing.intro')}</p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-fil">{tStudio('revisor_filing.file_label')}</Label>
+                      <Input
+                        id="di-rb-fil"
+                        type="file"
+                        accept=".xhtml,.html,application/xhtml+xml"
+                        onChange={(event) => setRbFile(event.target.files?.[0] ?? null)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-pnr">{tStudio('revisor_filing.pnr_label')}</Label>
+                      <Input
+                        id="di-rb-pnr"
+                        inputMode="numeric"
+                        placeholder="ÅÅÅÅMMDDNNNN eller ÅÅMMDD-NNNN"
+                        value={rbPnr}
+                        onChange={(event) => setRbPnr(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-fornamn">{tStudio('revisor_filing.first_name_label')}</Label>
+                      <Input id="di-rb-fornamn" value={rbFornamn} onChange={(event) => setRbFornamn(event.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-efternamn">{tStudio('revisor_filing.last_name_label')}</Label>
+                      <Input id="di-rb-efternamn" value={rbEfternamn} onChange={(event) => setRbEfternamn(event.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-epost">{tStudio('revisor_filing.email_label')}</Label>
+                      <Input
+                        id="di-rb-epost"
+                        type="email"
+                        placeholder="revisor@byra.se"
+                        value={rbEpost}
+                        onChange={(event) => setRbEpost(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleSubmitRevisionsberattelse()}
+                      disabled={!canWrite || (avtal !== null && !avtal.accepted)}
+                      title={lockedTitle}
+                      loading={rbSubmitting}
+                    >
+                      {!rbSubmitting && <PaperAirplaneIcon className="h-4 w-4" />}
+                      {tStudio('revisor_filing.submit')}
+                    </Button>
+                    {utfall && utfall.length > 0 && !utfallHasErrors && (
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleSubmitRevisionsberattelse({ ignoreWarnings: true })}
+                        disabled={!canWrite || rbSubmitting}
+                        title={lockedTitle}
+                      >
+                        {tStudio('revisor_filing.submit_despite_warnings')}
+                      </Button>
+                    )}
+                  </div>
+                  {rbKvittens && (
+                    <Button variant="outline" asChild>
+                      <a href={rbKvittens.url} target="_blank" rel="noopener noreferrer">
+                        <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> {tStudio('revisor_filing.open_at_bolagsverket')}
+                      </a>
+                    </Button>
+                  )}
                 </div>
               )}
             </>
@@ -797,7 +973,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       {extensionActive === true && (
         <section>
           <div className="mb-1 flex items-center gap-2 px-1">
-            <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Inlämningsstatus</h3>
+            <h3 className="font-sans text-xs font-medium text-muted-foreground">Inlämningsstatus</h3>
             <div className="h-px flex-1 bg-border/60" />
           </div>
           <p className="px-1 text-sm text-muted-foreground">
@@ -807,21 +983,27 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             <div className="flex justify-end">
               <Button
                 variant="outline"
-                size="sm"
                 loading={pollingEvents}
                 onClick={() => void handlePollEvents()}
               >
-                {!pollingEvents && <RefreshCcw className="mr-2 h-4 w-4" />}
+                {!pollingEvents && <ArrowPathIcon className="h-4 w-4" />}
                 {pollingEvents ? 'Uppdaterar …' : 'Uppdatera status'}
               </Button>
             </div>
-            {submissionsError && <p className="text-xs text-destructive">{submissionsError}</p>}
+            {submissionsError && submissions.length > 0 && (
+              <AttnLine action={{ label: tCommon('retry'), onClick: () => void loadSubmissions() }}>
+                {tCommon('refresh_failed')}
+              </AttnLine>
+            )}
+            {submissionsError && submissions.length === 0 && !loadingSubmissions && (
+              <LoadError title="Kunde inte hämta inlämningshistoriken" onRetry={() => void loadSubmissions()} />
+            )}
             {loadingSubmissions && submissions.length === 0 && (
-              <div className="space-y-2" aria-busy="true" aria-label="Hämtar">
+              <LateReveal className="space-y-2" aria-label={tCommon('loading')}>
                 <Skeleton className="h-4 w-1/3" />
                 <Skeleton className="h-4 w-2/3" />
                 <Skeleton className="h-4 w-1/2" />
-              </div>
+              </LateReveal>
             )}
             {!loadingSubmissions && submissions.length === 0 && !submissionsError && (
               <p className="text-muted-foreground italic">Inga inlämningar ännu.</p>
@@ -843,7 +1025,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               return (
                 <div
                   key={submission.id}
-                  className="flex flex-col gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"
+                  className="flex flex-col gap-3 border-b-hairline pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"
                 >
                   <div className="space-y-1">
                     {badge.variant ? (
@@ -867,9 +1049,9 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     )}
                   </div>
                   {submission.bolagsverket_url && submission.status === 'uploaded' && (
-                    <Button variant="outline" size="sm" asChild>
+                    <Button variant="outline" asChild>
                       <a href={submission.bolagsverket_url} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="mr-1 h-3.5 w-3.5" /> Signera
+                        <ArrowTopRightOnSquareIcon className="mr-1 h-3.5 w-3.5" /> Signera
                       </a>
                     </Button>
                   )}
@@ -882,8 +1064,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       </div>
       {INLAMNING_COMING_SOON && (
         <div className="absolute inset-0 z-10 flex items-center justify-center">
-          <div className="rounded-lg border border-border bg-background px-8 py-6 text-center">
-            <p className="font-display text-2xl">Kommer snart</p>
+          <div className="rounded-lg px-8 py-6 text-center bg-control shadow-raised">
+            <p className="text-[15px] font-medium leading-[22px] text-strong">Kommer snart</p>
             <p className="mt-2 max-w-xs text-sm text-muted-foreground">
               Digital inlämning till Bolagsverket öppnar så snart integrationen
               är godkänd. Tills dess: ladda ner PDF-utkastet ovan.

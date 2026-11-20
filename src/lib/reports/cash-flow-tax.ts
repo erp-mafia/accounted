@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TrialBalanceRow } from '@/types'
+import { roundOre } from '@/lib/money'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { scopeCashFlowEntries, type CashFlowEntryScope } from './cash-flow-evidence'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 
 // BAS current income tax, including prior-year adjustments and refunds.
 // Deferred tax (894x) has no payment effect. Other 89xx accounts need an
@@ -15,17 +17,18 @@ const isCurrentTaxExpense = (account: string) => CURRENT_TAX_EXPENSE.test(accoun
 const CURRENT_TAX_BALANCE = new Set(['1640', '2510', '2512', '2517', '2518'])
 const OTHER_TAX_BALANCE = new Set(['2513', '2514', '2515'])
 const OTHER_TAX_EXPENSE = new Set(['5191', '7533', '7550'])
-const r2 = (value: number) => Math.round(value * 100) / 100 || 0
+const r2 = (value: number) => roundOre(value) || 0
 
 /**
  * The accounts whose whole movement calculateCashFlowTax accounts for: the
  * income-tax and other-tax balances, and every 89xx account except deferred
- * tax (894x) and 8999, which the bridge either counts as current tax or
- * refuses. The cash-flow statement must not place these anywhere else.
+ * tax (894x) and årets resultat (8990-8999), which the bridge either counts as
+ * current tax or refuses. The cash-flow statement must not place these
+ * anywhere else.
  */
 export function isCashFlowTaxBridgeAccount(account: string): boolean {
   return CURRENT_TAX_BALANCE.has(account) || OTHER_TAX_BALANCE.has(account)
-    || (account.startsWith('89') && !account.startsWith('894') && account !== '8999')
+    || (account.startsWith('89') && !account.startsWith('894') && !isAretsResultatAccount(account))
 }
 
 export class CashFlowTaxAllocationError extends Error {
@@ -43,7 +46,6 @@ interface TaxLine {
   account_number: string
   debit_amount: number
   credit_amount: number
-  journal_entries: { reverses_id: string | null; correction_of_id: string | null }
 }
 
 /**
@@ -59,31 +61,17 @@ async function nonIncomeTaxTransfer(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  openingEntryId: string | null,
+  scope: CashFlowEntryScope,
 ): Promise<number> {
-  const [reversedYearEnd, lines] = await Promise.all([
-    fetchAllRows<{ id: string }>(({ from, to }) =>
-      supabase.from('journal_entries').select('id')
-        .eq('company_id', companyId).eq('source_type', 'year_end').eq('status', 'reversed')
-        .order('id', { ascending: true }).range(from, to),
-    ),
-    fetchEntryLines<TaxLine>({
-      supabase,
-      entryColumns: 'id, reverses_id, correction_of_id',
-      lineColumns: 'account_number, debit_amount, credit_amount',
-      filterEntries: query => {
-        const scoped = query.eq('company_id', companyId).eq('fiscal_period_id', fiscalPeriodId)
-          .in('status', ['posted', 'reversed']).neq('source_type', 'year_end')
-        return openingEntryId ? scoped.neq('id', openingEntryId) : scoped
-      },
-    }),
-  ])
-  const excluded = new Set(reversedYearEnd.map(entry => entry.id))
+  // The same entries as the account totals this corrects.
+  const lines = await fetchEntryLines<TaxLine>({
+    supabase,
+    attachEntriesAs: null,
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: query => scopeCashFlowEntries(query, companyId, fiscalPeriodId, scope),
+  })
   const entries = new Map<string, TaxLine[]>()
   for (const line of lines) {
-    const entry = line.journal_entries
-    if ((entry.reverses_id && excluded.has(entry.reverses_id))
-      || (entry.correction_of_id && excluded.has(entry.correction_of_id))) continue
     if (!line.debit_amount && !line.credit_amount) continue
     const group = entries.get(line.journal_entry_id) ?? []
     group.push(line)
@@ -129,7 +117,7 @@ async function nonIncomeTaxTransfer(
 /**
  * Indirect-method income-tax bridge: signed current tax expense minus the
  * debit-side change in tax liabilities, prepayments and tax receivables.
- * All inputs use the report's existing exclude-all-year-end scope.
+ * `rows` and `scope` must describe the same entries.
  *
  * Generic 2510 follows the report's BAS income-tax convention except where
  * current-period entries explicitly identify other taxes. Historical/custom
@@ -139,7 +127,7 @@ export async function calculateCashFlowTax(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  openingEntryId: string | null,
+  scope: CashFlowEntryScope,
   rows: TrialBalanceRow[],
 ): Promise<{ paidIncomeTax: number; otherTaxLiabilityChange: number; expenseInOperatingProfit: number }> {
   let expense = 0
@@ -150,7 +138,7 @@ export async function calculateCashFlowTax(
     const account = row.account_number
     const movement = row.period_debit - row.period_credit
     if (isCurrentTaxExpense(account)) expense -= movement
-    else if (account.startsWith('89') && !account.startsWith('894') && account !== '8999' && r2(movement) !== 0) {
+    else if (account.startsWith('89') && !account.startsWith('894') && !isAretsResultatAccount(account) && r2(movement) !== 0) {
       throw new CashFlowTaxAllocationError()
     }
     if (OPERATING_INCOME_TAX_EXPENSE.has(account)) expenseInOperatingProfit += movement
@@ -162,7 +150,7 @@ export async function calculateCashFlowTax(
   const needsEvidence = rows.some(row => row.account_number === '2510' && active(row))
     && rows.some(row => (OTHER_TAX_BALANCE.has(row.account_number) || OTHER_TAX_EXPENSE.has(row.account_number)) && active(row))
   const transferred = needsEvidence
-    ? await nonIncomeTaxTransfer(supabase, companyId, fiscalPeriodId, openingEntryId)
+    ? await nonIncomeTaxTransfer(supabase, companyId, fiscalPeriodId, scope)
     : 0
   return {
     paidIncomeTax: r2(expense - incomeTaxDelta - transferred),

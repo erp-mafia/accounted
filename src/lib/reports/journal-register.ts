@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { dbError } from '@/lib/errors/db-error'
+import { roundOre } from '@/lib/money'
 
 export interface JournalRegisterLine {
   account_number: string
@@ -171,4 +173,123 @@ export async function generateJournalRegister(
     total_credit: Math.round(grandTotalCredit * 100) / 100,
     period: { start: period.period_start, end: period.period_end },
   }
+}
+
+// ── The grundbok view: the verifikat a page at a time ──
+
+/** Verifikat per grundbok page. */
+export const JOURNAL_REGISTER_PAGE_SIZE = 200
+
+/** Where a grundbok page ends: its last verifikat. */
+export interface JournalRegisterCursor {
+  voucher_series: string
+  voucher_number: number
+  id: string
+}
+
+export interface JournalRegisterPage {
+  entries: JournalRegisterEntry[]
+  /** The cursor for the next page, or null when this one ends the period. */
+  next: JournalRegisterCursor | null
+  /** The whole period's totals, on the first page (no cursor). */
+  totals?: Pick<JournalRegisterReport, 'total_entries' | 'total_debit' | 'total_credit' | 'period'>
+}
+
+interface RegisterPageRow {
+  id: string
+  voucher_series: string
+  voucher_number: number
+  entry_date: string
+  description: string | null
+  source_type: string | null
+  status: string
+  lines: Array<{ account_number: string; debit_amount: number | string | null; credit_amount: number | string | null }>
+}
+
+/**
+ * One page of the grundbok: the period's posted and reversed verifikat in
+ * registration order (series, then number) from `after` on, each with its
+ * lines by account, the same entries generateJournalRegister lists. The
+ * first page also carries the period's totals, so the view can show the
+ * whole period's count and sums before every page is read.
+ */
+export async function generateJournalRegisterPage(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodId: string,
+  options?: { after?: JournalRegisterCursor; limit?: number },
+): Promise<JournalRegisterPage> {
+  const limit = options?.limit ?? JOURNAL_REGISTER_PAGE_SIZE
+  const first = !options?.after
+
+  const [page, accounts, period, totals] = await Promise.all([
+    supabase.rpc('get_journal_register_page', {
+      p_company_id: companyId,
+      p_fiscal_period_id: periodId,
+      p_after_series: options?.after?.voucher_series ?? null,
+      p_after_number: options?.after?.voucher_number ?? null,
+      p_after_id: options?.after?.id ?? null,
+      // One more than the page, to know whether another follows.
+      p_limit: limit + 1,
+    }),
+    fetchAllRows<{ account_number: string; account_name: string }>(({ from, to }) =>
+      supabase
+        .from('chart_of_accounts')
+        .select('account_number, account_name')
+        .eq('company_id', companyId)
+        .order('account_number', { ascending: true })
+        .range(from, to)
+    ),
+    first
+      ? supabase.from('fiscal_periods').select('period_start, period_end').eq('id', periodId).eq('company_id', companyId).single()
+      : Promise.resolve(null),
+    first
+      ? supabase.rpc('get_journal_register_totals', { p_company_id: companyId, p_fiscal_period_id: periodId })
+      : Promise.resolve(null),
+  ])
+  if (page.error) throw dbError(page.error, 'get_journal_register_page failed')
+  if (totals?.error) throw dbError(totals.error, 'get_journal_register_totals failed')
+
+  const accountNameMap = new Map(accounts.map((a) => [a.account_number, a.account_name]))
+  const rows = (Array.isArray(page.data) ? page.data : []) as RegisterPageRow[]
+  const shown = rows.slice(0, limit)
+
+  const entries: JournalRegisterEntry[] = shown.map((row) => {
+    const lines: JournalRegisterLine[] = (row.lines ?? []).map((line) => ({
+      account_number: line.account_number,
+      account_name: accountNameMap.get(line.account_number) || `Konto ${line.account_number}`,
+      debit: roundOre(Number(line.debit_amount) || 0),
+      credit: roundOre(Number(line.credit_amount) || 0),
+    }))
+    return {
+      voucher_series: row.voucher_series || 'A',
+      voucher_number: row.voucher_number,
+      date: row.entry_date,
+      description: row.description || '',
+      source_type: row.source_type || '',
+      status: row.status,
+      lines,
+      total_debit: roundOre(lines.reduce((sum, l) => sum + l.debit, 0)),
+      total_credit: roundOre(lines.reduce((sum, l) => sum + l.credit, 0)),
+    }
+  })
+
+  const last = shown[shown.length - 1]
+  const result: JournalRegisterPage = {
+    entries,
+    next: rows.length > limit && last
+      ? { voucher_series: last.voucher_series || 'A', voucher_number: last.voucher_number, id: last.id }
+      : null,
+  }
+  if (first) {
+    const t = (totals?.data ?? {}) as { total_entries?: unknown; total_debit?: unknown; total_credit?: unknown }
+    const p = period?.data as { period_start: string; period_end: string } | null | undefined
+    result.totals = {
+      total_entries: Number(t.total_entries) || 0,
+      total_debit: roundOre(Number(t.total_debit) || 0),
+      total_credit: roundOre(Number(t.total_credit) || 0),
+      period: { start: p?.period_start ?? '', end: p?.period_end ?? '' },
+    }
+  }
+  return result
 }

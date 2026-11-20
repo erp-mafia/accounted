@@ -20,10 +20,10 @@ const DENIAL = ctx({
 
 const HALF_ANSWER = ctx({
   representation: {
-    participants: [{ name: 'Elias Karlsson', company: 'Canguro Media' }],
+    participants: [{ name: 'Erik Exempel', company: 'Exempel Media' }],
     purpose: null,
     event_date: null,
-    raw_answer: 'Elias Karlsson från Canguro Media',
+    raw_answer: 'Erik Exempel från Exempel Media',
     answered_at: '2026-08-01T10:00:00Z',
   },
 })
@@ -81,7 +81,7 @@ describe('renderClarificationLines', () => {
 
   it('still asks for the missing half of a genuine half answer', () => {
     const text = renderClarificationLines(summariseClarifications(HALF_ANSWER)!).join('\n')
-    expect(text).toContain('Elias Karlsson (Canguro Media)')
+    expect(text).toContain('Erik Exempel (Exempel Media)')
     expect(text).toContain('syfte SAKNAS')
   })
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { generateKassaflodesanalys, type KassaflodesanalysReport } from '../kassaflodesanalys'
 
 // Runs the real report, trial-balance and tax-bridge modules over balanced
@@ -27,17 +27,27 @@ function aggregate(all: Line[]) {
   return [...sums.values()]
 }
 
-function makeClient(entries: Entry[], opening: Line[]) {
+function makeClient(entries: Entry[], opening: Line[], periodStart = '2026-01-01') {
   const period = {
-    period_start: '2026-01-01', period_end: '2026-12-31',
+    period_start: periodStart, period_end: `${periodStart.slice(0, 4)}-12-31`,
     opening_balance_entry_id: null, closing_entry_id: null, is_closed: false, closed_externally: false,
   }
+  // The voucher evidence reads (journal_entries, then their lines).
+  const entryRows = entries.map((_, index) => ({ id: `entry-${index}`, reverses_id: null }))
+  const lineRows = entries.flatMap((entry, index) => entry.map((line, i) => ({
+    id: `line-${index}-${i}`, journal_entry_id: `entry-${index}`, account_number: line.account,
+    debit_amount: line.debit, credit_amount: line.credit,
+  })))
   const from = vi.fn((table: string) => {
-    const result = () => (table === 'fiscal_periods'
-      ? { data: period, error: null }
-      : { data: [], error: null })
+    let bounds = [0, 999]
+    const result = () => {
+      if (table === 'fiscal_periods') return { data: period, error: null }
+      const rows = table === 'journal_entries' ? entryRows : table === 'journal_entry_lines' ? lineRows : []
+      return { data: rows.slice(bounds[0], bounds[1] + 1), error: null }
+    }
     const builder: Record<string, unknown> = {}
-    for (const method of ['select', 'eq', 'neq', 'in', 'order', 'range']) builder[method] = () => builder
+    for (const method of ['select', 'eq', 'neq', 'in', 'not', 'order']) builder[method] = () => builder
+    builder.range = (start: number, end: number) => { bounds = [start, end]; return builder }
     builder.single = async () => result()
     builder.then = (resolve: (value: ReturnType<typeof result>) => void) => resolve(result())
     return builder
@@ -47,16 +57,18 @@ function makeClient(entries: Entry[], opening: Line[]) {
     if (name === 'get_trial_balance_aggregates') {
       return { data: aggregate(entries.flat()).map((row) => ({ bucket: 'period', ...row })), error: null }
     }
+    // The resultatavslut 'exclude-final' leaves out; these ledgers have none.
+    if (name === 'result_closing_entry_ids') return { data: [], error: null }
     throw new Error(`Unexpected RPC: ${name}`)
   })
   return { from, rpc } as unknown as Parameters<typeof generateKassaflodesanalys>[0]
 }
 
-async function run(entries: Entry[], opening: Line[] = []) {
+async function run(entries: Entry[], opening: Line[] = [], periodStart?: string) {
   for (const entry of [...entries, opening]) {
     expect(round(entry.reduce((sum, line) => sum + line.debit - line.credit, 0))).toBe(0)
   }
-  return generateKassaflodesanalys(makeClient(entries, opening), 'company-1', 'period-1')
+  return generateKassaflodesanalys(makeClient(entries, opening, periodStart), 'company-1', 'period-1')
 }
 
 function expectSectionsAddUp(report: KassaflodesanalysReport) {
@@ -72,9 +84,6 @@ function expectSectionsAddUp(report: KassaflodesanalysReport) {
   expect(report.reconciliation.mismatch_amount).toBe(0)
   expect(report.reconciliation.is_reconciled).toBe(true)
 }
-
-beforeEach(() => { vi.stubEnv('REPORTS_TB_RPC', 'on') })
-afterEach(() => { vi.unstubAllEnvs() })
 
 describe('kassaflödesanalys classifies every account', () => {
   // Deterministic PRNG so a failure reproduces.
@@ -200,6 +209,19 @@ describe('kassaflödesanalys classifies every account', () => {
       erhallna_aktieagartillskott: 0,
       total: -420_000,
     })
+    expect(report.unclassified_accounts).toEqual([])
+  })
+
+  it('reads a resultatavslut through 8990 as equity, like one through 8999', async () => {
+    const report = await run([
+      pair('1930', '3001', 100_000),
+      pair('8990', '2099', 100_000), // the previous system's omföring, imported with the year
+    ])
+
+    expectSectionsAddUp(report)
+    expect(report.lopande.resultat_efter_finansiella_poster).toBe(100_000)
+    expect(report.lopande.skatt_betald).toBe(0)
+    expect(report.finansierings.utdelningar).toBe(0)
     expect(report.unclassified_accounts).toEqual([])
   })
 

@@ -1,26 +1,38 @@
 name: Set up core toolchain
 description: >-
-  Node, dependencies, and a zero-extension registry: the prologue every
-  core-build job needs before it can lint, build, or test. The caller must check
-  the repository out first, because a local composite action cannot be resolved
-  until the workspace containing it exists.
+  Node 20, npm dependencies through the shared npm cache and, by default, a
+  zero-extension registry: the prologue the CI jobs share. Check the repository
+  out first: a local action resolves from the workspace.
+
+inputs:
+  zero-extensions:
+    description: >-
+      Reset extensions.config.json to no extensions and regenerate the
+      registry, because CI builds and tests core with no extensions enabled.
+    default: 'true'
+  save-cache:
+    description: >-
+      Save the npm cache after the install. Takes effect on pushes to main
+      only; one job per workflow passes 'true' so the jobs do not race to
+      write the same key.
+    default: 'false'
 
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+    - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
       with:
         node-version: 20
+        # The cache is handled below, restore-only outside main.
+        package-manager-cache: false
 
-    # Restore-only, deliberately never `save`. A cache written from a
-    # pull_request run is scoped to that PR's ref, so no other run can ever read
-    # it: PR-side saves are pure quota burn. Fourteen dead 284 MB copies (4 GB,
-    # 40% of the repo quota) accumulated in a single day the last time a naive
-    # `cache: npm` was left on, which is why test-pg-real.yml still runs
-    # uncached. The entries read here are written on main by ci-cache.yml, and
-    # default-branch entries are restorable from every PR.
+    # Restore everywhere, save on main only. A cache entry written by a
+    # pull_request run is scoped to that pull request's merge ref and no other
+    # run can read it; entries written on main are readable from every branch
+    # and pull request, forks included.
     - name: Restore npm cache
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      id: npm-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.npm
         key: npm-${{ runner.os }}-node20-${{ hashFiles('package-lock.json') }}
@@ -29,15 +41,18 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      run: npm ci
+      run: npm ci --prefer-offline --no-audit --fund=false
 
-    # CI builds core with zero extensions enabled: that property is the entire
-    # reason this workflow exists, so every job that compiles or runs code needs
-    # the registry regenerated from an empty config first.
-    - name: Reset extensions config
-      shell: bash
-      run: echo '{"extensions":[]}' > extensions.config.json
+    - name: Save npm cache
+      if: inputs.save-cache == 'true' && github.event_name == 'push' && steps.npm-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.npm
+        key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
-    - name: Generate extension registry
+    - name: Use no extensions
+      if: inputs.zero-extensions == 'true'
       shell: bash
-      run: npm run setup:extensions
+      run: |
+        echo '{"extensions":[]}' > extensions.config.json
+        npm run setup:extensions

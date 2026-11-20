@@ -48,7 +48,7 @@ Verifikationer must be numbered in a systematisk serie without gaps. If a verifi
 
 ### Rättelse (BFL 5 kap 5§)
 A rättelse of a bokföringspost must be documented so that both the original and the corrected post are visible, and it must be recorded when the rättelse was made and who made it. You can never silently overwrite. BFL permits two tracks:
-1. **Särskild rättelsepost** (storno + correcting verifikation referencing the original): always allowed, and the only track once the period is locked/closed or the bokföring has been relied upon (filed declarations, bokslut).
+1. **Särskild rättelsepost** (storno + correcting verifikation referencing the original): always allowed, and the only track once the period is closed or locked or lies behind the company's lock date. A filed VAT or AGI declaration restricts neither track: while the period is open, both stay available, and Accounted shows every change to a filed period so the declaration gets corrected.
 2. **Rättelse in the same verifikat** (strike-and-replace of lines, or correcting the verifikation's text/date per BFL 5 kap 9 §): allowed while the period is open and unlocked, provided the original remains readable (struck lines stay visible) and who/when is recorded immutably. Fortnox and Visma implement this track; in Accounted it is the `correct_entry_metadata` / `correct_entry_lines_inline` RPC envelope logging to `journal_entry_rattelse_log`.
 
 A correction path that erases the original without a trace violates the law under both tracks.

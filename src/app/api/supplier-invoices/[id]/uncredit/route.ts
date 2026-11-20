@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { uncreditSupplierInvoice } from '@/lib/supplier-invoices/manage'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 /**
  * "Ångra kreditering": cancel the credit note's verifikat with a storno,

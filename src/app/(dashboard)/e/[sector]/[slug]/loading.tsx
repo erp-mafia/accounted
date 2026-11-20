@@ -2,8 +2,9 @@
 
 import { usePathname } from 'next/navigation'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { PageHeader } from '@/components/ui/page-header'
+import { PADDED_CANVAS_CLASS } from '@/components/dashboard/MainContainer'
+import { cn } from '@/lib/utils'
 import { getExtensionDefinition } from '@/lib/extensions/sectors'
 import InvoiceInboxSkeleton from '@/components/extensions/general/InvoiceInboxSkeleton'
 
@@ -20,87 +21,20 @@ export default function ExtensionWorkspaceLoading() {
   const match = pathname.match(/^\/e\/([^/]+)\/([^/]+)/)
   const sector = match?.[1] ?? ''
   const slug = match?.[2] ?? ''
-  const key = `${sector}/${slug}`
 
-  if (FULLSCREEN_WORKSPACES.has(key)) {
+  if (FULLSCREEN_WORKSPACES.has(`${sector}/${slug}`)) {
     return <InvoiceInboxSkeleton />
   }
 
   const definition = sector && slug ? getExtensionDefinition(sector, slug) : undefined
+  // ExtensionWorkspaceShell's frame: the top bar, then the workspace's rows.
   return (
-    <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10 space-y-8">
-      {definition ? (
-        <PageHeader title={definition.name} />
-      ) : (
-        <Skeleton className="h-9 md:h-10 w-64" />
-      )}
-      <ShellWorkspaceBody workspaceKey={key} />
-    </div>
-  )
-}
-
-function ShellWorkspaceBody({ workspaceKey }: { workspaceKey: string }) {
-  if (workspaceKey === 'general/tic') {
-    return <TicSkeleton />
-  }
-  return (
-    <div className="space-y-4">
-      <Skeleton className="h-32 w-full rounded-lg" />
-      <Skeleton className="h-64 w-full rounded-lg" />
-    </div>
-  )
-}
-
-function TicSkeleton() {
-  return (
-    <div className="space-y-6">
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader className="space-y-2">
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-3.5 w-40" />
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-start gap-2">
-              <Skeleton className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              <Skeleton className="h-3.5 flex-1 max-w-[260px]" />
-            </div>
-            <div className="flex items-center gap-2">
-              <Skeleton className="h-3.5 w-3.5 shrink-0" />
-              <Skeleton className="h-3.5 w-48" />
-            </div>
-            <div className="flex items-center gap-2">
-              <Skeleton className="h-3.5 w-3.5 shrink-0" />
-              <Skeleton className="h-3.5 w-36" />
-            </div>
-            <div className="pt-2 border-t space-y-1.5">
-              <Skeleton className="h-3 w-24" />
-              <Skeleton className="h-3 w-44" />
-            </div>
-            <div className="pt-2 border-t space-y-1.5">
-              <Skeleton className="h-3 w-20" />
-              <Skeleton className="h-3 w-full" />
-              <Skeleton className="h-3 w-3/4" />
-            </div>
-            <Skeleton className="h-3 w-32 mt-2" />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="space-y-2">
-            <Skeleton className="h-5 w-40" />
-            <Skeleton className="h-3.5 w-44" />
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-4">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="space-y-1.5">
-                  <Skeleton className="h-3 w-20" />
-                  <Skeleton className="h-4 w-24" />
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+    <div className={cn(PADDED_CANVAS_CLASS, 'space-y-8')}>
+      <PageHeader title={definition ? definition.name : <Skeleton className="h-4 w-44" />} />
+      <div className="space-y-3">
+        {[1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} className="h-11 w-full" />
+        ))}
       </div>
     </div>
   )

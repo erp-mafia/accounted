@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import type { SystemdokumentationReport } from '@/lib/reports/systemdokumentation-types'
 import { formatStockholmTimestamp } from '@/lib/reports/behandlingshistorik'
@@ -62,7 +62,7 @@ const ENTITY_LABEL: Record<string, string> = {
 const METHOD_LABEL: Record<string, string> = { accrual: 'Faktureringsmetoden', cash: 'Kontantmetoden' }
 const FRAMEWORK_LABEL: Record<string, string> = { k2: 'K2', k3: 'K3' }
 const MOMS_LABEL: Record<string, string> = { monthly: 'Månad', quarterly: 'Kvartal', yearly: 'Helår' }
-const ROLE_LABEL: Record<string, string> = { owner: 'Ägare', admin: 'Administratör', member: 'Medlem', viewer: 'Läsare' }
+const ROLE_LABEL: Record<string, string> = { owner: 'Ägare', admin: 'Administratör', member: 'Medlem', viewer: 'Läsare', invoicer: 'Fakturering' }
 
 const NUMBER = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -132,7 +132,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
           </View>
           <View style={styles.companyInfo}>
             {c.name ? <Text style={styles.companyName}>{pdfText(c.name)}</Text> : null}
-            {c.org_number ? <Text style={styles.companyMeta}>Org.nr: {formatOrgNumber(c.org_number)}</Text> : null}
+            {c.org_number ? <Text style={styles.companyMeta}>Org.nr: {formatOrgNumberDisplay(c.org_number)}</Text> : null}
           </View>
         </View>
 
@@ -260,7 +260,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
           ))}
         </Section>
 
-        <Section title="6. Rättelser och låsning" note={`BFL 5 kap. 5 §. Låsdatum: ${report.rattelse_och_las.lock_date ?? 'inget'}${report.rattelse_och_las.auto_lock_period_days != null ? `, flyttas automatiskt ${report.rattelse_och_las.auto_lock_period_days} dagar efter momsperiodens slut` : ''}.`}>
+        <Section title="6. Rättelser och låsning" note={`BFL 5 kap. 5 §. Låsdatum: ${report.rattelse_och_las.lock_date ?? 'inget'}${report.rattelse_och_las.auto_lock_period_days != null ? `, flyttas automatiskt ${report.rattelse_och_las.auto_lock_period_days} dagar efter varje kalendermånads slut` : ''}.`}>
           {report.rattelse_och_las.rules.map((r, i) => (
             <Bullet key={i} text={r} />
           ))}
@@ -330,7 +330,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
 
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
-            {pdfText(`${report.company.name ?? ''}${report.company.org_number ? ` · ${formatOrgNumber(report.company.org_number)}` : ''} · Systemdokumentation ${report.period.name}`)}
+            {pdfText(`${report.company.name ?? ''}${report.company.org_number ? ` · ${formatOrgNumberDisplay(report.company.org_number)}` : ''} · Systemdokumentation ${report.period.name}`)}
           </Text>
           <Text style={styles.footerText} render={({ pageNumber, totalPages }) => `Genererad ${generated} · Sida ${pageNumber} av ${totalPages}`} />
         </View>

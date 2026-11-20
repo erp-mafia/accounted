@@ -1,6 +1,6 @@
 {
   "name": "accounted-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Connect MCP clients to your Accounted bookkeeping account",
   "bin": {
     "accounted-mcp": "./index.mjs"

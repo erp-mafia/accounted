@@ -16,6 +16,8 @@ vi.mock('@/lib/core/bookkeeping/year-end-service', () => ({
 }))
 
 import { tools } from '../server'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 
 const runYearEnd = tools.find((t) => t.name === 'gnubok_run_year_end')!
@@ -34,6 +36,8 @@ type Staged = { staged: boolean; preview: Record<string, unknown> }
 async function stageFor(entityType: string): Promise<Staged> {
   const { supabase, enqueue } = createQueuedMockSupabase()
   enqueue({ data: PERIOD }) // fiscal_periods
+  enqueue({ data: { bookkeeping_locked_through: null } }) // company_settings (the lock on the year's last day)
+  enqueue({ data: PERIOD }) // fiscal_periods (the period covering it)
   enqueue({ data: { entity_type: entityType } }) // companies (resolveCompanyEntityType)
   enqueue({ data: { id: 'op-1' } }) // pending_operations insert
   return (await runYearEnd.execute(
@@ -90,6 +94,47 @@ describe('gnubok_run_year_end: form-aware preview', () => {
 
   it('refuses to stage when the company form is unknown instead of defaulting it', async () => {
     await expect(stageFor('handelsbolag')).rejects.toThrow(/Unknown company entity_type/)
+  })
+})
+
+// The closing entry is dated the year's last day: a company lock date on or
+// after it (where the automatic lock puts it) refused the close at approval.
+describe('gnubok_run_year_end: the company lock date over the year\'s last day', () => {
+  async function stageWithLockDate(lockedThrough: string) {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD }) // fiscal_periods
+    enqueue({ data: { bookkeeping_locked_through: lockedThrough } }) // company_settings
+    enqueue({ data: PERIOD }) // fiscal_periods (the period covering the date)
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { id: 'op-1' } }) // pending_operations insert
+    const staging = runYearEnd.execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+    return { staging, staged: () => findCalls('pending_operations', 'insert') }
+  }
+
+  it('refuses to stage, naming the lock date and the tool that moves it', async () => {
+    const { staging, staged } = await stageWithLockDate('2026-12-31')
+
+    const refusal = await staging.then(
+      () => null,
+      (err: unknown) => err,
+    )
+    expect(refusal).toMatchObject({ code: 'YEAR_END_COMPANY_LOCK_DATE' })
+    expect((refusal as Error).message).toMatch(/company lock date \(2026-12-31\).*gnubok_update_bookkeeping_lock.*auto_lock_period_days/)
+    // What the agent and the user read: the English text as thrown, the
+    // registry's Swedish sentence beside it, and the tool that moves the date.
+    const structured = getStructuredError(refusal)
+    expect(structured.code).toBe('YEAR_END_COMPANY_LOCK_DATE')
+    expect(structured.message_sv).toBe(getErrorEntry('YEAR_END_COMPANY_LOCK_DATE')!.message_sv)
+    expect(structured.message_en).toBe((refusal as Error).message)
+    expect(structured.remediation?.tool).toBe('gnubok_update_bookkeeping_lock')
+    expect(staged()).toHaveLength(0)
+  })
+
+  it('stages when the lock date is the day before', async () => {
+    const { staging, staged } = await stageWithLockDate('2026-12-30')
+
+    expect(((await staging) as Staged).staged).toBe(true)
+    expect(staged()).toHaveLength(1)
   })
 })
 

@@ -21,6 +21,19 @@
  * fields stay off the book-direct request: `toBookDirectPayloadLine` is the
  * payload mapping.
  *
+ * A foreign-currency document has no kronor amount of its own (crm#1146).
+ * Its total used to be the canonical total whenever no transaction was
+ * chosen, so a receipt for 100 EUR prefilled 100 in both columns and posted
+ * as 100 kr. Nothing is prefilled from a foreign total any more: the legs
+ * stay unresolved until a bank row supplies the kronor amount or the person
+ * types it. Typing kronor is a real way of booking (a receipt somebody paid
+ * privately, credited to 2893 or 2820, has no bank row), so the absence of a
+ * bank row is not refused. What is refused is the bug's own signature, a
+ * line that carries the document's foreign total as if it were kronor
+ * (`bookDirectFxRefusal`). The dialog and the route read that rule from this
+ * module, so the form cannot offer what the server will refuse. Nothing is
+ * converted here.
+ *
  * No VAT row is generated for a company that is not VAT-registered: it has
  * no avdragsrätt (13 kap. ML 2023:200), so the seller's VAT is part of the
  * cost (`sellerVatIsCost`, the rule the bank and inbox paths already apply).
@@ -29,8 +42,10 @@
  */
 
 import type { InvoiceExtractionResult } from '@/types'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre } from '@/lib/money'
+import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { sellerVatIsCost, type VatRegistration } from '@/lib/bookkeeping/vat-registration'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 export type BookDirectLineRole = 'cost' | 'vat' | 'settlement'
 
@@ -78,20 +93,87 @@ export interface BookDirectPayloadLine {
   dimensions?: Record<string, string>
 }
 
-const DEFAULT_SETTLEMENT_ACCOUNT = '1930'
-/** Ingående moms, the same default the dialog seeded before this module existed. */
-const INPUT_VAT_ACCOUNT = '2641'
+const DEFAULT_SETTLEMENT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'bank')
+/** Ingående moms (2641), the same default the dialog seeded before this module existed. */
+const INPUT_VAT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat')
 
 function isGeneratedRole(role: BookDirectLineRole | undefined): role is BookDirectLineRole {
   return role === 'cost' || role === 'vat' || role === 'settlement'
 }
 
+/** The part of an extraction the foreign-currency rule reads: currency and total. */
+type ExtractedUnderlag =
+  | {
+      invoice?: { currency?: string | null } | null
+      totals?: { total?: number | null } | null
+    }
+  | null
+  | undefined
+
 /**
- * Same default as the dialog's `targetCurrency`: missing currency is SEK,
- * and 'sek' / 'Sek' match SEK. Any other code is a foreign document.
+ * The underlag's currency, for the dialog and the route alike: a missing or
+ * blank currency is SEK, and 'sek' / 'Sek' match SEK. Any other code is a
+ * foreign document.
  */
-function documentCurrency(extracted: InvoiceExtractionResult | null): string {
-  return (extracted?.invoice?.currency ?? 'SEK').toUpperCase()
+export function bookDirectDocumentCurrency(extracted: ExtractedUnderlag): string {
+  const raw = extracted?.invoice?.currency
+  return (typeof raw === 'string' ? raw.trim().toUpperCase() : '') || 'SEK'
+}
+
+/** What a bank row says about its own kronor value. */
+export interface BookDirectBankRow {
+  amount: number
+  amount_sek?: number | null
+  currency?: string | null
+  exchange_rate?: number | null
+}
+
+/**
+ * The bank row's signed kronor amount, or null for a foreign row with neither
+ * a stored SEK value nor a rate. Never the raw foreign number.
+ */
+export function bankRowSekAmount(row: BookDirectBankRow): number | null {
+  return resolveSekAmountOrNull(row.amount, row.amount_sek, row.currency, row.exchange_rate)
+}
+
+/**
+ * Why these lines cannot be booked for a foreign-currency underlag, or null
+ * when they can. A SEK document always answers null: its own total is kronor.
+ *
+ *   bank_row_without_sek  the picked bank row is foreign too and has no SEK
+ *                         value, so it supplies no kronor amount
+ *   face_amount           a line carries the document's foreign total, to the
+ *                         öre, as its kronor amount: the 100 EUR booked as
+ *                         100 kr
+ *
+ * Only the foreign total itself is refused. Kronor typed by hand pass, with
+ * or without a bank row: 32 such bookings existed in production when this
+ * was written, nearly all a receipt somebody paid privately, against 3 that
+ * carried the face amount. A document with no extracted total cannot be
+ * compared and is not checked. And when the picked bank row's own kronor
+ * amount is that same figure, the figure is kronor (a currency read wrongly
+ * off the receipt, or a rate of exactly one) and is let through.
+ */
+export type BookDirectFxRefusal = 'face_amount' | 'bank_row_without_sek'
+
+export function bookDirectFxRefusal(
+  extracted: ExtractedUnderlag,
+  bankRow: BookDirectBankRow | null,
+  lines: ReadonlyArray<{ debit_amount?: number; credit_amount?: number }>,
+): BookDirectFxRefusal | null {
+  if (bookDirectDocumentCurrency(extracted) === 'SEK') return null
+  const bankRowSek = bankRow ? bankRowSekAmount(bankRow) : null
+  if (bankRow && bankRowSek === null) return 'bank_row_without_sek'
+
+  const total = extracted?.totals?.total
+  const faceAmount = typeof total === 'number' ? positiveOre(Math.abs(total)) : null
+  if (faceAmount === null) return null
+  if (bankRowSek !== null && equalOre(Math.abs(bankRowSek), faceAmount)) return null
+
+  const carriesFaceAmount = lines.some(
+    (line) => equalOre(line.debit_amount ?? 0, faceAmount) || equalOre(line.credit_amount ?? 0, faceAmount),
+  )
+  return carriesFaceAmount ? 'face_amount' : null
 }
 
 /** Positive öre, or null when the figure cannot be a canonical total or a VAT amount. */
@@ -146,6 +228,9 @@ function canonicalTotal(
     }
     return positiveOre(Math.abs(selectedTransactionAmount))
   }
+  // A foreign total is not kronor. With no bank row there is no canonical
+  // total, and the legs stay unresolved instead of carrying the face amount.
+  if (bookDirectDocumentCurrency(extracted) !== 'SEK') return null
   return positiveOre(extracted?.totals?.total ?? null)
 }
 
@@ -195,7 +280,7 @@ function generatedPrefillLines(
 ): BookDirectFormLine[] {
   if (total == null) return unresolvedPair()
 
-  const vat = splitVat ? sekDocumentVat(extracted, documentCurrency(extracted)) : null
+  const vat = splitVat ? sekDocumentVat(extracted, bookDirectDocumentCurrency(extracted)) : null
   const settlement = generatedLine('settlement', bankAccount, '', oreString(total))
 
   // VAT above the total cannot produce a cost debit. Leave the cost amount
@@ -353,14 +438,19 @@ export function applyCostAccountSuggestion(
   return lines.map((line, index) => (index === idx ? { ...line, account_number: trimmed } : line))
 }
 
-/** Template rows are manual: no role, no generated account, no provenance. */
+/**
+ * Template rows are manual: no role, no generated account, no provenance. A
+ * row keeps the dimensions the template set on it; a row without any gets no
+ * bag, since a defined bag opens the line's picker row.
+ */
 export function manualBookDirectLines(
-  rows: ReadonlyArray<Pick<BookDirectFormLine, 'account_number' | 'debit_amount' | 'credit_amount'>>,
+  rows: ReadonlyArray<Pick<BookDirectFormLine, 'account_number' | 'debit_amount' | 'credit_amount' | 'dimensions'>>,
 ): BookDirectFormLine[] {
   return rows.map((row) => ({
     account_number: row.account_number,
     debit_amount: row.debit_amount,
     credit_amount: row.credit_amount,
+    ...(row.dimensions && Object.keys(row.dimensions).length > 0 ? { dimensions: row.dimensions } : {}),
   }))
 }
 

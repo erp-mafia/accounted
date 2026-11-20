@@ -113,6 +113,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     try {
       const outcome = await setTransactionIgnored(ctx.supabase, ctx.companyId!, txId, true, {
         dryRun: ctx.dryRun,
+        userId: ctx.userId,
       })
       if (!outcome.ok) {
         return v1ErrorResponseFromCode(outcome.code, ctx.log, {

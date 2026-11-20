@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { HelpPopover } from '@/components/ui/help-popover'
 import {
   Dialog,
   DialogContent,
@@ -21,10 +23,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 
 interface MatchCandidate {
   journal_entry_id: string
@@ -51,6 +57,11 @@ function candidateKey(c: MatchCandidate): string {
   return [c.journal_entry_id, ...(c.combined_with ?? []).map((o) => o.id)].join(':')
 }
 
+const TRANSACTIONS_API = '/api/extensions/ext/skatteverket/skattekonto/transaktioner'
+
+/** Where rows are linked to a summarised verifikat: the Avstämning manual match view. */
+const MANUAL_MATCH_HREF = '/reconciliation?account=skattekonto&mode=match'
+
 /**
  * Shared dialog for linking a skattekonto_transactions row to an existing
  * journal entry. Used by both /skattekonto and /transactions so we don't
@@ -59,59 +70,95 @@ function candidateKey(c: MatchCandidate): string {
  * The dialog owns its own data fetch: pass the row + open flag and it
  * handles the rest. On successful match it calls onMatched(), letting the
  * caller refresh its data.
+ *
+ * Group mode (`rows`, two or more): the rows the user ticked together are
+ * matched to ONE verifikat whose 1630 movement their sum settles
+ * (findGroupMatchCandidates); linking sends them as one all-or-nothing group.
  */
 export function SkattekontoMatchDialog({
   row,
+  rows,
   open,
   onClose,
   onMatched,
+  skattekontoAccount,
 }: {
   row: StoredSkattekontoTransaction | null
+  rows?: StoredSkattekontoTransaction[] | null
   open: boolean
   onClose: () => void
   onMatched: () => void
+  /** The company's skattekonto account (1630, or 2012), as the server reported it. */
+  skattekontoAccount: SkattekontoLedgerAccount
 }) {
   const t = useTranslations('tx_skattekonto_match')
   const { toast } = useToast()
   const [candidates, setCandidates] = useState<MatchCandidate[] | null>(null)
+  // No verifikat settles the rows exactly, but unlinked verifikat on 1630
+  // already hold them (a summarised verifikat): the answer is to link them in
+  // Matcha manuellt, never the default "use Bokför" (crm#1043).
+  const [covered, setCovered] = useState(false)
   const [loading, setLoading] = useState(false)
+  // The candidate search failed: said in the dialog with "Försök igen" (Stil v3 states).
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [submittingId, setSubmittingId] = useState<string | null>(null)
+  const group = rows && rows.length > 1 ? rows : null
+  const groupTotal = group
+    ? roundOre(group.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
+    : 0
+  // How the search works, and what to do when it finds nothing, sits behind
+  // the "?" (convention 7): the body states only what was found.
+  const help =
+    loading || !candidates
+      ? null
+      : covered && candidates.length === 0
+        ? t('covered_help', { count: group ? group.length : 1 })
+        : group
+          ? t.rich('group_no_candidates_help', { strong: (chunks) => <strong>{chunks}</strong> })
+          : t.rich('no_candidates_help', {
+              strong: (chunks) => <strong>{chunks}</strong>,
+              skattekonto: skattekontoAccount,
+            })
 
   useEffect(() => {
-    if (!open || !row) {
+    const request: [string, RequestInit?] | null = group
+      ? [
+          `${TRANSACTIONS_API}/group-match-candidates`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction_ids: group.map((r) => r.id) }),
+          },
+        ]
+      : row
+        ? [`${TRANSACTIONS_API}/${row.id}/match-candidates`]
+        : null
+    if (!open || !request) {
       setCandidates(null)
+      setCovered(false)
       return
     }
     let cancelled = false
     setLoading(true)
+    setLoadError(null)
     ;(async () => {
       try {
-        const res = await fetch(
-          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match-candidates`,
-        )
+        const res = await fetch(...request)
         const json = await res.json()
         if (cancelled) return
         if (!res.ok) {
           // Map the parsed body plus the status, never `new Error(json.error)`:
           // the Error constructor stringifies a non-string body field, and the
           // mapper would discard the route's own Swedish reason.
-          toast({
-            title: t('fetch_candidates_failed_title'),
-            description: getUserErrorMessage(json, { statusCode: res.status }),
-            variant: 'destructive',
-          })
-          onClose()
+          setLoadError(getUserErrorMessage(json, { statusCode: res.status }))
           return
         }
         setCandidates(json.data.candidates as MatchCandidate[])
+        setCovered(Boolean(json.data.ledger_cover))
       } catch (err) {
         if (cancelled) return
-        toast({
-          title: t('fetch_candidates_failed_title'),
-          description: err instanceof Error ? getUserErrorMessage(err) : undefined,
-          variant: 'destructive',
-        })
-        onClose()
+        setLoadError(err instanceof Error ? getUserErrorMessage(err) : t('fetch_candidates_failed_title'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -119,25 +166,26 @@ export function SkattekontoMatchDialog({
     return () => {
       cancelled = true
     }
-  }, [open, row, toast, onClose, t])
+  }, [open, row, group, loadAttempt, t])
 
   async function confirmMatch(candidate: MatchCandidate) {
-    if (!row) return
+    const primary = group ? group[0] : row
+    if (!primary) return
+    // A group links every ticked row; a combined candidate links the
+    // companions it names. The server checks the whole group either way.
+    const others = group
+      ? group.slice(1).map((r) => r.id)
+      : (candidate.combined_with ?? []).map((o) => o.id)
     setSubmittingId(candidateKey(candidate))
     try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            journal_entry_id: candidate.journal_entry_id,
-            ...(candidate.combined_with?.length
-              ? { also_transaction_ids: candidate.combined_with.map((o) => o.id) }
-              : {}),
-          }),
-        },
-      )
+      const res = await fetch(`${TRANSACTIONS_API}/${primary.id}/match`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          journal_entry_id: candidate.journal_entry_id,
+          ...(others.length > 0 ? { also_transaction_ids: others } : {}),
+        }),
+      })
       const json = await res.json()
       if (!res.ok) {
         toast({
@@ -147,7 +195,11 @@ export function SkattekontoMatchDialog({
         })
         return
       }
-      toast({ title: t('match_success_title') })
+      toast({
+        title: group
+          ? t('group_match_success_title', { count: group.length })
+          : t('match_success_title'),
+      })
       onMatched()
       onClose()
     } catch (err) {
@@ -163,41 +215,80 @@ export function SkattekontoMatchDialog({
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
-          <DialogTitle>{t('title')}</DialogTitle>
+          <div className="flex items-center gap-2">
+            <DialogTitle>{t('title')}</DialogTitle>
+            {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
+          </div>
           {/* data-ph-mask: transaction text and amount are user data */}
           <DialogDescription data-ph-mask="">
-            {row && (
-              <>
-                {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
-                <span className="tabular-nums">
-                  {formatCurrency(Number(row.belopp_skatteverket))}
-                </span>
-              </>
-            )}
+            {group
+              ? t('group_description', { count: group.length, total: formatCurrency(groupTotal) })
+              : row && (
+                  <>
+                    {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
+                    <span className="tabular-nums">
+                      {formatCurrency(Number(row.belopp_skatteverket))}
+                    </span>
+                  </>
+                )}
           </DialogDescription>
+          {group && (
+            /* data-ph-mask: event texts and amounts are user data */
+            <ul className="max-h-32 space-y-1 overflow-y-auto text-xs text-muted-foreground" data-ph-mask="">
+              {group.map((r) => (
+                <li key={r.id} className="flex gap-3 tabular-nums">
+                  <span>{formatDate(r.transaktionsdatum)}</span>
+                  <span className="min-w-0 flex-1 truncate">{r.transaktionstext}</span>
+                  <span>{formatCurrency(Number(r.belopp_skatteverket))}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </DialogHeader>
 
         {loading && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            {t('searching')}
-          </p>
+          <LateReveal aria-label={t('searching')}>
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex h-11 items-center gap-6 border-b-hairline">
+                <Skeleton className="h-3.5 w-20" />
+                <Skeleton className="h-3.5 w-16" />
+                <Skeleton className="h-3.5 w-48" />
+              </div>
+            ))}
+          </LateReveal>
         )}
 
-        {!loading && candidates && candidates.length === 0 && (
+        {!loading && loadError && (
+          <LoadError
+            title={t('fetch_candidates_failed_title')}
+            description={loadError}
+            onRetry={() => setLoadAttempt((n) => n + 1)}
+          />
+        )}
+
+        {!loading && candidates && candidates.length === 0 && covered && (
           <div className="space-y-2 py-4 text-sm">
-            <p>{t('no_candidates_title')}</p>
-            <p className="text-muted-foreground">
-              {t.rich('no_candidates_help', {
-                strong: (chunks) => <strong>{chunks}</strong>,
-              })}
+            <p>{t('covered_title', { count: group ? group.length : 1, skattekonto: skattekontoAccount })}</p>
+            <p>
+              <Link href={MANUAL_MATCH_HREF} className="underline underline-offset-4" onClick={onClose}>
+                {t('covered_cta')}
+              </Link>
             </p>
           </div>
         )}
 
+        {!loading && candidates && candidates.length === 0 && !covered && (
+          <p className="py-4 text-sm">
+            {group
+              ? t('group_no_candidates_title', { skattekonto: skattekontoAccount })
+              : t('no_candidates_title', { skattekonto: skattekontoAccount })}
+          </p>
+        )}
+
         {!loading && candidates && candidates.length > 0 && (
-          <div className="max-h-[420px] overflow-y-auto rounded-lg border">
+          <div className="max-h-[420px] overflow-y-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -211,30 +302,31 @@ export function SkattekontoMatchDialog({
               <TableBody>
                 {candidates.map(c => (
                   <TableRow key={candidateKey(c)}>
-                    <TableCell className="tabular-nums">{formatDate(c.entry_date)}</TableCell>
+                    <TableCell className="date-figures">{formatDate(c.entry_date)}</TableCell>
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>
-                    <TableCell className="max-w-[260px]">
+                    <TableCell className="max-w-[260px] date-figures">
                       <span className="block truncate">{c.description}</span>
                       {c.combined_with && c.combined_with.length > 0 && (
                         /* data-ph-mask: event texts and amounts are user data */
                         <span className="mt-1 block text-xs text-muted-foreground" data-ph-mask="">
                           {t('combined_note', {
                             count: c.combined_with.length,
-                            total: formatCurrency(c.combined_total ?? 0),
+                            total: formatRowAmount(c.combined_total ?? 0),
+                            skattekonto: skattekontoAccount,
                           })}
                           {c.combined_with.map((o) => (
                             <span key={o.id} className="block truncate tabular-nums">
                               {formatDate(o.transaktionsdatum)} {o.transaktionstext}{' '}
-                              {formatCurrency(o.belopp_skatteverket)}
+                              {formatRowAmount(o.belopp_skatteverket)}
                             </span>
                           ))}
                         </span>
                       )}
                       {!!c.joins_linked_count && (
                         <span className="mt-1 block text-xs text-muted-foreground">
-                          {t('joins_linked_note', { count: c.joins_linked_count })}
+                          {t('joins_linked_note', { count: c.joins_linked_count, skattekonto: skattekontoAccount })}
                         </span>
                       )}
                     </TableCell>
@@ -250,15 +342,16 @@ export function SkattekontoMatchDialog({
                     </TableCell>
                     <TableCell className="text-right">
                       <Button
-                        size="sm"
                         onClick={() => confirmMatch(c)}
                         disabled={submittingId === candidateKey(c)}
                       >
                         {submittingId === candidateKey(c)
                           ? t('linking')
-                          : c.combined_with?.length
-                            ? t('link_group', { count: c.combined_with.length + 1 })
-                            : t('link')}
+                          : group
+                            ? t('link_group', { count: group.length })
+                            : c.combined_with?.length
+                              ? t('link_group', { count: c.combined_with.length + 1 })
+                              : t('link')}
                       </Button>
                     </TableCell>
                   </TableRow>

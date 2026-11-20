@@ -33,3 +33,26 @@ export async function readV1JsonBody(
     }
   }
 }
+
+/**
+ * The same for a verb whose body is optional: no body (or whitespace) reads
+ * as {}, a body that is present must still be valid JSON.
+ */
+export async function readV1OptionalJsonBody(
+  request: Request,
+  ctx: V1ValidationContext,
+): Promise<V1JsonBodyResult> {
+  const text = (await request.text()).trim()
+  if (text.length === 0) return { ok: true, body: {} }
+  try {
+    return { ok: true, body: JSON.parse(text) }
+  } catch {
+    return {
+      ok: false,
+      response: await v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'body', message: 'Body is not valid JSON.' },
+      }),
+    }
+  }
+}

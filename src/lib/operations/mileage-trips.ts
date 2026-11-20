@@ -10,8 +10,8 @@
  */
 import { z } from 'zod'
 import { CreateMileageTripSchema } from '@/lib/api/schemas'
-import { createTrip, listTrips, ratePerMil } from '@/lib/mileage/mileage-service'
-import { loadPayrollConfig } from '@/lib/salary/payroll-config'
+import { createTrip, listTrips, ratePerMil, storedDistanceKm } from '@/lib/mileage/mileage-service'
+import { loadPayrollConfig, PayrollConfigMissingError } from '@/lib/salary/payroll-config'
 import { roundOre } from '@/lib/money'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import type { MileageTrip } from '@/types'
@@ -156,25 +156,32 @@ async function checkTrip(
 ): Promise<Extract<OperationOutcome<never>, { ok: false }> | null> {
   if (input.employee_id) {
     // The FK on employee_id is not company-scoped, so tenancy is checked here.
-    const { data: employee } = await ctx.supabase
+    const { data: employee, error } = await ctx.supabase
       .from('employees')
       .select('id')
       .eq('company_id', ctx.companyId)
       .eq('id', input.employee_id)
       .maybeSingle()
+    // A failed read has not shown the employee missing: let it surface as an error.
+    if (error) throw new Error(`Failed to read employee: ${error.message}`)
     if (!employee) return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
   }
   return null
 }
 
-/** The schablon allowance the trip would add when booked; null when the year's rates are missing. */
-async function estimateAllowance(ctx: OperationContext, input: CreateInput) {
+/**
+ * The schablon allowance the trip would add when booked, from the distance as
+ * stored; null when the year's rates are not loaded. Any other failure is an
+ * error, never reported as missing rates.
+ */
+async function estimateAllowance(ctx: OperationContext, input: CreateInput, distanceKm: number) {
   try {
     const config = await loadPayrollConfig(ctx.supabase, Number(input.trip_date.slice(0, 4)))
     const rate = ratePerMil(config, input.vehicle_type)
-    return { rate_per_mil: rate, estimated_allowance_sek: roundOre((input.distance_km / 10) * rate) }
-  } catch {
-    return { rate_per_mil: null, estimated_allowance_sek: null }
+    return { rate_per_mil: rate, estimated_allowance_sek: roundOre((distanceKm / 10) * rate) }
+  } catch (err) {
+    if (err instanceof PayrollConfigMissingError) return { rate_per_mil: null, estimated_allowance_sek: null }
+    throw err
   }
 }
 
@@ -221,6 +228,7 @@ export const mileageTripsCreate = defineOperation({
     const refused = await checkTrip(ctx, input)
     if (refused) return refused
     if (dryRun) {
+      const distanceKm = storedDistanceKm(input.distance_km)
       return {
         ok: true,
         dryRun: true,
@@ -230,7 +238,7 @@ export const mileageTripsCreate = defineOperation({
           vehicle_registration: input.vehicle_registration?.trim() || null,
           odometer_start: input.odometer_start ?? null,
           odometer_end: input.odometer_end ?? null,
-          distance_km: Math.round(input.distance_km * 10) / 10,
+          distance_km: distanceKm,
           from_location: input.from_location,
           to_location: input.to_location,
           purpose: input.purpose,
@@ -238,7 +246,7 @@ export const mileageTripsCreate = defineOperation({
           is_round_trip: input.is_round_trip,
           employee_id: input.employee_id ?? null,
           status: 'draft',
-          ...(await estimateAllowance(ctx, input)),
+          ...(await estimateAllowance(ctx, input, distanceKm)),
         },
       }
     }

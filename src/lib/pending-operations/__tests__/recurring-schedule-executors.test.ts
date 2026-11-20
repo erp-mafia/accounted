@@ -137,6 +137,54 @@ describe('commitPendingOperation: create_recurring_schedule', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(5, 'recurring_invoice_schedules')
   })
 
+  it('stores the article link after proving the article is this company\'s (accounted#52)', async () => {
+    const article = '33333333-3333-4333-8333-333333333333'
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-recurring-1' } }) // claim
+    enqueue({ data: { id: CUSTOMER_ID, email: null } }) // customer
+    enqueue({ data: [{ id: article }] }) // articles (company-scoped)
+    enqueue({ data: { id: SCHEDULE_ID } }) // schedule insert
+    enqueue({ data: null }) // items insert
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp('create_recurring_schedule', {
+        ...createParams,
+        items: [{ ...createParams.items[0], article_id: article }],
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(findCalls('articles', 'eq')).toContainEqual(['company_id', 'company-1'])
+    const rows = findCalls('recurring_invoice_schedule_items', 'insert')[0][0] as Array<Record<string, unknown>>
+    expect(rows[0]).toMatchObject({ article_id: article })
+  })
+
+  it('refuses another company\'s article at commit before any write', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-recurring-1' } }) // claim
+    enqueue({ data: { id: CUSTOMER_ID, email: null } }) // customer
+    enqueue({ data: [] }) // articles: none in this company
+    enqueue({ data: null }) // status update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp('create_recurring_schedule', {
+        ...createParams,
+        items: [{ ...createParams.items[0], article_id: '33333333-3333-4333-8333-333333333333' }],
+      }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(findCalls('recurring_invoice_schedules', 'insert')).toHaveLength(0)
+  })
+
   it('auto-rejects when the customer no longer exists', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-recurring-1' } }) // claim

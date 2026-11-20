@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { PoolClient } from 'pg'
 import { getClient, getPool, runAsServiceRole, withUserContext } from './setup'
-import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
+import { insertAuthUser, insertCompanyMember, seedCompany, setActiveCompany } from './fixtures'
 
 // Migration 20260929220100_gate_posted_cancel.sql.
 //
@@ -16,15 +16,6 @@ interface Seeded {
   userId: string
   companyId: string
   fiscalPeriodId: string
-}
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
 }
 
 // Attach the company to a team where the user holds `role`: the

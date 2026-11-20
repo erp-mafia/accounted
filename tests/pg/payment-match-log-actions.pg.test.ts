@@ -5,7 +5,8 @@ import { getPool } from '@/tests/pg/setup'
 /**
  * pg-real coverage for the payment_match_log action CHECK
  * (20260323120000_payment_match_log.sql +
- * 20260813210000_payment_match_log_linked_to_existing_voucher.sql).
+ * 20260813210000_payment_match_log_linked_to_existing_voucher.sql +
+ * 20261013160000_payment_match_log_auto_matched.sql).
  *
  * Locks in Gap F: the code has emitted action = 'linked_to_existing_voucher'
  * since the existing-voucher link paths shipped, but the original CHECK never
@@ -29,7 +30,7 @@ async function insertLogRow(params: {
 }
 
 describe('payment_match_log.action CHECK', () => {
-  it('accepts every action the code emits, including linked_to_existing_voucher', async () => {
+  it('accepts every action the code emits, including linked_to_existing_voucher and auto_matched', async () => {
     const { userId, companyId } = await seedCompany()
     const txId = await insertTransaction({ companyId, userId })
 
@@ -42,6 +43,8 @@ describe('payment_match_log.action CHECK', () => {
       'suggestion_cleared',
       'storno_conflict_resolved',
       'linked_to_existing_voucher',
+      // The debit of a bank payment order booked its invoice without a person.
+      'auto_matched',
     ]
     for (const action of actions) {
       await expect(insertLogRow({ userId, transactionId: txId, action })).resolves.not.toThrow()

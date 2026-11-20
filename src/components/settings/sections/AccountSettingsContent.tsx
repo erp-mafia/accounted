@@ -5,11 +5,19 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Sun, Moon, Monitor, ExternalLink } from 'lucide-react'
+import {
+  ArrowTopRightOnSquareIcon,
+  ComputerDesktopIcon,
+  MoonIcon,
+  SunIcon,
+} from '@/components/icons'
 import { useTheme } from 'next-themes'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
+import { AnalyticsConsentRow } from '@/components/settings/AnalyticsConsentRow'
+import { FabVisibilityRow } from '@/components/settings/FabVisibilityRow'
 import {
   SettingsGroup,
   SettingsInput,
@@ -24,6 +32,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 import { PalettePicker } from '@/components/settings/PalettePicker'
 import { usePalette } from '@/components/providers/PaletteProvider'
+import { useAssistantChatEnabled, useCompanyOptional } from '@/contexts/CompanyContext'
 import type { Palette } from '@/lib/theme/palettes'
 
 export function AccountSettingsContent() {
@@ -33,6 +42,11 @@ export function AccountSettingsContent() {
   const { palette, setPalette } = usePalette()
   const [mounted, setMounted] = useState(false)
   const hasCalendarExtension = ENABLED_EXTENSION_IDS.has('calendar')
+  const assistantChatEnabled = useAssistantChatEnabled()
+  // Without the built-in chat the corner holds the support's button, where
+  // the company has the support assistant (the dashboard layout's rule).
+  const companyContext = useCompanyOptional()
+  const supportButton = !assistantChatEnabled && companyContext?.supportAssistant === true
   const { toast } = useToast()
   const activeLocale = useLocale() as Locale
   const tCommon = useTranslations('common')
@@ -56,7 +70,7 @@ export function AccountSettingsContent() {
   useEffect(() => {
     let active = true
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (!user) { if (active) setNameLoading(false); return }
       if (active && user.email) {
         setEmail(user.email)
@@ -182,7 +196,7 @@ export function AccountSettingsContent() {
     <div>
       <SettingsSectionHeader title={tNav('account')} intro={tIntro('account')} />
 
-      {/* Profile: name, appearance, language, install-as-app */}
+      {/* Profile: name, appearance, language, assistant button, install-as-app */}
       <SettingsGroup label={tSettings('group_profile')}>
         <SettingsRow
           label={tSettings('name_label')}
@@ -200,7 +214,7 @@ export function AccountSettingsContent() {
           />
           <SettingsRowEnd>
             <Button
-              size="sm"
+              variant="outline"
               onClick={handleSaveName}
               disabled={nameLoading || savingName || nameUnchanged}
             >
@@ -229,7 +243,7 @@ export function AccountSettingsContent() {
           />
           <SettingsRowEnd>
             <Button
-              size="sm"
+              variant="outline"
               onClick={handleSaveEmail}
               disabled={
                 !currentEmail ||
@@ -258,7 +272,7 @@ export function AccountSettingsContent() {
                   value: 'light',
                   label: (
                     <span className="inline-flex items-center gap-1.5">
-                      <Sun className="h-3.5 w-3.5" />
+                      <SunIcon className="h-3.5 w-3.5" />
                       {tCommon('theme_light')}
                     </span>
                   ),
@@ -267,7 +281,7 @@ export function AccountSettingsContent() {
                   value: 'dark',
                   label: (
                     <span className="inline-flex items-center gap-1.5">
-                      <Moon className="h-3.5 w-3.5" />
+                      <MoonIcon className="h-3.5 w-3.5" />
                       {tCommon('theme_dark')}
                     </span>
                   ),
@@ -276,7 +290,7 @@ export function AccountSettingsContent() {
                   value: 'system',
                   label: (
                     <span className="inline-flex items-center gap-1.5">
-                      <Monitor className="h-3.5 w-3.5" />
+                      <ComputerDesktopIcon className="h-3.5 w-3.5" />
                       {tCommon('theme_system')}
                     </span>
                   ),
@@ -317,6 +331,11 @@ export function AccountSettingsContent() {
           />
         </SettingsRow>
 
+        {/* The floating button in the corner, shown or hidden for this
+            person: the built-in assistant's, or the support's where the
+            company has no chat. No row where the corner has neither. */}
+        {(assistantChatEnabled || supportButton) && <FabVisibilityRow support={supportButton} />}
+
         {/* Install as app: renders nothing when already running installed */}
         <InstallAppSection />
       </SettingsGroup>
@@ -324,13 +343,24 @@ export function AccountSettingsContent() {
       {/* Calendar feed (extension-gated) */}
       {hasCalendarExtension && <CalendarFeedSettings />}
 
-      {/* Privacy & agreements: surface the otherwise-unlinked DPA + privacy policy */}
+      {/* Privacy & agreements: the documents, and the person's analytics choice */}
       <SettingsGroup label={tSettings('legal_title')}>
+        <AnalyticsConsentRow />
+        <SettingsRow label={tSettings('legal_terms')}>
+          <SettingsRowEnd>
+            <Button variant="outline" asChild>
+              <Link href="/terms" target="_blank" rel="noopener noreferrer">
+                <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
+                {tCommon('open')}
+              </Link>
+            </Button>
+          </SettingsRowEnd>
+        </SettingsRow>
         <SettingsRow label={tSettings('legal_privacy')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" asChild>
               <Link href="/privacy" target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
               </Link>
             </Button>
@@ -338,9 +368,9 @@ export function AccountSettingsContent() {
         </SettingsRow>
         <SettingsRow label={tSettings('legal_dpa')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" asChild>
               <Link href="/dpa" target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
               </Link>
             </Button>

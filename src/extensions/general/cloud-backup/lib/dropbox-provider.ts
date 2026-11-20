@@ -127,9 +127,7 @@ export const dropboxProvider: CloudStorageProvider = {
 
   /**
    * `previousId` is ignored: the path is derived from the file name, and an
-   * overwrite write is correct whether or not the file is already there. That
-   * also means a file the user deleted in Dropbox simply reappears on the next
-   * sync, with no recovery path needed.
+   * overwrite write is correct whether or not the file is already there.
    */
   async putFile({
     accessToken,

@@ -1,6 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { nextStepKind, type NextStepKind } from '@/lib/receipt-hunt/agent-worklist'
+import type { CompanyPortal } from '@/lib/receipt-hunt/company-portals'
+import { readCompanyPortals } from '@/lib/receipt-hunt/company-portals-read'
 import { createLogger } from '@/lib/logger'
+import { toError } from '@/lib/errors/to-error'
 
 const log = createLogger('worklist/missing-underlag')
 
@@ -35,19 +38,24 @@ const EMPTY: MissingUnderlagSample = { total: 0, sampled: 0, top: null }
  * The same `verifikat_without_documents` RPC the count uses, asked for a real
  * page instead of `p_limit: 1`. `total_count` is computed over the full
  * filtered set inside the RPC either way, so this replaces the count call
- * rather than adding a query: pass the result to getWorklistCounts as
- * `missingUnderlag` and Hem still makes exactly one call.
+ * rather than adding one: pass the result to getWorklistCounts as
+ * `missingUnderlag` and Hem still makes exactly one RPC call. The company's
+ * own portals are read beside it, so a supplier the company pointed at its
+ * portal reads as a portal errand here too, as it does per item.
  */
 export async function listMissingUnderlagSample(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<MissingUnderlagSample> {
   try {
-    const { data, error } = await supabase.rpc('verifikat_without_documents', {
-      p_company_id: companyId,
-      p_limit: MISSING_UNDERLAG_SAMPLE,
-      p_offset: 0,
-    })
+    const [{ data, error }, companyPortals] = await Promise.all([
+      supabase.rpc('verifikat_without_documents', {
+        p_company_id: companyId,
+        p_limit: MISSING_UNDERLAG_SAMPLE,
+        p_offset: 0,
+      }),
+      readCompanyPortals(supabase, companyId),
+    ])
     if (error) {
       log.error('missing underlag sample failed', { companyId, reason: error.message })
       return EMPTY
@@ -56,7 +64,7 @@ export async function listMissingUnderlagSample(
       ok?: boolean
       code?: string
       total_count?: number
-      verifikat?: { description: string | null }[]
+      verifikat?: { description: string | null; source_type?: string | null }[]
     } | null
     if (!result?.ok) {
       log.error('missing underlag sample failed', {
@@ -65,11 +73,11 @@ export async function listMissingUnderlagSample(
       })
       return EMPTY
     }
-    return summariseMissingUnderlag(result.total_count ?? 0, result.verifikat ?? [])
+    return summariseMissingUnderlag(result.total_count ?? 0, result.verifikat ?? [], companyPortals)
   } catch (err) {
     log.error('missing underlag sample failed', {
       companyId,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: toError(err).message,
     })
     return EMPTY
   }
@@ -80,18 +88,23 @@ export async function listMissingUnderlagSample(
  *
  * The RPC gives the entry description; the agent worklist classifies on the
  * counterparty when it has resolved one, and falls back to the same
- * description. A summary line is therefore never more specific than the
- * per-item sentence, which is the right direction to be wrong in.
+ * description. It also reads each verifikat's lines, which this summary does
+ * not: a row that bought nothing counts here under its words, usually as
+ * mail. A summary line is therefore never more specific than the per-item
+ * sentence, which is the right direction to be wrong in. The source type
+ * the RPC returns is read as the agent reads it: an imported verifikat is
+ * 'imported' in both.
  */
 export function summariseMissingUnderlag(
   total: number,
-  rows: { description: string | null }[],
+  rows: { description: string | null; source_type?: string | null }[],
+  companyPortals: readonly CompanyPortal[] = [],
 ): MissingUnderlagSample {
   if (total === 0 || rows.length === 0) return { total, sampled: 0, top: null }
 
   const tally = new Map<NextStepKind, number>()
   for (const row of rows) {
-    const kind = nextStepKind(row.description)
+    const kind = nextStepKind(row.description, companyPortals, undefined, row.source_type)
     tally.set(kind, (tally.get(kind) ?? 0) + 1)
   }
 

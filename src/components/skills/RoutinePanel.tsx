@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Monitor, Repeat } from 'lucide-react'
+import { ArrowPathRoundedSquareIcon, ComputerDesktopIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { AI_CLIENTS, type AiClient } from '@/lib/onboarding/ai-clients'
 import {
@@ -58,7 +58,7 @@ export function RoutineOffer({ client, disconnected, readOnly, canWrite, onOpen 
   const t = useTranslations('skills_registry')
   if (disconnected || (!readOnly && !canWrite)) return null
   if (client !== 'claude') return <span className={styles.stageStatus}>{t('routine_other_client')}</span>
-  return <Button size="lg" variant="outline" className="gap-2" onClick={onOpen}><Repeat className="h-4 w-4" aria-hidden />{t('routine_open')}</Button>
+  return <Button size="lg" variant="outline" className="gap-2" onClick={onOpen}><ArrowPathRoundedSquareIcon className="h-4 w-4" aria-hidden />{t('routine_open')}</Button>
 }
 
 /**
@@ -118,7 +118,7 @@ export function RoutinePanel({ run, name, item, kind, company, onBack, initial, 
           </Button>
           {desktop && (
             <Button variant="outline" className="gap-2" onClick={() => send('desktop')}>
-              <Monitor className="h-4 w-4" aria-hidden />
+              <ComputerDesktopIcon className="h-4 w-4" aria-hidden />
               {t('routine_target_desktop')}
             </Button>
           )}

@@ -39,6 +39,7 @@ function row(over: Partial<PortfolioCompanyRow> = {}): PortfolioCompanyRow {
     companyId: 'c-1',
     name: 'Alpha AB',
     orgNumber: null,
+    clientNumber: null,
     unbookedCount: 0,
     inboxCount: 0,
     nextDeadline: null,
@@ -263,6 +264,7 @@ describe('fetchPortfolioOverview', () => {
     truncated: false,
     remainingCompanyIds: [],
     unresolved: [],
+    dormant: [],
     team: { id: 'team-1', name: 'Siffra' },
   }
 
@@ -290,6 +292,7 @@ describe('fetchPortfolioOverview', () => {
         companyId: 'c-2',
         name: 'Beta',
         orgNumber: null,
+        clientNumber: '1042',
         unbookedCount: 12,
         inboxCount: 0,
         nextDeadline: deadline({ dueDate: '2026-09-12', urgency: 'overdue' }),
@@ -300,6 +303,7 @@ describe('fetchPortfolioOverview', () => {
         companyId: 'c-1',
         name: 'Alpha AB',
         orgNumber: '5560125790',
+        clientNumber: null,
         unbookedCount: 2,
         inboxCount: 1,
         nextDeadline: null,

@@ -659,3 +659,81 @@ describe('recurring schedule tools: dimension bags', () => {
     expect(result.preview.proposed.default_dimensions).toEqual({})
   })
 })
+
+describe('recurring schedule tools: article links (accounted#52)', () => {
+  const ARTICLE_ID = '33333333-3333-4333-8333-333333333333'
+  const createArgs = {
+    customer_id: CUSTOMER_ID,
+    name: 'Hosting',
+    day_of_month: 25,
+    items: [{ description: 'Hosting', quantity: 1, unit: 'st', unit_price: 500, article_id: ARTICLE_ID }],
+  }
+
+  it('list: returns each line\'s article_id so an update can send it back', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        {
+          ...currentSchedule(),
+          items: [
+            { description: 'Hosting', quantity: 1, unit: 'st', unit_price: 500, vat_rate: null, sort_order: 0, article_id: ARTICLE_ID },
+            // A row read before migration 20261101003800 has no article_id key.
+            { description: 'Support', quantity: 1, unit: 'st', unit_price: 100, vat_rate: null, sort_order: 1 },
+          ],
+        },
+      ],
+      count: 1,
+    })
+
+    const result = (await listTool().execute({}, 'company-1', 'user-1', supabase as never)) as {
+      schedules: Array<{ items: Array<{ article_id: string | null }> }>
+    }
+
+    expect(result.schedules[0].items.map((i) => i.article_id)).toEqual([ARTICLE_ID, null])
+    // '*' on the line join: tolerates the column not being migrated yet.
+    expect(String(findCall('recurring_invoice_schedules', 'select')?.[0])).toContain('recurring_invoice_schedule_items(*)')
+  })
+
+  it('create: stages a line linked to one of the company\'s articles', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
+    enqueue({ data: [{ id: ARTICLE_ID }] }) // articles (company-scoped)
+    enqueue({ data: { id: 'op-recurring-1' } })
+
+    const result = (await createTool().execute(createArgs, 'company-1', 'user-1', supabase as never)) as {
+      staged: boolean
+      preview: { items: Array<{ article_id?: string }> }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.items[0].article_id).toBe(ARTICLE_ID)
+    expect(findCalls('articles', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  it('create: refuses another company\'s article at staging', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
+    enqueue({ data: [] }) // articles: none in this company
+
+    await expect(
+      createTool().execute(createArgs, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/Article not found in this company/)
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('update: refuses another company\'s article in replacement lines', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentSchedule() })
+    enqueue({ data: [] }) // articles: none in this company
+
+    await expect(
+      updateTool().execute(
+        { schedule_id: SCHEDULE_ID, items: createArgs.items },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/Article not found in this company/)
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+})

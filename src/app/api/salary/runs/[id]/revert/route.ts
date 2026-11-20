@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { revertSalaryRunToDraft } from '@/lib/salary/run-status-recall'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 /**
  * review -> draft (unlock for editing). The rule lives in

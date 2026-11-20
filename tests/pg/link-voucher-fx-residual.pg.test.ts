@@ -657,12 +657,15 @@ describe('link_invoice_to_voucher: SEK-booked voucher settles a foreign invoice'
     })
   })
 
-  it('refuses on kontantmetoden when the invoice was booked at issue', async () => {
+  it('settles a booked kontantmetod invoice on its 1510 credit and books the residual', async () => {
     // A kontantmetod company can still hold an invoice that reached the ledger
-    // at issue (a method switch, the explicit Bokför route, migrated data).
-    // That one has a 1510 balance at the invoice rate, so a kronor settlement
-    // does leave a kursdifferens, and the cash branch books none. Same voucher
-    // as the accepted case above; only journal_entry_id differs.
+    // (a year-end carry, #3440; a method switch, the explicit Bokför route,
+    // migrated data). It has a 1510 balance at the invoice rate. Until
+    // 20261018131110 the RPC read such an invoice on the 19xx side and had to
+    // refuse this voucher; invoice_settlement_side() now reads it on the 1510
+    // credit like faktureringsmetoden, so the kronor settlement leaves a
+    // kursdifferens that is booked. Same voucher as the unbooked case above;
+    // only journal_entry_id differs.
     await withFxTransaction(async (client) => {
       const { userId, companyId, fiscalPeriodId } = await seedTenant(client)
       await client.query(
@@ -702,20 +705,27 @@ describe('link_invoice_to_voucher: SEK-booked voucher settles a foreign invoice'
 
       const result = await callLinkInvoice(client, { invoiceId, voucherId, userId, companyId })
 
-      expect(result.ok).toBe(false)
-      expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+      expect(result).toMatchObject({ ok: true, invoice_status: 'paid' })
+      expect(Number(result.payment_amount)).toBe(1000)
+      expect(Number(result.fx_settled_sek)).toBe(11450)
+      expect(Number(result.fx_residual_sek)).toBe(50)
+      // Booked 11 500 at the invoice rate, settled 11 450: Dr 7960 50 / Cr 1510 50.
+      await assertFxEntry(client, result.fx_journal_entry_id as string, [
+        { account: '7960', debit: 50, credit: 0 },
+        { account: '1510', debit: 0, credit: 50 },
+      ])
 
       const { rows } = await client.query(
         `SELECT status, remaining_amount FROM public.invoices WHERE id = $1`,
         [invoiceId],
       )
-      expect(rows[0].status).toBe('sent')
-      expect(Number(rows[0].remaining_amount)).toBe(1000)
+      expect(rows[0].status).toBe('paid')
+      expect(Number(rows[0].remaining_amount)).toBe(0)
       const { rows: payments } = await client.query(
         `SELECT COUNT(*)::int AS n FROM public.invoice_payments WHERE invoice_id = $1`,
         [invoiceId],
       )
-      expect(payments[0].n).toBe(0)
+      expect(payments[0].n).toBe(1)
     })
   })
 

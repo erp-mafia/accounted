@@ -77,12 +77,13 @@ function makeReq(method: 'GET' | 'DELETE' = 'DELETE') {
  * readDocumentDeletePins' order: supplier invoices, expense claims, bank
  * transactions, inbox items by file, inbox items by received Peppol XML.
  */
-function enqueuePins(pins: { supplierInvoice?: boolean; expenseClaim?: boolean; bankTransaction?: boolean; inboxFile?: unknown[]; inboxXml?: unknown[] } = {}) {
+function enqueuePins(pins: { supplierInvoice?: boolean; expenseClaim?: boolean; bankTransaction?: boolean; inboxFile?: unknown[]; inboxXml?: unknown[]; signingRequest?: boolean } = {}) {
   enqueue({ data: pins.supplierInvoice ? [{ id: 'si-1' }] : [] })
   enqueue({ data: pins.expenseClaim ? [{ id: 'ec-1' }] : [] })
   enqueue({ data: pins.bankTransaction ? [{ id: 'tx-1' }] : [] })
   enqueue({ data: pins.inboxFile ?? [] })
   enqueue({ data: pins.inboxXml ?? [] })
+  enqueue({ data: pins.signingRequest ? [{ id: 'sr-1', status: 'open' }] : [] })
 }
 
 const LOOSE_DOC = {

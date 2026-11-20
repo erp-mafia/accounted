@@ -27,7 +27,7 @@ vi.mock('@/lib/auth/api-keys', () => ({
 import { shopifyExtension } from '../index'
 import { requireCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { testConnectionAndFetchShopInfo } from '../lib/api-client'
+import { testConnectionAndFetchShopInfo, ShopifyApiError, ShopifyConnectError } from '../lib/api-client'
 import { syncShopifyOrders } from '../lib/order-sync'
 import { decryptCredential } from '../lib/credentials'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -100,15 +100,6 @@ describe('shopify extension routes', () => {
   })
 
   describe('GET /status', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('GET', '/status').handler(
-        makeRequest('GET'),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('prefers the active connection and reports configured', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
@@ -131,25 +122,13 @@ describe('shopify extension routes', () => {
   })
 
   describe('POST /connect', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/connect').handler(
-        makeRequest('POST', {}),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('blocks anonymous (sandbox) users before any external call', async () => {
       const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({
-        data: { user: { id: 'user-1', is_anonymous: true } },
-        error: null,
-      })
+      // The dispatcher marks an anonymous (sandbox) session on the context.
       const res = await findRoute('POST', '/connect').handler(
         makeRequest('POST', {}),
-        makeContext(supabase),
+        { ...makeContext(supabase), isAnonymous: true },
       )
       expect(res.status).toBe(403)
       const body = await res.json()
@@ -219,6 +198,53 @@ describe('shopify extension routes', () => {
       expect(res.status).toBe(400)
     })
 
+    it('names the permission the store has not approved instead of the generic sentence (PH 161)', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] }) // no existing connection
+      vi.mocked(testConnectionAndFetchShopInfo).mockRejectedValue(
+        new ShopifyConnectError(
+          'orders_scope_not_granted',
+          new ShopifyApiError('Shopify GraphQL error: Access denied for orders field.', 403, 'ACCESS_DENIED'),
+          ['read_products'],
+        ),
+      )
+      const ctx = makeContext(supabase)
+      const res = await findRoute('POST', '/connect').handler(
+        makeRequest('POST', VALID_CONNECT_BODY),
+        ctx,
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toContain('har inte godkänt behörigheten read_orders')
+      expect(body.error).toContain('minbutik.myshopify.com')
+      expect(body.error).toContain('read_products')
+      // The cause and the granted scopes reach the log, so the next ticket
+      // is answered from the log line alone.
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        '[shopify] Credential probe failed',
+        expect.objectContaining({ kind: 'orders_scope_not_granted', grantedScopes: ['read_products'] }),
+      )
+      // Nothing is stored for a store that cannot be read.
+      expect(findCall('shopify_connections', 'insert')).toBeUndefined()
+    })
+
+    it('answers 502 when Shopify could not be reached', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] }) // no existing connection
+      vi.mocked(testConnectionAndFetchShopInfo).mockRejectedValue(
+        new ShopifyConnectError('unreachable', new ShopifyApiError('Shopify API 500', 500)),
+      )
+      const res = await findRoute('POST', '/connect').handler(
+        makeRequest('POST', VALID_CONNECT_BODY),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(502)
+    })
+
     it('verifies, encrypts and activates on the happy path', async () => {
       const { supabase, enqueue, findCall } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
@@ -259,15 +285,6 @@ describe('shopify extension routes', () => {
   })
 
   describe('POST /sync', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/sync').handler(
-        makeRequest('POST'),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('returns 404 without an active connection', async () => {
       const { supabase } = createQueuedMockSupabase()
@@ -283,7 +300,7 @@ describe('shopify extension routes', () => {
     it('runs the sync on the service client and returns the summary', async () => {
       const { supabase, findCall } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-      const service = serviceReturning({ data: { id: 'conn-1', status: 'active' } })
+      const service = serviceReturning({ data: [{ id: 'conn-1', status: 'active' }] })
       vi.mocked(syncShopifyOrders).mockResolvedValue({
         fetched: 3,
         refundsFetched: 1,
@@ -310,16 +327,6 @@ describe('shopify extension routes', () => {
   })
 
   describe('POST /backfill', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/backfill').handler(
-        makeRequest('POST', { from: '2026-01-01' }),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-      expect(syncShopifyOrders).not.toHaveBeenCalled()
-    })
 
     it('rejects a date it cannot honour with 400', async () => {
       const { supabase } = createQueuedMockSupabase()
@@ -348,7 +355,7 @@ describe('shopify extension routes', () => {
       const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
       const service = serviceReturning({
-        data: { id: 'conn-1', status: 'active', last_order_synced_at: '2026-09-14T00:00:00.000Z' },
+        data: [{ id: 'conn-1', status: 'active', last_order_synced_at: '2026-09-14T00:00:00.000Z' }],
       })
       enqueue({ data: [] }) // cursor update (session client)
       vi.mocked(syncShopifyOrders).mockResolvedValue({
@@ -382,15 +389,6 @@ describe('shopify extension routes', () => {
   })
 
   describe('POST /transaction-sync', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/transaction-sync').handler(
-        makeRequest('POST', { enabled: true }),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('rejects a non-boolean enabled with 400', async () => {
       const { supabase } = createQueuedMockSupabase()
@@ -418,15 +416,6 @@ describe('shopify extension routes', () => {
   })
 
   describe('DELETE /disconnect', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('DELETE', '/disconnect').handler(
-        makeRequest('DELETE', {}),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('returns 404 when no connection exists', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()

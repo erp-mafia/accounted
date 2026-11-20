@@ -15,6 +15,17 @@ async function seedCompanySettings(): Promise<string> {
 }
 
 describe('company_settings reminder day constraints', () => {
+  it('starts every new company with automatic reminders off (opt-in)', async () => {
+    const companyId = await seedCompanySettings()
+
+    const result = await getPool().query(
+      `SELECT send_invoice_reminders FROM public.company_settings WHERE company_id = $1`,
+      [companyId],
+    )
+
+    expect(result.rows[0].send_invoice_reminders).toBe(false)
+  })
+
   it('uses the legacy 15, 30, and 45 day defaults', async () => {
     const companyId = await seedCompanySettings()
 

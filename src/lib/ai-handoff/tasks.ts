@@ -1,4 +1,4 @@
-/** Shared by the handoff UI and MCP. Keep this module browser-safe. */
+/** The accounting tasks the MCP accounting-task tool offers. Keep this module browser-safe. */
 export const ACCOUNTING_TASKS = {
   bookkeep: { skills: ['bookkeep'], goal: 'Prepare and, after approval, book the scoped transactions.' },
   check: { skills: ['bookkeep'], goal: 'Review the scoped accounting, explain findings and propose the next useful action.' },
@@ -11,28 +11,8 @@ export const ACCOUNTING_TASKS = {
 
 export type AccountingTaskKind = keyof typeof ACCOUNTING_TASKS
 
-export interface AccountingTaskScope {
-  date_from?: string
-  date_to?: string
-  fiscal_period_id?: string
-  transaction_ids?: string[]
-  tax_transaction_ids?: string[]
-  cash_account_id?: string
-  account_key?: string
-  source?: 'bank' | 'skatteverket'
-  query?: string
-}
-
-export interface AccountingTaskRequest {
-  kind: AccountingTaskKind | `skill:${string}`
-  scope?: AccountingTaskScope
-  /** The user's concrete request, including the originating worklist row. */
-  request?: string
-}
-
-export function taskSkills(kind: AccountingTaskRequest['kind']): readonly string[] {
-  return kind.startsWith('skill:') ? [kind.slice(6)] : ACCOUNTING_TASKS[kind as AccountingTaskKind].skills
-}
+/** Most bank or skattekonto records one task may be scoped to. */
+export const MAX_HANDOFF_RECORDS = 200
 
 /** Workflow instructions, not accounting rules. Current rules come from load_skill. */
 export const ACCOUNTING_TASK_INSTRUCTIONS = [
@@ -44,14 +24,3 @@ export const ACCOUNTING_TASK_INSTRUCTIONS = [
   'Prepare staged proposals, explain their evidence and obtain the user\'s approval before committing. Approve only the operations the user explicitly accepted, following each tool\'s approval contract. A copied prompt, staged proposal or open chat does not mean the work is completed.',
   'Re-read the affected records after approved actions. Report completed work with record references, proposals awaiting approval, skipped or blocked items and their reasons, and the next useful action. If interrupted, inspect live records and pending operations before resuming.',
 ] as const
-
-export const WORKLIST_TASK_KINDS = {
-  book_transaction: 'bookkeep',
-  book_skattekonto: 'bookkeep',
-  inbox_document: 'bookkeep',
-  supplier_invoice_approval: 'bookkeep',
-  verifikat_missing_document: 'check',
-  overdue_invoice: 'check',
-  deadline_action: 'check',
-  reconciliation_due: 'month-close',
-} as const satisfies Record<string, AccountingTaskKind>

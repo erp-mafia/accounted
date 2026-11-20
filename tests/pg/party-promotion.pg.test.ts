@@ -75,6 +75,18 @@ describe('promote_parties / undo_party_promotions (pg)', () => {
     expect(k.rows[0]).toEqual({ customer_type: 'individual', org_number: null })
   })
 
+  it('makes a business card from a person party that holds an org number, never an individual one', async () => {
+    // A person party learns an org number when its card becomes a business
+    // (a sole trader, whose org number is the owner's personnummer) and its
+    // kind stays person. An individual card holds no org number
+    // (customers_individual_no_org_number), so the number decides the type.
+    const c = await seedCompany()
+    const soleTrader = await suggested(c.companyId, c.userId, 'Exempel Enskild Firma', { kind: 'person', org: '9001011239' })
+    expect(await promote(c.companyId, c.userId, [{ party_id: soleTrader, roles: ['customer'] }])).toEqual({ parties: 1, suppliers: 0, customers: 1 })
+    const k = await getPool().query<{ customer_type: string; org_number: string | null }>(`SELECT customer_type, org_number FROM public.customers WHERE party_id = $1`, [soleTrader])
+    expect(k.rows).toEqual([{ customer_type: 'swedish_business', org_number: '9001011239' }])
+  })
+
   it('undo archives the rows the promotion created and returns the party to the queue; a second undo is a no-op', async () => {
     const c = await seedCompany()
     const id = await suggested(c.companyId, c.userId, 'Loopia AB', { org: ORG })

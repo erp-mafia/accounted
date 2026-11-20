@@ -1,19 +1,21 @@
 import { suggestCategory } from '@/lib/tax/expense-warnings'
 import { getExpenseAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import {
+  namesCounterparty,
   normalizeCounterpartyName,
   formatCounterpartyName,
+  mappingPatternNamesCounterparty,
   toCounterpartyTemplateId,
 } from '@/lib/bookkeeping/counterparty-templates'
-import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
-import { proposalFromTemplate, type BookingProposal, type ProposalSource } from '@/lib/bookkeeping/proposal'
+import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
+import { proposalFromTemplate, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
+import { ruleReviewFlags } from './direct-booking'
 import type {
   Transaction,
   TransactionCategory,
   EntityType,
   MappingRule,
-  LinePatternEntry,
-  VatTreatment,
   CategorizationTemplate,
 } from '@/types'
 
@@ -63,25 +65,43 @@ export type MerchantHistoryMap = Map<string, Record<string, number>>
  * Callers pass `original_description ?? description`: the raw bank descriptor
  * is the stable anchor, `description` is a user-editable working title that
  * would sever the link on rename.
+ *
+ * A text that names no one has no key, as it has no learned counterpart
+ * (namesCounterparty, the rule findCounterpartyTemplatesBatch matches by):
+ * "INTERNET BET 1" is the bank's wording for an internet payment, whoever
+ * was paid, so one key pooled the tags of every such payment and offered
+ * them for the next one (crm#1920). Both the build and the lookup pass here.
  */
 function normalizeMerchantKey(
   merchantName: string | null | undefined,
   descriptor?: string | null,
 ): string {
   const raw = (merchantName ?? '').trim() || (descriptor ?? '').trim()
-  return raw ? normalizeCounterpartyName(raw) : ''
+  if (!raw || !namesCounterparty(raw)) return ''
+  const key = normalizeCounterpartyName(raw)
+  return key.length >= 2 ? key : ''
 }
 
+/**
+ * `is_booked` is the row's own answer to "does a live verifikat book it"
+ * (public.bank_row_anchors, see lib/transactions/unbooked.ts). A row that
+ * says no is not counted: its tag outlives a verifikat reversed from the
+ * ledger, and the learned counterpart forgets that booking too
+ * (unlearnCounterpartyTemplate), so the history said "booked before" about
+ * a booking that was taken back (crm#1920).
+ */
 export function buildMerchantHistory(
   rows: Array<{
     merchant_name: string | null
     description?: string | null
     original_description?: string | null
     category: string | null
+    is_booked?: boolean | null
   }>,
 ): MerchantHistoryMap {
   const map: MerchantHistoryMap = new Map()
   for (const row of rows) {
+    if (row.is_booked === false) continue
     const key = normalizeMerchantKey(
       row.merchant_name,
       row.original_description ?? row.description,
@@ -113,11 +133,17 @@ export function merchantHistoryFor(
  * every transaction, which agents correctly read as no signal; an empty
  * result is the honest answer.
  */
-/** Whether a mapping rule's pattern (merchant, description, or MCC) hits this transaction. */
+/**
+ * Whether a mapping rule's pattern (merchant, description, or MCC) hits this
+ * transaction. A rule on a merchant text that names no one ("INSÄTTNING"),
+ * stored before saveUserMappingRule refused to learn one, hits nothing: the
+ * mapping engine's matchesRule skips it the same way (crm#1707).
+ */
 export function mappingRuleMatches(
   rule: Pick<MappingRule, 'merchant_pattern' | 'description_pattern' | 'mcc_codes'>,
   transaction: Pick<Transaction, 'merchant_name' | 'description' | 'mcc_code'>,
 ): boolean {
+  if (rule.merchant_pattern && !mappingPatternNamesCounterparty(rule.merchant_pattern)) return false
   if (rule.merchant_pattern && transaction.merchant_name) {
     if (new RegExp(rule.merchant_pattern, 'i').test(transaction.merchant_name)) return true
   }
@@ -191,7 +217,13 @@ export function getSuggestedCategories(
 
   // 3. Counterparty history: categories this merchant was booked as before.
   // Confidence scales with occurrences and the reason carries provenance.
-  const historyEntries = Object.entries(merchantHistory)
+  // A payment to Skatteverket books on the skattekonto by rule
+  // (leadWithSkattekonto in ./propose.ts), never by habit: no history is
+  // offered for it, as no learned counterpart is (crm#1275). The catalog
+  // template that books it tags the row expense_other, which read back here
+  // as 6991 (crm#1920).
+  const history: Record<string, number> = isSkatteverketPayment(transaction) ? {} : merchantHistory
+  const historyEntries = Object.entries(history)
     .sort(([, a], [, b]) => b - a)
     .filter(([cat]) => !seen.has(cat))
 
@@ -268,7 +300,6 @@ function accountToCategory(account: string, amount: number): string | null {
  * matched; 'counterparty' is the learned per-counterpart rule
  * (categorization_templates); 'assistant' is the model's read.
  */
-export type SuggestionSource = ProposalSource
 export type SuggestedTemplate = BookingProposal
 
 /**
@@ -383,10 +414,14 @@ export async function getSuggestedTemplates(
 /**
  * The suggestion a row wears as its chip and books from its Bokför: the
  * first one that matched the row itself. A template merely used lately is
- * a picker convenience, not a recommendation.
+ * a picker convenience, not a recommendation. Neither is a weak counterpart
+ * match the assistant's read booked differently: the row then recommends
+ * nothing, and what follows the match is not moved up in its place, so the
+ * read can take a suggestion down but never put itself on the row.
  */
 export function rowProposal(list: SuggestedTemplate[] | undefined): SuggestedTemplate | undefined {
-  return list?.find((s) => s.source !== 'recent')
+  const first = list?.find((s) => s.source !== 'recent')
+  return first?.contested ? undefined : first
 }
 
 /** The catalog template that books to this account in this direction, if one does. */
@@ -399,16 +434,38 @@ function templateForAccount(account: string, direction: 'expense' | 'income', en
   )
 }
 
+/**
+ * `directionMismatch` (contradictsLearnedDirection, decided by the caller on
+ * the stored template, as the booking decides it): the row's money moves
+ * against the template's learned direction, likely a refund. The legs are
+ * shown mirrored, as buildMappingResultFromCounterpartyTemplate books them,
+ * and it never books without a review (crm#1598).
+ */
 export function buildCounterpartySuggestion(
   template: CategorizationTemplate,
   confidence: number,
+  opts: { directionMismatch?: boolean } = {},
 ): SuggestedTemplate {
+  const proposal = counterpartyProposal(template, confidence)
+  if (!opts.directionMismatch) return proposal
+  return {
+    ...proposal,
+    debit_account: proposal.credit_account,
+    credit_account: proposal.debit_account,
+    description_sv: `${template.occurrence_count} tidigare bokföringar åt andra hållet: trolig återbetalning`,
+    requires_review: true,
+    direction_mismatch: true,
+  }
+}
+
+function counterpartyProposal(template: CategorizationTemplate, confidence: number): SuggestedTemplate {
   return {
     template_id: toCounterpartyTemplateId(template.id),
     source: 'counterparty',
     booking: { kind: 'counterparty', counterparty_template_id: template.id },
     seen_count: template.occurrence_count,
     rule_mode: template.mode,
+    ...ruleReviewFlags(template),
     name_sv: formatCounterpartyName(template.counterparty_name),
     name_en: formatCounterpartyName(template.counterparty_name),
     group: 'counterparty',

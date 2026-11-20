@@ -1,10 +1,10 @@
 /**
- * Operator tool for Peppol access (service role; .env.local points at prod).
+ * Operator tool for Peppol access (service role).
  *
  *   npx tsx --env-file=.env.local scripts/peppol/access.ts list
- *       Open requests first, then every company with a row (status, cap, sends used).
- *   npx tsx --env-file=.env.local scripts/peppol/access.ts enable <company_id|orgnr> [--max-sends N] [--receive] [--by you@accounted.se] [--note "..."]
- *       Grants sending (capped at N transmissions, omit for no cap) and, with
+ *       Open requests first, then every company with a row (status, monthly cap, sends this month).
+ *   npx tsx --env-file=.env.local scripts/peppol/access.ts enable <company_id|orgnr> [--max-sends N] [--receive] [--by you@example.com] [--note "..."]
+ *       Grants sending (capped at N transmissions per calendar month, omit for no cap) and, with
  *       --receive, the right to publish the company's identifier (one contracted
  *       tenant slot). Re-running adjusts the same row.
  *   npx tsx --env-file=.env.local scripts/peppol/access.ts disable <company_id|orgnr> [--note "..."]
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
       for (const row of rows) {
         const sends = row.status === 'enabled' ? await countPeppolSends(service, row.company_id) : 0
         console.log(
-          `${row.status.padEnd(9)} ${await describe(row.company_id)}  sends ${sends}/${row.max_sends ?? '∞'}  receive=${row.receive_enabled}`
+          `${row.status.padEnd(9)} ${await describe(row.company_id)}  sends this month ${sends}/${row.max_sends ?? '∞'}  receive=${row.receive_enabled}`
           + (row.requested_at ? `  requested ${row.requested_at}` : '')
           + (row.request_note ? `\n           note: ${row.request_note}` : ''),
         )
@@ -86,7 +86,7 @@ async function main(): Promise<void> {
       const companyId = await resolveCompanyId(target)
       console.log(await describe(companyId))
       console.log(JSON.stringify(await getPeppolAccess(service, companyId), null, 2))
-      console.log('sends used:', await countPeppolSends(service, companyId))
+      console.log('sends this month:', await countPeppolSends(service, companyId))
       return
     }
     case 'enable': {

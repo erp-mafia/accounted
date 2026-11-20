@@ -1,9 +1,16 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Upload, FileText, AlertCircle, HelpCircle, Loader2 } from 'lucide-react'
+import { FileDropzone } from '@/components/ui/file-dropzone'
+import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  ArrowUpTrayIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 
 interface SkattekontoFileUploadStepProps {
   onFileSelect: (file: File) => void
@@ -21,7 +28,6 @@ export default function SkattekontoFileUploadStep({
   errorTitle,
 }: SkattekontoFileUploadStepProps) {
   const t = useTranslations('import')
-  const [isDragging, setIsDragging] = useState(false)
 
   const acceptFile = useCallback(
     (file: File | undefined) => {
@@ -34,73 +40,43 @@ export default function SkattekontoFileUploadStep({
     [onFileSelect],
   )
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      setIsDragging(false)
-      acceptFile(e.dataTransfer.files[0])
-    },
-    [acceptFile],
-  )
-
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Upload className="h-5 w-5" />
+            <ArrowUpTrayIcon className="h-5 w-5" />
             {t('skattekonto_upload_title')}
+            {/* Where Skatteverket keeps the file: the description says what
+                to download, the clicks live behind the "?". */}
+            <HelpPopover className="shrink-0">
+              <p>{t('skattekonto_howto_steps')}</p>
+              <p className="mt-2">{t('skattekonto_howto_note')}</p>
+            </HelpPopover>
           </CardTitle>
           <CardDescription>{t('skattekonto_upload_description')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div
-            role="button"
-            tabIndex={isLoading ? -1 : 0}
-            aria-label={t('skattekonto_tap_select')}
-            className={`
-              relative border-2 border-dashed rounded-lg p-8 text-center transition-colors
-              ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
-              ${error ? 'border-destructive bg-destructive/5' : ''}
-              ${isLoading ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:border-primary/50'}
-            `}
-            onDragOver={(e) => {
-              e.preventDefault()
-              setIsDragging(true)
-            }}
-            onDragLeave={(e) => {
-              e.preventDefault()
-              setIsDragging(false)
-            }}
-            onDrop={handleDrop}
-            onClick={() => document.getElementById('skattekonto-file-input')?.click()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                document.getElementById('skattekonto-file-input')?.click()
-              }
-            }}
+          <FileDropzone
+            onFile={acceptFile}
+            accept={ACCEPTED_EXTENSIONS.join(',')}
+            disabled={isLoading}
+            invalid={!!error}
+            label={t('skattekonto_tap_select')}
+            className="relative p-8 text-center"
           >
-            <input
-              id="skattekonto-file-input"
-              type="file"
-              accept={ACCEPTED_EXTENSIONS.join(',')}
-              className="hidden"
-              onChange={(e) => acceptFile(e.target.files?.[0])}
-              disabled={isLoading}
-            />
 
             {isLoading ? (
               <div className="space-y-4">
-                <FileText className="mx-auto h-12 w-12 text-muted-foreground" />
-                <p className="flex items-center justify-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                <DocumentTextIcon className="mx-auto h-12 w-12 text-muted-foreground" />
+                <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                  <SpinnerIcon className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                   {t('skattekonto_analyzing')}
-                </p>
+                </div>
               </div>
             ) : (
               <div className="space-y-4">
-                <Upload className="mx-auto h-12 w-12 text-muted-foreground" />
+                <ArrowUpTrayIcon className="mx-auto h-12 w-12 text-muted-foreground" />
                 <div>
                   <p className="font-medium hidden sm:block">{t('skattekonto_drop_here')}</p>
                   <p className="font-medium sm:hidden">{t('skattekonto_tap_select')}</p>
@@ -108,11 +84,11 @@ export default function SkattekontoFileUploadStep({
                 </div>
               </div>
             )}
-          </div>
+          </FileDropzone>
 
           {error && (
-            <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
-              <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+            <div className="bg-destructive/8 p-4 rounded-lg flex gap-3">
+              <ExclamationCircleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <div>
                 <p className="font-medium text-destructive">
                   {errorTitle || t('skattekonto_error_title')}
@@ -121,22 +97,6 @@ export default function SkattekontoFileUploadStep({
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <HelpCircle className="h-4 w-4" />
-            {t('skattekonto_howto_title')}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm space-y-3">
-          <div>
-            <p className="font-medium">Skatteverket</p>
-            <p className="text-muted-foreground">{t('skattekonto_howto_steps')}</p>
-          </div>
-          <p className="text-muted-foreground">{t('skattekonto_howto_note')}</p>
         </CardContent>
       </Card>
     </div>

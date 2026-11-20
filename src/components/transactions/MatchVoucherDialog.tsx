@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import {
   Dialog,
@@ -20,9 +21,12 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { buildSplitSelection, proposeSplitSelection } from '@/lib/reconciliation/split-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
+import { ArrowDownRightIcon, ArrowUpRightIcon } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
+import { addDaysIso } from '@/lib/dates/iso'
 
 interface MatchVoucherDialogProps {
   open: boolean
@@ -32,6 +36,14 @@ interface MatchVoucherDialogProps {
    *  verifikat; voucherLabel names every picked one, e.g. "A-42" or, for a
    *  split, "A-42, A-43". */
   onLinked: (transactionId: string, journalEntryId: string, voucherLabel: string) => void
+  /**
+   * A verifikat the caller already knows pays this row (a booked salary run's
+   * net pay, lib/transactions/salary-run-payouts.ts): picked when the list
+   * holds it unmatched, before any ranking. The person still confirms.
+   */
+  preferredJournalEntryId?: string | null
+  /** Said under the list while the preferred verifikat is the one picked. */
+  preferredNote?: string | null
 }
 
 // ±30 days around the transaction date: wide enough to catch a salary or
@@ -39,20 +51,16 @@ interface MatchVoucherDialogProps {
 // keep the candidate list short. "Visa alla" drops the window entirely.
 const WINDOW_DAYS = 30
 
-function shiftDate(isoDate: string, deltaDays: number): string {
-  const d = new Date(isoDate)
-  if (Number.isNaN(d.getTime())) return isoDate
-  d.setDate(d.getDate() + deltaDays)
-  return d.toISOString().slice(0, 10)
-}
-
 export function MatchVoucherDialog({
   open,
   onOpenChange,
   transaction,
   onLinked,
+  preferredJournalEntryId = null,
+  preferredNote = null,
 }: MatchVoucherDialogProps) {
   const { toast } = useToast()
+  const tCommon = useTranslations('common')
   const [glLines, setGlLines] = useState<UnlinkedGLLine[]>([])
   // Picked verifikat, in pick order. One = the plain link (1:1, or N:1 behind
   // "visa matchade"); several = the split (1:N, #1553): one bank row that
@@ -66,6 +74,10 @@ export function MatchVoucherDialog({
   const [accountNumber, setAccountNumber] = useState('1930')
   const [accountFallback, setAccountFallback] = useState(false)
   const [loading, setLoading] = useState(false)
+  // The candidates could not be read: said in place of them (never "no
+  // vouchers in the period"), with "Försök igen".
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [wideRange, setWideRange] = useState(false)
   // Opt-in: also surface vouchers already matched to another bank transaction,
@@ -95,13 +107,19 @@ export function MatchVoucherDialog({
         params.set('transaction_id', tx.id)
         if (matched) params.set('include_matched', 'true')
         if (!wide) {
-          params.set('date_from', shiftDate(tx.date, -WINDOW_DAYS))
-          params.set('date_to', shiftDate(tx.date, WINDOW_DAYS))
+          params.set('date_from', addDaysIso(tx.date, -WINDOW_DAYS))
+          params.set('date_to', addDaysIso(tx.date, WINDOW_DAYS))
         }
 
         const res = await fetch(`/api/reconciliation/bank/unmatched-entries?${params}`)
-        const json = await res.json()
+        const json = await res.json().catch(() => null)
         if (signal.cancelled) return
+        if (!res.ok || !json) {
+          setGlLines([])
+          setLoadFailed(true)
+          return
+        }
+        setLoadFailed(false)
         const lines = (json.data ?? []) as UnlinkedGLLine[]
         setGlLines(lines)
         // Pre-select a strong auto-match (exact/reference/date-range) so the
@@ -115,19 +133,29 @@ export function MatchVoucherDialog({
         // smallest set of unmatched verifikat that sums to the row to the
         // öre (a Bankgirot day-sum against the day's inbetalningar). The
         // user still confirms; the button names how many.
+        // A verifikat the caller knows pays the row comes before the ranking.
+        const preferred = preferredJournalEntryId
+          ? lines.find((l) => l.journal_entry_id === preferredJournalEntryId && !(l.linked_transaction_count ?? 0))
+          : undefined
         const top = lines[0]
-        const strong =
-          top && (top.confidence ?? 0) >= 0.85 && !(top.linked_transaction_count ?? 0)
+        const strong = preferred
+          ? preferred.journal_entry_id
+          : top && (top.confidence ?? 0) >= 0.85 && !(top.linked_transaction_count ?? 0)
             ? top.journal_entry_id
             : null
         const proposed = strong ? null : proposeSplitSelection(lines, tx.amount, tx.date)
         setProposal(proposed)
         setSelected((prev) => (prev.length > 0 ? prev : strong ? [strong] : (proposed ?? [])))
+      } catch {
+        if (!signal.cancelled) {
+          setGlLines([])
+          setLoadFailed(true)
+        }
       } finally {
         if (!signal.cancelled) setLoading(false)
       }
     },
-    [cashAccounts],
+    [cashAccounts, preferredJournalEntryId],
   )
 
   // (Re)load whenever the dialog opens for a transaction, the range widens, or
@@ -137,7 +165,7 @@ export function MatchVoucherDialog({
     const signal = { cancelled: false }
     void loadCandidates(transaction, wideRange, includeMatched, signal)
     return () => { signal.cancelled = true }
-  }, [open, transaction, wideRange, includeMatched, loadCandidates])
+  }, [open, transaction, wideRange, includeMatched, loadCandidates, attempt])
 
   // Reset transient state when the dialog closes so the next open starts clean.
   useEffect(() => {
@@ -228,7 +256,7 @@ export function MatchVoucherDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
@@ -256,12 +284,12 @@ export function MatchVoucherDialog({
         </DialogHeader>
 
         {/* Transaction summary */}
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-sm">
+        <div className="flex items-center gap-3 rounded-lg bg-secondary/30 px-3 py-2.5 text-sm bg-control shadow-raised">
           <span
             className={isIncome ? 'text-success' : 'text-foreground/60'}
             aria-hidden
           >
-            {isIncome ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+            {isIncome ? <ArrowUpRightIcon className="h-4 w-4" /> : <ArrowDownRightIcon className="h-4 w-4" />}
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate font-medium">{transaction.description}</p>
@@ -276,33 +304,40 @@ export function MatchVoucherDialog({
         {accountFallback && (
           <p className="text-xs text-muted-foreground">
             Avstämning mot 1930. Hör transaktionen till ett annat bankkonto? Stäm av
-            det under Rapporter → Bankavstämning.
+            det under Konton.
           </p>
         )}
 
         {/* Candidate picker */}
         <div className="space-y-2">
           {loading ? (
-            <div className="flex items-center justify-center gap-2 rounded-lg border border-border py-6 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Söker verifikationer…
-            </div>
+            <LateReveal aria-label={tCommon('loading')}>
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="flex h-9 items-center gap-4 border-b-hairline">
+                  <Skeleton className="h-3.5 w-16" />
+                  <Skeleton className="h-3.5 w-48" />
+                  <Skeleton className="ml-auto h-3.5 w-20" />
+                </div>
+              ))}
+            </LateReveal>
+          ) : loadFailed ? (
+            <LoadError title="Kunde inte hämta verifikationerna" onRetry={() => setAttempt((n) => n + 1)} />
           ) : glLines.length === 0 ? (
-            <div className="rounded-lg border border-border px-3 py-6 text-center text-sm text-muted-foreground">
-              <p>
-                {includeMatched
-                  ? `Inga verifikationer på ${accountNumber} i perioden.`
-                  : `Inga omatchade verifikationer på ${accountNumber} i perioden.`}
-              </p>
-            </div>
+            <p className="py-3 text-[13px] text-muted-foreground">
+              {includeMatched
+                ? `Inga verifikationer på ${accountNumber} i perioden.`
+                : `Inga omatchade verifikationer på ${accountNumber} i perioden.`}
+            </p>
           ) : (
             <>
               <MatchVerifikationPicker
                 glLines={glLines}
                 selectedIds={selected}
                 onToggle={toggleVoucher}
-                inline
               />
+              {preferredNote && selectedLine && selectedLine.journal_entry_id === preferredJournalEntryId && (
+                <p className="text-xs text-muted-foreground">{preferredNote}</p>
+              )}
               {(selectedLine?.linked_transaction_count ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">
                   Redan matchad mot {selectedLine?.linked_transaction_count}{' '}

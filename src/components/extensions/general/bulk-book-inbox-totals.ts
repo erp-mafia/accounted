@@ -41,6 +41,7 @@
  * per currency, plus a note that the booking follows the bank amount.
  */
 import type { InvoiceExtractionResult } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /** The subset of an inbox item this module needs. */
 export interface UnderlagTotalsItem {
@@ -51,10 +52,6 @@ export interface UnderlagCurrencyTotal {
   /** ISO 4217 code, uppercased. */
   currency: string
   total: number
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
 }
 
 /**
@@ -98,7 +95,7 @@ export function summarizeUnderlagTotals(items: UnderlagTotalsItem[]): UnderlagCu
     const total = item.extracted_data?.totals?.total
     if (total == null || !Number.isFinite(total)) continue
     const currency = normalizeUnderlagCurrency(item.extracted_data?.invoice?.currency)
-    byCurrency.set(currency, round2((byCurrency.get(currency) ?? 0) + total))
+    byCurrency.set(currency, roundOre((byCurrency.get(currency) ?? 0) + total))
   }
   return Array.from(byCurrency.entries())
     .map(([currency, total]) => ({ currency, total }))

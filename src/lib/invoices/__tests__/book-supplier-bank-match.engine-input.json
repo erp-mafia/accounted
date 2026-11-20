@@ -1,0 +1,536 @@
+[
+  {
+    "name": "accrual: a SEK row pays a registered invoice in full",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-28",
+          "description": "Utbetalning leverantörsfaktura F-4000, Kontorsbolaget AB (ankomstnr 80)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0001",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-28",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning från bank"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-0",
+      "settledAmount": 1500
+    }
+  },
+  {
+    "name": "accrual: a whole-krona SEK row settles an öre invoice (3740)",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-29",
+          "description": "Utbetalning leverantörsfaktura F-4001, Kontorsbolaget AB (ankomstnr 81)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0002",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-29",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1499.6,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning från bank"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0.4,
+              "credit_amount": 0,
+              "line_description": "Öresavrundning"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-1",
+      "settledAmount": 1499.6
+    }
+  },
+  {
+    "name": "accrual: a SEK row paying more than owed books the excess on 6570",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-30",
+          "description": "Utbetalning leverantörsfaktura F-4002, Kontorsbolaget AB (ankomstnr 82)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0003",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-30",
+              "amount": -1525,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1525,
+              "line_description": "Utbetalning från bank"
+            },
+            {
+              "account_number": "6570",
+              "debit_amount": 25,
+              "credit_amount": 0,
+              "line_description": "Bankavgift"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-2",
+      "settledAmount": 1500
+    }
+  },
+  {
+    "name": "accrual: an EUR row clears at the booked rate with a kursdifferens",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-01",
+          "description": "Utbetalning leverantörsfaktura F-4003 (ankomstnr 83)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0004",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-01",
+              "amount": -200,
+              "currency": "EUR"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-4003 (ankomstnr 83)",
+              "currency": "EUR",
+              "amount_in_currency": 200,
+              "exchange_rate": 11.5
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 2311.4,
+              "line_description": "Utbetalning leverantörsfaktura F-4003 (ankomstnr 83)"
+            },
+            {
+              "account_number": "7960",
+              "debit_amount": 11.4,
+              "credit_amount": 0,
+              "line_description": "Valutakursförlust"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-3",
+      "settledAmount": 200
+    }
+  },
+  {
+    "name": "accrual: a partial SEK payment",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-02",
+          "description": "Utbetalning leverantörsfaktura F-4004, Kontorsbolaget AB (ankomstnr 84)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0005",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-02",
+              "amount": -500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 500,
+              "line_description": "Utbetalning från bank"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-4",
+      "settledAmount": 500
+    }
+  },
+  {
+    "name": "cash: a never-booked domestic invoice settled from the row",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-03",
+          "description": "Kontantbetalning leverantörsfaktura F-4005",
+          "source_type": "supplier_invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0006",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-03",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-4005"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-4005"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Kontantbetalning leverantörsfaktura F-4005"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Kontantbetalning leverantörsfaktura F-4005"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-5",
+      "settledAmount": 1500
+    }
+  },
+  {
+    "name": "custom lines: the person's own rows on a registered invoice",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-04",
+          "description": "Utbetalning leverantörsfaktura F-4006, Kontorsbolaget AB",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0007",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-04",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Egen rad"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-6",
+      "settledAmount": 1500
+    }
+  },
+  {
+    "name": "custom lines: the person's own kontantmetoden rows",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-05",
+          "description": "Utbetalning leverantörsfaktura F-4007, Kontorsbolaget AB",
+          "source_type": "supplier_invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000008",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0008",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-05",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1200,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-7",
+      "settledAmount": 1500
+    }
+  },
+  {
+    "name": "custom lines that do not balance are refused before the engine",
+    "calls": [],
+    "cancels": [],
+    "outcome": {
+      "ok": false,
+      "code": "INVOICE_PAID_LINES_UNBALANCED"
+    }
+  },
+  {
+    "name": "a concurrent settlement wins: the payment verifikat is cancelled",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-07",
+          "description": "Utbetalning leverantörsfaktura F-4009, Kontorsbolaget AB (ankomstnr 89)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000010",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0010",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-07",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning från bank"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-9",
+        {
+          "gapExplanation": "Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd"
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": false,
+      "code": "MATCH_SI_NOT_OPEN"
+    }
+  },
+  {
+    "name": "the debit of a signed bank payment order (auto_matched, rule basis)",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-08",
+          "description": "Utbetalning leverantörsfaktura F-4010, Kontorsbolaget AB (ankomstnr 90)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000011",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0011",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-08",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning från bank"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "ok": true,
+      "journalEntryId": "je-10",
+      "settledAmount": 1500
+    }
+  }
+]

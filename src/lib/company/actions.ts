@@ -8,8 +8,10 @@ import {
   shouldArmBooksGate,
 } from '@/lib/onboarding/books-gate'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
+import { httpOnlyCookieOptions } from '@/lib/supabase/cookie-options'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
+import { profilesApplyOnSignup } from '@/lib/modules/signup-profile'
 import { isEntityType, isEntityTypeCreatable } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
@@ -84,7 +86,7 @@ export async function createCompanyFromOnboarding(params: {
   } catch (err) {
     // Defensive top-level catch: a thrown error escapes to the client as
     // an opaque Next.js server-action exception with no message in dev
-    // and a redacted message in prod. Logging the full error here gives
+    // and a redacted message in production. Logging the full error here gives
     // us a server-side trace and returns a localized fallback to the UI.
     console.error('[createCompanyFromOnboarding] unexpected error', err)
     return { error: getErrorMessage(err, { context: 'settings' }) }
@@ -215,6 +217,11 @@ async function createCompanyFromOnboardingImpl(params: {
       settings: params.settings,
       fiscalPeriod: params.fiscalPeriod,
       ticLookup: params.ticLookup,
+      // Public signup (any team but a byrå's) takes the profile derived from
+      // the legal form only while PROFILES_APPLY_ON_SIGNUP is on; until then
+      // it is recorded as a suggestion and the company keeps Standard. A
+      // byrå's client company picks its profile in the byrå's invite form.
+      applyDerivedProfile: (teamRow as { kind?: string } | null)?.kind !== 'byra' && profilesApplyOnSignup(),
     },
     createCompanyRow,
     rollbackClient,
@@ -237,13 +244,11 @@ async function createCompanyFromOnboardingImpl(params: {
   if (armBooksGate) {
     try {
       const cookieStore = await cookies()
-      cookieStore.set(BOOKS_GATE_COOKIE, newCompanyId, {
-        path: '/',
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: BOOKS_GATE_MAX_AGE_SECONDS,
-      })
+      cookieStore.set(
+        BOOKS_GATE_COOKIE,
+        newCompanyId,
+        httpOnlyCookieOptions(BOOKS_GATE_MAX_AGE_SECONDS),
+      )
     } catch (err) {
       console.error('[createCompanyFromOnboarding] books gate cookie failed', err)
     }

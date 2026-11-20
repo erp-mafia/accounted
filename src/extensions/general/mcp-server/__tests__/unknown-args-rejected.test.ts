@@ -70,6 +70,18 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   }
 })
 
+const { getMeasureSpy } = vi.hoisted(() => ({ getMeasureSpy: vi.fn() }))
+vi.mock('@/lib/measures', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/measures')>()
+  return {
+    ...actual,
+    getMeasure: (...args: Parameters<typeof actual.getMeasure>) => {
+      getMeasureSpy(args[1])
+      return actual.getMeasure(...args)
+    },
+  }
+})
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
@@ -189,6 +201,37 @@ describe('MCP tools/call unknown-parameter guard', () => {
     expect(error.message_en).toContain('Did you mean: "as_of" -> "as_of_date"?')
   })
 
+  // Replays the 31 trial balance calls of 2026-10-30..11-12
+  // that sent dates or an account range: the parameter list alone did not
+  // say that the question belongs to the general ledger.
+  it.each([
+    [{ date_to: '2026-09-30' }],
+    [{ from_date: '2026-01-01', to_date: '2026-09-30' }],
+    [{ as_of: '2026-09-30' }],
+    [{ account_from: '1910', account_to: '1999' }],
+  ])('get_trial_balance with %j names the period source and the tool that takes ranges', async (args) => {
+    const error = await expectValidationError('gnubok_get_trial_balance', args)
+    expect(error.message_en).toContain('Valid parameters: period_id, dimensions.')
+    expect(error.message_en).toContain('period_id from gnubok_list_fiscal_periods')
+    expect(error.message_en).toContain('gnubok_get_general_ledger takes from_date, to_date, account_from and account_to')
+  })
+
+  it('a tool without a note keeps the plain unknown-parameter refusal', async () => {
+    const error = await expectValidationError('gnubok_get_balance_sheet', { zz_probe: 1 })
+    expect(error.message_en).not.toContain('gnubok_get_general_ledger')
+  })
+
+  // Replays `measure` (33 calls, 2026-10-30..11-12): the call
+  // runs as measure_id instead of being refused.
+  it('get_measure reads measure as measure_id and runs', async () => {
+    const response = await handleMcpRequest(mcpToolCall('gnubok_get_measure', { measure: 'bank_balance' }))
+    const { payload } = await parsedToolResult(response)
+    const error = payload.error as ToolError | undefined
+    expect(error?.message_en ?? '').not.toContain('Unknown parameter')
+    // The measure engine itself was asked for bank_balance: the call ran.
+    expect(getMeasureSpy).toHaveBeenCalledWith('bank_balance')
+  })
+
   // Prod telemetry 2026-09-23..28: these were rejected with no hint at all.
   // Still rejected: a hint never runs the call under the name it suggests.
   it('shows the exact record_ref for a document_id holding a uuid, and still refuses the call', async () => {
@@ -201,13 +244,30 @@ describe('MCP tools/call unknown-parameter guard', () => {
     expect(error.message_en).toContain('Unknown keys are rejected, not ignored.')
   })
 
+  // 2026-10 session autopsy: {type, id} (25 calls) and {record_type, id} (4)
+  // on gnubok_get_record. The pair is read as the record_ref and the call
+  // runs: here it reaches the document lookup, which this client answers
+  // with no row.
+  it('reads type and id on gnubok_get_record as the record_ref and runs the lookup', async () => {
+    const uuid = '0b8f6a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b'
+    const { isError, payload } = await parsedToolResult(
+      await handleMcpRequest(mcpToolCall('gnubok_get_record', { type: 'document', id: uuid })),
+    )
+    expect(isError).toBe(true)
+    expect(payload.error).toMatchObject({
+      code: 'NOT_FOUND',
+      message_en: expect.stringMatching(new RegExp(`^Record not found: no document with id ${uuid} in this company\\.`)),
+    })
+    expect(calls('eq')).toContainEqual(['id', uuid])
+  })
+
   it('points an id-shaped key at the one required identifier (structural fallback)', async () => {
     const error = await expectValidationError('gnubok_get_inbox_item', { id: '0b8f6a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b' })
     expect(error.message_en).toContain('Did you mean: "id" -> "inbox_item_id"?')
   })
 
   it('names since for a lower bound and nothing for an upper bound on a since-only list', async () => {
-    const error = await expectValidationError('gnubok_list_verifikat_without_documents', {
+    const error = await expectValidationError('gnubok_receipt_hunt_worklist', {
       date_from: '2026-01-01',
       until: '2026-06-30',
     })
@@ -216,8 +276,16 @@ describe('MCP tools/call unknown-parameter guard', () => {
     expect(error.message_en).not.toContain('"until" ->')
   })
 
-  it('names slug for a skill name on gnubok_load_skill', async () => {
-    const error = await expectValidationError('gnubok_load_skill', { name: 'vat-declaration' })
+  // 2026-10 session autopsy: name (10 calls) and skill (6) for slug.
+  it('reads a skill name as slug on gnubok_load_skill and loads that skill', async () => {
+    const response = await handleMcpRequest(mcpToolCall('gnubok_load_skill', { name: 'month-end-close' }))
+    const { isError, payload } = await parsedToolResult(response)
+    expect(isError).toBe(false)
+    expect(payload.slug).toBe('month-end-close')
+  })
+
+  it('never reads a private own/ skill through the alias: the agent:read check is made on slug', async () => {
+    const error = await expectValidationError('gnubok_load_skill', { name: 'own/11111111-2222-4333-8444-555555555555' })
     expect(error.message_en).toContain('Did you mean: "name" -> "slug"?')
   })
 

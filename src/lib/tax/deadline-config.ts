@@ -4,8 +4,10 @@
  */
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
-import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
-import { isBankingDay } from './swedish-holidays'
+import { filesIncomeReturn, fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
+import { nextFiscalYearRange } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { getNextBankingDay, isBankingDay } from './swedish-holidays'
+import { helarsmomsHasEuTrade } from '@/lib/reports/eu-trade'
 
 // Condition function type for determining if a deadline applies
 export type DeadlineCondition = (settings: CompanySettingsForDeadlines) => boolean
@@ -53,6 +55,91 @@ export interface CompanySettingsForDeadlines {
   rot_rut_payment_years?: number[]
   /** Derived from active tax_assessment_notices rows by the generator. */
   tax_assessment_notices?: TaxAssessmentNoticeForDeadline[]
+  /**
+   * Derived, NOT a company_settings column: the company's fiscal_periods.
+   * Where they exist they decide which räkenskapsår there are, and the
+   * years not created yet chain from them (see fiscalYearsEndingIn).
+   * Undefined = not resolved (the generator resolves it); an empty list leaves
+   * the schedule to fiscal_year_start_month alone.
+   */
+  fiscal_years?: FiscalYearForDeadlines[]
+  /**
+   * Derived, NOT a company_settings column: the earliest employment_start
+   * (YYYY-MM-DD) among the company's active employees with a monthly salary
+   * or hourly rate set; null when there is none. Employer evidence for the
+   * AGI rows while neither employer flag is attested (isAgiEmployer).
+   * Undefined = not resolved (the generator resolves it).
+   */
+  salaried_employee_since?: string | null
+  /**
+   * Derived, NOT a company_settings column: the helårsmoms periods the
+   * nightly job saw trade with other EU countries in, while the company has
+   * not said so (vat_has_eu_trade), as vat_eu_trade_fiscal_years records them:
+   * keyed by the month the period ends (YYYY-MM, fiscalYearEndKey of
+   * helarsmomsPeriodOf). Their helårsmoms takes the earlier EU-trade date
+   * (helarsmomsHasEuTrade). Undefined = not resolved (the generator resolves
+   * it, lib/tax/fiscal-year-eu-trade.ts).
+   */
+  eu_trade_fiscal_year_ends?: readonly string[]
+  /**
+   * Derived, NOT a company_settings column: the helårsmoms periods whose
+   * EU-trade date has passed, keyed like eu_trade_fiscal_year_ends, with the
+   * EU-trade answer their open row was placed by. Once the earlier date has
+   * passed, no later answer moves the row (the generator writes no row in the
+   * past): a row on that date stays the period's row, a row still ahead stays
+   * on the later date. Read from the open rows by the generator and the
+   * repair's detection alike (helarsmomsSettledByOpenRows). Undefined: none.
+   */
+  helarsmoms_settled?: Readonly<Record<string, boolean>>
+}
+
+/**
+ * Whether the company gets the monthly AGI rows (and the storföretag payment
+ * row). An attested employer_registered decides in both directions: a
+ * registered employer files every month (SFL 26 kap. 3 §) and an explicit
+ * false is the user's own answer. Never attested, pays_salaries decides, and
+ * without it an active employee with a salary set does (crm#1790): the flags
+ * only follow the ledger once a salary run is booked (20260904191000), so a
+ * company that set up its first employee got no AGI reminder until then.
+ */
+export function isAgiEmployer(settings: CompanySettingsForDeadlines): boolean {
+  if (settings.employer_registered != null) return settings.employer_registered
+  return settings.pays_salaries || employeeEvidenceAgiStart(settings) !== null
+}
+
+/**
+ * The first AGI period (YYYY-MM) when only an employee record, not a flag,
+ * makes the company an employer: no salary is paid for a month before anyone
+ * is employed, so the rows start at the earliest employment month. null when
+ * a flag decides (every period counts) or there is no such employee.
+ */
+function employeeEvidenceAgiStart(settings: CompanySettingsForDeadlines): string | null {
+  if (settings.employer_registered != null || settings.pays_salaries) return null
+  return settings.salaried_employee_since ? settings.salaried_employee_since.slice(0, 7) : null
+}
+
+function fromEmployeeEvidenceStart(
+  instances: DeadlineInstance[],
+  settings: CompanySettingsForDeadlines,
+): DeadlineInstance[] {
+  const start = employeeEvidenceAgiStart(settings)
+  return start === null ? instances : instances.filter((instance) => instance.period >= start)
+}
+
+/** One fiscal_periods row: its first and last day, YYYY-MM-DD. */
+export interface FiscalYearForDeadlines {
+  start: string
+  end: string
+}
+
+/** A räkenskapsår a yearly deadline is computed from. */
+export interface DeadlineFiscalYear {
+  /** Calendar year the räkenskapsår ends in. */
+  endYear: number
+  /** Month (1-12) it ends in, on the month's last day (BFL 3 kap.). */
+  endMonth: number
+  /** First day, YYYY-MM-DD. */
+  start: string
 }
 
 // Configuration for a single tax deadline type
@@ -130,6 +217,10 @@ export function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear
     : `${fiscalYearEndYear - 1}/${fiscalYearEndYear}`
 }
 
+function boundToCalendarYear(settings: { entity_type?: EntityType | string | null }): boolean {
+  return isEntityType(settings.entity_type) && fiscalYearLockedToCalendar(settings.entity_type)
+}
+
 /**
  * Month (1-12) the company's räkenskapsår ends, or null when it cannot be
  * known. A form bound to the calendar year (enskild firma, BFL 3 kap 1 §)
@@ -140,16 +231,173 @@ export function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear
  * (SFL 26 kap 10-11 §§), so this month is what places a yearly VAT period:
  * the generator's label, the filing record's key and the period's last day.
  */
-export function fiscalYearEndMonthFor(settings: {
+function fiscalYearEndMonthFor(settings: {
   entity_type?: EntityType | string | null
   fiscal_year_start_month?: number | null
 }): number | null {
-  if (isEntityType(settings.entity_type) && fiscalYearLockedToCalendar(settings.entity_type)) {
-    return 12
-  }
+  if (boundToCalendarYear(settings)) return 12
   const start = settings.fiscal_year_start_month
   if (start == null || !Number.isInteger(start) || start < 1 || start > 12) return null
   return start === 1 ? 12 : start - 1
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+function isoDate(year: number, month: number, day: number): string {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+/** Last day of a 1-12 month. */
+function lastDayOfMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate()
+}
+
+/** The date `days` days from a YYYY-MM-DD date. */
+function shiftIsoDate(iso: string, days: number): string {
+  const [year, month, day] = iso.split('-').map(Number)
+  const date = new Date(year, month - 1, day + days)
+  return isoDate(date.getFullYear(), date.getMonth() + 1, date.getDate())
+}
+
+/** First day of the twelve-month räkenskapsår ending on `end`. */
+function twelveMonthStart(end: string): string {
+  const [year, month] = end.split('-').map(Number)
+  return month === 12 ? isoDate(year, 1, 1) : isoDate(year - 1, month + 1, 1)
+}
+
+/** The settings that place a company's räkenskapsår. */
+type FiscalCalendar = Pick<CompanySettingsForDeadlines, 'fiscal_years'> &
+  Parameters<typeof fiscalYearEndMonthFor>[0]
+
+function recordedFiscalYears(settings: FiscalCalendar): FiscalYearForDeadlines[] {
+  return (settings.fiscal_years ?? [])
+    .filter((fy) => ISO_DATE.test(fy.start) && ISO_DATE.test(fy.end) && fy.start <= fy.end)
+    .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
+}
+
+/**
+ * The räkenskapsår ending in any of `endYears`, which is what every yearly
+ * deadline (årsstämma, årsredovisning, INK2/INK3, helårsmoms,
+ * fyllnadsinbetalning) is computed from:
+ *
+ * 1. Every recorded fiscal period is a räkenskapsår, whatever its length: a
+ *    first year may be shorter than twelve months or extended up to 18
+ *    (BFL 3 kap.), so its own end date counts, not one derived from
+ *    fiscal_year_start_month.
+ * 2. Before the first recorded period, only the year ending the day before
+ *    it can exist, and only when the first one starts on the 1st. A
+ *    räkenskapsår starts mid-month only when bokföringsskyldigheten begins
+ *    (BFL 3 kap. 1 and 3 §§), so a first period starting mid-month has no
+ *    predecessor. One starting on the 1st may follow years kept elsewhere;
+ *    that year's obligations are real and stay.
+ * 3. Where nothing is recorded after a recorded year, the next years chain
+ *    from it (nextFiscalYearRange): the years not created yet, and a gap
+ *    between two recorded years. One that would run into a recorded period
+ *    never existed. A year is re-laid by recording it, not by the setting.
+ *
+ * Without recorded periods this is the twelve-month schedule from
+ * fiscal_year_start_month alone.
+ */
+export function fiscalYearsEndingIn(
+  endYears: readonly number[],
+  settings: FiscalCalendar,
+): DeadlineFiscalYear[] {
+  const recorded = recordedFiscalYears(settings)
+  const found = new Map<string, DeadlineFiscalYear>()
+  const add = (end: string, start: string) => {
+    const [year, month] = end.split('-').map(Number)
+    const key = end.slice(0, 7)
+    if (endYears.includes(year) && !found.has(key)) {
+      found.set(key, { endYear: year, endMonth: month, start })
+    }
+  }
+
+  if (recorded.length === 0) {
+    const endMonth = fiscalYearEndMonthFor(settings) ?? 12
+    for (const endYear of endYears) {
+      const end = isoDate(endYear, endMonth, lastDayOfMonth(endYear, endMonth))
+      add(end, twelveMonthStart(end))
+    }
+  }
+
+  for (const fy of recorded) add(fy.end, fy.start)
+
+  const first = recorded[0]
+  if (first && first.start.endsWith('-01')) {
+    const end = shiftIsoDate(first.start, -1)
+    add(end, twelveMonthStart(end))
+  }
+
+  const horizon = `${Math.max(...endYears)}-12-31`
+  recorded.forEach((fy, index) => {
+    const nextRecorded = recorded[index + 1]?.start ?? null
+    let year = nextFiscalYearRange(fy.end)
+    while (year.end <= horizon && (nextRecorded === null || year.end < nextRecorded)) {
+      add(year.end, year.start)
+      year = nextFiscalYearRange(year.end)
+    }
+  })
+
+  return Array.from(found.values()).sort(
+    (a, b) => a.endYear - b.endYear || a.endMonth - b.endMonth,
+  )
+}
+
+/**
+ * Month (1-12) the räkenskapsår named by `year` ends, `year` being the
+ * calendar year it ends in: the key of a helårsmoms period. The later one when
+ * an omläggning ends two in one calendar year; the settings month when no year
+ * ends in `year`; December when that is not configured either.
+ *
+ * Always December for a form bound to the calendar year, whatever a stored
+ * year says: the generator labels that form's helårsmoms by the calendar year
+ * (getVatDeadlineForPeriod), so an enskild firma imported on broken years keeps
+ * one key for its filing and its deadline row.
+ */
+export function fiscalYearEndMonthIn(year: number, settings: FiscalCalendar): number {
+  if (boundToCalendarYear(settings)) return 12
+  return fiscalYearsEndingIn([year], settings).at(-1)?.endMonth ?? fiscalYearEndMonthFor(settings) ?? 12
+}
+
+/**
+ * Month (1-12) the räkenskapsår running on `day` (YYYY-MM-DD) ends. Before the
+ * first recorded year and in the rest of a gap no year runs: the settings month,
+ * else December. December for a form bound to the calendar year, as in
+ * fiscalYearEndMonthIn.
+ */
+export function fiscalYearEndMonthOn(day: string, settings: FiscalCalendar): number {
+  if (boundToCalendarYear(settings)) return 12
+  const year = Number(day.slice(0, 4))
+  const running = fiscalYearsEndingIn([year, year + 1, year + 2], settings).find(
+    ({ start, endYear, endMonth }) =>
+      start <= day && day <= isoDate(endYear, endMonth, lastDayOfMonth(endYear, endMonth)),
+  )
+  return running?.endMonth ?? fiscalYearEndMonthFor(settings) ?? 12
+}
+
+/**
+ * The day the company's bookkeeping began, when its recorded fiscal periods
+ * prove it: the first one starts mid-month, which only a company's first
+ * räkenskapsår does (BFL 3 kap. 1 and 3 §§). A first period starting on the
+ * 1st may follow years kept elsewhere, so it proves nothing and null is
+ * returned.
+ */
+export function bookkeepingStartFor(settings: CompanySettingsForDeadlines): string | null {
+  const first = recordedFiscalYears(settings)[0]
+  return first && !first.start.endsWith('-01') ? first.start : null
+}
+
+/**
+ * Last day (YYYY-MM-DD) of a monthly (`YYYY-MM`) or quarterly (`YYYY-Qn`)
+ * reporting period; null for every other period label (yearly, notices).
+ */
+function reportingPeriodEnd(period: string): string | null {
+  const monthly = /^(\d{4})-(\d{2})$/.exec(period)
+  const quarterly = /^(\d{4})-Q([1-4])$/.exec(period)
+  const year = Number((monthly ?? quarterly)?.[1])
+  const month = monthly ? Number(monthly[2]) : quarterly ? Number(quarterly[2]) * 3 : null
+  if (month === null || month < 1 || month > 12) return null
+  return isoDate(year, month, lastDayOfMonth(year, month))
 }
 
 function getAnnualVatDeadline(
@@ -266,14 +514,55 @@ export function getVatDeadlineForPeriod(
   }
 }
 
+/** The key a helårsmoms period is known by in eu_trade_fiscal_year_ends: the month it ends, YYYY-MM. */
+export function fiscalYearEndKey(fy: Pick<DeadlineFiscalYear, 'endYear' | 'endMonth'>): string {
+  return isoDate(fy.endYear, fy.endMonth, 1).slice(0, 7)
+}
+
+/**
+ * The period a räkenskapsår's helårsmoms declares, as getVatDeadlineForPeriod
+ * dates it: the räkenskapsår itself, and for a form bound to the calendar year
+ * (enskild firma) the calendar year it ends in, whatever a stored year says,
+ * the key fiscalYearEndMonthIn gives the filing record.
+ */
+export function helarsmomsPeriodOf(fy: DeadlineFiscalYear, settings: FiscalCalendar): DeadlineFiscalYear {
+  if (!boundToCalendarYear(settings)) return fy
+  return { endYear: fy.endYear, endMonth: 12, start: isoDate(fy.endYear, 1, 1) }
+}
+
+/**
+ * A räkenskapsår's helårsmoms deadline, with or without the EU-trade date:
+ * the one placement the generator, the repair's detection and the nightly
+ * pass read (lib/tax/deadline-generator.ts).
+ */
+export function helarsmomsDeadline(
+  fy: DeadlineFiscalYear,
+  settings: CompanySettingsForDeadlines,
+  euTrade: boolean,
+): DeadlineInstance | null {
+  return getVatDeadlineForPeriod('yearly', fy.endYear, 1, {
+    ...settings,
+    fiscal_year_start_month: fy.endMonth === 12 ? 1 : fy.endMonth + 1,
+    vat_has_eu_trade: euTrade,
+  })
+}
+
 function generateAnnualVatDates(
   deadlineYear: number,
   settings: CompanySettingsForDeadlines,
 ): DeadlineInstance[] {
   const results: DeadlineInstance[] = []
 
-  for (const fiscalYearEndYear of [deadlineYear - 1, deadlineYear]) {
-    const instance = getVatDeadlineForPeriod('yearly', fiscalYearEndYear, 1, settings)
+  // Helårsmoms is declared per beskattningsår, the räkenskapsår (SFL 26 kap.
+  // 10-11 §§): an extended first year is one period, dated by its own end.
+  // EU trade the nightly job saw in that period's rutor dates it as the
+  // setting would (eu_trade_fiscal_year_ends), until the earlier date has
+  // passed: then the period's open row stays where it is (helarsmoms_settled).
+  for (const fy of fiscalYearsEndingIn([deadlineYear - 1, deadlineYear], settings)) {
+    const key = fiscalYearEndKey(helarsmomsPeriodOf(fy, settings))
+    const booksShowEuTrade = settings.eu_trade_fiscal_year_ends?.includes(key) ?? false
+    const euTrade = settings.helarsmoms_settled?.[key] ?? helarsmomsHasEuTrade(settings.vat_has_eu_trade, booksShowEuTrade)
+    const instance = helarsmomsDeadline(fy, settings, euTrade)
     if (instance?.year === deadlineYear) results.push(instance)
   }
 
@@ -287,15 +576,12 @@ function generateAnnualVatDates(
  * rules: same return, same schedule, form-specific labels.
  */
 function ink2DigitalFilingDates(year: number, settings: CompanySettingsForDeadlines): DeadlineInstance[] {
-  // FY end month (1-indexed): e.g. start=1 → end=12, start=5 → end=4
-  const fyEndMonth = settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1
-
   // Skatteverket digital filing deadline lookup:
   // FY end Jan-Apr  → Dec 1 same year as FY end
   // FY end May-Jun  → Jan 15 year after FY end
   // FY end Jul-Aug  → Apr 1 year after FY end
   // FY end Sep-Dec  → Aug 1 year after FY end
-  const getDeadline = (fyEndYear: number) => {
+  const getDeadline = (fyEndMonth: number, fyEndYear: number) => {
     if (fyEndMonth >= 1 && fyEndMonth <= 4) {
       return { day: 1, month: 11, year: fyEndYear } // Dec 1
     } else if (fyEndMonth >= 5 && fyEndMonth <= 6) {
@@ -307,31 +593,29 @@ function ink2DigitalFilingDates(year: number, settings: CompanySettingsForDeadli
     }
   }
 
-  // We need to find which FY ending produces a deadline in `year`.
-  // Try FY endings in year-1 and year (both could produce deadlines in `year`).
+  // A deadline in `year` belongs to a räkenskapsår ending in year-1 or year.
   const results: DeadlineInstance[] = []
-  for (const fyEndYear of [year - 1, year]) {
-    const dl = getDeadline(fyEndYear)
+  for (const fy of fiscalYearsEndingIn([year - 1, year], settings)) {
+    const dl = getDeadline(fy.endMonth, fy.endYear)
     if (dl.year === year) {
-      // Compute the FY start year
-      const fyStart = fyEndMonth === 12 ? fyEndYear : fyEndYear
-      const periodLabel = fyEndMonth === 12
-        ? `${fyEndYear}`
-        : `${fyStart - 1}/${fyStart}`
-      const period = fyEndMonth === 12
-        ? `${fyEndYear}`
-        : `${fyStart - 1}/${fyStart}`
-      results.push({
-        day: dl.day,
-        month: dl.month,
-        year: dl.year,
-        period,
-        periodLabel,
-      })
+      const label = getFiscalYearLabel(fy.endMonth, fy.endYear)
+      results.push({ ...dl, period: label, periodLabel: label })
     }
   }
   return results
 }
+
+/**
+ * Inkomstdeklaration 3 (ideell förening). Skatteverket's INK3 table ("Du ska
+ * ha skickat in inkomstdeklaration 3", #47) is the INK2 table above and holds
+ * for digital and paper filing alike: räkenskapsår ending January-April 1
+ * December the same year, May-June 15 January, July-August 1 April and
+ * September-December 1 August the year after, moved to the next banking day
+ * by the generator (2 August 2027 for a 2026 calendar year). There is no
+ * byråanstånd for INK3 (Skatteverket skrivelse 2022-11-02), so no later
+ * date exists for a byrå's clients.
+ */
+const ink3FilingDates = ink2DigitalFilingDates
 
 /**
  * Seven months after the fiscal year end: the Bolagsverket filing deadline
@@ -340,41 +624,32 @@ function ink2DigitalFilingDates(year: number, settings: CompanySettingsForDeadli
  * (ÅRL 8 kap. 3 §, årsredovisning together with revisionsberättelse).
  */
 function bolagsverketFilingDates(year: number, settings: CompanySettingsForDeadlines): DeadlineInstance[] {
-  // FY end month (1-indexed)
-  const fyEndMonth = settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1
+  return monthsAfterFiscalYearEnd(7, year, fiscalYearsEndingIn([year - 1, year], settings))
+}
 
-  // 7 months after FY end per ÅRL 8:3
-  // Deadline month (0-indexed): ((fyEndMonth - 1) + 7) % 12
-  // Last day of the deadline month
-  // Determine which year the deadline falls in
-  const _wrapsYear = fyEndMonth > 5 // Jun+ wraps into next year
-  // For calendar year (Dec end): deadline Jul 31 same year+1
-  // The FY ending in `year` produces a deadline:
-  const _fyEndYear = year - 1 // By default we show deadline for the FY that ended in year-1
-  // Simpler: compute from a concrete FY end date
-  // FY ends: fyEndMonth (1-indexed), last day, in some year.
-  // We want the deadline that falls in `year`.
-
-  // Try FY endings in year-1 and year
+/**
+ * The last day of the month `months` after each räkenskapsår's end, for the
+ * deadlines that fall in `year`. Swedish fiscal years end on the last day of
+ * a calendar month (BFL 3 kap.), so this equals the statutory limit.
+ */
+function monthsAfterFiscalYearEnd(
+  months: number,
+  year: number,
+  fiscalYears: DeadlineFiscalYear[],
+): DeadlineInstance[] {
   const results: DeadlineInstance[] = []
-  for (const endYr of [year - 1, year]) {
-    // Deadline: 7 months after last day of fyEndMonth in endYr
-    const dlMonth0 = ((fyEndMonth - 1) + 7) % 12
-    const dlYear = (fyEndMonth - 1) + 7 >= 12 ? endYr + 1 : endYr
-    if (dlYear === year) {
-      const lastDay = new Date(dlYear, dlMonth0 + 1, 0).getDate()
-      const periodLabel = fyEndMonth === 12
-        ? `${endYr}`
-        : `${endYr - 1}/${endYr}`
-      const period = periodLabel
-      results.push({
-        day: lastDay,
-        month: dlMonth0,
-        year: dlYear,
-        period,
-        periodLabel,
-      })
-    }
+  for (const fy of fiscalYears) {
+    const dlMonth0 = (fy.endMonth - 1 + months) % 12
+    const dlYear = fy.endYear + Math.floor((fy.endMonth - 1 + months) / 12)
+    if (dlYear !== year) continue
+    const label = getFiscalYearLabel(fy.endMonth, fy.endYear)
+    results.push({
+      day: new Date(dlYear, dlMonth0 + 1, 0).getDate(),
+      month: dlMonth0,
+      year: dlYear,
+      period: label,
+      periodLabel: label,
+    })
   }
   return results
 }
@@ -386,29 +661,7 @@ function bolagsverketFilingDates(year: number, settings: CompanySettingsForDeadl
  * (BFL 3 kap.), so the last day of month + 6 is the statutory limit.
  */
 function annualMeetingDates(year: number, settings: CompanySettingsForDeadlines): DeadlineInstance[] {
-  // FY end month (1-indexed)
-  const fyEndMonth = settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1
-
-  // Last day of (FY end month + 6). Swedish fiscal years always end on
-  // the last day of a calendar month (BFL 3 kap.), so this equals the
-  // statutory six-month limit.
-  const results: DeadlineInstance[] = []
-  for (const endYr of [year - 1, year]) {
-    const dlMonth0 = ((fyEndMonth - 1) + 6) % 12
-    const dlYear = (fyEndMonth - 1) + 6 >= 12 ? endYr + 1 : endYr
-    if (dlYear === year) {
-      const lastDay = new Date(dlYear, dlMonth0 + 1, 0).getDate()
-      const periodLabel = fyEndMonth === 12 ? `${endYr}` : `${endYr - 1}/${endYr}`
-      results.push({
-        day: lastDay,
-        month: dlMonth0,
-        year: dlYear,
-        period: periodLabel,
-        periodLabel,
-      })
-    }
-  }
-  return results
+  return monthsAfterFiscalYearEnd(6, year, fiscalYearsEndingIn([year - 1, year], settings))
 }
 
 /**
@@ -488,8 +741,9 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
 
   // Arbetsgivardeklaration (monthly). A REGISTERED employer must file AGI
   // every month, including nil months (SFL 26 kap. 3 §): the gate is
-  // registration, not whether salaries were paid, with pays_salaries as a
-  // fallback for settings saved before the registration flag existed.
+  // registration, not whether salaries were paid, with pays_salaries and then
+  // an active salaried employee as fallbacks while registration was never
+  // attested (isAgiEmployer).
   // Säsongsregistrerade employers file only for months with payments plus a
   // December nil declaration when nothing was paid all year, so they get
   // only the December-period row; payment months are handled by the salary
@@ -503,7 +757,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     type: 'arbetsgivardeklaration',
     titleTemplate: 'Arbetsgivardeklaration {periodLabel}',
     description: 'Arbetsgivardeklaration för registrerade arbetsgivare',
-    condition: (s) => s.employer_registered ?? s.pays_salaries,
+    condition: isAgiEmployer,
     priority: 'important',
     linkedReportType: null,
     generateDates: (year, settings) => {
@@ -524,7 +778,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
           periodLabel: getMonthLabel(month, year),
         })
       }
-      return instances
+      return fromEmployeeEvidenceStart(instances, settings)
     },
   },
 
@@ -537,11 +791,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     type: 'skatteinbetalning',
     titleTemplate: 'Betala skatt och arbetsgivaravgifter {periodLabel}',
     description: 'Inbetalning av avdragen skatt och arbetsgivaravgifter för företag med beskattningsunderlag över 40 miljoner kronor',
-    condition: (s) =>
-      (s.employer_registered ?? s.pays_salaries) && s.vat_registered && s.vat_taxable_base_over_40m,
+    condition: (s) => isAgiEmployer(s) && s.vat_registered && s.vat_taxable_base_over_40m,
     priority: 'important',
     linkedReportType: null,
-    generateDates: (year) => {
+    generateDates: (year, settings) => {
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
         const deadlineMonth = (month + 1) % 12
@@ -558,7 +811,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
           periodLabel: getMonthLabel(month, year),
         })
       }
-      return instances
+      return fromEmployeeEvidenceStart(instances, settings)
     },
   },
 
@@ -713,11 +966,8 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     priority: 'normal',
     linkedReportType: null,
     generateDates: (year, settings) => {
-      const fyEndMonth = fiscalYearLockedToCalendar(settings.entity_type)
-        ? 12
-        : (settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1)
       const results: DeadlineInstance[] = []
-      for (const fyEndYear of [year - 1, year]) {
+      for (const { endMonth: fyEndMonth, endYear: fyEndYear } of fiscalYearsEndingIn([year - 1, year], settings)) {
         const fyLabel = getFiscalYearLabel(fyEndMonth, fyEndYear)
         // fyEndMonth is 1-indexed; (fyEndMonth - 1 + n) is the 0-indexed
         // month n months after FY end, counted from fyEndYear's January.
@@ -881,6 +1131,21 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     generateDates: annualMeetingDates,
   },
 
+  // Förenklat årsbokslut (ideell förening, BFNAR 2010:1): upprättat så snart
+  // det kan ske, senast sex månader efter räkenskapsårets utgång (BFL 6 kap.
+  // 7 §). Nothing is filed: the document is kept with the books. The date is
+  // the årsstämma's last day of the month six months on.
+  {
+    type: 'forenklat_arsbokslut',
+    titleTemplate: 'Förenklat årsbokslut räkenskapsår {periodLabel}',
+    description:
+      'Det förenklade årsbokslutet ska vara upprättat och undertecknat av styrelsen senast sex månader efter räkenskapsårets utgång (BFL 6 kap. 7 §)',
+    condition: (s) => isEntityType(s.entity_type) && preparesForenklatArsbokslut(s.entity_type) !== null,
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: annualMeetingDates,
+  },
+
   // Inkomstdeklaration 2 (ekonomisk förening): same INK2 return and digital
   // filing schedule as an aktiebolag (SFL 30 kap. 1 §, IL 65 kap. 10 §).
   // Separate rule so the deadline carries the association's own wording.
@@ -892,6 +1157,19 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     priority: 'critical',
     linkedReportType: null,
     generateDates: ink2DigitalFilingDates,
+  },
+
+  // Inkomstdeklaration 3 for the form whose return the product prepares as
+  // INK3 (ideell förening, lib/reports/ink3). Read from the profile, not the
+  // form name, so another INK3 form gets the deadline with its profile.
+  {
+    type: 'inkomstdeklaration_ideell_forening',
+    titleTemplate: 'Inkomstdeklaration 3 {periodLabel}',
+    description: 'Inkomstdeklaration 3 (INK3) för ideell förening',
+    condition: (s) => isEntityType(s.entity_type) && filesIncomeReturn(s.entity_type) === 'INK3',
+    priority: 'critical',
+    linkedReportType: 'ink3-declaration',
+    generateDates: ink3FilingDates,
   },
 
   // Årsredovisning och revisionsberättelse (ekonomisk förening): within seven
@@ -933,26 +1211,71 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
  * years beginning on or after 1 January 2025 (ÅRL 8 kap. 3 § as amended;
  * Bolagsverket, "Årsredovisning för ekonomisk förening"). Earlier years only
  * had to be filed by större föreningar, which the deadline settings cannot
- * tell apart, so no instance is generated for them: the deadline that would
- * follow from `bolagsverketFilingDates` for a fiscal year that started
- * before that date is dropped.
+ * tell apart, so no instance is generated for them: a räkenskapsår that
+ * started before that date gets no filing deadline.
  */
-const EKONOMISK_FORENING_FILING_DUTY_FROM = new Date(2025, 0, 1)
+const EKONOMISK_FORENING_FILING_DUTY_FROM = '2025-01-01'
 
 function bolagsverketFilingDatesEkonomiskForening(
   year: number,
   settings: CompanySettingsForDeadlines,
 ): DeadlineInstance[] {
-  return bolagsverketFilingDates(year, settings).filter((instance) => {
-    // The instance is dated seven months after the fiscal year end; walk
-    // back to the fiscal year's first day (a twelve-month year is assumed,
-    // as the generator does everywhere else).
-    const fyEndMonth0 = (instance.month + 5) % 12
-    const fyEndYear = instance.month >= 7 ? instance.year : instance.year - 1
-    const fyStartMonth0 = (fyEndMonth0 + 1) % 12
-    const fyStartYear = fyEndMonth0 === 11 ? fyEndYear : fyEndYear - 1
-    return new Date(fyStartYear, fyStartMonth0, 1) >= EKONOMISK_FORENING_FILING_DUTY_FROM
-  })
+  return monthsAfterFiscalYearEnd(
+    7,
+    year,
+    fiscalYearsEndingIn([year - 1, year], settings)
+      .filter((fy) => fy.start >= EKONOMISK_FORENING_FILING_DUTY_FROM),
+  )
+}
+
+/**
+ * The raw statutory day the tax and employer contributions declared in one
+ * month's AGI must be on the skattekonto (62 kap. 3 § SFL): the AGI deadline
+ * itself, the 12th of the following month (17th in January and August), or,
+ * for an employer above the SEK 40M VAT taxable base who files on the 26th,
+ * the skatteinbetalning day (the 12th, 17th in January). Read from the two
+ * configs above, so the payment day and the deadline list never disagree.
+ * Banking-day adjustment is left to callers, as for getVatDeadlineForPeriod.
+ */
+export function getAgiPaymentDeadlineForPeriod(
+  year: number,
+  month: number,
+  settings: { vat_registered: boolean; vat_taxable_base_over_40m: boolean },
+): DeadlineInstance | null {
+  if (month < 1 || month > 12) return null
+  const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
+  const config = TAX_DEADLINE_CONFIGS.find(
+    (c) => c.type === (storforetag ? 'skatteinbetalning' : 'arbetsgivardeklaration'),
+  )
+  if (!config) return null
+  // Both generators read only these fields. The payment month exists whether
+  // or not the employer is säsongsregistrerad, so that filter stays off.
+  const generatorSettings = {
+    vat_registered: storforetag,
+    vat_taxable_base_over_40m: storforetag,
+    employer_seasonal: false,
+  } as CompanySettingsForDeadlines
+  const period = `${year}-${String(month).padStart(2, '0')}`
+  return config.generateDates(year, generatorSettings).find((instance) => instance.period === period) ?? null
+}
+
+/**
+ * The day (YYYY-MM-DD) one AGI period's tax and employer contributions must be
+ * on the skattekonto: getAgiPaymentDeadlineForPeriod moved to the first
+ * banking day on or after it, as a förfallodag on a weekend or holiday moves
+ * to the next banking day. The one answer for every surface that shows or
+ * pays it (the run page's tax payment panel, Betala via banken).
+ */
+export function getAgiPaymentDueDate(
+  year: number,
+  month: number,
+  settings: { vat_registered: boolean; vat_taxable_base_over_40m: boolean },
+): string | null {
+  const instance = getAgiPaymentDeadlineForPeriod(year, month, settings)
+  if (!instance) return null
+  // Local noon: the day never shifts whatever the process time zone is.
+  const due = getNextBankingDay(new Date(instance.year, instance.month, instance.day, 12))
+  return `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`
 }
 
 /**
@@ -967,10 +1290,28 @@ function getMonthLabel(month: number, year: number): string {
 }
 
 /**
- * Get all applicable deadline configs for given company settings
+ * Get all applicable deadline configs for given company settings.
+ *
+ * When the recorded fiscal periods prove when the company's bookkeeping
+ * began (bookkeepingStartFor), no monthly or quarterly declaration is due for
+ * a period that ended before it: a company registered mid-quarter has no
+ * momsdeklaration for the quarter before. Applied here, the one source both
+ * the generator and the backfill detection read: if only one side dropped
+ * those periods, the nightly repair would regenerate the company forever.
  */
 export function getApplicableDeadlineConfigs(
   settings: CompanySettingsForDeadlines
 ): TaxDeadlineConfig[] {
-  return TAX_DEADLINE_CONFIGS.filter((config) => config.condition(settings))
+  const configs = TAX_DEADLINE_CONFIGS.filter((config) => config.condition(settings))
+  const bookkeepingStart = bookkeepingStartFor(settings)
+  if (bookkeepingStart === null) return configs
+
+  return configs.map((config) => ({
+    ...config,
+    generateDates: (year: number, s: CompanySettingsForDeadlines) =>
+      config.generateDates(year, s).filter((instance) => {
+        const periodEnd = reportingPeriodEnd(instance.period)
+        return periodEnd === null || periodEnd >= bookkeepingStart
+      }),
+  }))
 }

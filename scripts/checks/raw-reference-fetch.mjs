@@ -3,7 +3,8 @@
  * Guard: reference data fetched outside lib/reference-data.
  *
  * Fiscal periods, company settings, the chart of accounts, cash accounts,
- * dimensions, booking templates, customers, suppliers and articles are
+ * dimensions, booking templates, customers, suppliers, articles and the
+ * salary roster are
  * session-cached behind the hooks in lib/reference-data/hooks.ts (seeded
  * from the dashboard layout, invalidated after writes). Before that layer
  * existed the same lists were fetched raw from 47 / 27 / 14 / 8 / 12 / 5
@@ -40,6 +41,7 @@ export const REFERENCE_API_PATHS = [
   'customers',
   'suppliers',
   'articles',
+  'salary/employees',
 ]
 
 export const REFERENCE_TABLES = [
@@ -47,6 +49,11 @@ export const REFERENCE_TABLES = [
   'company_settings',
   'chart_of_accounts',
   'cash_accounts',
+  'customers',
+  'suppliers',
+  'articles',
+  'booking_template_library',
+  'employees',
 ]
 
 export const RAW_REFERENCE_SANCTIONED = new Set([

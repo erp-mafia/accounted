@@ -12,10 +12,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { ALL_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
-import { tools, isStagingTool } from '../server'
-import { toolCallableVia } from '../tool-reach'
+import { tools, callableViaFor } from '../server'
 
 const getInvoice = tools.find((t) => t.name === 'gnubok_get_invoice')!
 
@@ -41,6 +40,9 @@ function invoiceRow(overrides: Record<string, unknown> = {}) {
     total: 4250,
     paid_amount: 0,
     remaining_amount: 4250,
+    // The invoice's own öresavrundning choice, so no company read is needed.
+    ore_rounding: true,
+    deduction_total: 0,
     your_reference: 'Anna',
     our_reference: null,
     notes: null,
@@ -136,7 +138,9 @@ describe('gnubok_get_invoice: registration', () => {
     // serves, which had to join the default catalog (issue #2748) and now
     // names the bridge so an agent that only knows tools/list gets here.
     expect(getInvoice.catalogVisibility).toBe('search')
-    expect(toolCallableVia(getInvoice, isStagingTool(getInvoice))).toBe('call_tool')
+    expect(
+      callableViaFor(getInvoice, { anonymous: false, simpleCompanyMode: false, keyScopes: [...ALL_SCOPES] }),
+    ).toBe('call_tool')
     const updateInvoice = tools.find((t) => t.name === 'gnubok_update_invoice')!
     const itemsNote = (updateInvoice.inputSchema as { properties: { items: { description: string } } })
       .properties.items.description
@@ -224,6 +228,53 @@ describe('gnubok_get_invoice: execute', () => {
     expect(findCalls('invoices', 'eq')).toContainEqual(['id', INVOICE_ID])
   })
 
+  // crm#1367: a received self-billed sale has invoice_number null by design;
+  // the customer's number is how an agent matches it to the document.
+  it('returns the self-billed flag and the customer\'s number on a received self-bill', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: invoiceRow({
+        status: 'paid',
+        invoice_number: null,
+        external_invoice_number: 'S2441',
+        is_self_billed: true,
+        journal_entry_id: 'je-1',
+      }),
+    })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as Record<string, unknown>
+
+    expect(String(findCall('invoices', 'select')?.[0])).toContain('external_invoice_number')
+    expect(result).toMatchObject({ invoice_number: null, external_invoice_number: 'S2441', is_self_billed: true })
+  })
+
+  it('returns external_invoice_number null and is_self_billed false on an invoice we issued', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow() })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as Record<string, unknown>
+
+    expect(result).toMatchObject({ external_invoice_number: null, is_self_billed: false })
+  })
+
+  it('declares the self-billing fields in its output schema', () => {
+    const props = (getInvoice.outputSchema as { properties: Record<string, unknown> }).properties
+    expect(props).toHaveProperty('external_invoice_number')
+    expect(props).toHaveProperty('is_self_billed')
+  })
+
   it('reports editable_draft false for an issued invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '2026-0042', journal_entry_id: 'je-1' }) })
@@ -238,6 +289,25 @@ describe('gnubok_get_invoice: execute', () => {
 
     expect(result.editable_draft).toBe(false)
     expect(result.invoice_number).toBe('2026-0042')
+  })
+
+  it('reports a sent invoice past its due date as overdue, as gnubok_list_invoices does (crm#1084)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-13T08:00:00Z'))
+    try {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '2026-0042', journal_entry_id: 'je-1' }) })
+      const result = (await getInvoice.execute(
+        { invoice_id: INVOICE_ID },
+        COMPANY_ID,
+        USER_ID,
+        supabase as never,
+        { type: 'api_key' } as never,
+      )) as { status: string }
+      expect(result.status).toBe('overdue')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('returns an empty line list for a draft without lines', async () => {
@@ -353,5 +423,335 @@ describe('gnubok_get_invoice: execute', () => {
         { type: 'api_key' } as never,
       ),
     ).rejects.toThrow(/Database error/)
+  })
+})
+
+/**
+ * crm#1131: an invoice registered from the books (gnubok_register_booked_invoice)
+ * has no lines by design, and its original is the underlag on the verifikat
+ * that booked it. An agent that saw only `items: []` reported the original as
+ * never imported, so the read says what the row is and where the original is.
+ */
+describe('gnubok_get_invoice: registered from the books', () => {
+  const JOURNAL_ENTRY_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+  const DOCUMENT_ID = '11111111-1111-4111-8111-111111111111'
+  const OTHER_DOCUMENT_ID = '22222222-2222-4222-8222-222222222222'
+
+  const registeredRow = (overrides: Record<string, unknown> = {}) =>
+    invoiceRow({
+      status: 'sent',
+      invoice_number: 'OLD-7',
+      journal_entry_id: JOURNAL_ENTRY_ID,
+      items: [],
+      // Not yet due: past its due date a sent invoice reports overdue.
+      due_date: '2099-12-31',
+      ...overrides,
+    })
+  const voucherRow = { id: JOURNAL_ENTRY_ID, voucher_series: 'A', voucher_number: 47 }
+
+  const run = (supabase: unknown) =>
+    getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    ) as Promise<Record<string, unknown>>
+
+  it('declares the marker as always present and the verifikat fields as optional', () => {
+    const schema = getInvoice.outputSchema as {
+      properties: Record<string, { type: unknown }>
+      required: string[]
+    }
+    expect(schema.properties.registered_from_books.type).toBe('boolean')
+    expect(schema.required).toContain('registered_from_books')
+    // Emitted as null for an unbooked invoice: a bare string type would fail
+    // strict clients on a successful call.
+    expect(schema.properties.journal_entry_id.type).toContain('null')
+    for (const key of ['voucher_label', 'voucher_document_ids', 'note']) {
+      expect(schema.properties[key], key).toBeDefined()
+      expect(schema.required).not.toContain(key)
+    }
+  })
+
+  it('names the verifikat and its attached documents, and says the original is there', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: registeredRow() })
+    enqueue({ data: voucherRow })
+    enqueue({ data: [{ id: DOCUMENT_ID }, { id: OTHER_DOCUMENT_ID }] })
+
+    const result = await run(supabase)
+
+    expect(result).toMatchObject({
+      status: 'sent',
+      items: [],
+      item_count: 0,
+      editable_draft: false,
+      journal_entry_id: JOURNAL_ENTRY_ID,
+      registered_from_books: true,
+      voucher_label: 'A47',
+      voucher_document_ids: [DOCUMENT_ID, OTHER_DOCUMENT_ID],
+    })
+    const note = result.note as string
+    expect(note).toContain('no lines by design')
+    expect(note).toContain('verifikat A47')
+    expect(note).toContain('gnubok_get_document_content')
+    expect(note).not.toContain('gnubok_link_document_to_voucher')
+
+    // Service-role reads: both are scoped to the routed company, and the
+    // documents are the verifikat's current versions, as its page lists them.
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['company_id', COMPANY_ID])
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['id', JOURNAL_ENTRY_ID])
+    const documentFilters = findCalls('document_attachments', 'eq')
+    expect(documentFilters).toContainEqual(['company_id', COMPANY_ID])
+    expect(documentFilters).toContainEqual(['journal_entry_id', JOURNAL_ENTRY_ID])
+    expect(documentFilters).toContainEqual(['is_current_version', true])
+  })
+
+  it('says so when no document is attached to the verifikat yet', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: registeredRow({ status: 'partially_paid' }) })
+    enqueue({ data: voucherRow })
+    enqueue({ data: [] })
+
+    const result = await run(supabase)
+
+    expect(result.registered_from_books).toBe(true)
+    expect(result.voucher_document_ids).toEqual([])
+    const note = result.note as string
+    expect(note).toContain('No document is attached to that verifikat yet')
+    expect(note).toContain('gnubok_link_document_to_voucher')
+    expect(note).not.toContain('gnubok_get_document_content')
+  })
+
+  it('fails the call when the documents cannot be read, never reporting none attached', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: registeredRow() })
+    enqueue({ data: voucherRow })
+    enqueue({ data: null, error: { message: 'connection reset' } })
+
+    await expect(run(supabase)).rejects.toThrow(/Database error/)
+  })
+
+  it('reads nothing more for an invoice issued here, and returns its verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '2026-0042', journal_entry_id: JOURNAL_ENTRY_ID }) })
+
+    const result = await run(supabase)
+
+    expect(result.registered_from_books).toBe(false)
+    expect(result.journal_entry_id).toBe(JOURNAL_ENTRY_ID)
+    for (const key of ['voucher_label', 'voucher_document_ids', 'note']) {
+      expect(result, key).not.toHaveProperty(key)
+    }
+    // No read of the verifikat or its documents. The two reads after the
+    // invoice are its payment reference's (the settings, its own facts).
+    expect(supabase.from.mock.calls.map(([table]) => table)).toEqual(['invoices', 'company_settings', 'invoices'])
+  })
+
+  it('does not mark a draft without lines: it has no verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ items: [] }) })
+
+    const result = await run(supabase)
+
+    expect(result.registered_from_books).toBe(false)
+    expect(result.journal_entry_id).toBeNull()
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not mark the kreditfaktura of a registration: it was issued here', async () => {
+    // It mirrors its original's lines, so it has none, and it is booked: the
+    // same state as a registration, told apart by credited_invoice_id.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: registeredRow({ invoice_number: 'KR-OLD-7', credited_invoice_id: INVOICE_ID }),
+    })
+
+    const result = await run(supabase)
+
+    expect(result.registered_from_books).toBe(false)
+    expect(result).not.toHaveProperty('note')
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('gnubok_get_invoice: quote progress (crm#1196)', () => {
+  it('lists the live invoices converted from a quote with invoiced so far and what remains', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ document_type: 'quote', invoice_number: 'OF-012', quote_status: 'accepted', subtotal: 25000 }) })
+    enqueue({ data: [{ id: 'inv-1', invoice_number: 'F-001', status: 'sent', subtotal: 12500 }] })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as { quote_invoicing: Record<string, unknown> }
+
+    expect(result.quote_invoicing).toEqual({
+      invoiced: 12500,
+      remaining: 12500,
+      fully_invoiced: false,
+      invoices: [{ invoice_id: 'inv-1', invoice_number: 'F-001', status: 'sent', subtotal: 12500 }],
+    })
+    expect(findCalls('invoices', 'eq')).toContainEqual(['converted_from_id', INVOICE_ID])
+  })
+
+  it('names the source of a converted invoice and reads nothing more for it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ converted_from_id: 'quote-1' }) })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as Record<string, unknown>
+
+    expect(result.converted_from_id).toBe('quote-1')
+    expect(result.quote_invoicing).toBeUndefined()
+  })
+})
+
+// crm#1568: the read returned the exact total and remaining_amount only, so an
+// agent reported 3116,25 kr for an invoice whose "Att betala" is 3116 kr.
+describe('gnubok_get_invoice: what the invoice asks for (crm#1568)', () => {
+  const execute = (supabase: unknown) =>
+    getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    ) as Promise<Record<string, unknown>>
+
+  it('returns amount_to_pay and ore_rounding_amount next to the exact total', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: invoiceRow({
+        status: 'sent',
+        invoice_number: 'F-1002',
+        due_date: '2099-12-31',
+        subtotal: 2493,
+        vat_amount: 623.25,
+        total: 3116.25,
+        remaining_amount: 3116.25,
+        ore_rounding: true,
+        journal_entry_id: 'je-1',
+      }),
+    })
+
+    const result = await execute(supabase)
+
+    const columns = String(findCall('invoices', 'select')?.[0])
+    expect(columns).toContain('ore_rounding')
+    expect(columns).toContain('deduction_total')
+    expect(result).toMatchObject({ total: 3116.25, amount_to_pay: 3116, ore_rounding_amount: -0.25, remaining_amount: 3116.25 })
+    // Its own choice, frozen at issue: the company's rounding is not read.
+    // The one settings read is the payment reference's.
+    expect(findCalls('company_settings', 'select')).toEqual([['*']])
+  })
+
+  it('computes a draft without a choice of its own with the company setting', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ total: 4312.5, remaining_amount: 4312.5, ore_rounding: null }) })
+    enqueue({ data: { ore_rounding: true } })
+
+    const result = await execute(supabase)
+
+    expect(findCall('company_settings', 'eq')).toEqual(['company_id', COMPANY_ID])
+    expect(result).toMatchObject({ total: 4312.5, amount_to_pay: 4313, ore_rounding_amount: 0.5 })
+  })
+
+  it('nets the ROT/RUT deduction the customer does not pay', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', due_date: '2099-12-31', total: 10000.4, remaining_amount: 7000.4, deduction_total: 3000 }) })
+
+    const result = await execute(supabase)
+
+    expect(result).toMatchObject({ total: 10000.4, amount_to_pay: 7000, ore_rounding_amount: -0.4 })
+  })
+
+  it('declares both figures in its output schema', () => {
+    const props = (getInvoice.outputSchema as { properties: Record<string, { description?: string }> }).properties
+    expect(props.amount_to_pay.description).toMatch(/Att betala/)
+    expect(props.ore_rounding_amount).toBeDefined()
+  })
+})
+
+// crm#1886: the reference the invoice PDF prints, as gnubok_list_invoices and
+// the v1 responses report it.
+describe('gnubok_get_invoice: payment_reference (crm#1886)', () => {
+  const execute = (supabase: unknown) =>
+    getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    ) as Promise<Record<string, unknown>>
+  const facts = (overrides: Record<string, unknown> = {}) => ({
+    id: INVOICE_ID,
+    payment_details: null,
+    autogiro_payer_number: null,
+    customer: { language: 'sv' },
+    ...overrides,
+  })
+
+  it('declares both fields in the output schema', () => {
+    const props = (getInvoice.outputSchema as { properties: Record<string, { type: unknown }> }).properties
+    expect(props.payment_reference.type).toEqual(['string', 'null'])
+    expect(props.payment_reference_type.type).toEqual(['string', 'null'])
+  })
+
+  it('returns the OCR reference of an issued invoice that prints a giro', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '0073', journal_entry_id: 'je-1' }) })
+    enqueue({ data: { bankgiro: '5050-1055' } }) // company_settings
+    enqueue({ data: [facts()] })
+
+    const result = await execute(supabase)
+
+    // 0073 plus its Luhn check digit, as the PDF prints "OCR/Referens".
+    expect(result).toMatchObject({ invoice_number: '0073', payment_reference: '00737', payment_reference_type: 'ocr' })
+  })
+
+  it('returns the invoice number when the PDF prints no OCR', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '0073', journal_entry_id: 'je-1' }) })
+    enqueue({ data: { bankgiro: null, plusgiro: null } }) // company_settings: no giro to pay an OCR to
+    enqueue({ data: [facts()] })
+
+    expect(await execute(supabase)).toMatchObject({ payment_reference: '0073', payment_reference_type: 'invoice_number' })
+  })
+
+  it('is null on a draft without a number, and reads nothing for it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow() })
+
+    const result = await execute(supabase)
+
+    expect(result).toMatchObject({ invoice_number: null, payment_reference: null, payment_reference_type: null })
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('is null on an invoice debited by Autogiro', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '0073', journal_entry_id: 'je-1' }) })
+    enqueue({ data: { bankgiro: '5050-1055' } })
+    enqueue({ data: [facts({ autogiro_payer_number: '4711' })] })
+
+    expect(await execute(supabase)).toMatchObject({ payment_reference: null, payment_reference_type: null })
+  })
+
+  it('fails the call when the settings cannot be read, never guessing the reference', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '0073', journal_entry_id: 'je-1' }) })
+    enqueue({ error: { message: 'permission denied' } }) // company_settings
+
+    await expect(execute(supabase)).rejects.toThrow(/company_settings/)
   })
 })

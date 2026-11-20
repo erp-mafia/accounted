@@ -56,6 +56,8 @@
  * The parser exists (parseSIEFile objectOpeningBalances, planObjectBalances),
  * but the file transport through the dashboard, v1 and MCP doors does not.
  */
+import { chunk as chunks } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildOpeningBalanceLines, fetchObjectClosingBalances } from '@/lib/core/bookkeeping/opening-balance-split'
@@ -64,7 +66,10 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { isLockDateRefusal } from '@/lib/errors/get-structured-error'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -505,12 +510,6 @@ interface RegistryDimension {
   resets_annually: boolean
 }
 
-function chunks<T>(items: readonly T[], size = IN_CHUNK): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
-
 async function readIbLines(supabase: SupabaseClient, entryId: string): Promise<CurrentIbLine[]> {
   const rows = await fetchAllRows<{
     id: string
@@ -541,27 +540,20 @@ async function readIbLines(supabase: SupabaseClient, entryId: string): Promise<C
   }))
 }
 
-/** The ISO date before an ISO date (calendar arithmetic in UTC, no time zone drift). */
-function dayBefore(isoDate: string): string {
-  const date = new Date(`${isoDate}T00:00:00Z`)
-  date.setUTCDate(date.getUTCDate() - 1)
-  return date.toISOString().slice(0, 10)
-}
-
 async function readPreviousPeriod(
   supabase: SupabaseClient,
   companyId: string,
   period: PeriodRow,
 ): Promise<{ id: string; name: string | null; is_closed: boolean } | null> {
-  // The BFNAR 2013:2 continuity chain first; otherwise the year that ends the
-  // day before this one starts. Never an earlier year across a gap: its
-  // closing balances are not this year's opening basis.
-  const query = supabase.from('fiscal_periods').select('id, name, is_closed, period_end').eq('company_id', companyId)
-  const { data, error } = period.previous_period_id
-    ? await query.eq('id', period.previous_period_id).maybeSingle()
-    : await query.eq('period_end', dayBefore(period.period_start)).limit(1).maybeSingle()
-  if (error) throw new Error(`Failed to read the previous fiscal year: ${error.message}`)
-  const row = data as { id: string; name: string | null; is_closed: boolean } | null
+  // The year that ends the day before this one starts (the continuity link
+  // when it is adjacent, the date otherwise). Never an earlier year across a
+  // gap: its closing balances are not this year's opening basis.
+  const row = await resolvePreviousFiscalPeriod<{ id: string; name: string | null; is_closed: boolean; period_end: string }>(
+    supabase,
+    companyId,
+    period,
+    'id, name, is_closed, period_end',
+  )
   return row ? { id: row.id, name: row.name ?? null, is_closed: Boolean(row.is_closed) } : null
 }
 
@@ -580,7 +572,7 @@ async function readRegistry(supabase: SupabaseClient, companyId: string): Promis
 
 async function readAccountNames(supabase: SupabaseClient, companyId: string, accounts: string[]): Promise<Map<string, string>> {
   const names = new Map<string, string>()
-  for (const part of chunks(accounts)) {
+  for (const part of chunks(accounts, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('chart_of_accounts')
       .select('account_number, account_name')
@@ -596,7 +588,7 @@ async function readAccountNames(supabase: SupabaseClient, companyId: string, acc
 
 async function readLinesWithDocuments(supabase: SupabaseClient, lineIds: string[]): Promise<Set<string>> {
   const linked = new Set<string>()
-  for (const part of chunks(lineIds)) {
+  for (const part of chunks(lineIds, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('document_attachments')
       .select('journal_entry_line_id')
@@ -653,7 +645,7 @@ async function resolveBags(
 
   const found = new Map<string, { name: string; is_active: boolean }>()
   const dimensionIds = [...new Set(lookups.map((lookup) => lookup.dimension.id))]
-  for (const part of chunks([...new Set(lookups.map((lookup) => lookup.code))])) {
+  for (const part of chunks([...new Set(lookups.map((lookup) => lookup.code))], IN_CHUNK)) {
     if (dimensionIds.length === 0) break
     const { data, error } = await supabase
       .from('dimension_values')
@@ -767,7 +759,7 @@ async function loadSplitState(ctx: OperationContext, fiscalPeriodId: string): Pr
     return { preview, currentLines: [] }
   }
   preview.journal_entry_id = entry.id
-  preview.voucher = entry.voucher_series && entry.voucher_number ? `${entry.voucher_series}${entry.voucher_number}` : null
+  preview.voucher = entry.voucher_series && entry.voucher_number ? formatVoucher(entry) : null
 
   const previous = await readPreviousPeriod(supabase, companyId, period)
   if (!previous) {
@@ -910,7 +902,7 @@ function rpcFailure(error: { code?: string; message?: string }, done: AppliedSoF
     // The RPC points at storno for a locked year; for a split that is the
     // wrong advice (storno carries no bags), so answer this action's own codes.
     if (/stängd eller låst/i.test(message)) return { ok: false, code: 'OB_SPLIT_PERIOD_LOCKED', ...partial }
-    if (/Bokföringen är låst/i.test(message)) return { ok: false, code: 'OB_COMPANY_LOCK_DATE', ...partial }
+    if (isLockDateRefusal(message)) return { ok: false, code: 'OB_COMPANY_LOCK_DATE', ...partial }
     if (/bokslut/i.test(message)) return { ok: false, code: 'OB_CORRECT_YEAR_END_EXISTS', ...partial }
     return { ok: false, code: 'OB_SPLIT_REFUSED', ...partial, messageSv: getUserErrorMessage(error, { locale: 'sv' }) }
   }
@@ -1045,7 +1037,7 @@ export async function splitOpeningBalancesPerProject(
         })),
       )
 
-      const { data, error } = await supabase.rpc('correct_entry_lines_inline', {
+      const { data, error } = await rpcWithActor(supabase, 'correct_entry_lines_inline', {
         p_company_id: companyId,
         p_entry_id: entryId,
         p_strike_line_ids: strike,

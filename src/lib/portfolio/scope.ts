@@ -16,6 +16,11 @@
  *   string[]   explicit ids, in the given order; anything that is not an
  *              accessible company lands in `unresolved` (callers decide)
  *
+ * The multi-user seat gate applies here too, before the cap: a non-owner
+ * membership in a frozen company (multi_user lapsed past its grace) is
+ * dropped into `dormant`, the rule the per-company v1 and MCP doors refuse
+ * the same membership by. Every door that reads a scope gets it.
+ *
  * The result is capped at SCOPE_MAX_COMPANIES. The ids beyond the cap are
  * returned so a caller can call again with an explicit list.
  */
@@ -23,10 +28,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanyRole } from '@/types'
 import { getUserCompanies } from '@/lib/company/context'
+import { resolveDormantCompanyIds } from '@/lib/company/active-company'
 import { getByraMembership } from '@/lib/clients/fetch-client-overview'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import {
   capCompanies,
   excludeCompanies,
@@ -77,6 +84,12 @@ export interface ResolvedCompanyScope {
   remainingCompanyIds: string[]
   /** Explicit ids that are not an accessible non-archived membership. */
   unresolved: string[]
+  /**
+   * Selected companies paused for this user by the multi-user seat gate
+   * (non-owner in a frozen company). Never in `companies`; empty while the
+   * gate is off.
+   */
+  dormant: string[]
   /** The caller's byrå team (teams.kind = 'byra'), when they have one. */
   team: { id: string; name: string } | null
 }
@@ -155,6 +168,9 @@ export async function resolveCompanyScope(
     const company = pickEmbedded(membership.companies)
     if (!company || company.archived_at !== null) continue
     if (restrictTo && !restrictTo.has(company.id.toLowerCase())) continue
+    // A portfolio read spans the books (bank, deadlines, the ledger): an
+    // invoicing-only membership (lib/auth/invoicer-role.ts) never enters it.
+    if (isInvoicerRole(membership.role)) continue
     accessible.set(company.id.toLowerCase(), {
       companyId: company.id,
       name: company.name,
@@ -189,6 +205,19 @@ export async function resolveCompanyScope(
 
   selected = excludeCompanies(selected, input.exclude)
 
+  // 3b. Seat gate, before names and the cap so a paused company takes no
+  //     slot. Owners are exempt; no read at all while the gate is off.
+  const dormantIds = await resolveDormantCompanyIds(
+    supabase,
+    selected.map((company) => ({ company_id: company.companyId, role: company.role })),
+  )
+  const dormant = selected
+    .filter((company) => dormantIds.has(company.companyId))
+    .map((company) => company.companyId)
+  if (dormant.length > 0) {
+    selected = selected.filter((company) => !dormantIds.has(company.companyId))
+  }
+
   // 4. Display names, then the name sort (the sort needs the current name).
   if (selected.length > 0) {
     const displayNames = await fetchDisplayNames(
@@ -209,6 +238,7 @@ export async function resolveCompanyScope(
     truncated: capped.truncated,
     remainingCompanyIds: capped.remainingCompanyIds,
     unresolved,
+    dormant,
     team,
   }
 }

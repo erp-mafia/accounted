@@ -25,12 +25,7 @@
 import { isIsoDateShaped } from '@/lib/invariants'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { roundOre } from '@/lib/money'
-
-/**
- * The BAS account for skattekontot. The skatteverket extension's booking lib
- * imports this constant so prefill and server-side booking cannot drift.
- */
-export const SKATTEKONTO_ACCOUNT = '1630'
+import { isSkattekontoLedgerAccount, type SkattekontoLedgerAccount } from './skattekonto-account'
 
 const STORAGE_KEY = 'accounted.skv-manual-prefill'
 
@@ -42,6 +37,12 @@ export interface SkvManualPrefill {
   text: string
   /** belopp_skatteverket: positive = money into skattekontot */
   amount: number
+  /**
+   * The company's skattekonto account (1630, or 2012 for an enskild firma
+   * that runs it there), as the server reported it with the row: the same
+   * account the server-side booking uses (lib/skatteverket/skattekonto-account.ts).
+   */
+  account: SkattekontoLedgerAccount
 }
 
 /** Structurally compatible with the journal form's FormLine. */
@@ -80,6 +81,7 @@ export function stageSkvManualPrefill(
     transaktionstext: string
     belopp_skatteverket: string | number
   },
+  account: SkattekontoLedgerAccount,
   storage: PrefillStorage | null = defaultStorage(),
 ): string {
   try {
@@ -90,6 +92,7 @@ export function stageSkvManualPrefill(
         date: row.transaktionsdatum,
         text: row.transaktionstext,
         amount: Number(row.belopp_skatteverket),
+        account,
       }),
     )
   } catch {
@@ -129,19 +132,22 @@ export function takeSkvManualPrefill(
     date?: unknown
     text?: unknown
     amount?: unknown
+    account?: unknown
   }
   if (p.transactionId !== rawId) return null
   if (typeof p.date !== 'string' || !isIsoDateShaped(p.date)) return null
   const amount = typeof p.amount === 'number' ? p.amount : Number.NaN
   if (!Number.isFinite(amount) || amount === 0) return null
+  // Never guessed: a payload without the account prefills nothing.
+  if (!isSkattekontoLedgerAccount(p.account)) return null
   const text = typeof p.text === 'string' ? p.text.trim() : ''
-  return { transactionId: rawId, date: p.date, text, amount }
+  return { transactionId: rawId, date: p.date, text, amount, account: p.account }
 }
 
 /**
  * Prefill lines following the extension's booking sign convention:
- * positive belopp = money into skattekontot = debit 1630, counter credit;
- * negative = credit 1630, counter debit. The counter line carries the amount
+ * positive belopp = money into skattekontot = debit the skattekonto account
+ * (1630, or 2012), counter credit; negative = credit it, counter debit. The counter line carries the amount
  * but no account: picking the motkonto is exactly the manual decision this
  * flow exists for.
  */
@@ -151,7 +157,7 @@ export function buildSkvPrefillLines(prefill: SkvManualPrefill): SkvPrefillLine[
   // inputs; the rounding itself is done above.
   const value = rounded.toFixed(2)
   const skattekontoLine: SkvPrefillLine = {
-    account_number: SKATTEKONTO_ACCOUNT,
+    account_number: prefill.account,
     debit_amount: prefill.amount > 0 ? value : '',
     credit_amount: prefill.amount > 0 ? '' : value,
     line_description: prefill.text,

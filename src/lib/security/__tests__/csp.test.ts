@@ -178,6 +178,12 @@ describe('proxyOwnsContentSecurityPolicy', () => {
     '/api/documents/abc',
     '/api/documents/abc/inline/extra',
     '/api/storagefoo',
+    '/signera/abc',
+    '/api/signera/abc',
+    '/api/signera/abc/poll',
+    '/api/signera/abc/document/extra',
+    '/api/signing/me/abc',
+    '/api/signing/me/abc/start',
   ])('stamps %s', (path) => {
     expect(proxyOwnsContentSecurityPolicy(path)).toBe(true)
   })
@@ -186,6 +192,8 @@ describe('proxyOwnsContentSecurityPolicy', () => {
     '/api/storage',
     '/api/storage/v1/object/sign/documents/a.pdf',
     '/api/documents/6f1c2a3e-1234-4bcd-9abc-0123456789ab/inline',
+    '/api/signera/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd/document',
+    '/api/signing/me/6f1c2a3e-1234-4bcd-9abc-0123456789ab/document',
   ])('leaves %s to its headers() rule', (path) => {
     expect(proxyOwnsContentSecurityPolicy(path)).toBe(false)
   })

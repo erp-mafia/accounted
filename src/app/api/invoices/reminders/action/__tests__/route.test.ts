@@ -1,163 +1,104 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createMockRequest, createTableMockSupabase } from '@/tests/helpers'
 
 /**
- * The public reminder action endpoint feeds /invoice-action/[token], an
- * unauthenticated page that tells a customer what to pay. The statutory
- * påminnelseavgift (Lag 1981:739) is a krona amount booked 1510/3990 in SEK, so
- * it must never be relabelled as the invoice currency nor summed into a
- * foreign-currency total.
+ * The public endpoint that records a customer's answer to a reminder, posted
+ * by /invoice-action/[token]. The link token is the only credential. What the
+ * page shows (amounts, the old sender's SEK fee kept apart) is tested with
+ * src/lib/reminders/answer.ts.
  */
 
-let queued: { data: unknown; error: unknown } = { data: null, error: null }
+const db = vi.hoisted(() => ({ current: null as unknown }))
+vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: () => db.current }))
 
-vi.mock('@supabase/ssr', () => {
-  const buildChain = (): unknown =>
-    new Proxy(
-      {},
-      {
-        get(_t, prop) {
-          if (prop === 'then') {
-            return (resolve: (v: unknown) => void) => resolve(queued)
-          }
-          return () => buildChain()
-        },
-      },
-    )
+import { POST } from '../route'
 
-  return {
-    createServerClient: vi.fn(() => ({
-      from: vi.fn(() => buildChain()),
-    })),
-  }
-})
-
-const resolveBrandForCompanyMock = vi.hoisted(() => vi.fn())
-vi.mock('@/lib/branding/resolve', () => ({
-  resolveBrandForCompany: resolveBrandForCompanyMock,
-}))
-
-import { GET } from '../route'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
-
-interface ActionPayload {
-  currency: string
-  total: number
-  interestAmount: number
-  reminderFee: number
-  reminderFeeCurrency: string
-  totalDue: number
-  feeDueSeparately: number
-  brand: { appName: string; logoUrl: string | null; brandColor: string } | null
-}
-
-function makeReminderRow(currency: string, total: number) {
+function reminderRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'reminder-1',
     company_id: 'company-1',
     reminder_level: 1,
-    sent_at: '2026-05-20T08:00:00Z',
     response_type: null,
     action_token_used: false,
     interest_amount: 10,
     interest_rate: 0.105,
-    interest_from_date: '2026-05-01',
     interest_days: 30,
     reminder_fee: 60,
     invoice: {
-      id: 'invoice-1',
+      status: 'overdue',
       invoice_number: 'F2026011',
       invoice_date: '2026-04-15',
       due_date: '2026-05-01',
-      total,
-      currency,
-      status: 'overdue',
-      customer: { name: 'Erik Andersson' },
+      total: 1000,
+      vat_amount: 200,
+      currency: 'EUR',
+      paid_amount: null,
+      deduction_total: null,
+      remaining_amount: 1000,
+      credited_invoice_id: null,
+      ore_rounding: false,
+      customer: { name: 'Erik Andersson', language: 'sv' },
     },
+    ...overrides,
   }
 }
 
-async function callGet() {
-  const response = await GET(
-    createMockRequest('/api/invoices/reminders/action', {
-      searchParams: { token: 'tok-1' },
-    }),
-  )
-  return parseJsonResponse<ActionPayload>(response)
+function useDb(tables: Parameters<typeof createTableMockSupabase>[0]) {
+  const mock = createTableMockSupabase({ company_settings: { data: { company_name: 'Säljaren AB', ore_rounding: false } }, ...tables })
+  db.current = mock.supabase
+  return mock
 }
 
-describe('GET /api/invoices/reminders/action', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    resolveBrandForCompanyMock.mockResolvedValue(null)
+// The route's rate limits are module-level state shared across this file:
+// each test uses its own tokens and client addresses.
+const post = (body: unknown, headers?: Record<string, string>) =>
+  POST(createMockRequest('/api/invoices/reminders/action', { method: 'POST', body, headers }))
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('POST /api/invoices/reminders/action', () => {
+  it('validates the token, the action and the note', async () => {
+    useDb({ invoice_reminders: { data: reminderRow() } })
+    expect((await post({ action: 'marked_paid' })).status).toBe(400)
+    expect((await post({ token: 'tok', action: 'paid_twice' })).status).toBe(400)
+    expect((await post({ token: 'tok', action: 'disputed', note: 42 })).status).toBe(400)
+    expect((await post({ token: 'tok', action: 'disputed', note: 'x'.repeat(1001) })).status).toBe(400)
   })
 
-  it('returns 400 without a token', async () => {
-    queued = { data: null, error: null }
-    const response = await GET(createMockRequest('/api/invoices/reminders/action'))
-    expect(response.status).toBe(400)
+  it('records an answer with its note', async () => {
+    const mock = useDb({ invoice_reminders: [{ data: reminderRow() }, { data: [{ id: 'reminder-1' }] }] })
+    const response = await post({ token: 'tok', action: 'disputed', note: '  Fel antal timmar  ' })
+    expect(response.status).toBe(200)
+    expect(mock.payloads('invoice_reminders', 'update')).toEqual([
+      expect.objectContaining({ response_type: 'disputed', response_note: 'Fel antal timmar' }),
+    ])
   })
 
-  it('returns 404 for an unknown token', async () => {
-    queued = { data: null, error: { message: 'not found' } }
-    const { status } = await callGet()
-    expect(status).toBe(404)
+  it('answers 404 for an unknown link and 409 for a used one', async () => {
+    useDb({ invoice_reminders: { data: null } })
+    expect((await post({ token: 'nope', action: 'marked_paid' })).status).toBe(404)
+    useDb({ invoice_reminders: { data: reminderRow({ action_token_used: true }) } })
+    expect((await post({ token: 'tok', action: 'marked_paid' })).status).toBe(409)
   })
 
-  it('folds the fee into the total for a SEK invoice (unchanged behaviour)', async () => {
-    queued = { data: makeReminderRow('SEK', 10_000), error: null }
-    const { status, body } = await callGet()
-
-    expect(status).toBe(200)
-    expect(body.currency).toBe('SEK')
-    expect(body.reminderFee).toBe(60)
-    expect(body.reminderFeeCurrency).toBe('SEK')
-    expect(body.totalDue).toBe(10_070)
-    expect(body.feeDueSeparately).toBe(0)
+  it('answers 429 once a link is over its budget, before reading the database', async () => {
+    useDb({ invoice_reminders: { data: reminderRow({ action_token_used: true }) } })
+    for (let i = 0; i < 10; i++) expect((await post({ token: 'tok-budget', action: 'marked_paid' })).status).toBe(409)
+    const mock = useDb({ invoice_reminders: { data: reminderRow({ action_token_used: true }) } })
+    const limited = await post({ token: 'tok-budget', action: 'marked_paid' })
+    expect(limited.status).toBe(429)
+    expect(await limited.json()).toEqual({ error: 'RATE_LIMITED' })
+    expect(mock.tables()).toEqual([])
   })
 
-  it('never sums the SEK fee into a EUR total', async () => {
-    queued = { data: makeReminderRow('EUR', 1_000), error: null }
-    const { status, body } = await callGet()
-
-    expect(status).toBe(200)
-    expect(body.currency).toBe('EUR')
-    // 1000 EUR + 10 EUR interest. The 60 kr fee stays out of the EUR figure:
-    // 1070 here would demand roughly 690 kr too much on a public page.
-    expect(body.totalDue).toBe(1_010)
-    expect(body.feeDueSeparately).toBe(60)
-    expect(body.reminderFeeCurrency).toBe('SEK')
-  })
-
-  it('always reports the fee currency as SEK so the page cannot label 60 as EUR', async () => {
-    queued = { data: makeReminderRow('USD', 500), error: null }
-    const { body } = await callGet()
-
-    expect(body.reminderFeeCurrency).toBe('SEK')
-    expect(body.reminderFee).toBe(60)
-    expect(body.totalDue).toBe(510)
-  })
-
-  it('returns the company brand for the public page when one exists (WL-13)', async () => {
-    resolveBrandForCompanyMock.mockResolvedValue({
-      appName: 'Siffra',
-      logoUrl: 'https://cdn.example/siffra.png',
-      brandColor: '#123456',
-      domain: 'app.siffra.se',
-    })
-    queued = { data: makeReminderRow('SEK', 10_000), error: null }
-    const { body } = await callGet()
-
-    expect(resolveBrandForCompanyMock).toHaveBeenCalledWith('company-1')
-    expect(body.brand).toEqual({
-      appName: 'Siffra',
-      logoUrl: 'https://cdn.example/siffra.png',
-      brandColor: '#123456',
-    })
-  })
-
-  it('returns brand: null for a brandless company (page unchanged)', async () => {
-    queued = { data: makeReminderRow('SEK', 10_000), error: null }
-    const { body } = await callGet()
-    expect(body.brand).toBeNull()
+  it('answers 429 to a client trying one made-up token after another', async () => {
+    useDb({ invoice_reminders: { data: null } })
+    const from = { 'x-forwarded-for': '203.0.113.7' }
+    for (let i = 0; i < 60; i++) expect((await post({ token: `guess-${i}`, action: 'marked_paid' }, from)).status).toBe(404)
+    expect((await post({ token: 'guess-60', action: 'marked_paid' }, from)).status).toBe(429)
+    // Another network keeps its own budget.
+    expect((await post({ token: 'guess-61', action: 'marked_paid' }, { 'x-forwarded-for': '198.51.100.7' })).status).toBe(404)
   })
 })

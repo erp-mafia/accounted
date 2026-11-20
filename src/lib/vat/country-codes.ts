@@ -158,14 +158,6 @@ export function isAssignedCountryCode(code: string | null | undefined): boolean 
 }
 
 /**
- * Every folded name the TypeScript table knows, with its code. Exists so a
- * test can hold the SQL twin in migration 20260903173000 to the same table.
- */
-export function listKnownCountryNames(): Array<[name: string, code: string]> {
-  return [...NAME_TO_CODE.entries()]
-}
-
-/**
  * Turn user, agent or legacy input into an ISO 3166-1 alpha-2 code.
  *
  * Accepts a code in any case ("de", "DE"), the Skatteverket/VIES spelling
@@ -173,10 +165,6 @@ export function listKnownCountryNames(): Array<[name: string, code: string]> {
  * every country in COUNTRY_OPTIONS plus the aliases above. Returns null for
  * anything else (empty input included): the caller decides whether that is
  * "unknown, keep the raw text" (reports, backfill) or a 400 (API writes).
- *
- * The SQL twin `public.normalize_country_code(text)` (migration
- * 20260903173000) carries the same table for the one-off backfill; keep them
- * in step when adding names here.
  */
 export function normalizeCountryCode(input: string | null | undefined): string | null {
   if (input == null) return null
@@ -189,11 +177,6 @@ export function normalizeCountryCode(input: string | null | undefined): string |
     return upper
   }
   return NAME_TO_CODE.get(foldName(trimmed)) ?? null
-}
-
-/** True when the value already is a well-formed uppercase alpha-2 code. */
-export function isCountryCode(value: string | null | undefined): boolean {
-  return typeof value === 'string' && ALPHA2_RE.test(value)
 }
 
 /**
@@ -226,12 +209,6 @@ export function getCountryOptions(locale: 'sv' | 'en' = 'sv'): CountryOption[] {
 // ---------------------------------------------------------------------------
 // Country vs customer type
 // ---------------------------------------------------------------------------
-
-export type CountryPartyType =
-  | 'individual'
-  | 'swedish_business'
-  | 'eu_business'
-  | 'non_eu_business'
 
 export type CountryConsistencyIssue =
   | 'SWEDISH_BUSINESS_REQUIRES_SE'

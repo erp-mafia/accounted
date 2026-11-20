@@ -1,5 +1,4 @@
-import posthog from 'posthog-js'
-import { isAnalyticsEnabled } from './enabled'
+import { analyticsReady, loadedAnalytics } from './client'
 
 /**
  * Detach the current person from PostHog on logout.
@@ -23,15 +22,27 @@ import { isAnalyticsEnabled } from './enabled'
  * What it does NOT clear: `seenSurvey_<id>`. No PostHog bundle enumerates
  * localStorage, so the SDK cannot find those keys to delete them. That is
  * accepted, and desirable: clearing them would re-prompt every survey to the
- * next person on the device. See the client-side storage inventory in
- * .compliance/Data_Classification_Handling.md.
+ * next person on the device.
  */
 export function resetAnalyticsIdentity(): void {
   if (typeof window === 'undefined') return
-  if (!isAnalyticsEnabled()) return
-  try {
-    posthog.reset()
-  } catch {
-    // best-effort: we're already in a logout flow
+  const posthog = loadedAnalytics()
+  if (posthog) {
+    try {
+      posthog.reset()
+    } catch {
+      // best-effort: we're already in a logout flow
+    }
+    return
   }
+  // Still loading: the identify of the person who is leaving is queued
+  // behind posthog.init (identify.ts), so the reset queues behind it, or
+  // the tab would stay identified as them once the SDK arrives.
+  void analyticsReady().then((loadedLater) => {
+    try {
+      loadedLater?.reset()
+    } catch {
+      // best-effort: we're already in a logout flow
+    }
+  })
 }

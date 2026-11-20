@@ -9,6 +9,7 @@ import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
 import { ScbApiError } from '@/lib/parties/scb/transport'
 import { COMPANY_SUGGEST_MAX } from '@/lib/company-lookup/types'
 import { toCompanySuggestion } from '@/lib/company-lookup/scb-suggestion'
+import { offerableSearchHits, ownPersonalNumberHash } from '@/lib/company-lookup/own-firm'
 
 /**
  * GET /api/company/search?q=: companies whose registered name starts with
@@ -17,15 +18,16 @@ import { toCompanySuggestion } from '@/lib/company-lookup/scb-suggestion'
  * free, so the client may call it per debounced keystroke; the paid TIC
  * lookup runs once, on the pick, exactly as for a typed orgnr.
  *
- * Sole traders are included: a person searching for their own firm is the
- * point of the step. Their org number is a personnummer, so the client
- * names the form and never prints it.
+ * A sole trader's firm is listed only when it is the caller's own: its org
+ * number is the owner's personnummer, so a name match is no proof of whose
+ * firm it is (crm#1456). See offerableSearchHits. Everyone else's firm stays
+ * out of the response, number and all.
  *
  * No company context: the caller is in the middle of creating one.
  * requireAuth() (not a raw getUser()) keeps MFA AAL2 enforced on hosted.
  */
 export async function GET(request: Request) {
-  const { error: authError } = await requireAuth()
+  const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
 
   const requestId = `req_${crypto.randomUUID()}`
@@ -42,10 +44,18 @@ export async function GET(request: Request) {
   if (!isScbConfigured()) return errorResponseFromCode('SCB_NOT_CONFIGURED', log, { requestId })
 
   try {
-    const result = await createScbClient(scbConfigFromEnv()).searchByName(q, { includeSoleTraders: true })
-    const suggestions = result.candidates.slice(0, COMPANY_SUGGEST_MAX).map(toCompanySuggestion)
+    const [result, ownHash] = await Promise.all([
+      createScbClient(scbConfigFromEnv()).searchByName(q, { includeSoleTraders: true }),
+      ownPersonalNumberHash(supabase, user.id),
+    ])
+    const candidates = offerableSearchHits(
+      result.candidates.map(toCompanySuggestion),
+      (s) => ({ orgNumber: s.orgNumber, legalForm: s.legalEntityType }),
+      ownHash,
+    )
+    const suggestions = candidates.slice(0, COMPANY_SUGGEST_MAX)
     return NextResponse.json({
-      data: { suggestions, truncated: result.truncated || result.candidates.length > COMPANY_SUGGEST_MAX },
+      data: { suggestions, truncated: result.truncated || candidates.length > COMPANY_SUGGEST_MAX },
     })
   } catch (err) {
     log.warn('scb search failed', {

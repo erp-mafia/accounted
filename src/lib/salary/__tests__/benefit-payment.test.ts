@@ -65,7 +65,7 @@ const config2026: PayrollConfig = {
   reducedAvgiftAge: 67,
 }
 
-// The shape measured on prod 2026-09-21 (amounts only): salary 48 000, a car
+// The shape Measured 2026-09-21 (amounts only): salary 48 000, a car
 // benefit of 6 664 and a payment of the same amount. Three brackets so the
 // tax proves WHICH base was looked up:
 //   41 336 = the base when a same-amount bruttolöneavdrag adjusts a second time
@@ -80,7 +80,13 @@ const taxRates: TaxTableRate[] = [
 const SALARY = 48000
 const CAR = 6664
 
-type Line = { itemType: string; amount: number; isNetDeduction?: boolean; isGrossDeduction?: boolean }
+type Line = {
+  itemType: string
+  amount: number
+  isNetDeduction?: boolean
+  isGrossDeduction?: boolean
+  benefitType?: string | null
+}
 
 function input(lineItems: Line[]) {
   return {
@@ -111,13 +117,20 @@ function input(lineItems: Line[]) {
       isVacationBasis: false,
       isGrossDeduction: li.isGrossDeduction ?? false,
       isNetDeduction: li.isNetDeduction ?? false,
+      benefitType: li.benefitType ?? null,
     })),
   }
 }
 
 const car = (amount = CAR): Line => ({ itemType: 'benefit_car', amount })
 const meals = (amount: number): Line => ({ itemType: 'benefit_meals', amount })
-const payment = (amount: number): Line => ({ itemType: 'net_deduction_benefit_payment', amount, isNetDeduction: true })
+const payment = (amount: number, benefitType: string | null = null): Line => ({
+  itemType: 'net_deduction_benefit_payment',
+  amount,
+  isNetDeduction: true,
+  benefitType,
+})
+const other = (amount: number): Line => ({ itemType: 'benefit_other', amount })
 const grossDeduction = (amount: number, itemType = 'gross_deduction_other'): Line => ({
   itemType,
   amount,
@@ -261,7 +274,64 @@ describe('resolveTaxableBenefits', () => {
   it('refuses several benefit types with a payment, naming them', () => {
     const result = resolveTaxableBenefits([car(), meals(2480), payment(-100)])
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toContain('bilförmån, kostförmån')
+    if (!result.ok) {
+      expect(result.error).toContain('bilförmån, kostförmån')
+      expect(result.error).toContain('Ange på avdragsraden vilken förmån den betalar')
+    }
+  })
+})
+
+describe('resolveTaxableBenefits: a payment that names its benefit (crm#1492)', () => {
+  const resolved = (lines: Line[]) => {
+    const result = resolveTaxableBenefits(lines)
+    if (!result.ok) throw new Error(result.error)
+    return result.benefits
+  }
+
+  it('the reported case: car paid in full next to a sjukvårdsförmån (other) reduces only the car', () => {
+    const b = resolved([car(13713.75), other(281), payment(-13713.75, 'car')])
+    expect(b.taxableByType).toEqual({ benefit_car: 0, benefit_other: 281 })
+    expect(b).toMatchObject({ grossTotal: 13994.75, paid: 13713.75, reduction: 13713.75, taxableTotal: 281 })
+    expect(b.reducedTypes).toEqual(['benefit_car'])
+  })
+
+  it('a named payment reduces its own type even when it is the smaller one, capped at it', () => {
+    const b = resolved([car(), meals(2480), payment(-3000, 'meals')])
+    expect(b.taxableByType).toEqual({ benefit_car: CAR, benefit_meals: 0 })
+    expect(b).toMatchObject({ paid: 3000, reduction: 2480, taxableTotal: CAR })
+  })
+
+  it('two named payments reduce two types', () => {
+    const b = resolved([car(), meals(2480), payment(-2000, 'car'), payment(-480, 'meals')])
+    expect(b.taxableByType).toEqual({ benefit_car: 4664, benefit_meals: 2000 })
+    expect(b.reducedTypes).toEqual(['benefit_car', 'benefit_meals'])
+    expect(b).toMatchObject({ reduction: 2480, taxableTotal: 6664 })
+  })
+
+  it('a named benefit that is not on the payslip lowers nothing: plain net deduction', () => {
+    const b = resolved([meals(2480), payment(-CAR, 'car')])
+    expect(b.taxableByType).toEqual({ benefit_meals: 2480 })
+    expect(b).toMatchObject({ paid: CAR, reduction: 0, taxableTotal: 2480 })
+    expect(b.reducedTypes).toEqual([])
+  })
+
+  it('still refuses an unnamed payment next to several types, even beside a named one', () => {
+    const result = resolveTaxableBenefits([car(), meals(2480), payment(-2000, 'car'), payment(-100)])
+    expect(result.ok).toBe(false)
+  })
+
+  it('an unnamed payment with one benefit type behaves exactly as before', () => {
+    expect(resolved([car(), payment(-2000)])).toEqual(resolved([car(), payment(-2000, 'car')]))
+  })
+
+  it('the engine taxes the reported case on salary plus the unpaid benefit only', () => {
+    const r = calculateSalary(
+      input([car(13713.75), other(281), payment(-13713.75, 'car')]),
+      config2026,
+      taxRates,
+    )
+    expect(r.benefitValues).toBe(281)
+    expect(r.taxableIncome).toBe(SALARY + 281)
   })
 })
 
@@ -334,7 +404,7 @@ describe('the run-level warning, from rows as run-calculation sees them', () => 
     const lines = [...collectDescribedLines(stored, recurring), CAR_LINE]
     const entries = describeDoubleBenefitAdjustments('Anna Andersson', lines, benefitsOf(lines))
     expect(entries).toEqual([
-      'Anna Andersson: bruttolöneavdraget "Bilförmån justering vid nettolöneavdrag" (6\u00a0664 kr) ' +
+      'Anna Andersson: bruttolöneavdraget "Bilförmån justering vid nettolöneavdrag" (6\u00a0664\u00a0kr) ' +
         'tas bort under Återkommande lönerader på den anställde',
     ])
     const warning = doubleBenefitAdjustmentWarning(entries)

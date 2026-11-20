@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { getCurrentFiscalYearStart, getPreviousFiscalYearStart, daysBetween } from '../fiscal-year'
+import { fiscalYearStartMonthFor, getCurrentFiscalYearStart, getPreviousFiscalYearStart, daysBetween } from '../fiscal-year'
+
+describe('fiscalYearStartMonthFor', () => {
+  it('reads the setting, January when there is none', () => {
+    expect(fiscalYearStartMonthFor({ fiscal_year_start_month: 7, entity_type: 'aktiebolag' })).toBe(7)
+    expect(fiscalYearStartMonthFor({ entity_type: 'aktiebolag' })).toBe(1)
+    expect(fiscalYearStartMonthFor(null)).toBe(1)
+  })
+
+  it('keeps a form bound to the calendar year in January whatever the setting says', () => {
+    expect(fiscalYearStartMonthFor({ fiscal_year_start_month: 7, entity_type: 'enskild_firma' })).toBe(1)
+  })
+})
 
 describe('getCurrentFiscalYearStart', () => {
   it('returns Jan 1 of current year for calendar-year fiscals', () => {

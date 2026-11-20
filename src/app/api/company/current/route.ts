@@ -5,12 +5,12 @@ import { validateBody } from '@/lib/api/validate'
 import { AccountingFrameworkSchema, EntityTypeSchema } from '@/lib/api/schemas'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   isEntityType,
   isEntityTypeCreatable,
   supportsAccountingFramework,
 } from '@/lib/company/entity-type'
+import { changeAccountingFramework } from '@/lib/company/accounting-framework-change'
 
 /**
  * GET /api/company/current
@@ -24,7 +24,7 @@ import {
  * authoritative value in user_preferences.
  *
  * Uses requireAuth() directly (not withRouteContext): a null companyId is a
- * valid answer here — the wrapper would short-circuit it into an error.
+ * valid answer here - the wrapper would short-circuit it into an error.
  */
 export async function GET() {
   const auth = await requireAuth()
@@ -45,12 +45,35 @@ export async function GET() {
 /**
  * Body shape for PATCH /api/company/current.
  *
- * Currently only carries `accounting_framework` (K2 / K3). Adding more
+ * Carries the K2 / K3 framework of a räkenskapsår (with what BFNAR 2012:4
+ * asks of a switch from K3 to K2) and the legal-form correction. Adding more
  * companies-level fields here is fine but anything that belongs on
  * company_settings should go to /api/settings instead.
  */
 const PatchBodySchema = z.object({
   accounting_framework: AccountingFrameworkSchema.optional(),
+  /**
+   * The räkenskapsår the framework applies to. Omitted: the year running
+   * today. The framework is stored per year (lib/company/accounting-framework.ts);
+   * later years that only followed this one move with it.
+   */
+  fiscal_period_id: z.string().uuid().optional(),
+  /** BFNAR 2012:4 punkt 3: why the company leaves K3 for K2; printed in a note. */
+  framework_change_reason: z
+    .string()
+    .max(2000)
+    .transform((value) => value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''))
+    .nullable()
+    .optional(),
+  /** Whether the company applied a K2 regelverk before (BFNAR 2012:4 punkt 2). */
+  previously_applied_k2: z.boolean().nullable().optional(),
+  /** The stated reasons are särskilda skäl, not tax reasons. */
+  special_reasons_confirmed: z.boolean().nullable().optional(),
+  /**
+   * The framework the previous årsredovisning was prepared under (none: no
+   * previous årsredovisning), when Accounted holds no reliable record of it.
+   */
+  previous_year_framework: z.enum(['k2', 'k3', 'none']).nullable().optional(),
   /**
    * Legal-form correction for a company whose books are still empty (no
    * verifikat, invoices or supplier invoices, only seeded accounts). Runs
@@ -70,7 +93,7 @@ const ENTITY_TYPE_CHANGE_ERRORS: Record<string, { status: number; message: strin
   },
   ENTITY_TYPE_CHANGE_CONFIGURED_ACCOUNTS: {
     status: 409,
-    message: 'Företagsformen kan bara ändras innan konteringsregler eller dimensionsregler har skapats: ta bort dem först.',
+    message: 'Företagsformen kan bara ändras innan konteringsregler, dimensionsregler eller budgetbelopp har skapats: ta bort dem först.',
   },
   ENTITY_TYPE_CHANGE_CUSTOM_ACCOUNTS: {
     status: 409,
@@ -91,6 +114,11 @@ const ENTITY_TYPE_CHANGE_ERRORS: Record<string, { status: number; message: strin
  * handler validates the RESULTING (entity_type, accounting_framework) pair,
  * so a legal-form change can neither keep K3 on a form that never uses it
  * nor be judged against the form the company is leaving.
+ *
+ * A framework change applies to one räkenskapsår (fiscal_period_id, default
+ * the year running today) under BFNAR 2012:4 (changeAccountingFramework):
+ * refused on a closed or locked year or one whose årsredovisning is locked or
+ * signed, and a switch from K3 to K2 carries its reasons.
  */
 export const PATCH = withRouteContext(
   'company.update_current',
@@ -100,7 +128,6 @@ export const PATCH = withRouteContext(
   const validation = await validateBody(request, PatchBodySchema)
   if (!validation.success) return validation.response
 
-  const updates: Record<string, unknown> = {}
   const wantsFramework = validation.data.accounting_framework !== undefined
   const wantsEntityType = validation.data.entity_type !== undefined
 
@@ -136,9 +163,29 @@ export const PATCH = withRouteContext(
         { status: 400 },
       )
     }
-    // With a legal-form change the RPC writes the framework in the same
-    // transaction; only a framework-only request uses the direct update.
-    if (wantsFramework && !wantsEntityType) updates.accounting_framework = validation.data.accounting_framework
+  }
+
+  const frameworkInput = () => ({
+    framework: validation.data.accounting_framework!,
+    fiscal_period_id: validation.data.fiscal_period_id,
+    change_reason: validation.data.framework_change_reason ?? null,
+    previously_applied_k2: validation.data.previously_applied_k2 ?? null,
+    special_reasons_confirmed: validation.data.special_reasons_confirmed ?? null,
+    previous_year_framework: validation.data.previous_year_framework ?? null,
+  })
+
+  // Framework only: one räkenskapsår under BFNAR 2012:4.
+  if (wantsFramework && !wantsEntityType) {
+    const fiscalYear = await changeAccountingFramework(
+      { supabase, companyId, userId: ctx.user.id },
+      frameworkInput(),
+    )
+    const { data } = await supabase
+      .from('companies')
+      .select('id, accounting_framework, entity_type')
+      .eq('id', companyId)
+      .single()
+    return NextResponse.json({ data: { ...(data ?? {}), fiscal_year: fiscalYear } })
   }
 
   if (validation.data.entity_type !== undefined) {
@@ -166,30 +213,20 @@ export const PATCH = withRouteContext(
       }
       return NextResponse.json({ error: mapped.message, code: result.code }, { status: mapped.status })
     }
+    // A changed form moves the open years with it (the database trigger on
+    // companies.entity_type). With the form unchanged the RPC only wrote the
+    // company default, so the framework is applied to the year as above.
+    if (wantsFramework && result.changed === false) {
+      await changeAccountingFramework({ supabase, companyId, userId: ctx.user.id }, frameworkInput())
+    }
   }
 
-  if (Object.keys(updates).length === 0) {
-    // Nothing to write: surface the current row so the client can refresh
-    // its local state without a no-op write.
-    const { data } = await supabase
-      .from('companies')
-      .select('id, accounting_framework, entity_type')
-      .eq('id', companyId)
-      .single()
-    return NextResponse.json({ data })
-  }
-
-  const { data, error } = await supabase
+  // Surface the row as it stands so the client can refresh its local state.
+  const { data } = await supabase
     .from('companies')
-    .update(updates)
-    .eq('id', companyId)
     .select('id, accounting_framework, entity_type')
+    .eq('id', companyId)
     .single()
-
-  if (error) {
-    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-  }
-
   return NextResponse.json({ data })
   },
   // companies is writable by owner/admin only (RLS, user_is_company_admin).

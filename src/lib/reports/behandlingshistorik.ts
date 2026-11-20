@@ -2,7 +2,19 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { AuditLogEntry } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
+import { SOURCE_TYPE_LABELS_SV } from '@/lib/reports/systemdokumentation'
+import { getPackage, packageForConfigKey } from '@/lib/modules/packages'
+import { parseGrantPolicyVersion } from '@/lib/grants/types'
+import { approvalDoorOf } from '@/lib/suggestion-log/approval-door'
+import { agentDisplayName, formatActorAttribution } from '@/lib/attribution/format-actor'
+import {
+  buildDecisionReceipts,
+  fetchPeriodDecisions,
+  type DecisionCandidate,
+  type DecisionReceipt,
+} from '@/lib/suggestion-log/receipts'
 import {
   reportToWorkbook,
   textColumn,
@@ -11,6 +23,7 @@ import {
   UTF8_BOM,
   type SheetSpec,
 } from '@/lib/reports/xlsx-export'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Behandlingshistorik (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16).
@@ -27,8 +40,11 @@ import {
  * This module is a read model over the stores that already record both limbs
  * (`journal_entries.committed_at` + the trigger-written immutable `audit_log`,
  * `journal_entry_rattelse_log`, `company_migration_resets`, `sie_imports`,
- * `bank_file_imports`) and turns them into one chronological list of
- * human-readable events. It never writes.
+ * `bank_file_imports`, `collection_cases` and the company's decisions in
+ * `collection_case_events`, and the decisions on bank lines, underlag and
+ * approved staged operations in `suggestion_log`, read as decision receipts)
+ * and turns them into one
+ * chronological list of human-readable events. It never writes.
  *
  * Event labels are Swedish in both locales: the report is räkenskapsinformation
  * that is archived for seven years and handed to revisorer, the same rule as
@@ -58,6 +74,7 @@ import {
   type BehandlingshistorikEvent,
   type BehandlingshistorikReport,
   type BehandlingshistorikSource,
+  type BehandlingshistorikVerifiedPrincipal,
 } from '@/lib/reports/behandlingshistorik-types'
 
 export {
@@ -69,6 +86,7 @@ export {
   type BehandlingshistorikEvent,
   type BehandlingshistorikReport,
   type BehandlingshistorikSource,
+  type BehandlingshistorikVerifiedPrincipal,
 } from '@/lib/reports/behandlingshistorik-types'
 
 export interface BehandlingshistorikParams {
@@ -121,6 +139,12 @@ interface EntryRow {
   reverses_id: string | null
   correction_of_id: string | null
   import_batch_id?: string | null
+  /**
+   * The principal the database verified at commit (20261016110000). NULL on
+   * verifikat posted before it; absent when the database predates it.
+   */
+  committed_auth_role?: string | null
+  committed_auth_uid?: string | null
 }
 
 interface RattelseRow {
@@ -134,6 +158,13 @@ interface RattelseRow {
   struck_lines: unknown
   added_lines: unknown
   actor: string | null
+  /**
+   * WHO relayed the rättelse beside the user (migration 20261016005000): the
+   * committed_actor_type values. NULL or absent on rows written before it,
+   * which read as the user, as they always have.
+   */
+  actor_type?: string | null
+  actor_label?: string | null
   created_at: string
   /** 'sie_import' = correction history carried by the SIE file (#2427); absent/'user' = made here. */
   source?: 'user' | 'sie_import' | null
@@ -166,6 +197,18 @@ interface SieImportRow {
   imported_at: string | null
   created_at: string
   replaced_at: string | null
+  /** The durable job's state, NULL on a legacy import: the import's real lifecycle. */
+  job_state?: string | null
+  job_kind?: string | null
+  job_phase?: string | null
+  /** When the job reached 'undone' (20261109153200); NULL on an undo before it. */
+  undone_at?: string | null
+  execution_actor_id?: string | null
+  undo_actor_type?: string | null
+  undo_actor_label?: string | null
+  /** From job_result.repairOutcome and .stoppedAt (read in code): set on a stopped duplicate repair. */
+  repair_outcome?: string | null
+  repair_stopped_at?: string | null
 }
 
 interface BankFileImportRow {
@@ -183,6 +226,30 @@ interface BankFileImportRow {
   created_at: string
 }
 
+/** A collection case (collection_cases): an invoice the company handed over to its collections provider. */
+export interface CollectionCaseRow {
+  id: string
+  invoice_id: string
+  submission_status: string
+  opened_by: string | null
+  opened_at: string
+  closed_at: string | null
+  close_reason: string | null
+  provider_case_number: string | null
+  /** The embedded invoice: one row at runtime (many-to-one), typed as either shape. */
+  invoice: { invoice_number: string | null } | Array<{ invoice_number: string | null }> | null
+}
+
+/** A decision the company took on a collection case (collection_case_events, kind user_action). */
+export interface CollectionCaseDecisionRow {
+  id: string
+  case_id: string
+  occurred_at: string
+  label: string
+  actor_user_id: string | null
+  raw: Record<string, unknown> | null
+}
+
 /** Event before user labels are resolved. */
 interface RawActor {
   type: BehandlingshistorikActorType
@@ -190,15 +257,23 @@ interface RawActor {
   actor_label: string | null
 }
 
-export interface RawBehandlingshistorikEvent extends Omit<BehandlingshistorikEvent, 'actor'> {
+/** Verified principal before its user label is resolved. */
+type RawVerifiedPrincipal = Omit<BehandlingshistorikVerifiedPrincipal, 'label'>
+
+export interface RawBehandlingshistorikEvent extends Omit<BehandlingshistorikEvent, 'actor' | 'verified'> {
   actor: RawActor
+  verified?: RawVerifiedPrincipal
 }
 
 // ============================================================
 // Constants: tables, field labels, value labels
 // ============================================================
 
-/** audit_log tables the report reads. Everything else (registers) is out of scope per BFN's commentary. */
+/**
+ * audit_log tables the report reads. Everything else (registers) is out of scope per BFN's commentary.
+ * The rows are selected in SQL (behandlingshistorik_sources, together with
+ * GLOBAL_ACTIONS); a unit test pins the function's lists to these constants.
+ */
 export const AUDITED_TABLES = [
   'journal_entries',
   'chart_of_accounts',
@@ -227,6 +302,53 @@ export const AUDITED_TABLES = [
   // Which mailboxes the receipt hunt reads underlag from: connected and
   // disconnected, written by hand without tokens (extensions/general/mail).
   'mail_connections',
+  // Reminders and debt collection through a provider (migration
+  // 20261012030100): consent, activation, ending, and the rules applied when
+  // invoices are handed over and collected payments and payouts are booked.
+  'collection_connections',
+  // Service accounts (migration 20261016120000): a non-human principal that
+  // writes to the books through its own keys, created and revoked by an
+  // owner or admin. Their keys are api_keys rows, logged above.
+  'service_accounts',
+  // A company's package choices (migration 20261016200400): which parts of
+  // Accounted are switched on, by whom and why (an approved suggestion or the
+  // company's own choice). Only the package keys render; the rows are written
+  // by set_company_package_choice, which logs every change here.
+  'company_capability_config',
+  // Rules for automatic booking (grants, migration 20261017100200): which
+  // counterparty an agent may book without a person, how, up to what amount,
+  // who accepted it and when it was revoked; and the company's switch that
+  // pauses them all. Written by create_company_grant, revoke_company_grant
+  // and set_company_grants_paused, which log every change here.
+  'company_grants',
+  'company_grant_settings',
+  // Attest of supplier invoices (migration 20261028214917): whether attest is
+  // required, from what amount, by whom, any or all, and whether the person
+  // who registered an invoice may attest it. It decides what may be paid.
+  'company_attest_policies',
+  // Attest limits per person (migration 20261030140000): how much one
+  // attester's approval covers, which decides who may release a payment.
+  'company_attest_limits',
+  // Hard blocks (migration 20261031150000): what is never booked without a
+  // person's review, added, replaced and archived by an owner or admin
+  // through save_booking_review_rule and archive_booking_review_rule.
+  'booking_review_rules',
+  // An employee's pay basis (migration 20261101003400, accounted#30): the
+  // trigger logs only the EMPLOYEE_PAY_FIELDS columns and the name, never the
+  // personnummer, bank account or contact details.
+  'employees',
+  // Skattekonto links and ignores (migration 20261101003500, accounted#50):
+  // who linked a Skatteverket row to a verifikat, unlinked it, set it aside
+  // or restored it. The sync's own updates of the mirror write nothing.
+  'skattekonto_transactions',
+  // Pågående arbeten (K3 kapitel 23, migration 20261027180109): the method
+  // and the account the year's adjustment is booked on, chosen, changed and
+  // removed (behandlingshistorik since 20261108174501).
+  'contract_revenue_settings',
+  // Substitutes for attest (migration 20261108180000, accounted#192): who
+  // stands in for an attester away, for which days. It decides who may
+  // release a payment while the period runs.
+  'company_attest_substitutes',
 ] as const
 
 /**
@@ -248,47 +370,13 @@ export const GLOBAL_ACTIONS = [
   'GUARD_BYPASSED',
 ] as const
 
-/**
- * PostgREST `or` filter selecting the rows above. Written as one literal so the
- * schema guard (tests/schema/no-phantom-columns.test.ts) can resolve the column
- * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
- */
-export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
-
-const SOURCE_TYPE_LABELS: Record<string, string> = {
-  manual: 'Manuell',
-  import: 'Import',
-  bank_transaction: 'Banktransaktion',
-  storno: 'Storno',
-  correction: 'Rättelse',
-  supplier_invoice_registered: 'Leverantörsfaktura registrerad',
-  supplier_invoice_paid: 'Leverantörsfaktura betald',
-  supplier_invoice_privately_paid: 'Leverantörsfaktura privat betald',
-  supplier_invoice_cash_payment: 'Leverantörsfaktura kontant',
-  supplier_credit_note: 'Leverantörskreditnota',
-  opening_balance: 'Ingående balans',
-  system: 'System',
-  salary_payment: 'Lön',
-  inbox_item: 'Underlag från inkorg',
-  invoice_created: 'Kundfaktura',
-  invoice_paid: 'Kundfaktura betald',
-  invoice_cash_payment: 'Kontantfaktura',
-  credit_note: 'Kreditfaktura',
-  result_appropriation: 'Resultatdisposition',
-  year_end: 'Bokslut',
-  vat_settlement: 'Momsavräkning',
-  accrual: 'Periodisering',
-  currency_revaluation: 'Valutaomvärdering',
-  webshop_order: 'Webshop',
-  stripe_payout: 'Stripe-utbetalning',
-}
-
 const COMMIT_METHOD_LABELS: Record<string, string> = {
   user_accept: 'Godkänd av användare',
   bulk_accept: 'Godkänd i massbokning',
   api_key: 'Via API-nyckel',
   agent_relay: 'Godkänd via assistenten',
+  // An SIE import or provider migration (write_sie_job_entries, 20261015235000).
+  migration: 'Importerad (SIE)',
 }
 
 const JOURNAL_ENTRY_FIELDS: Record<string, string> = {
@@ -349,6 +437,7 @@ const SETTINGS_FIELDS: Record<string, string> = {
   salary_default_bank: 'Standardbank för lön',
   salary_deviation_period: 'Avvikelseperiod för lön',
   salary_calculation_policy: 'Beräkningsprinciper för lön',
+  salary_vacation_liability_method: 'Bokföring av semesterlöneskuld',
   kontrolluppgifter_enabled: 'Kontrolluppgifter',
   fyllnadsinbetalning_enabled: 'Fyllnadsinbetalning',
   preliminary_tax_monthly: 'Preliminärskatt per månad',
@@ -363,6 +452,8 @@ const SETTINGS_FIELDS: Record<string, string> = {
   punktskatt_enabled: 'Punktskatt',
   intrastat_enabled: 'Intrastat',
   dimensions_enabled: 'Dimensioner',
+  // accounted#130: off, every bank-row and Inkorg suggestion opens its review.
+  direct_booking_enabled: 'Bokföring med ett klick',
   invoice_payment_accounts: 'Betalkonton för kundfakturor',
   last_supplier_payment_account: 'Standardkonto för leverantörsbetalning',
   schablon_mileage_rate: 'Milersättning (schablon)',
@@ -470,7 +561,7 @@ const CATEGORIZATION_TEMPLATE_FIELDS: Record<string, string> = {
   counterparty_name: 'Motpart',
   // counterparty_aliases deliberately absent: aliases grow in the same
   // learning write as occurrence_count (migration 20260901200000 stopped
-  // logging them), and the pre-fix audit rows already in prod are alias-only
+  // logging them), and the pre-fix audit rows already in production are alias-only
   // noise that must render as no-ops, not as rule changes.
   debit_account: 'Debetkonto',
   credit_account: 'Kreditkonto',
@@ -480,6 +571,8 @@ const CATEGORIZATION_TEMPLATE_FIELDS: Record<string, string> = {
   line_pattern: 'Radmönster',
   default_dimensions: 'Dimensioner',
   is_active: 'Aktiv',
+  // accounted#130: the rule never books with one click.
+  always_review: 'Granskas alltid',
 }
 
 const BOOKING_TEMPLATE_FIELDS: Record<string, string> = {
@@ -489,6 +582,62 @@ const BOOKING_TEMPLATE_FIELDS: Record<string, string> = {
   entity_type: 'Företagsform',
   lines: 'Konteringsrader',
   is_active: 'Aktiv',
+}
+
+/**
+ * An employee's pay basis: the columns audit_employee_pay_basis (migration
+ * 20261101003400) writes to audit_log, in its order. A unit test holds this
+ * list and the trigger's together.
+ */
+export const EMPLOYEE_PAY_FIELDS: Record<string, string> = {
+  employment_type: 'Anställningstyp',
+  personnel_category: 'Personalkategori',
+  employment_start: 'Anställningsdatum',
+  employment_end: 'Slutdatum',
+  employment_degree: 'Sysselsättningsgrad (%)',
+  hours_per_week: 'Timmar per vecka',
+  workdays_per_week: 'Arbetsdagar per vecka',
+  salary_type: 'Löneform',
+  monthly_salary: 'Månadslön',
+  hourly_rate: 'Timlön',
+  tax_table_number: 'Skattetabell',
+  tax_column: 'Skattekolumn',
+  is_sidoinkomst: 'Sidoinkomst (30 % skatteavdrag)',
+  jamkning_percentage: 'Jämkning (%)',
+  jamkning_valid_from: 'Jämkning gäller från',
+  jamkning_valid_to: 'Jämkning gäller till',
+  extra_tax_amount: 'Extra skatteavdrag (kr)',
+  extra_tax_percentage: 'Extra skatteavdrag (%)',
+  f_skatt_status: 'Skatteform',
+  f_skatt_verified_at: 'F-skatt verifierad',
+  vacation_rule: 'Semesterregel',
+  vacation_days_per_year: 'Semesterdagar per år',
+  vacation_days_saved: 'Sparade semesterdagar',
+  vacation_pay_rate: 'Semesterlön, procentsats',
+  semestertillagg_rate: 'Semestertillägg, procentsats',
+  housing_benefit_type: 'Bostadsförmån, typ',
+  vaxa_stod_eligible: 'Växa-stöd',
+  vaxa_stod_start: 'Växa-stöd från',
+  vaxa_stod_end: 'Växa-stöd till',
+  fora_fok_id: 'Fora-kod',
+  fora_fok_start_date: 'Fora-kod gäller från',
+  default_dimensions: 'Dimensioner (standard)',
+  is_active: 'Aktiv',
+}
+
+/** Display values for the coded employee columns (their CHECK constraints). */
+const EMPLOYEE_VALUE_LABELS: Record<string, Record<string, string>> = {
+  employment_type: { employee: 'Anställd', company_owner: 'Företagsledare', board_member: 'Styrelseledamot' },
+  personnel_category: { tjansteman: 'Tjänsteman', arbetare: 'Arbetare' },
+  salary_type: { monthly: 'Månadslön', hourly: 'Timlön' },
+  vacation_rule: {
+    procentregeln: 'Procentregeln',
+    sammaloneregeln: 'Sammalöneregeln',
+    semesterersattning: 'Semesterersättning',
+    none: 'Ingen semesteravsättning',
+  },
+  f_skatt_status: { a_skatt: 'A-skatt', f_skatt: 'F-skatt', fa_skatt: 'FA-skatt', not_verified: 'Ej verifierad' },
+  housing_benefit_type: { smahus: 'Småhus', ej_smahus: 'Annan bostad än småhus' },
 }
 
 /** Keys of salary_payroll_config that are bookkeeping constants (all but bookkeeping of the row itself). */
@@ -523,6 +672,11 @@ const COLLAPSIBLE: Record<string, CollapseRule> = {
   'account.updated': { minSize: 10, event: 'Kontoplan ändrad', noun: 'konton', category: 'kontoplan', mode: 'accounts' },
   'account.deleted': { minSize: 10, event: 'Konton borttagna ur kontoplanen', noun: 'konton', category: 'kontoplan', mode: 'accounts' },
   'document.deleted': { minSize: 3, event: 'Underlag borttagna', noun: 'underlag', category: 'ovrigt', mode: 'documents' },
+  // A matched period or a set-aside history writes one row per Skatteverket event.
+  'skattekonto.linked': { minSize: 10, event: 'Skattekontohändelser kopplade till verifikat', noun: 'händelser', category: 'beslut', mode: 'documents' },
+  'skattekonto.unlinked': { minSize: 10, event: 'Skattekontohändelsers kopplingar borttagna', noun: 'händelser', category: 'beslut', mode: 'documents' },
+  'skattekonto.ignored': { minSize: 10, event: 'Skattekontohändelser ignorerade', noun: 'händelser', category: 'beslut', mode: 'documents' },
+  'skattekonto.restored': { minSize: 10, event: 'Ignorerade skattekontohändelser återställda', noun: 'händelser', category: 'beslut', mode: 'documents' },
 }
 
 const MAX_VALUE_LENGTH = 80
@@ -556,7 +710,7 @@ function fmtValue(value: unknown, key?: string): string {
   if (typeof value === 'boolean') return value ? 'Ja' : 'Nej'
   if (typeof value === 'number') return String(value)
   if (typeof value === 'string') {
-    const mapped = key ? SETTINGS_VALUE_LABELS[key]?.[value] : undefined
+    const mapped = key ? (SETTINGS_VALUE_LABELS[key] ?? EMPLOYEE_VALUE_LABELS[key])?.[value] : undefined
     return truncate(mapped ?? value)
   }
   if (Array.isArray(value)) {
@@ -613,9 +767,13 @@ function num(value: unknown): number | null {
   return typeof value === 'number' ? value : null
 }
 
+/**
+ * The typed map shared with the systemdokumentation, so both documents name a
+ * source the same way and a new source type cannot compile without a label.
+ */
 function sourceTypeLabel(sourceType: string | null | undefined): string {
   if (!sourceType) return 'Okänd'
-  return SOURCE_TYPE_LABELS[sourceType] ?? sourceType
+  return (SOURCE_TYPE_LABELS_SV as Readonly<Record<string, string | undefined>>)[sourceType] ?? sourceType
 }
 
 function normaliseActorType(value: unknown): BehandlingshistorikActorType {
@@ -625,6 +783,7 @@ function normaliseActorType(value: unknown): BehandlingshistorikActorType {
     case 'cron':
     case 'agent_chat':
     case 'system':
+    case 'service_account':
       return value
     default:
       return 'user'
@@ -640,14 +799,15 @@ export function formatActorLabel(actor: RawActor, userLabels: Map<string, string
   const userLabel = actor.user_id ? userLabels.get(actor.user_id) : undefined
   const fallbackUser = actor.user_id ? `Användare ${actor.user_id.slice(0, 8)}` : null
   switch (actor.type) {
+    // An agent is named with the person it acted for, the row's user: the
+    // key's owner, a service account's sponsor (who answers for it), who
+    // chatted. "Claude åt anna@example.se", never the credential's name
+    // (lib/attribution, in its Swedish words: this report stays Swedish).
     case 'api_key':
-      return actor.actor_label ? `API-nyckel: ${actor.actor_label}` : 'API-nyckel'
     case 'mcp_oauth':
-      return actor.actor_label ? `MCP-anslutning: ${actor.actor_label}` : 'MCP-anslutning'
-    case 'agent_chat': {
-      const who = userLabel ?? fallbackUser
-      return who ? `Assistenten, på uppdrag av ${who}` : 'Assistenten'
-    }
+    case 'agent_chat':
+    case 'service_account':
+      return formatActorAttribution({ actorType: actor.type, actorLabel: actor.actor_label, personName: userLabel ?? fallbackUser })
     case 'cron':
       return actor.actor_label ? `Schemalagd körning: ${actor.actor_label}` : 'Schemalagd körning'
     case 'system':
@@ -657,18 +817,48 @@ export function formatActorLabel(actor: RawActor, userLabels: Map<string, string
   }
 }
 
+/**
+ * Label for the principal the database verified at commit. The role is what
+ * the request ran as (20261016110000): a signed-in user's JWT, the
+ * application server's service key, or a direct database connection.
+ */
+export function formatVerifiedLabel(verified: RawVerifiedPrincipal, userLabels: Map<string, string>): string {
+  switch (verified.role) {
+    case 'authenticated': {
+      if (!verified.user_id) return 'Inloggad användare (inget användar-id)'
+      return `Inloggad användare: ${userLabels.get(verified.user_id) ?? `Användare ${verified.user_id.slice(0, 8)}`}`
+    }
+    case 'service_role':
+      return 'Applikationsservern (service_role)'
+    case 'anon':
+      return 'Ej inloggad (anon)'
+    default:
+      return `Direkt databasanslutning (${verified.role})`
+  }
+}
+
+/** The "Utförd av" cell of the exports: the actor, and the verified principal when the event has one. */
+export function actorWithVerified(event: Pick<BehandlingshistorikEvent, 'actor' | 'verified'>): string {
+  return event.verified
+    ? `${event.actor.label} (verifierat av databasen: ${event.verified.label})`
+    : event.actor.label
+}
+
 function finaliseEvent(
   raw: RawBehandlingshistorikEvent,
   userLabels: Map<string, string>,
 ): BehandlingshistorikEvent {
-  return {
-    ...raw,
+  const { verified, ...rest } = raw
+  const event: BehandlingshistorikEvent = {
+    ...rest,
     actor: {
       type: raw.actor.type,
       user_id: raw.actor.user_id,
       label: formatActorLabel(raw.actor, userLabels),
     },
   }
+  if (verified) event.verified = { ...verified, label: formatVerifiedLabel(verified, userLabels) }
+  return event
 }
 
 // ============================================================
@@ -679,6 +869,20 @@ interface NormaliseContext {
   /** journal_entry_id → committed metadata-rättelse timestamps (ms), to suppress the duplicate audit UPDATE row. */
   rattelseMetadataAt: Map<string, number[]>
   entryById: Map<string, EntryRow>
+  /**
+   * The verifikat skattekonto link rows name, read by id whatever their
+   * period (fetchLinkedEntries). Absent when nothing was looked up.
+   */
+  linkedEntryById?: Map<string, LinkedEntryRow>
+}
+
+/** A verifikat a skattekonto row was linked to or unlinked from: its label and its origin. */
+interface LinkedEntryRow {
+  id: string
+  voucher_series: string | null
+  voucher_number: number | null
+  source_type: string | null
+  source_id: string | null
 }
 
 const RATTELSE_DUPLICATE_WINDOW_MS = 30_000
@@ -693,7 +897,11 @@ export function commitEventFromEntry(entry: EntryRow): RawBehandlingshistorikEve
   const details: string[] = [`Datum: ${entry.entry_date}`]
   if (entry.description) details.push(`Text: ${truncate(entry.description)}`)
   details.push(`Källa: ${sourceTypeLabel(entry.source_type)}`)
-  if (entry.commit_method) {
+  if (entry.commit_method === 'migration' && entry.reverses_id) {
+    // A storno posted by an SIE undo or a reviewed duplicate repair
+    // (20261016005200): imported history taken back out, not imported.
+    details.push('Bokföringssätt: Makulering av importerad verifikation (SIE)')
+  } else if (entry.commit_method) {
     details.push(`Bokföringssätt: ${COMMIT_METHOD_LABELS[entry.commit_method] ?? entry.commit_method}`)
   }
   if (entry.reverses_id) details.push('Vändningsverifikation (storno)')
@@ -703,7 +911,7 @@ export function commitEventFromEntry(entry: EntryRow): RawBehandlingshistorikEve
     : entry.commit_method === 'api_key'
       ? 'api_key'
       : 'user'
-  return {
+  const event: RawBehandlingshistorikEvent = {
     id: `entry:${entry.id}`,
     occurred_at: toIso(entry.committed_at)!,
     category: 'verifikation',
@@ -715,6 +923,12 @@ export function commitEventFromEntry(entry: EntryRow): RawBehandlingshistorikEve
     source: 'journal_entries',
     count: 1,
   }
+  // The database's own stamp, next to the asserted actor. Verifikat posted
+  // before 20261016110000 have none and read exactly as before.
+  if (entry.committed_auth_role) {
+    event.verified = { role: entry.committed_auth_role, user_id: entry.committed_auth_uid ?? null }
+  }
+  return event
 }
 
 function describeLine(line: unknown): string {
@@ -785,7 +999,13 @@ export function rattelseEvent(
         ? 'Verifikation rättad i samma verifikat (rader)'
         : 'Verifikation rättad i samma verifikat (text/datum)',
     object: entry ? voucherLabel(entry.voucher_series, entry.voucher_number) : null,
-    actor: { type: 'user', user_id: row.actor, actor_label: null },
+    // The API key, OAuth client, cron job or assistant that relayed it, when
+    // the row records one; otherwise the user, as before.
+    actor: {
+      type: row.actor_type ? normaliseActorType(row.actor_type) : 'user',
+      user_id: row.actor,
+      actor_label: row.actor_label ?? null,
+    },
     details,
     source: 'rattelse_log',
     count: 1,
@@ -825,6 +1045,33 @@ function auditEvent(
   }
 }
 
+/**
+ * WHO reversed a verifikat. The trigger's REVERSE row carries the original's
+ * user_id (who booked it, not who reversed it), and a reversal made over
+ * PostgREST (reverseEntry, correctEntry) cannot hand the trigger an actor, so
+ * its actor_type falls back to 'user'. The storno verifikat records who
+ * reversed: its user_id is the reverser, and committed_actor_* names the
+ * credential since the storno is posted through commit_journal_entry
+ * (commitStornoOrCorrectionDraft). Without the storno in this report the row
+ * speaks for itself, as before.
+ */
+function reversalActor(row: AuditLogEntry, ctx: NormaliseContext): RawActor {
+  const stornoId = str(row.new_state?.reversed_by_id)
+  const storno = stornoId ? ctx.entryById.get(stornoId) : undefined
+  if (!storno?.user_id) return baseAuditActor(row)
+  if (storno.committed_actor_type) {
+    return {
+      type: normaliseActorType(storno.committed_actor_type),
+      user_id: storno.user_id,
+      actor_label: storno.committed_actor_label,
+    }
+  }
+  // An actor the row itself records (an SIE undo sets one) wins over an
+  // unattributed storno; otherwise the storno's user is who reversed.
+  if (row.actor_type && row.actor_type !== 'user') return baseAuditActor(row)
+  return { type: 'user', user_id: storno.user_id, actor_label: null }
+}
+
 function journalEntryAuditEvent(
   row: AuditLogEntry,
   ctx: NormaliseContext,
@@ -846,6 +1093,7 @@ function journalEntryAuditEvent(
         event: 'Verifikation makulerad (storno)',
         object,
         details: ['Bokförd verifikation vänd med en vändningsverifikation'],
+        actor: reversalActor(row, ctx),
       })
     case 'DELETE':
       if (!isBookedStatus(oldState?.status)) return null
@@ -1082,6 +1330,379 @@ function apiKeyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | nul
 }
 
 /**
+ * A service account's lifecycle (migration 20261016120000): created, then at
+ * most once revoked; nothing else ever changes on the row. The actor is the
+ * person (and credential) who created or revoked it; the sponsor answers for
+ * every write the account makes and is named on those.
+ */
+function serviceAccountAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const object = str(state?.name)
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, { category: 'atkomst', code: 'service_account.created', event: 'Tjänstekonto skapat', object })
+    case 'UPDATE':
+      if (!row.old_state?.revoked_at && row.new_state?.revoked_at) {
+        return auditEvent(row, { category: 'atkomst', code: 'service_account.revoked', event: 'Tjänstekonto återkallat', object })
+      }
+      return null
+    default:
+      return null
+  }
+}
+
+/**
+ * A package switched on or off (set_company_package_choice, migration
+ * 20261016200400): what changes how the system handles the company's work is
+ * a dated processing-rule change (BFNAR 2013:2 p. 9.16). The approver is the
+ * actor; the detail says whether an approved suggestion or the company itself
+ * asked for it. A capability key row is entitlement state and renders nothing.
+ */
+function packageChoiceAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  if (row.action !== 'INSERT' && row.action !== 'UPDATE') return null
+  const key = str(row.new_state?.capability_key)
+  const dataChoice = key ? dataChoiceAuditEvent(row, key) : null
+  if (dataChoice) return dataChoice
+  const packageId = key ? packageForConfigKey(key) : null
+  if (!packageId) return null
+  const enabled = row.new_state?.enabled === true
+  const source = str(row.new_state?.source)
+  const details =
+    source === 'suggestion' ? ['Källa: godkänt förslag'] : source === 'company' ? ['Källa: företagets eget val'] : []
+  return auditEvent(row, {
+    category: 'installningar',
+    code: enabled ? 'package.switched_on' : 'package.switched_off',
+    event: enabled ? 'Paket påslaget' : 'Paket avstängt',
+    object: getPackage(packageId).nameSv,
+    details,
+  })
+}
+
+const DATA_CHOICE_OBJECTS: Record<string, string> = {
+  ai: 'AI-bearbetning',
+  'data:pooling': 'Anonyma mönster delas',
+  'data:contribution': 'Innehåll till utvärdering och förbättring',
+}
+
+/**
+ * A company data choice (set_company_data_choice, migration 20261021170000):
+ * AI processing on or off changes how the system handles the bookkeeping, and
+ * what the company lets us do with its data is its own instruction, so both
+ * are dated lines next to the package switches. Only rows the company itself
+ * wrote (source 'company') render: an `ai` row without a source is
+ * entitlement state, as before.
+ */
+function dataChoiceAuditEvent(row: AuditLogEntry, key: string): RawBehandlingshistorikEvent | null {
+  const object = DATA_CHOICE_OBJECTS[key]
+  if (!object || str(row.new_state?.source) !== 'company') return null
+  const enabled = row.new_state?.enabled === true
+  return auditEvent(row, {
+    category: 'installningar',
+    code: enabled ? 'data_choice.switched_on' : 'data_choice.switched_off',
+    event: enabled ? 'Inställning påslagen' : 'Inställning avstängd',
+    object,
+    details: ['Källa: företagets eget val'],
+  })
+}
+
+/** Whole kronor with Swedish grouping, for a grant's limit. */
+function fmtKronor(value: number): string {
+  return value.toLocaleString('sv-SE', { maximumFractionDigits: 0 })
+}
+
+const GRANT_VAT_LABELS: Record<string, string> = {
+  standard_25: 'moms 25 %',
+  reduced_12: 'moms 12 %',
+  reduced_6: 'moms 6 %',
+  reverse_charge: 'omvänd betalningsskyldighet',
+  exempt: 'ingen moms',
+  export: 'export utan moms',
+}
+
+const GRANT_REVERSE_CHARGE_LABELS: Record<string, string> = {
+  eu_services: 'tjänster från EU',
+  non_eu_services: 'tjänster från länder utanför EU',
+  domestic_services: 'inom Sverige, till exempel byggtjänster',
+}
+
+/** "konto 6212 moms 25 %": one invoice line's booking under a supplier-invoice rule ('6212:25'). */
+function grantItemLineLabel(line: string): string {
+  const [account, rate] = line.split(':')
+  return rate === '0' ? `konto ${account} utan moms` : `konto ${account} moms ${rate} %`
+}
+
+/**
+ * A rule for automatic booking (grant, migration 20261017100200): an
+ * automatkontering in BFNAR 2013:2 p. 9.16's sense, dated when it is
+ * accepted, superseded or revoked. The approver is the actor. One line says
+ * what the rule permits: "Regel för automatisk bokföring: <motpart>, upp
+ * till <belopp> kr", or for a known supplier's invoices from the inbox
+ * (grants slice 2, migration 20261018100000) "Regel för automatisk
+ * bokföring av leverantörsfakturor: <leverantör>, upp till <belopp> kr
+ * inklusive moms", with the line bookings and the VAT treatment it pins.
+ */
+function grantAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = (row.new_state ?? row.old_state ?? {}) as Record<string, unknown>
+  const supplierInvoice = str(state.operation_type) === 'create_supplier_invoice_from_inbox'
+  const counterparty =
+    str(state.counterparty_label) ?? (supplierInvoice ? 'okänd leverantör' : (str(state.counterparty_key) ?? 'okänd motpart'))
+  const limitRaw = state.amount_limit_sek
+  const limit = typeof limitRaw === 'number' ? limitRaw : Number(limitRaw)
+  const limitText = Number.isFinite(limit) ? `, upp till ${fmtKronor(limit)} kr${supplierInvoice ? ' inklusive moms' : ''}` : ''
+  const version = typeof state.version === 'number' ? state.version : Number(state.version)
+  const object = supplierInvoice
+    ? `Regel för automatisk bokföring av leverantörsfakturor: ${counterparty}${limitText}`
+    : `Regel för automatisk bokföring: ${counterparty}${limitText}`
+  if (row.action === 'INSERT') {
+    const details: string[] = []
+    if (Number.isFinite(version)) details.push(`Version: ${version}`)
+    const account = str(state.account_number)
+    if (account) {
+      const vat = str(state.vat_treatment)
+      details.push(`Bokföring: konto ${account}${vat ? `, ${GRANT_VAT_LABELS[vat] ?? vat}` : ''}`)
+    }
+    if (supplierInvoice) {
+      const supplierId = str(state.supplier_id)
+      if (supplierId) details.push(`Leverantör: ${counterparty} (${supplierId})`)
+      const lines = Array.isArray(state.item_lines) ? (state.item_lines as unknown[]).map(String) : []
+      if (lines.length > 0) details.push(`Fakturarader: ${lines.map(grantItemLineLabel).join(', ')}`)
+      const vat = str(state.vat_treatment)
+      if (vat) {
+        const kind = str(state.reverse_charge_kind)
+        details.push(
+          `Momsbehandling: ${GRANT_VAT_LABELS[vat] ?? vat}${kind ? ` (${GRANT_REVERSE_CHARGE_LABELS[kind] ?? kind})` : ''}`,
+        )
+      }
+      details.push('Gäller: fakturor från inkorgen i SEK med underlag, som bokförs när de registreras')
+    }
+    const accounts = Array.isArray(state.line_accounts) ? (state.line_accounts as unknown[]).map(String) : []
+    if (accounts.length > 0) details.push(`Konton i verifikatet: ${accounts.join(', ')}`)
+    const monthlyRaw = state.monthly_limit_sek
+    const monthly = monthlyRaw === null || monthlyRaw === undefined ? null : Number(monthlyRaw)
+    if (monthly !== null && Number.isFinite(monthly)) details.push(`Högst per månad: ${fmtKronor(monthly)} kr`)
+    const scope = str(state.credential_scope)
+    details.push(
+      scope === 'api_key'
+        ? 'Gäller: en namngiven API-nyckel'
+        : scope === 'service_account'
+          ? 'Gäller: ett namngivet tjänstekonto'
+          : 'Gäller: alla nycklar i företaget',
+    )
+    const validFrom = str(state.valid_from)
+    if (validFrom) details.push(`Gäller från: ${validFrom.slice(0, 10)}`)
+    return auditEvent(row, { category: 'installningar', code: 'grant.accepted', event: 'Regel för automatisk bokföring godkänd', object, details })
+  }
+  if (row.action === 'UPDATE' && !row.old_state?.revoked_at && row.new_state?.revoked_at) {
+    const superseded = str(row.new_state?.revoked_reason) === 'superseded'
+    return auditEvent(row, {
+      category: 'installningar',
+      code: superseded ? 'grant.superseded' : 'grant.revoked',
+      event: superseded ? 'Regel för automatisk bokföring ersatt av ny version' : 'Regel för automatisk bokföring återkallad',
+      object,
+      details: Number.isFinite(version) ? [`Version: ${version}`] : [],
+    })
+  }
+  return null
+}
+
+const BOOKING_REVIEW_VAT_LABELS: Record<string, string> = {
+  standard_25: 'moms 25 %',
+  reduced_12: 'moms 12 %',
+  reduced_6: 'moms 6 %',
+  reverse_charge: 'omvänd betalningsskyldighet',
+  none: 'utan moms',
+}
+
+/** "konto 6250, Google Cloud, från 5 000 kr, omvänd betalningsskyldighet": what a block matches. */
+function bookingReviewCriteria(state: Record<string, unknown>): string {
+  const parts: string[] = []
+  const accounts = Array.isArray(state.accounts) ? (state.accounts as unknown[]).map(String) : []
+  if (accounts.length > 0) parts.push(`${accounts.length === 1 ? 'konto' : 'konton'} ${accounts.join(', ')}`)
+  const counterparty = str(state.counterparty_label) ?? str(state.counterparty_key)
+  if (counterparty) parts.push(counterparty)
+  const fromRaw = state.amount_from_sek
+  const from = fromRaw === null || fromRaw === undefined ? null : Number(fromRaw)
+  if (from !== null && Number.isFinite(from)) parts.push(`från ${fmtKronor(from)} kr`)
+  const vat = str(state.vat_treatment)
+  if (vat) parts.push(BOOKING_REVIEW_VAT_LABELS[vat] ?? vat)
+  return parts.join(', ')
+}
+
+/**
+ * A hard block (booking_review_rules, migration 20261031150000): a
+ * processing rule in BFNAR 2013:2 p. 9.16's sense, dated when an owner or
+ * admin adds it, replaces it with a new version or archives it. While it is
+ * active, a booking of a bank row it matches is booked only by a person,
+ * from its review. One line says what it matches.
+ */
+function bookingReviewRuleAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = (row.new_state ?? row.old_state ?? {}) as Record<string, unknown>
+  const criteria = bookingReviewCriteria(state)
+  const object = `Spärr: ${criteria || 'okänd'}`
+  const version = typeof state.version === 'number' ? state.version : Number(state.version)
+  const versionLine = Number.isFinite(version) ? [`Version: ${version}`] : []
+  if (row.action === 'INSERT') {
+    const details = [...versionLine, 'Gäller: bokningar av bankrader som spärren träffar bokförs bara av en person, från granskningen']
+    const note = str(state.note)
+    if (note) details.push(`Anteckning: ${note}`)
+    const validFrom = str(state.valid_from)
+    if (validFrom) details.push(`Gäller från: ${validFrom.slice(0, 10)}`)
+    return auditEvent(row, { category: 'installningar', code: 'booking_review_rule.created', event: 'Spärr för bokföring tillagd', object, details })
+  }
+  if (row.action === 'UPDATE' && !row.old_state?.revoked_at && row.new_state?.revoked_at) {
+    const superseded = str(row.new_state?.revoked_reason) === 'superseded'
+    return auditEvent(row, {
+      category: 'installningar',
+      code: superseded ? 'booking_review_rule.superseded' : 'booking_review_rule.archived',
+      event: superseded ? 'Spärr för bokföring ersatt av ny version' : 'Spärr för bokföring arkiverad',
+      object,
+      details: versionLine,
+    })
+  }
+  return null
+}
+
+/** The company's switch that pauses every rule for automatic booking at once. */
+function grantSettingsAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  if (row.action !== 'INSERT' && row.action !== 'UPDATE') return null
+  const paused = row.new_state?.paused === true
+  if (row.action === 'UPDATE' && (row.old_state?.paused === true) === paused) return null
+  return auditEvent(row, {
+    category: 'installningar',
+    code: paused ? 'grants.paused' : 'grants.resumed',
+    event: paused ? 'Automatisk bokföring enligt regler pausad' : 'Automatisk bokföring enligt regler återupptagen',
+    object: 'Alla regler för automatisk bokföring',
+  })
+}
+
+/** One rule of the attest policy, as the report states it. */
+function attestRuleValue(key: string, value: unknown): string {
+  switch (key) {
+    case 'threshold_amount':
+      if (value === null || value === undefined) return 'alla fakturor'
+      return Number.isFinite(Number(value)) ? `${fmtKronor(Number(value))} kr` : fmtValue(value)
+    case 'two_step_from_sek':
+      if (value === null || value === undefined) return 'aldrig'
+      return Number.isFinite(Number(value)) ? `${fmtKronor(Number(value))} kr` : fmtValue(value)
+    case 'mode':
+      return value === 'all' ? 'alla attestanter' : 'en attestant räcker'
+    case 'attesters':
+    case 'pre_attesters':
+      return `${Array.isArray(value) ? value.length : 0} st`
+    case 'project_attesters':
+      return value && typeof value === 'object' && !Array.isArray(value) ? `${Object.keys(value).length} projekt` : '0 projekt'
+    default:
+      return fmtValue(value)
+  }
+}
+
+const ATTEST_POLICY_RULES: Record<string, string> = {
+  enabled: 'Attest krävs',
+  threshold_amount: 'Från belopp',
+  mode: 'Attest av',
+  attesters: 'Attestanter',
+  preparer_may_attest: 'Den som registrerat får attestera',
+  two_step_from_sek: 'Två attestanter från',
+  pre_attesters: 'Förattest av fakturor utan projekt',
+  project_attesters: 'Förattest per projekt',
+}
+
+/**
+ * The attest policy for supplier invoices (migration 20261028214917): who
+ * must attest before an invoice may be paid. The trigger logs only saves
+ * that change a rule; the attesters are counted (their ids stay in the row).
+ */
+function attestPolicyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  if (row.action !== 'INSERT' && row.action !== 'UPDATE') return null
+  const details: string[] = []
+  for (const [key, label] of Object.entries(ATTEST_POLICY_RULES)) {
+    const after = attestRuleValue(key, row.new_state?.[key])
+    if (row.action === 'INSERT') {
+      // A rule newer than the row (two_step_from_sek before 20261030140000) is not stated,
+      // nor a förattest nobody is named for (#192): a policy without one reads as before.
+      const unused = (key === 'pre_attesters' || key === 'project_attesters') && same(row.new_state?.[key], key === 'pre_attesters' ? [] : {})
+      if (row.new_state && key in row.new_state && !unused) details.push(`${label}: ${after}`)
+      continue
+    }
+    const before = attestRuleValue(key, row.old_state?.[key])
+    const changed =
+      key === 'attesters' || key === 'pre_attesters' || key === 'project_attesters'
+        ? !same(row.old_state?.[key], row.new_state?.[key])
+        : before !== after
+    if (changed) details.push(`${label}: ${before} → ${after}`)
+  }
+  if (row.action === 'UPDATE' && details.length === 0) return null
+  return auditEvent(row, {
+    category: 'installningar',
+    code: row.action === 'INSERT' ? 'attest_policy.created' : 'attest_policy.updated',
+    event: row.action === 'INSERT' ? 'Attestregler för leverantörsfakturor sparade' : 'Attestregler för leverantörsfakturor ändrade',
+    object: 'Leverantörsfakturor',
+    details,
+  })
+}
+
+/**
+ * A substitute for attest (migration 20261108180000): who stands in for an
+ * attester away, for which days. The people stay ids in the row, as the
+ * attesters do in the policy's rows; the period is what the report states.
+ */
+function attestSubstituteAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.action === 'DELETE' ? row.old_state : row.new_state
+  const period = `Period: ${fmtValue(state?.starts_on)} till ${fmtValue(state?.ends_on)}`
+  const fields = { category: 'installningar' as const, object: 'Leverantörsfakturor' }
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, { ...fields, code: 'attest_substitute.added', event: 'Ersättare för attest vald', details: [period] })
+    case 'DELETE':
+      return auditEvent(row, { ...fields, code: 'attest_substitute.removed', event: 'Ersättare för attest borttagen', details: [period] })
+    default:
+      return null
+  }
+}
+
+/** An attest limit as the report states it. */
+function attestLimitValue(value: unknown): string {
+  if (value === null || value === undefined) return 'ingen gräns'
+  return Number.isFinite(Number(value)) ? `${fmtKronor(Number(value))} kr` : fmtValue(value)
+}
+
+/**
+ * An attest limit per person (migration 20261030140000): how much one
+ * attester's approval covers. The trigger logs a limit set, changed or
+ * removed; the person it is for stays an id in the row, as the attesters do
+ * in the policy's rows.
+ */
+function attestLimitAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const review = (row.new_state?.scope ?? row.old_state?.scope) === 'booking_review'
+  const scope = review ? 'granskning av bokningar' : 'leverantörsfakturor'
+  const fields = { category: 'installningar' as const, object: review ? 'Bokföring' : 'Leverantörsfakturor' }
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, {
+        ...fields,
+        code: 'attest_limit.set',
+        event: `Attestgräns satt för ${scope}`,
+        details: [`Gräns: ${attestLimitValue(row.new_state?.max_amount_sek)}`],
+      })
+    case 'UPDATE': {
+      const before = attestLimitValue(row.old_state?.max_amount_sek)
+      const after = attestLimitValue(row.new_state?.max_amount_sek)
+      if (before === after) return null
+      return auditEvent(row, { ...fields, code: 'attest_limit.changed', event: `Attestgräns ändrad för ${scope}`, details: [`Gräns: ${before} → ${after}`] })
+    }
+    case 'DELETE':
+      return auditEvent(row, {
+        ...fields,
+        code: 'attest_limit.removed',
+        event: `Attestgräns borttagen för ${scope}`,
+        details: [`Gräns: ${attestLimitValue(row.old_state?.max_amount_sek)}`],
+      })
+    default:
+      return null
+  }
+}
+
+/**
  * A mailbox the receipt hunt reads underlag from: who connected it, with
  * which access, and when it was disconnected (and whether the provider
  * confirmed the access was withdrawn).
@@ -1099,6 +1720,97 @@ function mailConnectionAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEve
       const revocation = str(row.new_state?.provider_revocation)
       const details = revocation ? [`Återkallad hos leverantören: ${MAIL_REVOCATION_LABELS[revocation] ?? revocation}`] : []
       return auditEvent(row, { category: 'atkomst', code: 'mail_connection.disconnected', event: 'Brevlåda frånkopplad', object, details })
+    }
+    default:
+      return null
+  }
+}
+
+/**
+ * collection_connections columns that are behandlingsregler: what is handed
+ * over and how, and the accounts and automation used when collected
+ * payments and payouts are booked. The status poll's columns (provider
+ * status, health, run record) are not audited at all.
+ */
+const COLLECTION_CONNECTION_FIELDS: Record<string, string> = {
+  minimum_amount: 'Lägsta belopp att skicka till inkasso',
+  default_start_step: 'Första steget',
+  reminder_fee_terms_since: 'Påminnelseavgift avtalad sedan',
+  late_interest_percent: 'Avtalad dröjsmålsränta (procent)',
+  late_interest_agreed_since: 'Dröjsmålsränta avtalad sedan',
+  distribution_enabled: 'Utskick via inkassobolaget',
+  ladder_mode: 'Förslag på påminnelser i Att göra',
+  ladder_days_after_due: 'Dagar efter förfallodagen',
+  clearing_account: 'Konto för inbetalningar via inkassobolaget',
+  payout_account: 'Konto för utbetalningar från inkassobolaget',
+  auto_book_collected_payments: 'Bokför inbetalningar via inkassobolaget automatiskt',
+  auto_book_settlements: 'Bokför avräkningar automatiskt',
+}
+
+const COLLECTION_CONNECTION_VALUE_LABELS: Record<string, Record<string, string>> = {
+  default_start_step: { reminder: 'Påminnelse', collection: 'Inkassokrav direkt' },
+  ladder_mode: { off: 'Av', staged: 'Varje morgon, godkänns av en administratör' },
+}
+
+const COLLECTION_CONNECTION_STATE_EVENTS: Record<string, { code: string; event: string }> = {
+  active: { code: 'collection_connection.activated', event: 'Påminnelser och inkasso aktiverat' },
+  needs_setup: { code: 'collection_connection.needs_setup', event: 'Påminnelser och inkasso: inkassobolaget godkände inte eller stängde av kopplingen' },
+  disconnected: { code: 'collection_connection.ended', event: 'Påminnelser och inkasso avslutat' },
+  connecting: { code: 'collection_connection.connecting', event: 'Påminnelser och inkasso: aktivering pågår' },
+}
+
+function labelCollectionValues(state: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!state) return state
+  const labelled: Record<string, unknown> = { ...state }
+  for (const [key, labels] of Object.entries(COLLECTION_CONNECTION_VALUE_LABELS)) {
+    const value = state[key]
+    if (typeof value === 'string' && labels[value]) labelled[key] = labels[value]
+  }
+  return labelled
+}
+
+/**
+ * The collections connection: the consent that started it, the provider's
+ * terms accepted, activation and ending, and every change to its rules. A
+ * change the status poll stored carries no person and shows as the system.
+ */
+function collectionConnectionAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const object = str(state?.display_name)
+  switch (row.action) {
+    case 'INSERT': {
+      const details = [`Villkor lästa och godkända i appen: version ${fmtValue(state?.catalogue_terms_version)}`]
+      if (str(state?.dpa_version)) details.push(`Personuppgiftsvillkor: version ${fmtValue(state?.dpa_version)}`)
+      return auditEvent(row, { category: 'atkomst', code: 'collection_connection.consented', event: 'Påminnelser och inkasso: aktivering påbörjad', object, details })
+    }
+    case 'DELETE':
+      return auditEvent(row, { category: 'atkomst', code: 'collection_connection.deleted', event: 'Koppling för påminnelser och inkasso borttagen', object })
+    case 'UPDATE': {
+      const { lines } = diffFields(labelCollectionValues(row.old_state), labelCollectionValues(row.new_state), COLLECTION_CONNECTION_FIELDS)
+      const before = str(row.old_state?.state)
+      const after = str(row.new_state?.state)
+      if (after && before !== after) {
+        const meta = COLLECTION_CONNECTION_STATE_EVENTS[after]
+        if (meta) return auditEvent(row, { category: 'atkomst', code: meta.code, event: meta.event, object, details: lines })
+      }
+      const terms = str(row.new_state?.terms_version)
+      if (terms && terms !== str(row.old_state?.terms_version)) {
+        return auditEvent(row, {
+          category: 'atkomst',
+          code: 'collection_connection.terms_accepted',
+          event: 'Inkassobolagets villkor godkända',
+          object,
+          details: [`Version: ${terms}`, ...lines],
+        })
+      }
+      if (lines.length === 0) return null
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'collection_connection.updated',
+        event: 'Regler för påminnelser och inkasso ändrade',
+        object,
+        details: lines,
+      })
     }
     default:
       return null
@@ -1169,6 +1881,11 @@ const GUARD_LABELS: Record<string, { code: string; event: string; check: string 
     event: 'Dubbelbetalningskontroll förbikopplad',
     check: 'möjlig dubbelbetalning av leverantörsfaktura',
   },
+  invoice_duplicate_payment: {
+    code: 'invoice.duplicate_payment_guard_bypassed',
+    event: 'Dubbelbetalningskontroll förbikopplad',
+    check: 'möjlig dubbelbetalning av kundfaktura',
+  },
 }
 
 /** Why the detector flagged a bank row (DuplicatePaymentMatchReason). */
@@ -1211,16 +1928,17 @@ function guardBypassedEvent(
 ): RawBehandlingshistorikEvent | null {
   const state = (row.new_state ?? {}) as Record<string, unknown>
   const guard = str(state.guard)
+  if (guard === ACCOUNTING_METHOD_MID_YEAR_GUARD) return accountingMethodCorrectionEvent(row, state)
   const meta = guard ? GUARD_LABELS[guard] : undefined
   if (!meta) return null
 
-  const invoiceNumber = str(state.supplier_invoice_number)
+  const invoiceNumber = str(state.supplier_invoice_number) ?? str(state.invoice_number)
   const entryId = str(state.journal_entry_id)
   const entry = entryId ? ctx.entryById.get(entryId) : undefined
   const object = entry
     ? voucherLabel(entry.voucher_series, entry.voucher_number)
     : invoiceNumber
-      ? `Leverantörsfaktura ${invoiceNumber}`
+      ? `${state.supplier_invoice_number ? 'Leverantörsfaktura' : 'Kundfaktura'} ${invoiceNumber}`
       : null
 
   const details: string[] = [
@@ -1257,6 +1975,90 @@ function guardBypassedEvent(
   })
 }
 
+/**
+ * `new_state.guard` of an accounting method corrected in a fiscal year that
+ * already had posted verifikat (lib/company/accounting-method-change.ts).
+ */
+const ACCOUNTING_METHOD_MID_YEAR_GUARD = 'accounting_method_mid_year'
+
+/**
+ * The mid-year guard on the accounting method, passed with a stated reason:
+ * the change was recorded as a correction of a wrong setting. The trigger's
+ * own company_settings row shows the same change as a plain settings diff;
+ * this event carries why, and what the year already held.
+ */
+function accountingMethodCorrectionEvent(
+  row: AuditLogEntry,
+  state: Record<string, unknown>,
+): RawBehandlingshistorikEvent {
+  const details = [
+    `Redovisningsmetod: ${fmtValue(state.from, 'accounting_method')} → ${fmtValue(state.to, 'accounting_method')}`,
+    `Skäl: ${str(state.reason) ?? '(inget angivet)'}`,
+  ]
+  const posted = num(state.posted_entries)
+  if (posted !== null) details.push(`Bokförda verifikationer i räkenskapsåret vid rättelsen: ${posted}`)
+  const timed = num(state.method_timed_entries)
+  if (timed) details.push(`Varav bokförda av fakturaflödet enligt tidigare metod: ${timed} (oförändrade)`)
+  return auditEvent(row, {
+    category: 'installningar',
+    code: 'settings.accounting_method_corrected',
+    event: 'Redovisningsmetod rättad under räkenskapsåret',
+    object: str(state.fiscal_year),
+    details,
+  })
+}
+
+const CONTRACT_REVENUE_METHOD_LABELS: Record<string, string> = {
+  successiv: 'Successiv vinstavräkning',
+  fardigstallande: 'Färdigställandemetoden',
+}
+
+/**
+ * The method and account of pågående arbeten (contract_revenue_settings):
+ * how the year's adjustment is computed and on which account it is booked,
+ * a behandlingsregel in the sense of BFNAR 2013:2 punkt 9.16.
+ */
+function contractRevenueSettingsAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const method = (state: Record<string, unknown> | null) =>
+    CONTRACT_REVENUE_METHOD_LABELS[str(state?.method) ?? ''] ?? fmtValue(state?.method)
+  const account = (state: Record<string, unknown> | null) => fmtValue(state?.revenue_account)
+  const fields = { category: 'installningar' as const, object: 'Pågående arbeten' }
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, {
+        ...fields,
+        code: 'contract_revenue_settings.created',
+        event: 'Metod och konto för pågående arbeten valda',
+        details: [`Metod: ${method(row.new_state)}`, `Konto för upparbetade intäkter: ${account(row.new_state)}`],
+      })
+    case 'UPDATE': {
+      const details: string[] = []
+      if (!same(row.old_state?.method, row.new_state?.method)) {
+        details.push(`Metod: ${method(row.old_state)} → ${method(row.new_state)}`)
+      }
+      if (!same(row.old_state?.revenue_account, row.new_state?.revenue_account)) {
+        details.push(`Konto för upparbetade intäkter: ${account(row.old_state)} → ${account(row.new_state)}`)
+      }
+      if (details.length === 0) return null
+      return auditEvent(row, {
+        ...fields,
+        code: 'contract_revenue_settings.updated',
+        event: 'Metod eller konto för pågående arbeten ändrat',
+        details,
+      })
+    }
+    case 'DELETE':
+      return auditEvent(row, {
+        ...fields,
+        code: 'contract_revenue_settings.deleted',
+        event: 'Pågående arbeten används inte längre',
+        details: [`Metod: ${method(row.old_state)}`, `Konto för upparbetade intäkter: ${account(row.old_state)}`],
+      })
+    default:
+      return null
+  }
+}
+
 /** One audit_log row → zero or one behandlingshistorik event. Exported for tests. */
 export function auditRowToEvent(
   row: AuditLogEntry,
@@ -1277,6 +2079,24 @@ export function auditRowToEvent(
       return periodAuditEvent(row)
     case 'api_keys':
       return apiKeyAuditEvent(row)
+    case 'service_accounts':
+      return serviceAccountAuditEvent(row)
+    case 'company_capability_config':
+      return packageChoiceAuditEvent(row)
+    case 'company_grants':
+      return grantAuditEvent(row)
+    case 'company_grant_settings':
+      return grantSettingsAuditEvent(row)
+    case 'company_attest_policies':
+      return attestPolicyAuditEvent(row)
+    case 'company_attest_limits':
+      return attestLimitAuditEvent(row)
+    case 'company_attest_substitutes':
+      return attestSubstituteAuditEvent(row)
+    case 'booking_review_rules':
+      return bookingReviewRuleAuditEvent(row)
+    case 'contract_revenue_settings':
+      return contractRevenueSettingsAuditEvent(row)
     case 'dimensions':
       return genericAuditEvent(row, {
         category: 'installningar',
@@ -1377,6 +2197,8 @@ export function auditRowToEvent(
       return payrollConfigAuditEvent(row)
     case 'mail_connections':
       return mailConnectionAuditEvent(row)
+    case 'collection_connections':
+      return collectionConnectionAuditEvent(row)
     // The import tables emit their own events from the rows themselves; the
     // audit trail only adds what the rows can no longer show: a deletion.
     case 'sie_imports':
@@ -1411,6 +2233,117 @@ export function auditRowToEvent(
         event: 'Bankfilsimport raderad',
         object: str(row.old_state?.filename),
       })
+    case 'employees':
+      return employeePayAuditEvent(row)
+    case 'skattekonto_transactions':
+      return skattekontoLinkAuditEvent(row, ctx)
+    default:
+      return null
+  }
+}
+
+/**
+ * The verifikat a skattekonto row points at, as the report names it: its
+ * voucher label, "utkast" before it is numbered, "borttaget" when it no
+ * longer exists (a deleted draft unlinks its rows), "okänt" when it was not
+ * looked up.
+ */
+function linkedEntryLabel(entryId: string, ctx: NormaliseContext): string {
+  const entry = ctx.linkedEntryById?.get(entryId) ?? ctx.entryById.get(entryId)
+  if (entry) return voucherLabel(entry.voucher_series, entry.voucher_number) ?? 'utkast'
+  return ctx.linkedEntryById ? 'borttaget' : 'okänt'
+}
+
+/**
+ * A skattekonto row linked, unlinked, ignored or restored (trigger
+ * audit_skattekonto_transactions_link, migration 20261101003500): the
+ * trigger writes write_audit_log's whole row, and only when journal_entry_id
+ * or is_ignored changed. A link to the verifikat Bokför created for the row
+ * (source 'system', source_id = the row) reads as booked.
+ */
+function skattekontoLinkAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandlingshistorikEvent | null {
+  if (row.action !== 'UPDATE') return null
+  const before = row.old_state ?? {}
+  const after = row.new_state ?? {}
+  const oldEntry = str(before.journal_entry_id)
+  const newEntry = str(after.journal_entry_id)
+  const ignoredBefore = before.is_ignored === true
+  const ignoredAfter = after.is_ignored === true
+  const linkChanged = oldEntry !== newEntry
+  const ignoreChanged = ignoredBefore !== ignoredAfter
+  if (!linkChanged && !ignoreChanged) return null
+
+  const object = [str(after.transaktionsdatum), str(after.transaktionstext)].filter(Boolean).join(' ') || null
+  const details: string[] = []
+  const amount = Number(after.belopp_skatteverket)
+  if (after.belopp_skatteverket !== null && after.belopp_skatteverket !== undefined && Number.isFinite(amount)) {
+    details.push(`Belopp: ${fmtAmount(amount)} kr`)
+  }
+
+  let code: string
+  let event: string
+  if (!linkChanged) {
+    code = ignoredAfter ? 'skattekonto.ignored' : 'skattekonto.restored'
+    event = ignoredAfter ? 'Skattekontohändelse ignorerad' : 'Ignorerad skattekontohändelse återställd'
+  } else {
+    if (newEntry && !oldEntry) {
+      const entry = ctx.linkedEntryById?.get(newEntry)
+      const booked = (entry?.source_type === 'system' || entry?.source_type === 'tax_account') && !!entry.source_id && entry.source_id === row.record_id
+      code = booked ? 'skattekonto.booked' : 'skattekonto.linked'
+      event = booked ? 'Skattekontohändelse bokförd' : 'Skattekontohändelse kopplad till verifikat'
+      details.push(`Verifikat: ${linkedEntryLabel(newEntry, ctx)}`)
+    } else if (oldEntry && !newEntry) {
+      code = 'skattekonto.unlinked'
+      event = 'Skattekontohändelsens koppling borttagen'
+      details.push(`Verifikat: ${linkedEntryLabel(oldEntry, ctx)}`)
+    } else {
+      code = 'skattekonto.relinked'
+      event = 'Skattekontohändelse kopplad om'
+      details.push(`Verifikat: ${linkedEntryLabel(oldEntry!, ctx)} → ${linkedEntryLabel(newEntry!, ctx)}`)
+    }
+    if (ignoreChanged) details.push(`Ignorerad: ${fmtValue(ignoredBefore)} → ${fmtValue(ignoredAfter)}`)
+  }
+  return auditEvent(row, { category: 'beslut', code, event, object, details })
+}
+
+/**
+ * An employee's pay basis (audit_employee_pay_basis, migration
+ * 20261101003400): the starting values when the employee is created, the
+ * changed values after. The trigger writes no DELETE rows; the
+ * sammalöneregeln confirmation (GUARD_BYPASSED on employees) is handled
+ * before the table switch.
+ */
+function employeePayAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const object = [str(state?.first_name), str(state?.last_name)].filter(Boolean).join(' ') || null
+  switch (row.action) {
+    case 'INSERT': {
+      // What was set, in field order; an unset field or a "no" adds nothing.
+      const details = Object.entries(EMPLOYEE_PAY_FIELDS)
+        .filter(([key]) => {
+          const value = row.new_state?.[key]
+          return fmtValue(value, key) !== '(tomt)' && value !== false
+        })
+        .map(([key, label]) => `${label}: ${fmtValue(row.new_state?.[key], key)}`)
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'employee.created',
+        event: 'Anställd upplagd med lönegrunder',
+        object,
+        details,
+      })
+    }
+    case 'UPDATE': {
+      const { lines } = diffFields(row.old_state, row.new_state, EMPLOYEE_PAY_FIELDS)
+      if (lines.length === 0) return null
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'employee.pay_basis_updated',
+        event: 'Lönegrunder ändrade',
+        object,
+        details: lines,
+      })
+    }
     default:
       return null
   }
@@ -1494,18 +2427,143 @@ function migrationResetEvent(row: MigrationResetRow, companyId: string): RawBeha
   }
 }
 
-function sieImportEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
-  const events: RawBehandlingshistorikEvent[] = []
-  const actor: RawActor = { type: 'user', user_id: row.user_id, actor_label: null }
+/**
+ * The events of one sie_imports row. A durable job (job_state set) is read
+ * from its job: job_state is the lifecycle, imported_at when it completed and
+ * undone_at when an undo took it back out of the ledger. On a job row status
+ * and replaced_at lag behind (an undone job reads status 'replaced' and never
+ * gets replaced_at), so they describe a legacy import only.
+ */
+export function sieImportEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
+  if (!row.job_state) return legacySieImportEvents(row)
+  return row.job_kind === 'duplicate_repair' ? sieRepairJobEvents(row) : sieImportJobEvents(row)
+}
+
+function sieImportDetails(row: SieImportRow): string[] {
   const details: string[] = []
   if (row.sie_type !== null && row.sie_type !== undefined) details.push(`Filtyp: SIE${row.sie_type}`)
   if (row.fiscal_year_start && row.fiscal_year_end) details.push(`Räkenskapsår: ${row.fiscal_year_start} till ${row.fiscal_year_end}`)
   if (typeof row.accounts_count === 'number' || typeof row.transactions_count === 'number') {
     details.push(`${row.accounts_count ?? 0} konton, ${row.transactions_count ?? 0} transaktioner`)
   }
-  // undo_sie_import sets status = 'undone' + replaced_at: the import did
-  // complete, and was later reversed (the entry deletions carry their own
-  // audit rows).
+  return details
+}
+
+/**
+ * What a durable undo does to the ledger (undo_sie_import_chunk): a
+ * vändningsverifikation for each imported verifikat. Nothing is deleted; the
+ * stornos are in the report as verifikationer of their own.
+ */
+const SIE_UNDO_STORNO = 'importerade verifikationer makulerade med vändningsverifikationer (storno)'
+
+/** Who asked for the undo: request_sie_import_undo records the user and the credential. */
+function sieUndoActor(row: SieImportRow): RawActor {
+  return {
+    type: normaliseActorType(row.undo_actor_type),
+    user_id: row.execution_actor_id ?? row.user_id,
+    actor_label: row.undo_actor_type ? (row.undo_actor_label ?? null) : null,
+  }
+}
+
+function sieImportJobEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
+  const details = sieImportDetails(row)
+  // complete_sie_import_job stamps imported_at and an undo keeps it, so an
+  // undone import that had completed still reads as imported first.
+  const completed = row.job_state === 'completed' || !!row.imported_at
+  const failed = row.job_state === 'failed'
+  const undone = row.job_state === 'undone'
+  const undoneAt = undone ? toIso(row.undone_at) : null
+  if (undone && !undoneAt) {
+    details.push(`Senare ångrad: ${SIE_UNDO_STORNO}. Tidpunkten för ångringen finns inte registrerad.`)
+  } else if (!undone && row.job_phase === 'undo') {
+    details.push('Ångring pågår: importerade verifikationer makuleras med vändningsverifikationer (storno)')
+  }
+  if (failed && row.error_message) details.push(`Fel: ${truncate(row.error_message)}`)
+  const events: RawBehandlingshistorikEvent[] = [{
+    id: `sie:${row.id}`,
+    occurred_at: toIso(completed ? (row.imported_at ?? row.created_at) : row.created_at)!,
+    category: 'import',
+    code: completed ? 'sie_import.completed' : failed ? 'sie_import.failed' : 'sie_import.started',
+    event: completed ? 'SIE-fil importerad' : failed ? 'SIE-import misslyckades' : 'SIE-import påbörjad',
+    object: row.filename,
+    actor: { type: 'user', user_id: row.user_id, actor_label: null },
+    details,
+    source: 'sie_import',
+    count: 1,
+  }]
+  if (undoneAt) {
+    events.push({
+      id: `sie:${row.id}:undone`,
+      occurred_at: undoneAt,
+      category: 'import',
+      code: 'sie_import.undone',
+      event: `SIE-import ångrad (${SIE_UNDO_STORNO})`,
+      object: row.filename,
+      actor: sieUndoActor(row),
+      details: [],
+      source: 'sie_import',
+      count: 1,
+    })
+  }
+  return events
+}
+
+/**
+ * A reviewed duplicate repair (job_kind 'duplicate_repair') is not an import:
+ * it posts a vändningsverifikation for each approved duplicate an older import
+ * left. job_state 'undone' is the repair done; 'completed' with repairOutcome
+ * 'stopped' is the repair stopped before every pair was reversed.
+ */
+function sieRepairJobEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
+  const actor: RawActor = { type: 'user', user_id: row.user_id, actor_label: null }
+  const details: string[] = []
+  if (row.fiscal_year_start && row.fiscal_year_end) details.push(`Räkenskapsår: ${row.fiscal_year_start} till ${row.fiscal_year_end}`)
+  if (typeof row.transactions_count === 'number') details.push(`Dubbla verifikationer att makulera: ${row.transactions_count}`)
+  const done = row.job_state === 'undone'
+  const stopped = row.job_state === 'completed' && row.repair_outcome === 'stopped'
+  const endedAt = done ? toIso(row.undone_at) : stopped ? toIso(row.repair_stopped_at) : null
+  if (done && !endedAt) {
+    details.push('Slutförd: dubbletterna makulerade med vändningsverifikationer (storno). Tidpunkten finns inte registrerad.')
+  }
+  const events: RawBehandlingshistorikEvent[] = [{
+    id: `sie:${row.id}`,
+    occurred_at: toIso(row.created_at)!,
+    category: 'import',
+    code: 'sie_import.repair_started',
+    event: 'Granskad rättelse av dubbla SIE-verifikationer påbörjad',
+    object: null,
+    actor,
+    details,
+    source: 'sie_import',
+    count: 1,
+  }]
+  if (endedAt) {
+    events.push({
+      id: `sie:${row.id}:${done ? 'repaired' : 'stopped'}`,
+      occurred_at: endedAt,
+      category: 'import',
+      code: done ? 'sie_import.repair_completed' : 'sie_import.repair_stopped',
+      event: done
+        ? 'Granskad rättelse av dubbla SIE-verifikationer slutförd (dubbletterna makulerade med vändningsverifikationer)'
+        : 'Granskad rättelse av dubbla SIE-verifikationer avbruten',
+      object: null,
+      actor,
+      details: [],
+      source: 'sie_import',
+      count: 1,
+    })
+  }
+  return events
+}
+
+/** A legacy import (no durable job): status and replaced_at are its lifecycle. */
+function legacySieImportEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
+  const events: RawBehandlingshistorikEvent[] = []
+  const actor: RawActor = { type: 'user', user_id: row.user_id, actor_label: null }
+  const details = sieImportDetails(row)
+  // The legacy undo_sie_import and reset_fiscal_year set status = 'undone' +
+  // replaced_at: the import did complete, and its verifikationer were later
+  // deleted (the deletions carry their own audit rows).
   const undone = row.status === 'undone'
   const completed = row.status === 'completed' || undone
   const failed = row.status === 'failed'
@@ -1564,6 +2622,125 @@ function bankFileImportEvent(row: BankFileImportRow): RawBehandlingshistorikEven
   }
 }
 
+// ============================================================
+// Collection cases (handover of a kundfordran to the company's provider)
+// ============================================================
+//
+// Handing an invoice over changes how its kundfordran is processed from
+// then on: Accounted's own reminders and reminder fees stop for it, and the
+// provider pursues the customer until the case closes. Neither the handover
+// nor a decision on the case is a bokföringspost, so they are listed under
+// Övrigt with who decided and when; the provider's own steps stay on the
+// invoice's case card.
+
+const COLLECTION_ACTION_LABELS: Record<string, string> = {
+  start: 'påminnelser startade',
+  approve_step: 'nästa steg godkänt',
+  pause: 'ärendet pausat',
+  resume: 'ärendet återupptaget',
+  withdraw: 'ärendet återkallat',
+  dispute: 'markerat som bestritt',
+  contest_dispute: 'drivs vidare trots bestridandet',
+  already_paid: 'bekräftat som betalt',
+  confirm_not_paid: 'besvarat: fakturan är inte betald',
+  approve_legal_action: 'godkänt att ärendet går till Kronofogden',
+  decline_legal_action: 'avstod från Kronofogden',
+}
+
+const COLLECTION_CLOSE_REASON_LABELS: Record<string, string> = {
+  paid: 'betald',
+  withdrawn: 'återkallad',
+  credited: 'krediterad',
+  insolvent: 'kunden saknar betalningsförmåga',
+  bankrupt: 'kunden har gått i konkurs',
+  deceased: 'kunden har avlidit',
+  moved_abroad: 'kunden har flyttat utomlands',
+  error: 'ett fel',
+  other: 'annan orsak',
+}
+
+/** Cases that reached the provider: a refused or never-sent handover changed nothing. */
+function caseWasHandedOver(row: CollectionCaseRow): boolean {
+  return row.submission_status === 'submitted' || row.submission_status === 'registered'
+}
+
+function collectionCaseObject(row: CollectionCaseRow | undefined): string | null {
+  const invoice = Array.isArray(row?.invoice) ? row.invoice[0] : row?.invoice
+  const number = invoice?.invoice_number
+  return number ? `Faktura ${number}` : 'Faktura'
+}
+
+/** The handover and, once the provider closed it, the close of one case. */
+export function collectionCaseEvents(row: CollectionCaseRow): RawBehandlingshistorikEvent[] {
+  if (!caseWasHandedOver(row)) return []
+  const object = collectionCaseObject(row)
+  const events: RawBehandlingshistorikEvent[] = [
+    {
+      id: `collection:${row.id}:opened`,
+      occurred_at: toIso(row.opened_at)!,
+      category: 'ovrigt',
+      code: 'collection_case.handed_over',
+      event: 'Faktura lämnad till inkasso',
+      object,
+      actor: { type: 'user', user_id: row.opened_by, actor_label: null },
+      details: [
+        ...(row.provider_case_number ? [`Ärendenummer: ${row.provider_case_number}`] : []),
+        'Accounted skickar inga egna påminnelser för fakturan medan ärendet är öppet',
+      ],
+      source: 'collection_case',
+      count: 1,
+    },
+  ]
+  if (row.closed_at) {
+    const reason = row.close_reason ? COLLECTION_CLOSE_REASON_LABELS[row.close_reason] ?? row.close_reason : null
+    events.push({
+      id: `collection:${row.id}:closed`,
+      occurred_at: toIso(row.closed_at)!,
+      category: 'ovrigt',
+      code: 'collection_case.closed',
+      event: 'Inkassoärende avslutat',
+      object,
+      actor: { type: 'system', user_id: null, actor_label: 'inkassobolaget' },
+      details: reason ? [`Orsak: ${reason}`] : [],
+      source: 'collection_case',
+      count: 1,
+    })
+  }
+  return events
+}
+
+/** A decision the company took on a case: who decided, and through which door. */
+export function collectionDecisionEvent(
+  row: CollectionCaseDecisionRow,
+  caseRow: CollectionCaseRow | undefined,
+): RawBehandlingshistorikEvent {
+  const raw = row.raw ?? {}
+  const action = str(raw.action) ?? row.label
+  const details: string[] = []
+  const until = str(raw.until)
+  if (until) details.push(`Till och med ${until}`)
+  if (str(raw.bank_checked_at)) {
+    details.push(raw.bank_attested === true ? 'Banken kontrollerad; användaren intygade att fakturan inte är betald' : 'Banken kontrollerad: ingen obokförd inbetalning')
+  }
+  if (Array.isArray(raw.dismissed_transaction_ids) && raw.dismissed_transaction_ids.length > 0) {
+    details.push(`${raw.dismissed_transaction_ids.length} banktransaktioner bedömda som inte betalning av fakturan`)
+  }
+  if (raw.withdraw_fee_acknowledged === true) details.push('Användaren godkände att återkallelsen kan kosta en avgift')
+  if (raw.channel === 'agent') details.push('Föreslaget av en agent eller API-nyckel')
+  return {
+    id: `collection-decision:${row.id}`,
+    occurred_at: toIso(row.occurred_at)!,
+    category: 'ovrigt',
+    code: 'collection_case.decision',
+    event: `Inkassoärende: ${COLLECTION_ACTION_LABELS[action] ?? action}`,
+    object: collectionCaseObject(caseRow),
+    actor: { type: 'user', user_id: row.actor_user_id, actor_label: null },
+    details,
+    source: 'collection_case',
+    count: 1,
+  }
+}
+
 /** A program version first seen in production (app_releases): p. 9.16 "nya programversioner". */
 export function appReleaseEvent(row: AppReleaseRow): RawBehandlingshistorikEvent {
   return {
@@ -1579,13 +2756,6 @@ export function appReleaseEvent(row: AppReleaseRow): RawBehandlingshistorikEvent
     count: 1,
   }
 }
-
-const STOCKHOLM_DAY = new Intl.DateTimeFormat('sv-SE', {
-  timeZone: 'Europe/Stockholm',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-})
 
 /**
  * Program versions, rolled up per calendar day.
@@ -1605,7 +2775,7 @@ export function appReleaseEvents(rows: AppReleaseRow[]): RawBehandlingshistorikE
   for (const row of rows) {
     const iso = toIso(row.first_seen_at)
     if (!iso) continue
-    const day = STOCKHOLM_DAY.format(new Date(iso))
+    const day = todayIsoStockholm(new Date(iso))
     const bucket = byDay.get(day)
     if (bucket) bucket.push(row)
     else byDay.set(day, [row])
@@ -1636,6 +2806,308 @@ export function appReleaseEvents(rows: AppReleaseRow[]): RawBehandlingshistorikE
     })
   }
   return out
+}
+
+// ============================================================
+// Beslut och förslag: decisions on bank lines, underlag and approved
+// staged operations (agentförslag)
+// ============================================================
+
+const DECISION_SOURCE_LABELS: Record<DecisionCandidate['source'], string> = {
+  assistant: 'assistenten',
+  rule: 'regel',
+  catalog: 'mall',
+  counterparty_template: 'motpartsmall',
+  recent: 'tidigare bokning',
+  extraction: 'dokumentläsning',
+  pending_operation: 'agentförslag',
+}
+
+const DECISION_OUTCOME_LABELS: Record<Exclude<DecisionReceipt['outcome'], 'dismissed'>, string> = {
+  accepted: 'Förslag följt',
+  changed: 'Förslag ändrat före bokföring',
+  manual: 'Bokfört utan förslag',
+}
+
+const INBOX_FIELD_LABELS: Record<string, string> = {
+  supplier_name: 'leverantör',
+  supplier_org_number: 'organisationsnummer',
+  invoice_number: 'fakturanummer',
+  invoice_date: 'fakturadatum',
+  due_date: 'förfallodatum',
+  payment_reference: 'betalningsreferens',
+  currency: 'valuta',
+  total: 'belopp',
+  vat_amount: 'moms',
+  accounts: 'konton',
+}
+
+/** The guards a booking door records (lib/suggestion-log/checks.ts), as the report names them. */
+const DECISION_CHECK_LABELS: Record<string, string> = {
+  already_booked: 'inte redan bokförd',
+  duplicate: 'dubblettkontroll',
+  currency: 'valuta',
+  reverse_charge_seller_vat: 'säljarens moms vid omvänd skattskyldighet',
+  counter_legs: 'motkonto',
+  bank_line_direction: 'bankradens sida',
+  chart: 'kontoplan',
+  dimension_policy: 'dimensionskrav',
+  invoice_match: 'öppen faktura',
+  period_lock: 'periodlås',
+  document_reuse: 'underlaget inte redan använt',
+  payee_alert: 'betalningsmottagare',
+  representation_vat_cap: 'representationsmoms',
+}
+
+const DECISION_BAND_LABELS: Record<NonNullable<DecisionReceipt['confidence_band']>, string> = {
+  direct: 'kunde bokföras direkt',
+  review: 'krävde granskning',
+}
+
+/** Rules, policy and guards the decision was made under, as recorded then. */
+function decisionProvenanceDetails(r: DecisionReceipt): string[] {
+  const details: string[] = []
+  if (r.rule_version) details.push(`Regelversion: ${r.rule_version}`)
+  if (r.policy_version) {
+    const band = r.confidence_band ? `, bedömning: ${DECISION_BAND_LABELS[r.confidence_band]}` : ''
+    details.push(`Policy: ${r.policy_version}${band}`)
+  }
+  if (r.checks) {
+    details.push(`Kontroller: ${r.checks.length}`)
+    for (const c of r.checks) {
+      if (c.result === 'pass') continue
+      const label = DECISION_CHECK_LABELS[c.id] ?? c.id
+      details.push(`Kontroll ${c.result === 'warn' ? 'med varning' : 'underkänd'}: ${label}${c.detail ? ` (${c.detail})` : ''}`)
+    }
+  }
+  return details
+}
+
+const DECISION_SUBJECT_LABELS: Record<DecisionReceipt['subject_kind'], { one: string; many: string }> = {
+  bank_line: { one: 'banktransaktion', many: 'banktransaktioner' },
+  inbox_item: { one: 'underlag', many: 'underlag' },
+  operation: { one: 'agentförslag', many: 'agentförslag' },
+}
+
+function decisionSubject(kind: DecisionReceipt['subject_kind']): string {
+  return DECISION_SUBJECT_LABELS[kind].one
+}
+
+/** The subject standing in for a voucher number the report does not know. */
+function decisionObject(kind: DecisionReceipt['subject_kind']): string {
+  const one = decisionSubject(kind)
+  return one.charAt(0).toUpperCase() + one.slice(1)
+}
+
+/**
+ * The door a key's approval of a staged operation came through (the AI's own
+ * call, or a person's click in the approval view inside the AI client), as
+ * the receipt recorded it; null for anything else.
+ */
+function receiptDoor(r: DecisionReceipt) {
+  return r.subject_kind === 'operation' ? approvalDoorOf(r.policy_version) : null
+}
+
+function decisionEventLabel(r: DecisionReceipt): string {
+  if (r.outcome === 'dismissed') return r.subject_kind === 'bank_line' ? 'Banktransaktion ignorerad' : 'Underlag raderat'
+  // An approval books exactly what was staged: no suggestion to follow or change.
+  if (r.subject_kind === 'operation') {
+    if (parseGrantPolicyVersion(r.policy_version)) return 'Bokfört automatiskt enligt regel'
+    const door = receiptDoor(r)
+    if (door === 'mcp_view') return 'Agentförslag godkänt i granskningsrutan'
+    if (door === 'mcp_chat') return 'Agentförslag godkänt av AI-assistenten'
+    return 'Agentförslag godkänt'
+  }
+  return DECISION_OUTCOME_LABELS[r.outcome]
+}
+
+/**
+ * Who approved, by the door: what the server knows and what it does not. It
+ * never sees the chat, so an AI's approval cannot say whether a person asked
+ * for it there; a click in the approval view is the client's word for it.
+ */
+function approvalDoorDetails(r: DecisionReceipt): string[] {
+  const door = receiptDoor(r)
+  const client = r.decided_by.label ? agentDisplayName(r.decided_by.actor_type, r.decided_by.label) : 'AI-klienten'
+  if (door === 'mcp_view') {
+    return [`Godkännande: en person klickade Godkänn i granskningsrutan i ${client} (intygat av klienten, inte en inloggning i Accounted)`]
+  }
+  if (door === 'mcp_chat') {
+    return [`Godkännande: AI-assistenten (${client}) godkände förslaget själv; om en person bad om det i chatten syns inte i Accounted`]
+  }
+  return []
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)} %`
+}
+
+/**
+ * What was on offer, what was taken and on what basis, what was booked, and
+ * who proposed it: the agent and the person it staged the proposal for,
+ * named from `userLabels` (the generator resolves them before it builds the
+ * decisions).
+ */
+export function decisionDetails(r: DecisionReceipt, userLabels: Map<string, string> = new Map()): string[] {
+  const details: string[] = []
+  if (r.booked?.voucher) details.push(`Gäller: ${decisionSubject(r.subject_kind)}`)
+  if (r.candidates.length === 0) {
+    details.push('Inga förslag fanns')
+  } else {
+    const sources = [...new Set(r.candidates.map((c) => DECISION_SOURCE_LABELS[c.source]))]
+    details.push(`Förslag: ${r.candidates.length} (${sources.join(', ')})`)
+  }
+  if (r.chosen) {
+    const accounts = r.chosen.accounts.length > 0 ? `, konto ${r.chosen.accounts.join(', ')}` : ''
+    details.push(`Valt förslag: ${DECISION_SOURCE_LABELS[r.chosen.source]}${accounts}`)
+  }
+  if (r.confidence.value != null) {
+    details.push(
+      r.confidence.basis === 'model_reported'
+        ? `Modellens egen säkerhet: ${percent(r.confidence.value)}`
+        : `Säkerhet: ${percent(r.confidence.value)}`,
+    )
+  }
+  if (r.chosen?.model) details.push(`Modell: ${r.chosen.model}`)
+  if (r.booked?.account) details.push(`Bokfört konto: ${r.booked.account}`)
+  if (r.booked && r.booked.changed_fields.length > 0) {
+    details.push(`Ändrade fält: ${r.booked.changed_fields.map((f) => INBOX_FIELD_LABELS[f] ?? f).join(', ')}`)
+  }
+  if (r.proposed_by && r.proposed_by.actor_type !== 'user') {
+    const proposer = formatActorLabel(
+      { type: normaliseActorType(r.proposed_by.actor_type), user_id: r.proposed_by.user_id ?? null, actor_label: r.proposed_by.label },
+      userLabels,
+    )
+    details.push(`Föreslaget av: ${proposer}`)
+  }
+  // The agent's own words, as the approver saw them.
+  if (r.agent_reason) details.push(`Agentens motivering: ${r.agent_reason}`)
+  const grant = r.subject_kind === 'operation' ? parseGrantPolicyVersion(r.policy_version) : null
+  if (grant) {
+    details.push(`Bokfört utan godkännande av en person, enligt regel ${grant.grantId} version ${grant.grantVersion}`)
+  }
+  details.push(...approvalDoorDetails(r))
+  details.push(...decisionProvenanceDetails(r))
+  return details
+}
+
+function decisionEvent(r: DecisionReceipt, userLabels: Map<string, string>): RawBehandlingshistorikEvent {
+  return {
+    id: `decision:${r.receipt_id}`,
+    occurred_at: toIso(r.decided_at) ?? r.decided_at,
+    category: 'beslut',
+    code: `decision.${r.outcome}`,
+    event: decisionEventLabel(r),
+    object: r.booked?.voucher ?? decisionObject(r.subject_kind),
+    // A click in the approval view is the person's decision; the key that
+    // carried it is named in the details and on the verifikat's own event.
+    actor:
+      receiptDoor(r) === 'mcp_view'
+        ? { type: 'user', user_id: r.decided_by.user_id, actor_label: null }
+        : { type: r.decided_by.actor_type, user_id: r.decided_by.user_id, actor_label: r.decided_by.label },
+    details: decisionDetails(r, userLabels),
+    source: 'suggestion_log',
+    count: 1,
+  }
+}
+
+/**
+ * One event per decision. A samlingsverifikat books many bank lines in one
+ * decision, written as one insert (one timestamp), so the receipts that
+ * booked the same voucher at the same moment become one event carrying
+ * their count, the way bursts of identical changes are collapsed. Decisions
+ * on one voucher at different moments stay separate events.
+ */
+export function decisionEvents(receipts: DecisionReceipt[], userLabels: Map<string, string> = new Map()): RawBehandlingshistorikEvent[] {
+  const byVoucher = new Map<string, DecisionReceipt[]>()
+  const events: RawBehandlingshistorikEvent[] = []
+  for (const r of receipts) {
+    const entryId = r.booked?.journal_entry_id
+    if (!entryId) {
+      events.push(decisionEvent(r, userLabels))
+      continue
+    }
+    const key = `${entryId}|${r.decided_at}`
+    const group = byVoucher.get(key) ?? []
+    group.push(r)
+    byVoucher.set(key, group)
+  }
+  for (const group of byVoucher.values()) {
+    if (group.length === 1) {
+      events.push(decisionEvent(group[0], userLabels))
+      continue
+    }
+    const sorted = [...group].sort((a, b) => a.decided_at.localeCompare(b.decided_at) || a.receipt_id.localeCompare(b.receipt_id))
+    const first = sorted[0]
+    const counts = new Map<string, number>()
+    for (const r of sorted) counts.set(decisionEventLabel(r), (counts.get(decisionEventLabel(r)) ?? 0) + 1)
+    const proposer = first.proposed_by && first.proposed_by.actor_type !== 'user'
+      ? decisionDetails(first, userLabels).find((d) => d.startsWith('Föreslaget av: '))
+      : undefined
+    events.push({
+      id: `decision:${first.receipt_id}:batch`,
+      occurred_at: toIso(first.decided_at) ?? first.decided_at,
+      category: 'beslut',
+      code: 'decision.batch',
+      event: 'Samlingsbeslut',
+      object: first.booked?.voucher ?? null,
+      actor: { type: first.decided_by.actor_type, user_id: first.decided_by.user_id, actor_label: first.decided_by.label },
+      details: [
+        `${sorted.length} ${DECISION_SUBJECT_LABELS[first.subject_kind].many} i en verifikation`,
+        ...[...counts.entries()].map(([label, n]) => `${label}: ${n}`),
+        ...(proposer ? [proposer] : []),
+        // One approval, one staged operation: the rows share its reason.
+        ...(first.agent_reason ? [`Agentens motivering: ${first.agent_reason}`] : []),
+        // One insert, one snapshot: the rows share their rules version.
+        ...(first.rule_version ? [`Regelversion: ${first.rule_version}`] : []),
+      ],
+      source: 'suggestion_log',
+      count: sorted.length,
+    })
+  }
+  return events
+}
+
+/** Operation ids per sponsor read: 100 ids stay well under the gateway's 8 KB request line. */
+const SPONSOR_ID_CHUNK = 100
+
+/**
+ * The person each agent proposal was staged for (pending_operations.user_id:
+ * the key's owner, a service account's sponsor, who chatted), which
+ * behandlingshistorik_decisions does not return. Read by operation id, for
+ * agent proposals only. Best-effort: a failed read leaves the proposal named
+ * by its agent alone, never fails the report.
+ */
+async function withProposalSponsors(
+  supabase: SupabaseClient,
+  companyId: string,
+  receipts: DecisionReceipt[],
+): Promise<DecisionReceipt[]> {
+  const ids = [
+    ...new Set(
+      receipts
+        .map((r) => r.proposed_by)
+        .filter((p): p is NonNullable<DecisionReceipt['proposed_by']> => !!p && p.actor_type !== 'user' && !p.user_id)
+        .map((p) => p.pending_operation_id),
+    ),
+  ]
+  if (ids.length === 0) return receipts
+  const sponsors = new Map<string, string>()
+  const reads = await Promise.all(
+    chunk(ids, SPONSOR_ID_CHUNK).map((part) =>
+      supabase.from('pending_operations').select('id, user_id').eq('company_id', companyId).in('id', part),
+    ),
+  )
+  for (const { data, error } of reads) {
+    if (error) continue
+    for (const row of (data ?? []) as { id: string; user_id: string | null }[]) {
+      if (row.user_id) sponsors.set(row.id, row.user_id)
+    }
+  }
+  return receipts.map((r) => {
+    const sponsor = r.proposed_by ? sponsors.get(r.proposed_by.pending_operation_id) : undefined
+    return sponsor && r.proposed_by ? { ...r, proposed_by: { ...r.proposed_by, user_id: sponsor } } : r
+  })
 }
 
 /**
@@ -1671,20 +3143,28 @@ const SOURCE_ORDER: Record<BehandlingshistorikSource, number> = {
   migration_reset: 3,
   sie_import: 4,
   bank_file_import: 5,
+  collection_case: 6,
+  suggestion_log: 7,
 }
 
+/** `a.localeCompare(b)` is defined as this collator's compare; one instance instead of one lookup per call. */
+const ID_COLLATOR = new Intl.Collator()
+
+/**
+ * Chronological, then by source, then by id. The keys are read once per
+ * event: a year is 100 000+ events, and parsing both timestamps inside the
+ * comparator cost two Date.parse calls per comparison.
+ */
 export function sortEvents<T extends { occurred_at: string; source: BehandlingshistorikSource; id: string }>(
   events: T[],
 ): T[] {
-  return [...events].sort((a, b) => {
-    const ta = toMs(a.occurred_at)
-    const tb = toMs(b.occurred_at)
-    if (ta !== tb) return ta - tb
-    const sa = SOURCE_ORDER[a.source]
-    const sb = SOURCE_ORDER[b.source]
-    if (sa !== sb) return sa - sb
-    return a.id.localeCompare(b.id)
+  const keyed = events.map((event) => ({ event, t: toMs(event.occurred_at), s: SOURCE_ORDER[event.source] }))
+  keyed.sort((a, b) => {
+    if (a.t !== b.t) return a.t - b.t
+    if (a.s !== b.s) return a.s - b.s
+    return ID_COLLATOR.compare(a.event.id, b.event.id)
   })
+  return keyed.map((k) => k.event)
 }
 
 export interface CollapseOptions {
@@ -1812,121 +3292,91 @@ async function fetchCompany(supabase: SupabaseClient, companyId: string): Promis
   return { name: row?.company_name ?? '', org_number: row?.org_number ?? null }
 }
 
-async function fetchPeriodEntries(supabase: SupabaseClient, companyId: string, periodId: string): Promise<EntryRow[]> {
-  return fetchAllRows<EntryRow>(({ from, to }) =>
-    supabase
+/** The period's ledger history, as the report reads it. */
+interface LedgerHistoryRows {
+  entries: EntryRow[]
+  audit: AuditLogEntry[]
+  rattelse: RattelseRow[]
+}
+
+/** The row behandlingshistorik_sources() returns: audit rows inside and outside the window apart. */
+interface LedgerHistoryRow extends LedgerHistoryRows {
+  audit_outside: AuditLogEntry[]
+}
+
+/**
+ * The verifikat, audit rows and rättelser of one report, in one statement
+ * (behandlingshistorik_sources, migration 20261023094050). It joins the
+ * period's verifikat in SQL: they were sent back as .in() lists of 200 ids,
+ * four times over, and the decisions list crossed the gateway's 8 KB request
+ * line. Fiscal-year mode returns every verifikat of the period and the
+ * record-id unions; date-range mode the verifikat committed in the window and
+ * the ones the window's rows look up by id, which is all entryById is read for.
+ * Rows no event can come from stay in the database (see the migration).
+ */
+async function fetchLedgerHistory(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodId: string,
+  window: { fromTs: string; toTs: string },
+  fiscalYear: boolean,
+): Promise<LedgerHistoryRows> {
+  const { data, error } = await supabase.rpc('behandlingshistorik_sources', {
+    p_company_id: companyId,
+    p_period_id: periodId,
+    p_from: window.fromTs,
+    p_to: window.toTs,
+    p_fiscal_year: fiscalYear,
+  })
+  if (error) throw dbError(error, null)
+  // One row of JSON arrays (a scalar json result would be parsed again by PostgREST).
+  const row = ((data as Partial<LedgerHistoryRow>[] | null) ?? [])[0] ?? {}
+  return {
+    entries: row.entries ?? [],
+    // Disjoint by created_at: the window's rows, then those about the period's
+    // verifikat logged outside it (fiscal-year mode).
+    audit: [...(row.audit ?? []), ...(row.audit_outside ?? [])],
+    rattelse: row.rattelse ?? [],
+  }
+}
+
+/** The verifikat ids the window's skattekonto link rows name, before and after. */
+export function skattekontoLinkedEntryIds(rows: AuditLogEntry[]): string[] {
+  const ids = new Set<string>()
+  for (const row of rows) {
+    if (row.table_name !== 'skattekonto_transactions') continue
+    for (const state of [row.old_state, row.new_state]) {
+      const id = str(state?.journal_entry_id)
+      if (id) ids.add(id)
+    }
+  }
+  return [...ids]
+}
+
+/** Ids per request: 100 uuids keep the request line well under the gateway's 8 KB. */
+const LINKED_ENTRY_CHUNK = 100
+
+/**
+ * The verifikat skattekonto rows were linked to or unlinked from, by id: a
+ * link made this year may name last year's verifikat, which the period's
+ * entries do not hold. A deleted draft is simply missing from the result.
+ */
+async function fetchLinkedEntries(
+  supabase: SupabaseClient,
+  companyId: string,
+  ids: string[],
+): Promise<Map<string, LinkedEntryRow>> {
+  const out = new Map<string, LinkedEntryRow>()
+  for (const part of chunk(ids, LINKED_ENTRY_CHUNK)) {
+    const { data, error } = await supabase
       .from('journal_entries')
-      .select(
-        'id, voucher_series, voucher_number, entry_date, description, source_type, status, committed_at, user_id, committed_actor_type, committed_actor_label, commit_method, reverses_id, correction_of_id, import_batch_id',
-      )
+      .select('id, voucher_series, voucher_number, source_type, source_id')
       .eq('company_id', companyId)
-      .eq('fiscal_period_id', periodId)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
-}
-
-async function fetchAuditRows(
-  supabase: SupabaseClient,
-  companyId: string,
-  window: { fromTs: string; toTs: string },
-  recordIds: string[],
-  importIds: string[] = [],
-): Promise<AuditLogEntry[]> {
-  const byId = new Map<string, AuditLogEntry>()
-
-  const windowed = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
-    supabase
-      .from('audit_log')
-      .select('*')
-      .eq('company_id', companyId)
-      .gte('created_at', window.fromTs)
-      .lte('created_at', window.toTs)
-      // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
-      // resolves string literals here. A test pins the two to each other.
-      .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
-      )
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
-  for (const row of windowed) byId.set(row.id, row)
-
-  for (const ids of chunk(recordIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
-      supabase
-        .from('audit_log')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('table_name', 'journal_entries')
-        .in('record_id', ids)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-    for (const row of rows) byId.set(row.id, row)
+      .in('id', part)
+    if (error) throw dbError(error, null)
+    for (const entry of (data ?? []) as LinkedEntryRow[]) out.set(entry.id, entry)
   }
-  // A bypassed guard is dated by when it was overridden, which is not always
-  // inside the year it belongs to: a payment booked after year end (or a
-  // bokslut-period payment) would fall outside the window and vanish from the
-  // year whose voucher it explains. Selected by the voucher instead, the same
-  // record-id union the journal_entries rows above get.
-  for (const ids of chunk(recordIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
-      supabase
-        .from('audit_log')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('action', 'GUARD_BYPASSED')
-        .in('new_state->>journal_entry_id', ids)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-    for (const row of rows) byId.set(row.id, row)
-  }
-  // An older fiscal year can be imported today. Its immutable chunk receipts
-  // belong to that year's history even outside the registration-time window.
-  for (const ids of chunk(importIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) => supabase.from('audit_log')
-      .select('*').eq('company_id', companyId).eq('table_name', 'sie_import_chunks')
-      .in('new_state->>import_id', ids).order('id').range(from, to))
-    for (const row of rows) byId.set(row.id, row)
-  }
-  return [...byId.values()]
-}
-
-async function fetchRattelseRows(
-  supabase: SupabaseClient,
-  companyId: string,
-  window: { fromTs: string; toTs: string },
-  entryIds: string[],
-): Promise<RattelseRow[]> {
-  const byId = new Map<string, RattelseRow>()
-  const windowed = await fetchAllRows<RattelseRow>(({ from, to }) =>
-    supabase
-      .from('journal_entry_rattelse_log')
-      .select('*')
-      .eq('company_id', companyId)
-      .gte('created_at', window.fromTs)
-      .lte('created_at', window.toTs)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
-  for (const row of windowed) byId.set(row.id, row)
-  for (const ids of chunk(entryIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<RattelseRow>(({ from, to }) =>
-      supabase
-        .from('journal_entry_rattelse_log')
-        .select('*')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', ids)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-    for (const row of rows) byId.set(row.id, row)
-  }
-  return [...byId.values()]
+  return out
 }
 
 async function fetchMigrationResets(supabase: SupabaseClient, companyId: string): Promise<MigrationResetRow[]> {
@@ -1955,17 +3405,41 @@ async function fetchMigrationResets(supabase: SupabaseClient, companyId: string)
   return [...byId.values()]
 }
 
+const SIE_IMPORT_COLUMNS =
+  'id, user_id, filename, sie_type, fiscal_year_start, fiscal_year_end, accounts_count, transactions_count, status, error_message, imported_at, created_at, replaced_at, ' +
+  'job_state, job_kind, job_phase, execution_actor_id, undo_actor_type, undo_actor_label, job_result'
+
+/** A stopped duplicate repair's outcome and stop time, read from job_result in code (not a JSON-path select). */
+function withRepairOutcome(row: SieImportRow & { job_result?: unknown }): SieImportRow {
+  const { job_result: jobResult, ...rest } = row
+  const result = jobResult && typeof jobResult === 'object' ? (jobResult as Record<string, unknown>) : null
+  const text = (value: unknown) => (typeof value === 'string' ? value : null)
+  return { ...rest, repair_outcome: text(result?.repairOutcome), repair_stopped_at: text(result?.stoppedAt) }
+}
+
 async function fetchSieImports(supabase: SupabaseClient, companyId: string): Promise<SieImportRow[]> {
-  return fetchAllRows<SieImportRow>(({ from, to }) =>
-    supabase
-      .from('sie_imports')
-      .select(
-        'id, user_id, filename, sie_type, fiscal_year_start, fiscal_year_end, accounts_count, transactions_count, status, error_message, imported_at, created_at, replaced_at',
+  const read = async (columns: string) =>
+    (
+      await fetchAllRows<SieImportRow & { job_result?: unknown }>(({ from, to }) =>
+        supabase
+          .from('sie_imports')
+          .select(columns)
+          .eq('company_id', companyId)
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: (SieImportRow & { job_result?: unknown })[] | null
+          error: { message: string } | null
+        }>,
       )
-      .eq('company_id', companyId)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+    ).map(withRepairOutcome)
+  try {
+    return await read(`${SIE_IMPORT_COLUMNS}, undone_at`)
+  } catch (err) {
+    // undone_at arrives with 20261109153200, which applies after the merge:
+    // until then the report reads the import without it (42703 on a read).
+    if ((err as { code?: string } | null)?.code !== '42703') throw err
+    return read(SIE_IMPORT_COLUMNS)
+  }
 }
 
 async function fetchBankFileImports(supabase: SupabaseClient, companyId: string): Promise<BankFileImportRow[]> {
@@ -1976,6 +3450,35 @@ async function fetchBankFileImports(supabase: SupabaseClient, companyId: string)
         'id, user_id, filename, file_format, transaction_count, imported_count, duplicate_count, status, error_message, date_from, date_to, created_at',
       )
       .eq('company_id', companyId)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+}
+
+async function fetchCollectionCases(supabase: SupabaseClient, companyId: string): Promise<CollectionCaseRow[]> {
+  return fetchAllRows<CollectionCaseRow>(({ from, to }) =>
+    supabase
+      .from('collection_cases')
+      .select('id, invoice_id, submission_status, opened_by, opened_at, closed_at, close_reason, provider_case_number, invoice:invoices(invoice_number)')
+      .eq('company_id', companyId)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+}
+
+async function fetchCollectionDecisions(
+  supabase: SupabaseClient,
+  companyId: string,
+  window: { fromTs: string; toTs: string },
+): Promise<CollectionCaseDecisionRow[]> {
+  return fetchAllRows<CollectionCaseDecisionRow>(({ from, to }) =>
+    supabase
+      .from('collection_case_events')
+      .select('id, case_id, occurred_at, label, actor_user_id, raw')
+      .eq('company_id', companyId)
+      .eq('kind', 'user_action')
+      .gte('occurred_at', window.fromTs)
+      .lte('occurred_at', window.toTs)
       .order('id', { ascending: true })
       .range(from, to),
   )
@@ -2147,7 +3650,6 @@ export async function generateBehandlingshistorik(
 ): Promise<BehandlingshistorikReport | null> {
   const period = await fetchPeriod(supabase, companyId, params.periodId)
   if (!period) return null
-  const company = await fetchCompany(supabase, companyId)
 
   const mode: BehandlingshistorikReport['mode'] = params.fromDate || params.toDate ? 'date_range' : 'fiscal_year'
   const from = params.fromDate ?? period.period_start
@@ -2157,16 +3659,15 @@ export async function generateBehandlingshistorik(
   const fromMs = Date.parse(fromTs)
   const toMsBound = Date.parse(toTs)
   const window = { fromTs, toTs }
+  const fiscalYear = mode === 'fiscal_year'
 
-  const entries = await fetchPeriodEntries(supabase, companyId, period.id)
-  const entryById = new Map(entries.map((e) => [e.id, e]))
-  const entryIds = entries.map((e) => e.id)
-  const unionIds = mode === 'fiscal_year' ? entryIds : []
-
-  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities] = await Promise.all([
-    fetchAuditRows(supabase, companyId, window, unionIds, mode === 'fiscal_year'
-      ? [...new Set(entries.map(entry => entry.import_batch_id).filter((id): id is string => !!id))] : []),
-    fetchRattelseRows(supabase, companyId, window, unionIds),
+  const [company, ledger, decisions, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities, collectionCases, collectionDecisions] = await Promise.all([
+    fetchCompany(supabase, companyId),
+    fetchLedgerHistory(supabase, companyId, period.id, window, fiscalYear),
+    // Decisions on bank lines and underlag: those registered in the window,
+    // plus in fiscal-year mode every one that booked one of the year's
+    // vouchers, the same record-id union the audit rows get.
+    fetchPeriodDecisions(supabase, companyId, { periodId: period.id, window, fiscalYear }),
     fetchMigrationResets(supabase, companyId),
     fetchSieImports(supabase, companyId),
     fetchBankFileImports(supabase, companyId),
@@ -2174,7 +3675,11 @@ export async function generateBehandlingshistorik(
     options.globalClient ? fetchGlobalAuditRows(options.globalClient, window) : Promise.resolve([] as AuditLogEntry[]),
     fetchCompanyFacts(supabase, companyId, window),
     fetchArkivActivities(supabase, companyId),
+    fetchCollectionCases(supabase, companyId),
+    fetchCollectionDecisions(supabase, companyId, window),
   ])
+  const { entries, audit: auditRows, rattelse: rattelseRows } = ledger
+  const entryById = new Map(entries.map((e) => [e.id, e]))
 
   const raw: RawBehandlingshistorikEvent[] = []
 
@@ -2209,7 +3714,9 @@ export async function generateBehandlingshistorik(
     raw.push(rattelseEvent(row, entryById))
   }
 
-  const ctx: NormaliseContext = { rattelseMetadataAt, entryById }
+  const linkedEntryIds = skattekontoLinkedEntryIds(auditRows)
+  const linkedEntryById = linkedEntryIds.length > 0 ? await fetchLinkedEntries(supabase, companyId, linkedEntryIds) : undefined
+  const ctx: NormaliseContext = { rattelseMetadataAt, entryById, linkedEntryById }
   for (const row of auditRows) {
     const ev = auditRowToEvent(row, ctx)
     if (ev) raw.push(ev)
@@ -2227,6 +3734,29 @@ export async function generateBehandlingshistorik(
   for (const row of bankImports) {
     if (isWithin(row.created_at, fromMs, toMsBound)) raw.push(bankFileImportEvent(row))
   }
+  // Invoices handed over to collection, the provider closing a case, and the company's decisions on it.
+  const caseById = new Map(collectionCases.map((c) => [c.id, c]))
+  for (const row of collectionCases) {
+    for (const ev of collectionCaseEvents(row)) {
+      if (isWithin(ev.occurred_at, fromMs, toMsBound)) raw.push(ev)
+    }
+  }
+  for (const row of collectionDecisions) {
+    if (isWithin(row.occurred_at, fromMs, toMsBound)) raw.push(collectionDecisionEvent(row, caseById.get(row.case_id)))
+  }
+  // Beslut och förslag: each decision read as its receipt (suggestions on
+  // offer, the one taken, who decided, the agent proposal that carried it
+  // and the person the agent staged it for, named before the details are
+  // written).
+  const userLabels = new Map<string, string>()
+  if (decisions.rows.length > 0) {
+    const receipts = await withProposalSponsors(supabase, companyId, buildDecisionReceipts(decisions.rows, decisions.context))
+    const sponsorIds = [...new Set(receipts.map((r) => r.proposed_by?.user_id).filter((id): id is string => !!id))]
+    if (options.resolveUserLabels && sponsorIds.length > 0) {
+      for (const [id, label] of await options.resolveUserLabels(sponsorIds)) userLabels.set(id, label)
+    }
+    raw.push(...decisionEvents(receipts, userLabels))
+  }
 
   let events = collapseBursts(sortEvents(raw))
   if (params.categories && params.categories.length > 0) {
@@ -2234,10 +3764,12 @@ export async function generateBehandlingshistorik(
     events = events.filter((e) => wanted.has(e.category))
   }
 
-  const userIds = [...new Set(events.map((e) => e.actor.user_id).filter((id): id is string => !!id))]
-  const userLabels = options.resolveUserLabels && userIds.length > 0
-    ? await options.resolveUserLabels(userIds)
-    : new Map<string, string>()
+  const userIds = [
+    ...new Set(events.flatMap((e) => [e.actor.user_id, e.verified?.user_id]).filter((id): id is string => !!id && !userLabels.has(id))),
+  ]
+  if (options.resolveUserLabels && userIds.length > 0) {
+    for (const [id, label] of await options.resolveUserLabels(userIds)) userLabels.set(id, label)
+  }
   const finalEvents = events.map((e) => finaliseEvent(e, userLabels))
 
   const byCategory = Object.fromEntries(
@@ -2300,7 +3832,7 @@ export function behandlingshistorikSheetSpecs(report: BehandlingshistorikReport)
       BEHANDLINGSHISTORIK_CATEGORY_LABELS[e.category],
       e.event,
       e.object,
-      e.actor.label,
+      actorWithVerified(e),
       e.details.join(' | '),
       e.code,
       e.count,
@@ -2325,15 +3857,15 @@ export function behandlingshistorikSheetSpecs(report: BehandlingshistorikReport)
   return [events as SheetSpec<unknown>, meta as SheetSpec<unknown>]
 }
 
-export function buildBehandlingshistorikExport(
+export async function buildBehandlingshistorikExport(
   report: BehandlingshistorikReport,
   format: 'xlsx' | 'csv',
-): { buffer: Buffer; contentType: string; filename: string } {
+): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
   const specs = behandlingshistorikSheetSpecs(report)
   const date = report.mode === 'fiscal_year' ? report.period.end : report.range.to
   if (format === 'csv') {
     // CSV carries the first sheet only; the metadata sheet is xlsx-only.
-    const buf = reportToWorkbook([specs[0]], { bookType: 'csv' })
+    const buf = await reportToWorkbook([specs[0]], { bookType: 'csv' })
     // SheetJS already emits a UTF-8 BOM for csv in current versions; only add
     // one when it is missing so Excel never sees a doubled mark in cell A1.
     const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf
@@ -2344,7 +3876,7 @@ export function buildBehandlingshistorikExport(
     }
   }
   return {
-    buffer: reportToWorkbook(specs),
+    buffer: await reportToWorkbook(specs),
     contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     filename: exportFilename('behandlingshistorik', report.company.name, date, 'xlsx'),
   }

@@ -1,6 +1,7 @@
 import type { ArsredovisningData } from './types'
 import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 import { buildBrRows, buildRrRows } from './statement-rows'
+import { k2LegalFormOf } from '@/lib/bokslut/ixbrl/k2-mapper'
 import type {
   AnnualReportComplianceIssue,
   AnnualReportDisclosureState,
@@ -10,8 +11,12 @@ import type {
   AnnualReportValidationStage,
 } from './compliance-types'
 import { cashFlowOmissionIssues } from './cash-flow-omission'
+import { disclosureIssues } from './disclosures'
+import { k3ArsredovisningEnabled, k3DocumentCoversForm } from './k3-release'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { isEntityType, requiresAuditorRegardlessOfSize } from '@/lib/company/entity-type'
+import { isEntityType, requiresAuditorRegardlessOfSize, requiresHousingKeyRatios } from '@/lib/company/entity-type'
+import { dividendExceedsFreeEquity } from './dividend-equity'
+import { exceedsFiscalYearCap } from '@/lib/bookkeeping/validate-period-duration'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -59,6 +64,44 @@ function statementRowsEqual(
       (row.indent ?? 0) === (other.indent ?? 0)
     )
   })
+}
+
+/**
+ * The specification of changes in equity must tie to the balance sheet it
+ * sits next to (ÅRL 6 kap. 2 § andra stycket: "jämfört med föregående års
+ * balansräkning"): the books against the balance sheet (integrity_issues,
+ * found when it was built), the closing total against Summa eget kapital,
+ * and every column from opening to closing. A version saved before the
+ * specification existed carries none and is not checked.
+ */
+function equitySpecificationIntegrity(report: ArsredovisningData): AnnualReportComplianceIssue[] {
+  const spec = report.equity_specification
+  if (!spec) return []
+  const problems = [...(spec.integrity_issues ?? [])]
+  const equityTotal = report.balansrakning.equity_liabilities.find(
+    (row) => row.semantic_key === 'balance_sheet_equity_total',
+  )?.current
+  if (equityTotal !== null && equityTotal !== undefined && Math.round(equityTotal) !== spec.current.totals.closing) {
+    problems.push(`Utgående eget kapital ${spec.current.totals.closing} kr, balansräkningen ${Math.round(equityTotal)} kr.`)
+  }
+  for (const year of [spec.current, spec.previous]) {
+    if (!year) continue
+    for (const post of year.posts) {
+      const explained = post.opening + Object.values(post.movements).reduce((sum, amount) => sum + (amount ?? 0), 0)
+      if (explained !== post.closing) problems.push(`${post.label} ${year.name} summerar inte.`)
+    }
+  }
+  if (problems.length === 0) return []
+  const issues: AnnualReportComplianceIssue[] = []
+  push(
+    issues,
+    'AR-EQUITY-SPECIFICATION-MISMATCH',
+    'error',
+    'statements',
+    `Specifikationen av förändringar i eget kapital stämmer inte med balansräkningen: ${problems.join(' ')}`,
+    'Kontrollera bokföringen av eget kapital och skapa om årsredovisningen.',
+  )
+  return issues
 }
 
 export function validateStatementIntegrity(
@@ -119,6 +162,8 @@ export function validateStatementIntegrity(
     )
   }
 
+  issues.push(...equitySpecificationIntegrity(report))
+
   if (
     report.resultatrakning.length === 0 ||
     report.balansrakning.assets.length === 0 ||
@@ -134,7 +179,19 @@ export function validateStatementIntegrity(
   }
 
   if (ixbrl) {
-    const ixbrlMapping = { rr: ixbrl.rr, br: ixbrl.br, totals: ixbrl.totals }
+    // Rendered in the company's equity layout, as the PDF rows were: the
+    // aktiebolag layout would put an Aktiekapital row against a förening's
+    // Medlemsinsatser and fail every K2 förening.
+    // A K3 report's rows carry K3's own posts (k3-presentation.ts): the
+    // iXBRL rows are rebuilt the same way, or a K3 document would be checked
+    // against K2-shaped rows.
+    const ixbrlMapping = {
+      rr: ixbrl.rr,
+      br: ixbrl.br,
+      totals: ixbrl.totals,
+      legalForm: k2LegalFormOf(report.company.entity_type),
+      ...(report.accounting_framework === 'k3' ? { presentation: 'k3' as const } : {}),
+    }
     const ixbrlIncomeRows = buildRrRows(ixbrlMapping)
     const ixbrlBalanceRows = buildBrRows(ixbrlMapping)
     if (
@@ -221,7 +278,7 @@ export function validateAnnualReportCompleteness(
       'Räkenskapsårets start- och slutdatum är ogiltiga.',
       'Korrigera räkenskapsåret i företagsinställningarna.',
     )
-  } else if (periodEnd >= addCalendarMonths(periodStart, 18)) {
+  } else if (exceedsFiscalYearCap(report.fiscal_period.period_start, report.fiscal_period.period_end)) {
     push(
       issues,
       'AR-FISCAL-PERIOD-TOO-LONG',
@@ -256,8 +313,8 @@ export function validateAnnualReportCompleteness(
       'Komplettera företagsinställningarna.',
     )
   }
-  // registered_office is the säte (never the postal town); null means the
-  // company has none and no fallback applied (registered-office.ts).
+  // registered_office is the säte, never the postal town: null means the
+  // company has none stored, and the report is not finalised without it.
   if (!report.company.registered_office?.trim()) {
     push(
       issues,
@@ -265,7 +322,7 @@ export function validateAnnualReportCompleteness(
       'error',
       'company',
       'Företagets registrerade säte saknas.',
-      'Ange säte under Inställningar → Företag.',
+      'Ange säte under Inställningar → Företag. Sätet är kommunen där företaget är registrerat och kan skilja sig från orten i postadressen.',
     )
   }
   if (!report.forvaltningsberattelse.description.trim()) {
@@ -278,9 +335,7 @@ export function validateAnnualReportCompleteness(
     push(issues, 'AR-MANAGEMENT-DISPOSITION', 'error', 'management_report', 'Styrelsens förslag till resultatdisposition saknas.')
   }
   const disposition = report.forvaltningsberattelse.resultatdisposition_amounts
-  const proposedDividendCents = Math.round(disposition.proposed_dividend * 100)
-  const distributableEquityCents = Math.round(disposition.total * 100)
-  if (proposedDividendCents > 0 && proposedDividendCents > distributableEquityCents) {
+  if (dividendExceedsFreeEquity(disposition.proposed_dividend, disposition.total)) {
     push(
       issues,
       'AR-DIVIDEND-EXCEEDS-EQUITY',
@@ -342,25 +397,25 @@ export function validateAnnualReportCompleteness(
       disclosures.long_term_debt_over_five_years_confirmed,
       'AR-NOTE-LONG-DEBT-UNCONFIRMED',
       'Uppgiften om långfristiga skulder som förfaller efter mer än fem år är inte bekräftad.',
-      'Kryssa i "Jag har kontrollerat uppgiften" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
+      'Kryssa i "Jag har kontrollerat uppgiften" under Lagstadgade upplysningar och klicka på Spara texten.',
     ],
     [
       disclosures.securities_pledged_confirmed,
       'AR-NOTE-SECURITIES-UNCONFIRMED',
       'Uppgiften om ställda säkerheter är inte bekräftad.',
-      'Kryssa i "Jag har kontrollerat ställda säkerheter" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
+      'Kryssa i "Jag har kontrollerat ställda säkerheter" under Lagstadgade upplysningar och klicka på Spara texten.',
     ],
     [
       disclosures.contingent_liabilities_confirmed,
       'AR-NOTE-CONTINGENT-UNCONFIRMED',
       'Uppgiften om eventualförpliktelser är inte bekräftad.',
-      'Kryssa i "Jag har kontrollerat eventualförpliktelser" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
+      'Kryssa i "Jag har kontrollerat eventualförpliktelser" under Lagstadgade upplysningar och klicka på Spara texten.',
     ],
     [
       disclosures.parent_company_confirmed,
       'AR-NOTE-PARENT-UNCONFIRMED',
       'Uppgiften om koncern- och moderföretagsförhållanden är inte bekräftad.',
-      'Kryssa i "Jag har kontrollerat koncernförhållandet" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
+      'Kryssa i "Jag har kontrollerat koncernförhållandet" under Lagstadgade upplysningar och klicka på Spara texten.',
     ],
   ]
   for (const [confirmed, code, message, remediation] of disclosureChecks) {
@@ -368,14 +423,45 @@ export function validateAnnualReportCompleteness(
   }
 
   if (report.accounting_framework === 'k3') {
-    push(
-      issues,
-      'AR-K3-DRAFT-ONLY',
-      'error',
-      'scope',
-      'Accounteds K3-dokument är ännu ett granskningsutkast och kan inte låsas som en komplett K3-årsredovisning.',
-      'Slutför K3:s upplysningsmatris och oberoende regelverksgranskning innan versionen låses.',
-    )
+    // The disclosure matrix (disclosures/) evaluated by the model: one error
+    // per requirement that is unanswered or outside what Accounted supports.
+    if (report.k3_disclosures) {
+      issues.push(...disclosureIssues(report.k3_disclosures))
+    } else {
+      push(
+        issues,
+        'AR-K3-DISCLOSURES-NOT-EVALUATED',
+        'error',
+        'notes',
+        'K3-upplysningarna har inte kontrollerats för den här årsredovisningen.',
+        'Skapa om årsredovisningen.',
+      )
+    }
+    // The K3 document is released only for the form it is built for (the
+    // aktiebolag, k3-release.ts): for any other form it stays a
+    // granskningsutkast whatever the flag says.
+    const entityType = report.company.entity_type
+    if (!k3DocumentCoversForm(entityType)) {
+      push(
+        issues,
+        'AR-K3-DRAFT-ONLY',
+        'error',
+        'scope',
+        isEntityType(entityType) && requiresHousingKeyRatios(entityType)
+          ? 'Accounteds K3-dokument är byggt för aktiebolag och ett granskningsutkast för en bostadsrättsförening: K3 kapitel 38 (nyckeltalen i förvaltningsberättelsen och kapitel 38-upplysningarna) finns ännu inte i dokumentet.'
+          : 'Accounteds K3-dokument är byggt för aktiebolag och ett granskningsutkast för den här företagsformen.',
+        'Upprätta den slutliga årsredovisningen med redovisningskonsult eller revisor.',
+      )
+    } else if (!k3ArsredovisningEnabled()) {
+      push(
+        issues,
+        'AR-K3-DRAFT-ONLY',
+        'error',
+        'scope',
+        'Accounteds K3-dokument är ännu ett granskningsutkast och kan inte låsas som en komplett K3-årsredovisning.',
+        'K3-årsredovisningen släpps när den har granskats av en redovisningskonsult. Upprätta den slutliga årsredovisningen med redovisningskonsult eller revisor tills dess.',
+      )
+    }
   }
   issues.push(...cashFlowOmissionIssues(report.kassaflodesanalys_omission))
 
@@ -554,6 +640,9 @@ export function validateAnnualReportCompleteness(
 
   for (const warning of report.warnings) {
     push(issues, 'AR-SOURCE-WARNING', 'warning', 'statements', warning)
+  }
+  for (const error of report.errors ?? []) {
+    push(issues, 'AR-SOURCE-ERROR', 'error', 'notes', error)
   }
 
   const errorCount = issues.filter((item) => item.severity === 'error').length

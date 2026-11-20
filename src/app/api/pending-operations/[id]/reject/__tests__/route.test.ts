@@ -7,7 +7,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, enqueueMany, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, enqueueMany, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -24,7 +24,20 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
+const appendMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: (...args: unknown[]) => appendMock(...args),
+}))
+
 import { POST } from '../route'
+
+/** The fetch row the shared reject service reads (an IN list, so an array). */
+const PENDING_ROW = { id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }
+
+/** A person's rejection: the category is required. */
+function rejectRequest(body: Record<string, unknown> = { rejection_category: 'wrong_amount' }) {
+  return createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST', body })
+}
 
 describe('POST /api/pending-operations/:id/reject', () => {
   const routeParams = createMockRouteParams({ id: 'op-1' })
@@ -34,6 +47,7 @@ describe('POST /api/pending-operations/:id/reject', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mockSupabase, error: null })
     requireWriteMock.mockResolvedValue({ ok: true })
+    appendMock.mockResolvedValue('event-1')
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -64,19 +78,28 @@ describe('POST /api/pending-operations/:id/reject', () => {
   })
 
   it('returns 404 when not found', async () => {
-    enqueue({ data: null, error: { message: 'not found' } })
+    enqueue({ data: [] })
 
-    const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
+    const request = rejectRequest()
     const response = await POST(request, routeParams)
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(404)
   })
 
-  it('returns 409 when already committed', async () => {
-    enqueue({ data: { id: 'op-1', status: 'committed' } })
+  it('returns 500 when the operation cannot be read', async () => {
+    enqueue({ data: null, error: { message: 'connection reset' } })
 
-    const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
+    const response = await POST(rejectRequest(), routeParams)
+
+    expect(response.status).toBe(500)
+    expect(findCalls('pending_operations', 'update')).toEqual([])
+  })
+
+  it('returns 409 when already committed', async () => {
+    enqueue({ data: [{ ...PENDING_ROW, status: 'committed' }] })
+
+    const request = rejectRequest()
     const response = await POST(request, routeParams)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
@@ -84,18 +107,87 @@ describe('POST /api/pending-operations/:id/reject', () => {
     expect(body.error).toContain('already committed')
   })
 
+  it('returns 409 for an unknown outcome, pointing at the ledger instead of a verifikat to reverse', async () => {
+    enqueue({ data: [{ ...PENDING_ROW, status: 'unknown' }] })
+
+    const response = await POST(rejectRequest(), routeParams)
+    const { status, body } = await parseJsonResponse<{ error: string; status: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.status).toBe('unknown')
+    expect(body.error).toMatch(/may or may not have posted/)
+    expect(body.error).toMatch(/Check the ledger/)
+    expect(body.error).not.toMatch(/approved explicitly|verifikat/)
+    expect(findCalls('pending_operations', 'update')).toEqual([])
+  })
+
   it('rejects successfully', async () => {
     enqueueMany([
-      { data: { id: 'op-1', status: 'pending' } },   // fetch op
+      { data: [PENDING_ROW] },                         // fetch op
       { data: [{ id: 'op-1' }], error: null },         // guarded update returns the row
     ])
 
-    const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
+    const request = rejectRequest({ rejection_category: 'wrong_amount', rejection_reason: '  fel belopp  ' })
     const response = await POST(request, routeParams)
     const { status, body } = await parseJsonResponse<{ data: { id: string; status: string } }>(response)
 
     expect(status).toBe(200)
     expect(body.data.status).toBe('rejected')
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      status: 'rejected',
+      rejection_category: 'wrong_amount',
+      rejection_reason: 'fel belopp',
+    })
+  })
+
+  it('records who rejected, and audits it, the way an agent rejection is recorded', async () => {
+    enqueueMany([
+      { data: [PENDING_ROW] },
+      { data: [{ id: 'op-1' }], error: null },
+    ])
+
+    const response = await POST(rejectRequest({ rejection_category: 'wrong_category' }), routeParams)
+
+    expect(response.status).toBe(200)
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      result_data: { rejected_by: 'user-1', rejected_via: 'user' },
+    })
+    expect(appendMock).toHaveBeenCalledTimes(1)
+    expect(appendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 'company-1',
+        eventType: 'PendingOperationRejected',
+        payload: expect.objectContaining({ operation_id: 'op-1', channel: 'app' }),
+        actor: { type: 'user', id: 'user-1' },
+      }),
+    )
+  })
+
+  it('returns 400 when the category is missing: a person always says what was wrong', async () => {
+    const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
+    const response = await POST(request, routeParams)
+    expect(response.status).toBe(400)
+
+    const withReasonOnly = await POST(rejectRequest({ rejection_reason: 'nej' }), routeParams)
+    expect(withReasonOnly.status).toBe(400)
+  })
+
+  it('returns 400 for a system category a client may not claim', async () => {
+    for (const category of ['expired', 'failed']) {
+      const response = await POST(rejectRequest({ rejection_category: category }), routeParams)
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it("accepts 'superseded' from the assistant withdrawing a proposal for a new answer", async () => {
+    enqueueMany([
+      { data: [PENDING_ROW] },
+      { data: [{ id: 'op-1' }], error: null },
+    ])
+
+    const response = await POST(rejectRequest({ rejection_category: 'superseded' }), routeParams)
+
+    expect(response.status).toBe(200)
   })
 
   it('returns 409 when commit claims the row between the status read and the write', async () => {
@@ -104,11 +196,11 @@ describe('POST /api/pending-operations/:id/reject', () => {
     // `rejected` over an operation that has since posted a verifikat, so the
     // UPDATE is guarded on status and matches zero rows here.
     enqueueMany([
-      { data: { id: 'op-1', status: 'pending' } },   // fetch op: still pending
+      { data: [PENDING_ROW] },                         // fetch op: still pending
       { data: [], error: null },                       // guarded update matches nothing
     ])
 
-    const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
+    const request = rejectRequest()
     const response = await POST(request, routeParams)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 

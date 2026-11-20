@@ -1,6 +1,9 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 import { format as formatDateFns, parseISO, isValid } from "date-fns"
+import { roundOre } from "@/lib/money"
+import { isLedgerCurrency } from "@/lib/bookkeeping/currency-utils"
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -15,17 +18,42 @@ export function cn(...inputs: ClassValue[]) {
  */
 const INVALID_DATE_PLACEHOLDER = '-'
 
+type FractionDigitOptions = { minimumFractionDigits?: number; maximumFractionDigits?: number }
+
 /**
- * Money with a currency symbol, sv-SE grouping: `1234.5` -> `1 234,50 kr`.
+ * Öre are shown as two digits or not at all: `174.5` -> `174,50 kr`, `1000` ->
+ * `1 000 kr`. A minimum of 0 made Intl drop the trailing zero and print
+ * `174,5 kr`, which reads as a typo on an amount. A caller that passes
+ * `minimumFractionDigits` gets exactly what it asked for; one that passes only
+ * a maximum below 2 gets that maximum as the minimum too (min above max throws).
+ */
+function currencyFractionDigits(options?: FractionDigitOptions): Intl.NumberFormatOptions {
+  if (options?.minimumFractionDigits !== undefined) {
+    return {
+      minimumFractionDigits: options.minimumFractionDigits,
+      maximumFractionDigits: options.maximumFractionDigits ?? 2,
+    }
+  }
+  const max = options?.maximumFractionDigits ?? 2
+  return {
+    minimumFractionDigits: Math.min(2, max),
+    maximumFractionDigits: max,
+    trailingZeroDisplay: 'stripIfInteger',
+  }
+}
+
+/**
+ * Money with a currency symbol, sv-SE grouping: `1234.5` -> `1 234,50 kr`,
+ * `1000` -> `1 000 kr` (see currencyFractionDigits).
  *
  * `currency` defaults to SEK and stays sv-SE in both locales: that is a Swedish
- * accounting convention, not a UI string (.claude/rules/i18n.md), and the
+ * accounting convention, not a UI string, and the
  * single-argument form is the correct call on the hundreds of values that ARE
  * kronor (ledger amounts, KPI aggregates, salary, tax).
  *
  * What the default cannot know is that the number came off a record carrying
  * its own currency. `formatCurrency(invoice.total)` on a 1 000 EUR invoice
- * prints "1 000,00 kr", and nothing downstream can tell that apart from a real
+ * prints "1 000 kr", and nothing downstream can tell that apart from a real
  * SEK total. So: pass `record.currency` whenever the record has one, or format
  * the kronor twin (`total_sek` / `amount_sek`). Journal entry line amounts are
  * always SEK already (lib/bookkeeping/ledger-line-amount.ts).
@@ -36,7 +64,7 @@ const INVALID_DATE_PLACEHOLDER = '-'
 export function formatCurrency(
   amount: number,
   currency?: string | null,
-  options?: { minimumFractionDigits?: number; maximumFractionDigits?: number },
+  options?: FractionDigitOptions,
 ): string {
   // A `= 'SEK'` default only covers undefined. `transactions.currency` is a
   // nullable column whose NULL is legacy for the 'SEK' default (see migration
@@ -44,10 +72,7 @@ export function formatCurrency(
   // reached Intl unguarded: `currency: null` throws RangeError and a single
   // legacy row blanked the whole transactions list into the error boundary.
   const code = currency || 'SEK'
-  const digits = {
-    minimumFractionDigits: options?.minimumFractionDigits ?? 0,
-    maximumFractionDigits: options?.maximumFractionDigits ?? 2,
-  }
+  const digits = currencyFractionDigits(options)
   try {
     return new Intl.NumberFormat('sv-SE', { style: 'currency', currency: code, ...digits }).format(
       amount,
@@ -60,6 +85,19 @@ export function formatCurrency(
     // value, never crash the page.
     return `${new Intl.NumberFormat('sv-SE', digits).format(amount)} ${code}`
   }
+}
+
+/**
+ * An amount in kronor with öre only when it has them: whole kronor without
+ * decimals ("12 500 kr"), otherwise both öre digits ("11 250,50 kr"). The
+ * collections screens and the kundförlust texts show amounts this way.
+ * Pure and client-safe.
+ */
+export function formatKronor(amount: number): string {
+  const ore = roundOre(amount)
+  return Number.isInteger(ore)
+    ? formatCurrency(ore, 'SEK', { maximumFractionDigits: 0 })
+    : formatCurrency(ore, 'SEK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 export function formatDate(date: Date | string): string {
@@ -121,6 +159,20 @@ export function formatAmount(amount: number): string {
 }
 
 /**
+ * An amount in a list or table row (Stil v3 polish P7: no "kr" in rows; it
+ * stays on headlines, totals and dialogs). A SEK amount shows as the bare
+ * number, with formatCurrency's digits; any other currency keeps its code, so a EUR
+ * invoice in a krona list is never read as kronor. A NULL currency is the
+ * legacy SEK default, as in `formatCurrency`.
+ */
+export function formatRowAmount(amount: number, currency?: string | null): string {
+  if (!isLedgerCurrency(currency)) return formatCurrency(amount, currency)
+  // The same digits as formatCurrency (decimals only when there are öre),
+  // without the unit: dropping "kr" must not change how a number reads.
+  return new Intl.NumberFormat('sv-SE', currencyFractionDigits()).format(amount)
+}
+
+/**
  * Whole-krona amount, no decimals, sv-SE grouping: `1234.56` → `1 235`. For
  * compact KPI tiles and rounded summaries.
  *
@@ -166,34 +218,11 @@ export function formatDateLong(date: Date | string, locale: string = 'sv'): stri
  * read a day behind.
  */
 export function swedishToday(now: Date = new Date()): string {
-  const date = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now)
   const weekday = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Europe/Stockholm',
     weekday: 'long',
   }).format(now)
-  return `${date} (${weekday})`
-}
-
-export function formatOrgNumber(orgNumber: string): string {
-  // Format Swedish org number: XXXXXX-XXXX
-  const cleaned = orgNumber.replace(/\D/g, '')
-  if (cleaned.length === 10) {
-    return `${cleaned.slice(0, 6)}-${cleaned.slice(6)}`
-  }
-  return orgNumber
-}
-
-/** UTC YYYYMMDD stamp (e.g. for archive download filenames). */
-export function utcDateStamp(date: Date): string {
-  const year = date.getUTCFullYear()
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(date.getUTCDate()).padStart(2, '0')
-  return `${year}${month}${day}`
+  return `${todayIsoStockholm(now)} (${weekday})`
 }
 
 /** Resolve after `ms` milliseconds (setTimeout as a promise). */
@@ -238,4 +267,15 @@ export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       },
     )
   })
+}
+
+/**
+ * Collapse a possibly multi-line description to one line.
+ *
+ * Line descriptions may carry line breaks (the editor allows them so the PDF
+ * breaks where the user wants). Every consumer that is a single-line field by
+ * format (Peppol cbc:Name, journal entry and SIE texts) goes through this.
+ */
+export function toSingleLine(text: string | null | undefined): string {
+  return (text ?? '').replace(/\s+/g, ' ').trim()
 }

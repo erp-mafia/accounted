@@ -4,9 +4,6 @@ import type { EntityType } from '@/types'
 import {
   BOOKING_TEMPLATES,
   getTemplateById,
-  getTemplatesByGroup,
-  getTemplatesByMcc,
-  getTemplateGroups,
   searchTemplates,
   findMatchingTemplates,
   buildMappingResultFromTemplate,
@@ -18,15 +15,22 @@ import {
   templateAppliesToForm,
 } from '../booking-templates'
 import { applySettlementAccount } from '../mapping-engine'
+import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
+import { chartVatTreatmentsOf } from '../vat-entries'
 import { getCategoryAccountMapping } from '../category-mapping'
+import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
+import { resolveVatTreatmentRuta } from '@/lib/vat/account-vat-treatment'
+import { isEuMemberCountry } from '@/lib/vat/eu-countries'
+import { DIRECTORY_SEED } from '@/lib/parties/resolver/directory-seed'
+import { matchSeedText } from '@/lib/parties/resolver/directory'
 
 // ============================================================
 // Template Data Integrity
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 86 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(86)
+  it('has exactly 87 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(87)
   })
 
   it('scopes templates to legal forms through templateAppliesToForm', () => {
@@ -155,51 +159,6 @@ describe('getTemplateById', () => {
 
   it('returns undefined for unknown ID', () => {
     expect(getTemplateById('nonexistent')).toBeUndefined()
-  })
-})
-
-describe('getTemplatesByGroup', () => {
-  it('returns templates for the premises group', () => {
-    const templates = getTemplatesByGroup('premises')
-    expect(templates.length).toBeGreaterThan(0)
-    for (const t of templates) {
-      expect(t.group).toBe('premises')
-    }
-  })
-
-  it('returns empty array for non-existent group', () => {
-    expect(getTemplatesByGroup('nonexistent' as never)).toEqual([])
-  })
-})
-
-describe('getTemplatesByMcc', () => {
-  it('returns templates for MCC 5541 (fuel)', () => {
-    const templates = getTemplatesByMcc(5541)
-    expect(templates.length).toBeGreaterThan(0)
-    expect(templates.some((t) => t.id === 'vehicle_fuel')).toBe(true)
-  })
-
-  it('returns empty array for unknown MCC', () => {
-    expect(getTemplatesByMcc(9999)).toEqual([])
-  })
-})
-
-describe('getTemplateGroups', () => {
-  it('returns all 20 groups', () => {
-    const groups = getTemplateGroups()
-    expect(groups).toHaveLength(20)
-    for (const g of groups) {
-      expect(g.group).toBeTruthy()
-      expect(g.label_sv).toBeTruthy()
-      expect(g.label_en).toBeTruthy()
-      expect(Array.isArray(g.templates)).toBe(true)
-    }
-  })
-
-  it('every template is in exactly one group', () => {
-    const groups = getTemplateGroups()
-    const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(86)
   })
 })
 
@@ -427,6 +386,17 @@ describe('milersättning routing', () => {
     expect(matches[0]?.template.id).toBe('personnel_mileage_taxfree')
   })
 
+  it('books "Insättning skattekonto" on the company skattekonto account (PH 175)', () => {
+    const template = getTemplateById('financial_tax_account')!
+    const payment = makeTransaction({ amount: -5000, description: 'Skatteverket' })
+    const on2012 = buildMappingResultFromTemplate(template, payment, 'enskild_firma', true, '2012')
+    expect([on2012.debit_account, on2012.credit_account]).toEqual(['2012', '1930'])
+    const on1630 = buildMappingResultFromTemplate(template, payment, 'enskild_firma', true, '1630')
+    expect([on1630.debit_account, on1630.credit_account]).toEqual(['1630', '1930'])
+    // Without an account (no caller resolved one) the catalog's own 1630.
+    expect(buildMappingResultFromTemplate(template, payment, 'aktiebolag').debit_account).toBe('1630')
+  })
+
   it('emits no VAT lines for milersättning (employee reimbursement, not a purchase)', () => {
     const template = getTemplateById('personnel_mileage_taxfree')
     expect(template).toBeDefined()
@@ -601,18 +571,35 @@ describe('buildMappingResultFromTemplate', () => {
     expect(result.vat_lines[2].account_number).toBe('4425')
   })
 
-  it('skips basbelopp emission when template already debits a basis account', () => {
+  it('books no basbelopp when the template already debits a basis account, once the door settles it', () => {
     const template: BookingTemplate = {
       ...getTemplate('it_cloud_hosting'),
       debit_account: '4535', // user-customized template that books directly to basis
     }
     const tx = makeTransaction({ amount: -1000 })
-    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+    // The builder books the complete set; the booking door settles the pair
+    // on the debit account with the chart (rc-basis-reconcile.ts).
+    const result = reconcileRcBasisWithCostLines(buildMappingResultFromTemplate(template, tx, 'enskild_firma'), new Map())
 
     // Only the fiktiv-moms pair: basbelopp would double-count.
     expect(result.vat_lines).toHaveLength(2)
     expect(result.vat_lines[0].account_number).toBe('2645')
     expect(result.vat_lines[1].account_number).toBe('2614')
+  })
+
+  it('books no basbelopp when the debit account has a reverse-charge momskod, once the door settles it (crm#1096)', () => {
+    const template = getTemplate('it_saas_eu') // 5420 Programvaror
+    const tx = makeTransaction({ amount: -1000 })
+    const built = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+    expect(built.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+
+    const configured = reconcileRcBasisWithCostLines(
+      built,
+      chartVatTreatmentsOf([{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }]),
+    )
+    expect(configured.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    // An ordinary 5420 keeps the pair.
+    expect(reconcileRcBasisWithCostLines(built, chartVatTreatmentsOf([{ account_number: '5420' }]))).toBe(built)
   })
 
   it('produces no VAT lines for exempt expenses', () => {
@@ -875,22 +862,29 @@ describe('new and split templates', () => {
     expect(t!.common).toBe(false)
   })
 
-  it('has representation_internal on 7631 with deductible VAT', () => {
-    // 7622 is Sjuk- och hälsovård, ej avdragsgill; personal representation
-    // is 7631, and its VAT is deductible on a base of up to 300 kr/person.
+  it('has representation_internal on 7632 with deductible VAT', () => {
+    // 7622 is Sjuk- och hälsovård, ej avdragsgill. A staff meal is not
+    // income-tax deductible since 2017 (IL 16 kap. 2 §), so it books on 7632
+    // Personalrepresentation, ej avdragsgill (accounted#86); its VAT stays
+    // deductible on a base of at most 300 kr excl. moms per person.
     const t = getTemplateById('representation_internal')
     expect(t).toBeDefined()
-    expect(t!.debit_account).toBe('7631')
+    expect(t!.debit_account).toBe('7632')
     expect(t!.vat_treatment).toBe('reduced_12')
     expect(t!.common).toBe(true)
+    expect(t!.special_rules_sv).toContain('underlag om högst 300 kr exkl. moms per person och tillfälle')
+    expect(t!.special_rules_sv).not.toMatch(/Momsavdrag på högst 300/)
+    expect(t!.deductibility_note_sv).toContain('7631')
   })
 
-  it('routes Stripe fees to reverse charge, not to VAT-free bank fees', () => {
+  it("books Stripe's processing fees as an exempt payment service: 6570, no reverse charge (issue #131)", () => {
     const t = getTemplateById('payment_fees_eu')
     expect(t).toBeDefined()
     expect(t!.debit_account).toBe('6570')
-    expect(t!.vat_treatment).toBe('reverse_charge')
-    expect(getTemplateById('bank_fees')!.keywords).not.toContain('stripe')
+    expect(t!.vat_treatment).toBe('exempt')
+    expect(t!.requires_vat_registration_data).toBeUndefined()
+    expect(t!.special_rules_sv).toContain('ML 10 kap. 33 §')
+    expect(t!.keywords).toContain('stripe')
   })
 
   it('has shareholder_loan_received (AB, D:1930 K:2393)', () => {
@@ -924,10 +918,65 @@ describe('new and split templates', () => {
     expect(t!.requires_review).toBe(true)
   })
 
-  it('representation_external has updated deductibility note with VAT cap', () => {
-    const t = getTemplateById('representation_external')
-    expect(t).toBeDefined()
-    expect(t!.deductibility_note_sv).toContain('46 kr/person')
+  // accounted#86: a meal at representation is not income-tax deductible since
+  // 2017 (IL 16 kap. 2 §), so the meal template books 6072, not 6071.
+  it('representation_external books a meal on 6072 Representation, ej avdragsgill', () => {
+    const t = getTemplateById('representation_external')!
+    expect(t.debit_account).toBe('6072')
+    expect(t.debit_account_ab).toBeUndefined()
+    for (const form of ['enskild_firma', 'aktiebolag', 'ekonomisk_forening', 'ideell_forening'] as const) {
+      const result = buildMappingResultFromTemplate(t, makeTransaction({ amount: -268.8 }), form)
+      expect(result.debit_account).toBe('6072')
+    }
+  })
+
+  // ML 13 kap. 24-25 §§: 300 kr is the VAT BASE per person and occasion. The
+  // old note said "Momsavdrag på högst 300 kr/person", the deduction itself.
+  it('representation_external says 300 kr is the VAT base, not the deduction', () => {
+    const note = getTemplateById('representation_external')!.deductibility_note_sv!
+    expect(note).toContain('underlag om högst 300 kr exkl. moms per person och tillfälle')
+    expect(note).not.toMatch(/Momsavdrag på högst 300/)
+    expect(note).toContain('36 kr')
+    expect(note).toContain('schablon 46 kr')
+    // Where the deductible kind still goes.
+    expect(note).toContain('Enklare förtäring')
+    expect(note).toContain('6071')
+  })
+
+  it('representation_external VAT: the whole 12 % moms under the cap, as the note says', () => {
+    // Two people, 240 kr excl. moms (120 kr each, under 300): 28.80 kr moms,
+    // all of it deductible. The template has no participant count, so above
+    // the cap the reviewer adjusts the moms line, which the note asks for.
+    const t = getTemplateById('representation_external')!
+    const result = buildMappingResultFromTemplate(t, makeTransaction({ amount: -268.8 }), 'enskild_firma')
+    expect(result.vat_lines).toEqual([
+      expect.objectContaining({ account_number: '2641', debit_amount: 28.8, credit_amount: 0 }),
+    ])
+    expect(t.requires_review).toBe(true)
+  })
+
+  // accounted#86: a gift is not a meal (6071 within 300 kr, usually 25 %
+  // moms), so gift words no longer propose a meal template: no suggestion
+  // beats a wrong one.
+  it.each(['Gåva', 'Present', 'Presentkort'])('no meal template matches a gift worded "%s"', (word) => {
+    const meals = ['representation_external', 'representation_internal']
+    const tx = makeTransaction({ amount: -450, description: word, merchant_name: 'Blomsterhandeln', mcc_code: null })
+    expect(findMatchingTemplates(tx).map((m) => m.template.id).filter((id) => meals.includes(id))).toEqual([])
+    for (const id of meals) {
+      expect(getTemplateById(id)!.keywords.filter((k) => /gåva|^present/i.test(k))).toEqual([])
+    }
+  })
+
+  it('still matches a customer lunch to the meal template', () => {
+    const tx = makeTransaction({ amount: -268.8, description: 'Kundlunch', merchant_name: 'Restaurang Exempel', mcc_code: null })
+    expect(findMatchingTemplates(tx).map((m) => m.template.id)).toContain('representation_external')
+  })
+
+  it('representation_external says syfte and deltagare can be written, not only uploaded (crm#1342)', () => {
+    const rule = getTemplateById('representation_external')!.special_rules_sv!
+    expect(rule).toContain('syfte och deltagare')
+    expect(rule).toContain('anteckning')
+    expect(rule).toContain('bifoga')
   })
 })
 
@@ -947,7 +996,7 @@ describe('applySettlementAccount (bank-leg routing)', () => {
 
     // Interest that landed on a savings account mapped to 1931 must debit 1931,
     // not 1930: otherwise the real bank transaction never reconciles.
-    const routed = applySettlementAccount(base, '1931')
+    const routed = applySettlementAccount(base, '1931', tx.amount)
     expect(routed.debit_account).toBe('1931')
     expect(routed.credit_account).toBe('8310')
   })
@@ -960,7 +1009,7 @@ describe('applySettlementAccount (bank-leg routing)', () => {
     expect(base.debit_account).toBe('6570')
     expect(base.credit_account).toBe('1930')
 
-    const routed = applySettlementAccount(base, '1931')
+    const routed = applySettlementAccount(base, '1931', tx.amount)
     expect(routed.debit_account).toBe('6570')
     expect(routed.credit_account).toBe('1931')
   })
@@ -969,7 +1018,7 @@ describe('applySettlementAccount (bank-leg routing)', () => {
     const template = getTemplateById('bank_interest_income')!
     const tx = makeTransaction({ amount: 50, currency: 'SEK' })
     const base = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
-    const routed = applySettlementAccount(base, '1930')
+    const routed = applySettlementAccount(base, '1930', tx.amount)
     expect(routed.debit_account).toBe('1930')
     expect(routed.credit_account).toBe('8310')
   })
@@ -1014,5 +1063,185 @@ describe('buildMappingResultFromTemplate: VAT registration', () => {
     const notRegistered = buildMappingResultFromTemplate(template, tx, 'aktiebolag', false)
     expect(notRegistered.vat_lines).toEqual(registered.vat_lines)
     expect(notRegistered.vat_lines.length).toBeGreaterThan(0)
+  })
+})
+
+// ============================================================
+// Reverse charge follows the supplier's location (crm#1028):
+// a service from another EU country is ruta 21, from outside the EU ruta 22
+// ============================================================
+
+describe('reverse-charge software lands in the box of the supplier location', () => {
+  const topFor = (description: string, mcc_code: number | null = null) =>
+    findMatchingTemplates(
+      makeTransaction({ description, original_description: description, merchant_name: null, amount: -1000, mcc_code }),
+      'aktiebolag',
+    )[0]?.template
+
+  /** The VAT lines of a 1 000 kr purchase, each with the declaration box its account feeds. */
+  const linesFor = (template: BookingTemplate) =>
+    buildMappingResultFromTemplate(template, makeTransaction({ amount: -1000 }), 'aktiebolag').vat_lines.map((l) => ({
+      account: l.account_number,
+      debit: l.debit_amount,
+      credit: l.credit_amount,
+      box: ACCOUNT_RUTA[l.account_number]?.box,
+    }))
+
+  it.each(['Google Workspace', 'GOOGLE*WORKSPACE', 'GOOGLE *WORKSPACE', 'GOOGLE GSUITE', 'GOOGLE*GSUITE'])(
+    'proposes the EU template for Google Workspace, billed from Ireland: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_eu')
+    },
+  )
+
+  it('keeps Google Workspace on the EU template when the card MCC is one the 25 % SaaS template shares', () => {
+    expect(topFor('Google Workspace', 5817)?.id).toBe('it_saas_eu')
+  })
+
+  it.each(['SUPABASE', 'SUPABASE,SINGAPORE,SG'])('proposes the non-EU template for Supabase: %s', (text) => {
+    expect(topFor(text)?.id).toBe('it_saas_non_eu')
+  })
+
+  it('keeps Supabase off the 25 % SaaS template on a software-store MCC card row', () => {
+    expect(topFor('SUPABASE', 5734)?.id).toBe('it_saas_non_eu')
+  })
+
+  it('books Google Workspace with the basis in ruta 21, output VAT on 2614 (ruta 30) and input VAT on 2645 (ruta 48)', () => {
+    expect(linesFor(topFor('Google Workspace')!)).toEqual([
+      { account: '2645', debit: 250, credit: 0, box: 'ruta48' },
+      { account: '2614', debit: 0, credit: 250, box: 'ruta30' },
+      { account: '4535', debit: 1000, credit: 0, box: 'ruta21' },
+      { account: '4598', debit: 0, credit: 1000, box: undefined },
+    ])
+  })
+
+  it('books Supabase with the basis in ruta 22, never ruta 21, and the same 2614/2645 pair', () => {
+    expect(linesFor(topFor('SUPABASE')!)).toEqual([
+      { account: '2645', debit: 250, credit: 0, box: 'ruta48' },
+      { account: '2614', debit: 0, credit: 250, box: 'ruta30' },
+      { account: '4531', debit: 1000, credit: 0, box: 'ruta22' },
+      { account: '4598', debit: 0, credit: 1000, box: undefined },
+    ])
+  })
+
+  it('puts the basis in the box resolveVatTreatmentRuta gives the supplier location', () => {
+    const treatment = { eu_business: 'reverse_charge_eu_services', non_eu_business: 'reverse_charge_non_eu_services' } as const
+    for (const id of ['it_saas_eu', 'it_cloud_hosting', 'it_saas_non_eu', 'it_services_foreign']) {
+      const t = getTemplateById(id)!
+      const supplier = t.reverse_charge_supplier_type ?? 'eu_business'
+      if (supplier === 'swedish_business') throw new Error(`${id} is not a foreign-supplier template`)
+      const basis = linesFor(t).find((l) => /^45\d{2}$/.test(l.account) && l.debit > 0)
+      expect(basis?.box, id).toBe(resolveVatTreatmentRuta(treatment[supplier], Number(t.debit_account.charAt(0)))!.box)
+    }
+  })
+
+  // GitHub, Inc. bills from the US; Microsoft's Copilot is billed from Ireland
+  // (counterpart directory). The word 'copilot' alone names both (crm#1431).
+  it.each(['GitHub Copilot', 'GITHUB, INC.', 'GITHUB  INC', 'PAYPAL *GITHUB INC'])(
+    'proposes the non-EU template for GitHub, billed from the US: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_non_eu')
+      expect(topFor(text, 5734)?.id).toBe('it_saas_non_eu')
+    },
+  )
+
+  it.each(['Microsoft Copilot', 'Microsoft 365 Copilot', 'M365 Copilot', 'COPILOT'])(
+    'proposes the EU template for Microsoft Copilot, billed from Ireland: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_eu')
+      expect(topFor(text, 5734)?.id).toBe('it_saas_eu')
+    },
+  )
+
+  it('books GitHub Copilot with the basis on 4531 (ruta 22), never 4535 (ruta 21)', () => {
+    expect(linesFor(topFor('GitHub Copilot')!)).toEqual([
+      { account: '2645', debit: 250, credit: 0, box: 'ruta48' },
+      { account: '2614', debit: 0, credit: 250, box: 'ruta30' },
+      { account: '4531', debit: 1000, credit: 0, box: 'ruta22' },
+      { account: '4598', debit: 0, credit: 1000, box: undefined },
+    ])
+  })
+
+  it('books Microsoft Copilot with the basis on 4535 (ruta 21)', () => {
+    expect(linesFor(topFor('Microsoft 365 Copilot')!)).toEqual([
+      { account: '2645', debit: 250, credit: 0, box: 'ruta48' },
+      { account: '2614', debit: 0, credit: 250, box: 'ruta30' },
+      { account: '4535', debit: 1000, credit: 0, box: 'ruta21' },
+      { account: '4598', debit: 0, credit: 1000, box: undefined },
+    ])
+  })
+
+  it('lists on the non-EU template only vendors the counterpart directory places outside the EU', () => {
+    for (const keyword of getTemplateById('it_saas_non_eu')!.keywords) {
+      // The directory entry the keyword resolves to: 'github copilot' is GitHub.
+      const country = matchSeedText(keyword)?.country
+      expect(country, keyword).toBeDefined()
+      expect(isEuMemberCountry(country!), keyword).toBe(false)
+    }
+  })
+
+  it('lets no new vendor from outside the EU onto an EU reverse-charge template', () => {
+    // These keywords book ruta 21 today although the directory places the
+    // vendor outside the EU. Moving them to it_saas_non_eu waits on an operator
+    // call (crm#1028); remove an entry when its keyword moves, never add one.
+    const awaitingFounderCall = ['anthropic', 'chatgpt', 'claude', 'cloudflare', 'digitalocean', 'godaddy', 'midjourney', 'openai', 'vercel']
+    const outsideEu = new Set(
+      DIRECTORY_SEED.filter((e) => e.country && !isEuMemberCountry(e.country)).flatMap((e) => e.patterns),
+    )
+    const listed = BOOKING_TEMPLATES
+      .filter((t) => t.direction === 'expense' && t.vat_treatment === 'reverse_charge' && (t.reverse_charge_supplier_type ?? 'eu_business') === 'eu_business')
+      .flatMap((t) => t.keywords.filter((k) => outsideEu.has(k)))
+    expect(listed.sort()).toEqual(awaitingFounderCall)
+  })
+
+  // crm#1498: card rows from sellers abroad were proposed with Swedish moms
+  // because the 25 % software template listed them by name, and Google Ads'
+  // card text matched only that template's 'google'.
+  it.each(['GOOGLE*ADS5845275194,CC GOOGLE.COM,IE', 'GOOGLE *ADS1234', 'Google Ads', 'FACEBK *ABC123'])(
+    'proposes reverse charge for online ads billed from Ireland: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('marketing_online_ads_eu')
+    },
+  )
+
+  it.each(['ADOBE *ADOBE,DUBLIN,IE', 'MICROSOFT-G193484448', 'SLACK T0123', 'DROPBOX*ABC'])(
+    'proposes the EU template for software billed from the EU: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_eu')
+      expect(topFor(text, 5734)?.id).toBe('it_saas_eu')
+    },
+  )
+
+  it.each(['NOTION LABS', 'FIGMA', 'ATLASSIAN', '1PASSWORD'])(
+    'proposes the non-EU template for software billed from outside the EU: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_non_eu')
+      expect(topFor(text, 5734)?.id).toBe('it_saas_non_eu')
+    },
+  )
+
+  it('lists on the 25 % software template no vendor the counterpart directory places abroad', () => {
+    const abroad = getTemplateById('it_saas_subscription')!.keywords.filter((k) => {
+      const country = matchSeedText(k)?.country
+      return !!country && country !== 'SE'
+    })
+    expect(abroad).toEqual([])
+  })
+
+  it.each(['LOOPIA AB', 'LOOPIA AB,VASTERAAS,SE', 'BINERO'])(
+    'proposes Swedish VAT for a Swedish web host or domain, not reverse charge: %s',
+    (text) => {
+      const t = topFor(text)!
+      expect(t.id).toBe('it_saas_subscription')
+      expect(linesFor(t)).toEqual([{ account: '2641', debit: 200, credit: 0, box: 'ruta48' }])
+    },
+  )
+
+  it('lists no vendor the counterpart directory places in Sweden on a foreign-supplier reverse-charge template', () => {
+    const swedish = new Set(DIRECTORY_SEED.filter((e) => e.country === 'SE').flatMap((e) => e.patterns))
+    const listed = BOOKING_TEMPLATES
+      .filter((t) => t.direction === 'expense' && t.vat_treatment === 'reverse_charge' && t.reverse_charge_supplier_type !== 'swedish_business')
+      .flatMap((t) => t.keywords.filter((k) => swedish.has(k)).map((k) => `${t.id}:${k}`))
+    expect(listed).toEqual([])
   })
 })

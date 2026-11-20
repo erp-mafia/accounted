@@ -8,8 +8,9 @@ const TAG_LENGTH = 16
 const logger = createLogger('salary/personnummer')
 
 /**
- * Registry code (lib/errors/structured-errors.ts) for a production deployment
- * that never set PERSONNUMMER_ENCRYPTION_KEY. Carried on the thrown Error so
+ * Registry code (lib/errors/structured-errors.ts) for a production deployment,
+ * or a local run against a hosted Supabase, that never set
+ * PERSONNUMMER_ENCRYPTION_KEY. Carried on the thrown Error so
  * withRouteContext -> errorResponse() answers with the typed 503 envelope
  * ("krypteringsnyckel saknas, kontakta supporten") instead of the generic
  * INTERNAL_ERROR 500, which reads as a transient failure and invites retries
@@ -17,23 +18,41 @@ const logger = createLogger('salary/personnummer')
  */
 export const PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED = 'PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'
 
+/** Hosts a local Supabase stack answers on (`supabase start`). */
+const LOCAL_SUPABASE_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+
 /**
- * Get the encryption key from environment.
- * Falls back to a dev-only key for local development.
+ * The dev key is public (it is right below), so a value sealed with it in a
+ * shared database can never be opened by the real key. It may be used only
+ * where nothing it seals can reach one: under the test runner, or outside
+ * production against a local Supabase. Not on NODE_ENV alone: `npm run dev`
+ * or a script pointed at a hosted project is not production either.
+ * accounted#5
  */
+function devKeyAllowed(): boolean {
+  if (process.env.NODE_ENV === 'production') return false
+  if (process.env.VITEST) return true
+  try {
+    return LOCAL_SUPABASE_HOSTS.has(new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').hostname)
+  } catch {
+    return false
+  }
+}
+
+/** The key from the environment, or the dev key where devKeyAllowed(). */
 function getEncryptionKey(): Buffer {
   const envKey = process.env.PERSONNUMMER_ENCRYPTION_KEY
-  if (!envKey) {
-    if (process.env.NODE_ENV === 'production') {
-      throw Object.assign(new Error('PERSONNUMMER_ENCRYPTION_KEY is required in production'), {
-        code: PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED,
-      })
-    }
-    // Dev-only deterministic key (NOT safe for production)
-    return scryptSync('dev-only-key', 'gnubok-dev-salt', 32)
-  }
-  // Use scrypt to derive a 32-byte key from the env var
-  return scryptSync(envKey, 'gnubok-pnr-salt', 32)
+  if (envKey) return scryptSync(envKey, 'gnubok-pnr-salt', 32)
+  if (devKeyAllowed()) return scryptSync('dev-only-key', 'gnubok-dev-salt', 32)
+  throw Object.assign(
+    new Error(
+      process.env.NODE_ENV === 'production'
+        ? 'PERSONNUMMER_ENCRYPTION_KEY is required in production'
+        : 'PERSONNUMMER_ENCRYPTION_KEY is required unless NEXT_PUBLIC_SUPABASE_URL is a local Supabase ' +
+            '(localhost): the dev key is public and the real key can never open what it seals',
+    ),
+    { code: PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED },
+  )
 }
 
 /**

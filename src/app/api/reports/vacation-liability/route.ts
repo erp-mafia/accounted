@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { VacationLiabilityQuerySchema } from '@/lib/api/schemas'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { generateVacationLiability, vacationLiabilityCheck } from '@/lib/reports/vacation-liability'
 import { bookedVacationBalances } from '@/lib/salary/semesterberedning'
-import { SemesterskuldPDF } from '@/lib/reports/semesterskuld-pdf-template'
 import {
   currencyColumn,
   decimalColumn,
@@ -17,17 +14,20 @@ import {
   textColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
+import { roundOre } from '@/lib/money'
+import { todayIsoStockholm, stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * GET /api/reports/vacation-liability
  *
  * Semesterlöneskuld per employee (BFNAR 2016:10 kap 16), accounts 2920 +
- * 2940, as of a fiscal period's end (`period_id`) or December 31 of `year`
- * (default: the current year). JSON carries `check`: the booked 2920/2940
- * balances and the difference against the report, null when no fiscal
+ * 2940, as of `as_of`, a fiscal period's end (`period_id`, today while the
+ * period runs) or December 31 of
+ * `year` (default: the current year). Each row carries the booked
+ * specification and the computed (day-valued) liability. JSON carries
+ * `check`: the booked 2920/2940 balances, their difference against the
+ * specification and against the computed liability, null when no fiscal
  * period covers the date. format=pdf|xlsx downloads the same report.
  */
 export const GET = withRouteContext('report.vacation_liability', async (request, ctx) => {
@@ -38,10 +38,10 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
     operation: 'report.vacation_liability',
   })
   if (!query.success) return query.response
-  const { period_id: periodId, year, format } = query.data
+  const { period_id: periodId, year, as_of: asOf, format } = query.data
 
-  let asOfDate = `${year ?? new Date().getFullYear()}-12-31`
-  if (periodId) {
+  let asOfDate = asOf ?? `${year ?? stockholmYearMonth().year}-12-31`
+  if (periodId && !asOf) {
     const { data: period } = await supabase
       .from('fiscal_periods')
       .select('period_end')
@@ -51,7 +51,12 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
     if (!period) {
       return errorResponseFromCode('FISCAL_PERIOD_NOT_FOUND', log, { requestId })
     }
-    asOfDate = (period as { period_end: string }).period_end
+    // A year still running is valued as of today: the liability on a
+    // future date would count days not yet earned against runs not yet
+    // booked, and stäm av books only dates that have passed.
+    const periodEnd = (period as { period_end: string }).period_end
+    const today = todayIsoStockholm()
+    asOfDate = periodEnd > today ? today : periodEnd
   }
 
   try {
@@ -81,18 +86,20 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
     }
 
     if (format === 'pdf') {
+      const [{ renderToBuffer }, { SemesterskuldPDF }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/lib/reports/semesterskuld-pdf-template'),
+      ])
       const pdf = await renderToBuffer(SemesterskuldPDF({ report, check, company: companyInfo }))
       const filename = `semesterskuld-${slugifyCompanyName(companyInfo.name)}-${asOfDate.replace(/-/g, '')}.pdf`
-      return new NextResponse(new Uint8Array(pdf), {
-        headers: {
-          'Content-Type': 'application/pdf',
-          'Content-Disposition': contentDisposition('attachment', filename),
-          'Cache-Control': 'private, no-store',
-        },
+      return fileResponse(new Uint8Array(pdf), {
+        filename: filename,
+        contentType: 'application/pdf',
+        cacheControl: 'private, no-store',
       })
     }
 
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: 'Semesterskuld',
         columns: [
@@ -107,6 +114,11 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
           currencyColumn('Sociala avgifter (2940)'),
           currencyColumn('Summa skuld'),
           currencyColumn('Förskottsskuld'),
+          decimalColumn('Skuldens dagar'),
+          currencyColumn('Dagvärde'),
+          currencyColumn('Beräknad semesterlön'),
+          currencyColumn('Beräknade sociala avgifter'),
+          currencyColumn('Beräknad skuld'),
         ],
         rows: report.rows,
         mapRow: (r) => [
@@ -121,15 +133,18 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
           r.accruedAvgifter,
           r.totalLiability,
           r.advanceVacationDebt,
+          r.liabilityDays,
+          r.dayValue,
+          r.computedLiability,
+          r.computedAvgifter,
+          roundOre(r.computedLiability + r.computedAvgifter),
         ],
       },
     ])
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': contentDisposition('attachment', xlsxFilename('semesterskuld', companyInfo.name, asOfDate)),
-        'Cache-Control': 'private, no-store',
-      },
+    return fileResponse(new Uint8Array(buffer), {
+      filename: xlsxFilename('semesterskuld', companyInfo.name, asOfDate),
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      cacheControl: 'private, no-store',
     })
   } catch (err) {
     // Raw message stays server-side: it can carry table names / SQL.

@@ -221,7 +221,7 @@ const SIE_RTRANS_WITHOUT_TWIN = [
 const SIE_BRACE_ON_VER_LINE = [
   '#FLAGGA 0',
   '#SIETYP 4',
-  '#FNAMN "Brace AB"',
+  '#FNAMN "Exempelbolaget AB"',
   '#RAR 0 20240101 20241231',
   '#KONTO 1930 "Företagskonto"',
   '#KONTO 3001 "Försäljning"',
@@ -738,7 +738,7 @@ describe('validateSIEFile', () => {
 // A completed fiscal year whose vouchers leave a residual on P&L accounts
 // never moved its result to equity. Later imported years derive IB from
 // balance-sheet accounts only, so the residual becomes a permanent
-// balansräkning differens (prod incident: 97 kr across three years).
+// balansräkning differens (seen as 97 kr across three years).
 
 const OMFORING_HEADER = [
   '#FLAGGA 0',
@@ -801,7 +801,7 @@ describe('validateSIEFile — untransferred result (omföring saknas)', () => {
   it('does not warn for a running fiscal year', () => {
     const content = [
       ...OMFORING_HEADER,
-      // Fiscal year end far in the future — the running year legitimately
+      // Fiscal year end far in the future - the running year legitimately
       // carries its result on class 3-8 until bokslut.
       '#RAR 0 20990101 20991231',
       ...OMFORING_MISSING_VOUCHERS.map((line) =>
@@ -1289,8 +1289,8 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     '#PROGRAM\t"Bollbok"\t2078',
     '#GEN\t20260512\t""',
     '#SIETYP\t4',
-    '#ORGNR\t"950406-3679"',
-    '#FNAMN\t"Erik Hellqvist "',
+    '#ORGNR\t"950101-1234"',
+    '#FNAMN\t"Erik Exempel "',
     '#RAR 0 20250101 20251231',
     '#KPTYP\tEUBAS97',
     '#KONTO\t1510\t"Kundfordringar"',
@@ -1314,8 +1314,8 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     '#FORMAT\tPC8',
     '#GEN\t20260514\t""',
     '#SIETYP\t4',
-    '#ORGNR\t"950406-3679"',
-    '#FNAMN\t"Erik Hellqvist "',
+    '#ORGNR\t"950101-1234"',
+    '#FNAMN\t"Erik Exempel "',
     '#RAR 0 20260101 20261231',
     '#KPTYP\tEUBAS97',
     '#KONTO\t1510\t"Kundfordringar"',
@@ -1523,7 +1523,7 @@ describe('parseSIEFile: silent-failure diagnostic warnings', () => {
 })
 
 describe('getEffectiveOpeningBalances: derive IB from #UB -1 (issue #675)', () => {
-  // Issue #675 (ro66an): some systems export no #IB 0 records: the current
+  // Issue #675: some systems export no #IB 0 records: the current
   // year's IB exists only via the continuity invariant IB(0) = UB(-1).
   const SIE_NO_IB0 = [
     '#FLAGGA 0',
@@ -1548,6 +1548,14 @@ describe('getEffectiveOpeningBalances: derive IB from #UB -1 (issue #675)', () =
       { yearIndex: 0, account: '1930', amount: 37400.78 },
       { yearIndex: 0, account: '2010', amount: -37400.78 },
     ])
+  })
+
+  // crm#1294: an import that leaves the IB out derives none, so it says nothing about one.
+  it('warns about the derived IB only when the import brings the IB', () => {
+    const parsed = parseSIEFile(SIE_NO_IB0)
+    expect(validateSIEFile(parsed).warnings.join(' ')).toContain('härleds från föregående års utgående balans')
+    expect(validateSIEFile(parsed, { importOpeningBalances: true }).warnings.join(' ')).toContain('härleds')
+    expect(validateSIEFile(parsed, { importOpeningBalances: false }).warnings.join(' ')).not.toContain('härleds')
   })
 
   it('never uses #IB -1 (previous year IB) as the derivation source', () => {

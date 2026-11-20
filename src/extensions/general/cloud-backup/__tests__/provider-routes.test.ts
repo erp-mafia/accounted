@@ -4,11 +4,37 @@ vi.mock('next/server', async (importOriginal) => {
   return { ...actual, after: vi.fn() }
 })
 
+// /connect validates the starting host against the brands table.
+const resolveBrandByHost = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({ resolveBrandByHost }))
+
+// Disconnect asks the service role whether another company shares the grant.
+const sharedLookup = vi.hoisted(() => ({
+  result: { count: 0 as number | null, error: null as { message: string } | null },
+  calls: [] as unknown[][],
+}))
+vi.mock('@/lib/supabase/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/supabase/server')>()
+  const query: Record<string, unknown> = {
+    then: (resolve: (value: unknown) => unknown) => resolve(sharedLookup.result),
+  }
+  for (const method of ['from', 'select', 'eq', 'neq']) {
+    query[method] = (...args: unknown[]) => {
+      sharedLookup.calls.push([method, ...args])
+      return query
+    }
+  }
+  return { ...actual, createServiceClient: () => query }
+})
+
 import { cloudBackupExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { CloudBackupStatus } from '../types'
-import { createOAuthState } from '../lib/crypto'
+import { createOAuthState, encryptToken, verifyOAuthState } from '../lib/crypto'
 import { googleDriveProvider } from '../lib/google-provider'
+import { dropboxProvider } from '../lib/dropbox-provider'
+import { CloudScopeMissingError } from '../lib/cloud-provider'
+import { scheduleRecordDb } from '../lib/__tests__/schedule-record'
 
 const BASE = 'https://test.local/api/extensions/ext/cloud-backup'
 
@@ -88,6 +114,9 @@ beforeEach(() => {
   process.env.DROPBOX_APP_SECRET = 'dropbox-secret'
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key'
   delete process.env.NEXT_PUBLIC_APP_URL
+  resolveBrandByHost.mockResolvedValue(null)
+  sharedLookup.result = { count: 0, error: null }
+  sharedLookup.calls = []
 })
 
 afterEach(() => {
@@ -191,13 +220,13 @@ describe('canonical redirect URI', () => {
 
   it('uses the same canonical origin for the callback token exchange', async () => {
     process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.se'
-    const route = findRoute('GET', '/oauth/callback')
+    const route = findRoute('GET', '/oauth/complete')
     const { ctx } = makeContext()
     const exchange = vi.spyOn(googleDriveProvider, 'exchangeCode').mockResolvedValue({
       refreshToken: 'refresh-token',
       accountLabel: 'backup@example.com',
     })
-    const callbackUrl = new URL(`${BASE}/oauth/callback`)
+    const callbackUrl = new URL(`${BASE}/oauth/complete?provider=google_drive`)
     callbackUrl.searchParams.set('code', 'provider-code')
     callbackUrl.searchParams.set('state', createOAuthState(ctx.userId, ctx.companyId))
 
@@ -211,7 +240,160 @@ describe('canonical redirect URI', () => {
   })
 })
 
+describe('connecting from a brand domain', () => {
+  const BRAND = 'https://byra.example.se'
+  const APP = 'https://app.accounted.se'
+
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_APP_URL = APP
+    resolveBrandByHost.mockImplementation(async (host: string) =>
+      host === 'byra.example.se' ? { domain: 'byra.example.se' } : null
+    )
+  })
+
+  it('records the brand origin in the state and keeps the registered redirect URI', async () => {
+    const route = findRoute('POST', '/connect')
+    const { ctx } = makeContext()
+    const request = new Request(`${BRAND}/api/extensions/ext/cloud-backup/connect`, {
+      method: 'POST',
+    })
+
+    const res = await route.handler(request, ctx)
+
+    const { url } = (await res.json()) as { url: string }
+    const params = new URL(url).searchParams
+    expect(params.get('redirect_uri')).toBe(
+      `${APP}/api/extensions/ext/cloud-backup/oauth/callback`
+    )
+    expect(verifyOAuthState(params.get('state')!)?.origin).toBe(BRAND)
+  })
+
+  it('records the app origin for a host that is not a brand', async () => {
+    const route = findRoute('POST', '/connect')
+    const { ctx } = makeContext()
+    const request = new Request('https://evil.example.com/api/extensions/ext/cloud-backup/connect', {
+      method: 'POST',
+    })
+
+    const res = await route.handler(request, ctx)
+
+    const { url } = (await res.json()) as { url: string }
+    const state = new URL(url).searchParams.get('state')!
+    expect(verifyOAuthState(state)?.origin).toBe(APP)
+  })
+
+  it.each([
+    ['/oauth/callback', 'google_drive'],
+    ['/oauth/dropbox/callback', 'dropbox'],
+  ])('%s needs no session and forwards the answer to the brand domain', (path, providerId) => {
+    const route = findRoute('GET', path)
+    expect(route.skipAuth).toBe(true)
+    const state = createOAuthState('user-1', 'company-1', BRAND)
+    const callbackUrl = new URL(`${APP}/api/extensions/ext/cloud-backup${path}`)
+    callbackUrl.searchParams.set('code', 'provider-code')
+    callbackUrl.searchParams.set('state', state)
+
+    return (route.handler as (r: Request) => Promise<Response>)(new Request(callbackUrl)).then(
+      (res) => {
+        const location = new URL(res.headers.get('location')!)
+        expect(location.origin).toBe(BRAND)
+        expect(location.pathname).toBe('/api/extensions/ext/cloud-backup/oauth/complete')
+        expect(location.searchParams.get('code')).toBe('provider-code')
+        expect(location.searchParams.get('state')).toBe(state)
+        expect(location.searchParams.get('provider')).toBe(providerId)
+      }
+    )
+  })
+
+  it('forwards a state that does not verify to the app, never elsewhere', async () => {
+    const route = findRoute('GET', '/oauth/callback')
+    const callbackUrl = new URL(`${APP}/api/extensions/ext/cloud-backup/oauth/callback`)
+    callbackUrl.searchParams.set('code', 'provider-code')
+    callbackUrl.searchParams.set('state', 'forged')
+
+    const res = await (route.handler as (r: Request) => Promise<Response>)(
+      new Request(callbackUrl)
+    )
+
+    expect(new URL(res.headers.get('location')!).origin).toBe(APP)
+  })
+
+  it('finishes on the brand domain and exchanges against the registered URI', async () => {
+    const route = findRoute('GET', '/oauth/complete')
+    const { ctx, set } = makeContext()
+    const exchange = vi.spyOn(dropboxProvider, 'exchangeCode').mockResolvedValue({
+      refreshToken: 'refresh-token',
+      accountLabel: 'backup@example.com',
+    })
+    const completeUrl = new URL(
+      `${BRAND}/api/extensions/ext/cloud-backup/oauth/complete?provider=dropbox`
+    )
+    completeUrl.searchParams.set('code', 'provider-code')
+    completeUrl.searchParams.set('state', createOAuthState(ctx.userId, ctx.companyId, BRAND))
+
+    const res = await route.handler(new Request(completeUrl), ctx)
+
+    expect(exchange).toHaveBeenCalledWith(APP, 'provider-code')
+    expect(set).toHaveBeenCalledWith('dropbox_connection', expect.anything())
+    const location = new URL(res.headers.get('location')!)
+    expect(location.origin).toBe(BRAND)
+    expect(location.pathname).toBe('/settings/backup')
+    expect(location.searchParams.get('cloud_backup')).toBe('connected_first')
+  })
+})
+
+describe('OAuth callback with the storage box unticked (B12)', () => {
+  it('stores nothing and sends the user back with reason missing_scope', async () => {
+    const route = findRoute('GET', '/oauth/complete')
+    const { ctx, set } = makeContext()
+    vi.spyOn(googleDriveProvider, 'exchangeCode').mockRejectedValue(
+      new CloudScopeMissingError('Google Drive', 'granted: openid email')
+    )
+    const callbackUrl = new URL(`${BASE}/oauth/complete?provider=google_drive`)
+    callbackUrl.searchParams.set('code', 'provider-code')
+    callbackUrl.searchParams.set('state', createOAuthState(ctx.userId, ctx.companyId))
+
+    const res = await route.handler(new Request(callbackUrl), ctx)
+
+    const location = new URL(res.headers.get('location')!)
+    expect(location.searchParams.get('cloud_backup')).toBe('error')
+    expect(location.searchParams.get('reason')).toBe('missing_scope')
+    expect(location.searchParams.get('provider')).toBe('google_drive')
+    expect(set).not.toHaveBeenCalled()
+    // The person's choice, not our failure: no error-level log.
+    expect(ctx.log.error).not.toHaveBeenCalled()
+  })
+})
+
 describe('GET /status', () => {
+  it('says why a connection needs reconnecting', async () => {
+    const route = findRoute('GET', '/status')
+    const { ctx } = makeContext({
+      google_drive_connection: makeConnection({
+        status: 'needs_reauth',
+        needs_reauth_reason: 'missing_scope',
+      }),
+      // Flagged before the reason existed: read as a dead token.
+      dropbox_connection: makeConnection({ status: 'needs_reauth' }),
+    })
+
+    const res = await route.handler(makeRequest('/status', 'GET'), ctx)
+    const { data } = (await res.json()) as { data: CloudBackupStatus }
+
+    expect(data.providers[0]).toMatchObject({ needs_reauth: true, reauth_reason: 'missing_scope' })
+    expect(data.providers[1]).toMatchObject({ needs_reauth: true, reauth_reason: 'token_revoked' })
+  })
+
+  it('reports no reason for a healthy connection', async () => {
+    const route = findRoute('GET', '/status')
+    const { ctx } = makeContext({ google_drive_connection: makeConnection() })
+
+    const res = await route.handler(makeRequest('/status', 'GET'), ctx)
+    const { data } = (await res.json()) as { data: CloudBackupStatus }
+
+    expect(data.providers[0].reauth_reason).toBeNull()
+  })
+
   it('reports every provider independently', async () => {
     const route = findRoute('GET', '/status')
     const { ctx } = makeContext({
@@ -302,6 +484,65 @@ describe('POST /disconnect', () => {
     ])
   })
 
+  it('does not revoke a Google grant another company still uses', async () => {
+    const route = findRoute('POST', '/disconnect')
+    const revoke = vi.spyOn(googleDriveProvider, 'revoke').mockResolvedValue()
+    sharedLookup.result = { count: 1, error: null }
+    const { ctx, store } = makeContext({
+      google_drive_connection: makeConnection({ refresh_token_encrypted: encryptToken('rt') }),
+    })
+
+    const res = await route.handler(makeRequest('/disconnect?provider=google_drive'), ctx)
+
+    expect(res.status).toBe(200)
+    expect(revoke).not.toHaveBeenCalled()
+    expect(store.has('google_drive_connection')).toBe(false)
+    expect(sharedLookup.calls).toContainEqual(['eq', 'value->>account_email', 'user@example.com'])
+    expect(sharedLookup.calls).toContainEqual(['neq', 'company_id', 'company-1'])
+  })
+
+  it('does not revoke a connection with no account to compare', async () => {
+    const route = findRoute('POST', '/disconnect')
+    const revoke = vi.spyOn(googleDriveProvider, 'revoke').mockResolvedValue()
+    const { ctx } = makeContext({
+      google_drive_connection: makeConnection({
+        account_email: '',
+        refresh_token_encrypted: encryptToken('rt'),
+      }),
+    })
+
+    await route.handler(makeRequest('/disconnect?provider=google_drive'), ctx)
+
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('revokes a grant no other company uses', async () => {
+    const route = findRoute('POST', '/disconnect')
+    const revoke = vi.spyOn(googleDriveProvider, 'revoke').mockResolvedValue()
+    const { ctx } = makeContext({
+      google_drive_connection: makeConnection({ refresh_token_encrypted: encryptToken('rt') }),
+    })
+
+    await route.handler(makeRequest('/disconnect?provider=google_drive'), ctx)
+
+    expect(revoke).toHaveBeenCalledWith('rt', expect.any(String))
+  })
+
+  it('does not revoke when it cannot tell whether the grant is shared', async () => {
+    const route = findRoute('POST', '/disconnect')
+    const revoke = vi.spyOn(googleDriveProvider, 'revoke').mockResolvedValue()
+    sharedLookup.result = { count: null, error: { message: 'timeout' } }
+    const { ctx, store } = makeContext({
+      google_drive_connection: makeConnection({ refresh_token_encrypted: encryptToken('rt') }),
+    })
+
+    const res = await route.handler(makeRequest('/disconnect?provider=google_drive'), ctx)
+
+    expect(res.status).toBe(200)
+    expect(revoke).not.toHaveBeenCalled()
+    expect(store.has('google_drive_connection')).toBe(false)
+  })
+
   it('still works when the deployment lost its credentials', async () => {
     // A user must never be trapped with a connection they cannot remove.
     delete process.env.DROPBOX_APP_KEY
@@ -320,6 +561,8 @@ describe('schedule routes are per provider', () => {
   it('writes the schedule under the targeted provider key', async () => {
     const route = findRoute('PUT', '/schedule')
     const { ctx, store } = makeContext()
+    // No schedule record yet: the route creates it through the settings store.
+    Object.assign(ctx, { supabase: scheduleRecordDb(null).supabase })
 
     const res = await route.handler(
       makeRequest('/schedule?provider=dropbox', 'PUT', { enabled: true, hour_local: 4 }),
@@ -329,26 +572,5 @@ describe('schedule routes are per provider', () => {
     expect(res.status).toBe(200)
     expect(store.has('dropbox_schedule')).toBe(true)
     expect(store.has('google_drive_schedule')).toBe(false)
-  })
-
-  it('reads each provider schedule separately', async () => {
-    const route = findRoute('GET', '/schedule')
-    const { ctx } = makeContext({
-      google_drive_schedule: { enabled: true, hour_utc: 3, hour_local: 5 },
-      dropbox_schedule: { enabled: false, hour_utc: 9, hour_local: 11 },
-    })
-
-    const google = await route.handler(makeRequest('/schedule', 'GET'), ctx)
-    const dropbox = await route.handler(
-      makeRequest('/schedule?provider=dropbox', 'GET'),
-      ctx
-    )
-
-    await expect(google.json()).resolves.toMatchObject({
-      data: { enabled: true, hour_local: 5 },
-    })
-    await expect(dropbox.json()).resolves.toMatchObject({
-      data: { enabled: false, hour_local: 11 },
-    })
   })
 })

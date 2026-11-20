@@ -96,7 +96,7 @@ export async function login(ctx, args) {
 
   if (previous) {
     ctx.note(
-      `The previous sign-in (key ${keyPrefix(previous.access_token)}) keeps working until you disconnect it in Settings: ${ctx.origin}/settings/api`
+      `The previous sign-in (key ${keyPrefix(previous.access_token)}) keeps working until you disconnect it under Agents › Connect an agent: ${ctx.origin}/settings/api`
     )
   }
   ctx.note(`Signed in to ${ctx.origin}.`)

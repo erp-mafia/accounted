@@ -2,11 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   ticApiFetch,
   searchCompanyByOrgNumber,
-  getBankAccounts,
-  getIndustryCodes,
   getFiscalYears,
   getPayrolls,
-  getSignatory,
   getRepresentatives,
   getCompanyStatus,
   __resetTicCacheForTest,
@@ -123,16 +120,16 @@ describe('tic-client', () => {
     })
 
     // Enskild firma: Lens only resolves the 12-digit (century-prefixed) form,
-    // so a 10-digit personnummer must be expanded before the query. Björn's
-    // 860224-5618 → born 1986 → prefix 19.
+    // so a 10-digit personnummer must be expanded before the query:
+    // 860101-1235 → born 1986 → prefix 19.
     it('expands a 10-digit personnummer to the 12-digit form before querying', async () => {
       const mockFetch = vi.mocked(fetch)
       mockFetch.mockResolvedValue(new Response(JSON.stringify({ found: 0, hits: [] })))
 
-      await searchCompanyByOrgNumber('860224-5618')
+      await searchCompanyByOrgNumber('860101-1235')
 
       const calledUrl = mockFetch.mock.calls[0][0] as string
-      expect(calledUrl).toContain('q%3D198602245618')
+      expect(calledUrl).toContain('q%3D198601011235')
     })
 
     // An organisationsnummer (3rd digit >= 2) must NOT be century-prefixed:
@@ -141,10 +138,10 @@ describe('tic-client', () => {
       const mockFetch = vi.mocked(fetch)
       mockFetch.mockResolvedValue(new Response(JSON.stringify({ found: 0, hits: [] })))
 
-      await searchCompanyByOrgNumber('5595719864')
+      await searchCompanyByOrgNumber('5566990023')
 
       const calledUrl = mockFetch.mock.calls[0][0] as string
-      expect(calledUrl).toContain('q%3D5595719864')
+      expect(calledUrl).toContain('q%3D5566990023')
     })
 
     // Lens holds one document per registration of the same person (…0001,
@@ -153,7 +150,7 @@ describe('tic-client', () => {
     it('prefers the active registration when a personnummer matches several enskilda firmor', async () => {
       const closed2012 = {
         companyId: 1,
-        registrationNumber: '1982083002390002',
+        registrationNumber: '1982010112390002',
         names: [{ nameOrIdentifier: 'Old Firm', companyNamingType: 'legalName' }],
         legalEntityType: 'Enskild näringsidkare',
         registrationDate: 1239667200,
@@ -161,7 +158,7 @@ describe('tic-client', () => {
       }
       const current = {
         companyId: 2,
-        registrationNumber: '1982083002390003',
+        registrationNumber: '1982010112390003',
         names: [{ nameOrIdentifier: 'Current Firm', companyNamingType: 'legalName' }],
         legalEntityType: 'Enskild näringsidkare',
         registrationDate: 1770000000,
@@ -173,14 +170,14 @@ describe('tic-client', () => {
         )
       )
 
-      const result = await searchCompanyByOrgNumber('820830-0239')
+      const result = await searchCompanyByOrgNumber('820101-1239')
       expect(result).toEqual(current)
     })
 
     it('prefers an active registration over a newer ceased one despite a stale isCeased', async () => {
       const restarted = {
         companyId: 1,
-        registrationNumber: '1982083002390001',
+        registrationNumber: '1982010112390001',
         names: [{ nameOrIdentifier: 'Restarted Firm', companyNamingType: 'legalName' }],
         legalEntityType: 'Enskild näringsidkare',
         registrationDate: 936748800,
@@ -190,7 +187,7 @@ describe('tic-client', () => {
       const closed = {
         ...restarted,
         companyId: 2,
-        registrationNumber: '1982083002390002',
+        registrationNumber: '1982010112390002',
         registrationDate: 1239667200,
         activityStatus: 'isNoLongerActive',
       }
@@ -198,26 +195,26 @@ describe('tic-client', () => {
         new Response(JSON.stringify({ found: 2, hits: [{ document: closed }, { document: restarted }], facet_counts: [] }))
       )
 
-      const result = await searchCompanyByOrgNumber('820830-0239')
-      expect(result?.registrationNumber).toBe('1982083002390001')
+      const result = await searchCompanyByOrgNumber('820101-1239')
+      expect(result?.registrationNumber).toBe('1982010112390001')
     })
 
     it('falls back to the most recent registration when every match is ceased', async () => {
       const older = {
         companyId: 1,
-        registrationNumber: '1982083002390001',
+        registrationNumber: '1982010112390001',
         names: [{ nameOrIdentifier: 'First Firm', companyNamingType: 'legalName' }],
         legalEntityType: 'Enskild näringsidkare',
         registrationDate: 986774400,
         isCeased: true,
       }
-      const newer = { ...older, companyId: 2, registrationNumber: '1982083002390002', registrationDate: 1239667200 }
+      const newer = { ...older, companyId: 2, registrationNumber: '1982010112390002', registrationDate: 1239667200 }
       vi.mocked(fetch).mockResolvedValue(
         new Response(JSON.stringify({ found: 2, hits: [{ document: newer }, { document: older }], facet_counts: [] }))
       )
 
-      const result = await searchCompanyByOrgNumber('820830-0239')
-      expect(result?.registrationNumber).toBe('1982083002390002')
+      const result = await searchCompanyByOrgNumber('820101-1239')
+      expect(result?.registrationNumber).toBe('1982010112390002')
     })
 
     it('returns null when no hits', async () => {
@@ -246,7 +243,7 @@ describe('tic-client', () => {
         new Response(JSON.stringify({ found: 1, hits: [{ document: lookalike }], facet_counts: [] }))
       )
 
-      const result = await searchCompanyByOrgNumber('8602245618')
+      const result = await searchCompanyByOrgNumber('8601011235')
       expect(result).toBeNull()
     })
 
@@ -256,7 +253,7 @@ describe('tic-client', () => {
     it('accepts a 16-digit enskild-firma number that embeds the requested personnummer', async () => {
       const soleTrader = {
         companyId: 6704455,
-        registrationNumber: '2002011732750001', // contains 0201173275
+        registrationNumber: '2002010112360001', // contains 0201011236
         names: [{ nameOrIdentifier: 'Sole Trader', companyNamingType: 'name' }],
         legalEntityType: 'Enskild näringsidkare',
         registrationDate: 0,
@@ -266,7 +263,7 @@ describe('tic-client', () => {
         new Response(JSON.stringify({ found: 1, hits: [{ document: soleTrader }], facet_counts: [] }))
       )
 
-      const result = await searchCompanyByOrgNumber('0201173275')
+      const result = await searchCompanyByOrgNumber('0201011236')
       expect(result).toEqual(soleTrader)
     })
 
@@ -299,34 +296,6 @@ describe('tic-client', () => {
     })
   })
 
-  describe('getBankAccounts', () => {
-    it('fetches bankgiro numbers for company ID via /companies/{id}/bank-accounts', async () => {
-      const mockFetch = vi.mocked(fetch)
-      const accounts = [{ bankgironumber: 1234567, terminated: false, name: 'Test AB' }]
-      mockFetch.mockResolvedValue(new Response(JSON.stringify(accounts)))
-
-      const result = await getBankAccounts(123)
-      expect(result).toEqual(accounts)
-      const calledUrl = mockFetch.mock.calls[0][0] as string
-      expect(calledUrl).toContain(encodeURIComponent('/companies/123/bank-accounts'))
-    })
-  })
-
-  describe('getIndustryCodes', () => {
-    it('fetches industry codes for company ID via /companies/{id}/industries', async () => {
-      const mockFetch = vi.mocked(fetch)
-      const codes = [
-        { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
-      ]
-      mockFetch.mockResolvedValue(new Response(JSON.stringify(codes)))
-
-      const result = await getIndustryCodes(123)
-      expect(result).toEqual(codes)
-      const calledUrl = mockFetch.mock.calls[0][0] as string
-      expect(calledUrl).toContain(encodeURIComponent('/companies/123/industries'))
-    })
-  })
-
   describe('getFiscalYears', () => {
     it('hits /companies/{id}/fiscal-years', async () => {
       const mockFetch = vi.mocked(fetch)
@@ -350,19 +319,6 @@ describe('tic-client', () => {
       expect(result).toEqual(payload)
       const calledUrl = mockFetch.mock.calls[0][0] as string
       expect(calledUrl).toContain(encodeURIComponent('/companies/123/payrolls'))
-    })
-  })
-
-  describe('getSignatory', () => {
-    it('hits /companies/{id}/signatory (singular per v2)', async () => {
-      const mockFetch = vi.mocked(fetch)
-      mockFetch.mockResolvedValue(new Response(JSON.stringify([])))
-
-      await getSignatory(123)
-      const calledUrl = mockFetch.mock.calls[0][0] as string
-      expect(calledUrl).toContain(encodeURIComponent('/companies/123/signatory'))
-      // Guard against v1's plural path sneaking back in
-      expect(calledUrl).not.toContain(encodeURIComponent('/signatories'))
     })
   })
 

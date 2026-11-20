@@ -36,39 +36,16 @@ vi.mock('@/lib/salary/payroll-config', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listTrips, POST as createTrip } from '../route'
+import { PayrollConfigMissingError } from '@/lib/salary/payroll-config'
+import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-/** Per-table queue mock that also records every (table, method, args). */
-function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const calls: Array<{ table: string; method: string; args: unknown[] }> = []
-  const buildChain = (key: string): unknown =>
-    new Proxy(
-      {},
-      {
-        get(_target, prop) {
-          if (prop === 'then') {
-            return (resolve: (v: unknown) => void) => {
-              const q = queues.get(key)
-              resolve(q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null }))
-            }
-          }
-          return (...args: unknown[]) => {
-            calls.push({ table: key, method: String(prop), args })
-            return buildChain(key)
-          }
-        },
-      },
-    )
-  return { calls, from: vi.fn((table: string) => buildChain(table)), rpc: vi.fn(() => buildChain('rpc')) }
+/** Per-table answers (tests/helpers.ts) plus the service client the v1 door reads. */
+function makeClient(byTable: Record<string, TableMockResult | TableMockResult[]>) {
+  const { supabase, calls } = createTableMockSupabase(byTable)
+  return { ...supabase, calls }
 }
 
 const wroteTrips = (client: ReturnType<typeof makeClient>) =>
@@ -328,10 +305,24 @@ describe('POST /api/v1/companies/:companyId/mileage-trips', () => {
   })
 
   it('a dry run still answers when the year has no payroll rates', async () => {
-    loadPayrollConfigMock.mockRejectedValue(new Error('no config for 2026'))
+    loadPayrollConfigMock.mockRejectedValue(new PayrollConfigMissingError(2026))
     mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
     const res = await post(validTrip, '?dry_run=true')
     expect(res.status).toBe(200)
     expect((await res.json()).data.preview).toMatchObject({ rate_per_mil: null, estimated_allowance_sek: null })
+  })
+
+  it('a dry run whose rates read fails is an error, not missing rates', async () => {
+    loadPayrollConfigMock.mockRejectedValue(new Error('connection reset'))
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    const res = await post(validTrip, '?dry_run=true')
+    expect(res.status).toBe(500)
+  })
+
+  it('a dry run estimates the allowance from the distance as stored (one decimal)', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    const res = await post({ ...validTrip, distance_km: 10.04 }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview).toMatchObject({ distance_km: 10, estimated_allowance_sek: 25 })
   })
 })

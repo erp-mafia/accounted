@@ -9,6 +9,7 @@ const PAYLOAD_MARKER = 987654
 
 const mockSkvRequest = vi.fn()
 const mockAgiPostUnderlag = vi.fn()
+const mockAgiGetKontrollresultat = vi.fn()
 
 vi.mock('../lib/api-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api-client')>()
@@ -23,14 +24,17 @@ vi.mock('../lib/agi-client', async (importOriginal) => {
   return {
     ...actual,
     agiPostUnderlag: (...args: unknown[]) => mockAgiPostUnderlag(...args),
+    agiGetKontrollresultat: (...args: unknown[]) => mockAgiGetKontrollresultat(...args),
   }
 })
 
 vi.mock('../lib/declaration-prep', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/declaration-prep')>()
+  const { COMPLETE_VAT_DECLARATION } = await import('./vat-declaration-fixture')
   return {
     ...actual,
     buildMomsuppgift: vi.fn(async () => ({
+      declaration: COMPLETE_VAT_DECLARATION,
       redovisare: PERSONNUMMER,
       redovisningsperiod: '202606',
       momsuppgift: { momspliktigForsaljning: PAYLOAD_MARKER, momsUtgHog: PAYLOAD_MARKER },
@@ -46,6 +50,10 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
   }
 })
 
+// The completeness verdict runs over the declaration above; its per-verifikat
+// ledger scan is stubbed.
+vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
+
 vi.mock('../lib/audit', () => ({
   writeSkatteverketAudit: vi.fn(),
 }))
@@ -60,6 +68,18 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
+import { asSkvUnavailable } from '../lib/api-client'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { NO_ANSWER } from './skv-no-answer-fixture'
+
+/** The write-role gate reads company_members; this caller is a member. */
+function memberSupabase() {
+  const membership = {
+    eq: () => membership,
+    maybeSingle: async () => ({ data: { role: 'member' }, error: null }),
+  }
+  return { from: () => ({ select: () => membership }) }
+}
 
 function makeContext(): ExtensionContext {
   return {
@@ -68,7 +88,7 @@ function makeContext(): ExtensionContext {
     extensionId: 'skatteverket',
     requestId: 'req-payload-logging',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    supabase: {} as any,
+    supabase: memberSupabase() as any,
     emit: vi.fn().mockResolvedValue(undefined),
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     settings: {
@@ -166,6 +186,11 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
         status: 400,
       })
       expectNoPayloadLogged(ctx)
+      // The answer quotes what Skatteverket said, with the personnummer in it masked.
+      const answer = await response.json()
+      expect(answer.error).toContain('Skatteverkets svar: "Felaktig redovisare 19121212-XXXX')
+      expect(answer.skv).toMatchObject({ skv_status: 400 })
+      expect(JSON.stringify(answer)).not.toContain(PERSONNUMMER)
     },
   )
 
@@ -180,6 +205,11 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
       const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
 
       expect(response.status).toBe(500)
+      // The thrown text is for the log line only: the person reads a sentence
+      // (crm#1944), so neither the redovisare nor the amount reaches the page.
+      expect(await response.json()).toEqual({
+        error: 'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.',
+      })
       // handleSkvError has no request context, so it writes through the module
       // logger (createLogger('skatteverket')), the same redacting writer ctx.log wraps.
       expect(everythingLogged(ctx)).toContain('[skatteverket] ERROR API error')
@@ -187,8 +217,40 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
     },
   )
 
+  // The dashboard door answers no answer from Skatteverket with the one
+  // answer (skvUnavailableAnswer): its code and status, never logged as our
+  // own error.
+  it.each(['/declaration/validate', '/declaration/draft'].flatMap((path) => NO_ANSWER.map(([label, platform]) => [path, label, platform] as const)))(
+    '%s, no answer (%s): SKATTEVERKET_UNAVAILABLE 503 in Swedish, not logged as our error',
+    async (path, _label, platform) => {
+      mockSkvRequest.mockRejectedValue(asSkvUnavailable(platform()))
+      const ctx = makeContext()
+
+      const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
+
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({
+        error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
+        code: 'SKATTEVERKET_UNAVAILABLE',
+      })
+      expect(getErrorEntry('SKATTEVERKET_UNAVAILABLE')?.retryable).toBe(true)
+      expect(everythingLogged(ctx)).not.toContain('ERROR API error')
+    },
+  )
+
+  it('/declaration/validate keeps a thrown sentence that was written in Swedish for the person', async () => {
+    mockSkvRequest.mockRejectedValue(new Error('Organisationsnummer saknas för företaget.'))
+    const ctx = makeContext()
+
+    const response = await route('POST', '/declaration/validate').handler(postJson('/declaration/validate', vatBody), ctx)
+
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'Organisationsnummer saknas för företaget.' })
+  })
+
   it('/agi/submit logs nothing personal on success', async () => {
-    mockAgiPostUnderlag.mockResolvedValue({ ok: true, data: { inlamningId: 'inl-1' } })
+    mockAgiPostUnderlag.mockResolvedValue({ ok: true, data: { inlamningId: 7 } })
+    mockAgiGetKontrollresultat.mockResolvedValue({ ok: true, data: { status: 'DONE_SUCCESS' } })
     const ctx = makeContext()
 
     const response = await route('POST', '/agi/submit').handler(postJson('/agi/submit', { salaryRunId: 'run-1' }), ctx)
@@ -211,7 +273,6 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
 
     expect(response.status).toBe(400)
     expect(ctx.log.error).toHaveBeenCalledWith(expect.any(String), {
-      period: '202606',
       status: 400,
       kod: 'FEL_01',
     })

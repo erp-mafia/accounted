@@ -1,10 +1,13 @@
 /**
- * Validates fiscal period duration per BFL 3 kap.
+ * The BFL 3 kap. shape of a räkenskapsår: the one definition every door reads,
+ * with the fiscal_periods triggers as the legal floor.
  * Maximum 18 months for any fiscal period (first year may be extended).
  * Normal ongoing periods are 12 months. There is NO minimum length: BFL
  * 3 kap 3 § expressly allows a räkenskapsår shorter than 12 months when
  * bokföringsskyldigheten begins or the year is re-laid, with no floor
- * (Bolagsverket: the first year may be "hur kort som helst").
+ * (Bolagsverket: the first year may be "hur kort som helst"). A form bound to
+ * the calendar year (fiscalYearLockedToCalendar, an enskild firma) ends on 31
+ * December, and only its first year may start after 1 January.
  */
 
 /**
@@ -29,14 +32,37 @@ export function monthsBetween(start: string, end: string): number {
   return (e.year - s.year) * 12 + (e.month - s.month) + 1
 }
 
+/**
+ * Whether a räkenskapsår runs past the 18 months of BFL 3 kap., counted as
+ * monthsBetween counts: a mid-month start takes its month in full, which also
+ * puts a year starting on the last of a month over the line by that one day.
+ */
+export function exceedsFiscalYearCap(start: string, end: string): boolean {
+  return monthsBetween(start, end) > 18
+}
+
+/**
+ * A company's first räkenskapsår is the one no recorded year starts before.
+ * The year behind a gap has an earlier year, so it is not the first; a lone
+ * year starting on the 1st stays first, because the app cannot know of years
+ * kept elsewhere. `otherStarts` may hold `start` itself.
+ */
+export function isFirstFiscalPeriod(start: string, otherStarts: readonly string[]): boolean {
+  return !otherStarts.some((other) => other < start)
+}
+
 export interface ValidatePeriodOptions {
   /** Allow any start day (not just 1st of month) for the first fiscal period per BFL 3 kap. */
   isFirstPeriod?: boolean
+  /** The form is bound to the calendar year (fiscalYearLockedToCalendar). */
+  calendarYearOnly?: boolean
 }
 
 /** Which BFL 3 kap. shape rule a period's dates break. */
 export type PeriodDurationRule =
   | 'end_not_after_start'
+  | 'not_calendar_year_end'
+  | 'not_calendar_year_start'
   | 'start_not_first_of_month'
   | 'end_not_month_end'
   | 'exceeds_18_months'
@@ -67,6 +93,15 @@ export function checkPeriodDuration(
     return { rule: 'end_not_after_start', message: 'Period end must be after period start' }
   }
 
+  if (options?.calendarYearOnly) {
+    if (endParts.month !== 12 || endParts.day !== 31) {
+      return { rule: 'not_calendar_year_end', message: 'Period end must be 31 December for a calendar-year form (BFL 3 kap.)' }
+    }
+    if (!options.isFirstPeriod && (startParts.month !== 1 || startParts.day !== 1)) {
+      return { rule: 'not_calendar_year_start', message: 'Period start must be 1 January for a calendar-year form (BFL 3 kap.)' }
+    }
+  }
+
   // start must be 1st of month: unless this is the first fiscal period (BFL 3
   // kap. 1 § for subsequent years, 3 kap. 3 § for the first). Say why and what
   // is allowed, not only "no" (issue #2237).
@@ -88,8 +123,8 @@ export function checkPeriodDuration(
   // Max 18 months per BFL 3 kap. No minimum: a first (or re-laid) year may
   // be arbitrarily short, e.g. an autumn-registered AB shortening its first
   // year to end at Dec 31 for an early årsredovisning.
-  const months = monthsBetween(start, end)
-  if (months > 18) {
+  if (exceedsFiscalYearCap(start, end)) {
+    const months = monthsBetween(start, end)
     return {
       rule: 'exceeds_18_months',
       message: `Period duration ${months} months exceeds maximum 18 months (BFL 3 kap.)`,

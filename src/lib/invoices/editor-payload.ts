@@ -93,6 +93,33 @@ export function sanitizeDeductionItems<T extends DeductionItemFields>(
   })
 }
 
+/**
+ * The VAT treatment the editor states for the invoice itself (#2906 wire
+ * pair). The editor offers one: omvänd betalningsskyldighet for construction
+ * services (crm#1007); null clears a stored statement.
+ */
+export interface EditorVatStatement {
+  vat_treatment: 'reverse_charge_domestic' | null
+  delivery_country: null
+}
+
+/**
+ * The statement the domestic reverse charge checkbox makes. Ticked, it
+ * states reverse_charge_domestic. Unticked on a draft that had it, it clears
+ * the statement. Otherwise nothing is sent, so a treatment set through the
+ * API (an export or an intra-EU supply of goods) stays on the draft: the
+ * server keeps a stored pair the body does not mention.
+ */
+export function domesticReverseChargeStatement(input: {
+  checked: boolean
+  /** The draft being edited already states reverse_charge_domestic. */
+  stored: boolean
+}): EditorVatStatement | undefined {
+  if (input.checked) return { vat_treatment: 'reverse_charge_domestic', delivery_country: null }
+  if (input.stored) return { vat_treatment: null, delivery_country: null }
+  return undefined
+}
+
 export interface InvoiceWritePayloadOptions {
   /** POST with save_as_draft: true (unnumbered draft, no invoice.created). */
   saveAsDraft?: boolean
@@ -100,6 +127,8 @@ export interface InvoiceWritePayloadOptions {
   oreRounding: boolean
   /** Invoice-level default dims: always sent so an edit can clear them ({} = none). */
   defaultDims: Record<string, string>
+  /** The invoice's own VAT treatment (domesticReverseChargeStatement); absent = not sent. */
+  vatStatement?: EditorVatStatement
 }
 
 /**
@@ -118,6 +147,7 @@ export function buildInvoiceWritePayload<
   return {
     ...stripSelfBillingFields(data),
     ...(options.saveAsDraft ? { save_as_draft: true } : {}),
+    ...(options.vatStatement ?? {}),
     ore_rounding: options.oreRounding,
     default_dimensions: options.defaultDims,
     items: sanitizedItems,

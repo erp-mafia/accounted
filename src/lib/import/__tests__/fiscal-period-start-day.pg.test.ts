@@ -37,7 +37,7 @@ describe('fiscal_periods: subsequent-period start-day trigger', () => {
     const { rows } = await insertPeriod(
       companyId,
       'Räkenskapsår 2024/2025',
-      '2024-06-15',
+      '2024-07-15',
       '2025-12-31',
     )
     expect(rows[0]!.id).toBeTruthy()
@@ -54,7 +54,7 @@ describe('fiscal_periods: subsequent-period start-day trigger', () => {
     const { rows } = await insertPeriod(
       companyId,
       'Räkenskapsår 2023/2024',
-      '2023-06-15',
+      '2023-07-15',
       '2024-12-31',
     )
     expect(rows[0]!.id).toBeTruthy()

@@ -2,6 +2,7 @@ import {
   skatteverketConnectorMode,
   type ConnectorUpstream,
 } from '@/lib/connect/instance/upstreams'
+import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
 import {
   fetchWithTimeout,
   OAUTH_TIMEOUT_MS,
@@ -10,7 +11,7 @@ import {
 
 /**
  * Instance-side helpers for running the Skatteverket extension through the
- * hosted connector broker (/api/connect/skv on app.gnubok.se) instead of
+ * connector broker (/api/connect/skv at the Connect service) instead of
  * against Skatteverket directly.
  *
  * Active only when skatteverketConnectorMode() returns non-null: the instance
@@ -143,7 +144,7 @@ export async function startConnectorAuthorization(
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${connector.key}`,
+        ...connectorHeaders({ key: connector.key }),
         'Content-Type': 'application/json',
       },
       // redirect 'error': a followed 307/308 would resend the connector key
@@ -196,7 +197,7 @@ async function connectorTokenRequest(
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${connector.key}`,
+        ...connectorHeaders({ key: connector.key }),
         'Content-Type': 'application/json',
       },
       // redirect 'error': a followed 307/308 would resend the connector key

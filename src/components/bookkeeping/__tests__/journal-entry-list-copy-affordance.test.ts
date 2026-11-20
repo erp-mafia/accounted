@@ -17,12 +17,8 @@ const SRC = fs.readFileSync(
  * shape instead, the same way NewInvoiceDialog's copy query is pinned.
  */
 describe('JournalEntryList row copy affordance', () => {
-  it('keeps the Copy icon imported from lucide', () => {
-    const importLine = SRC.split('\n').find(
-      (l) => l.includes("from 'lucide-react'") && l.startsWith('import'),
-    )
-    expect(importLine).toBeDefined()
-    expect(importLine).toContain('Copy')
+  it('keeps the copy icon imported from the icon module', () => {
+    expect(SRC).toMatch(/import \{[^}]*\bSquare2StackIcon\b[^}]*\} from '@\/components\/icons'/)
   })
 
   it('references copy_voucher_tooltip, so the i18n key is not orphaned', () => {

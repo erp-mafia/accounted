@@ -5,7 +5,7 @@ import { createLogger } from '@/lib/logger'
 import { pollOpenPeppolDeliveries } from '@/lib/invoices/peppol-delivery-sync'
 import { PeppolTransportError, type PeppolTransport, type PeppolVerifiedEvent } from '@/lib/invoices/peppol-transport'
 
-const { supabase: mockService, enqueue, reset, findCall } = createQueuedMockSupabase()
+const { supabase: mockService, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const service = mockService as unknown as SupabaseClient
 const log = createLogger('test')
 /** The queued mock records rpc() invocations on the vi.fn itself. */
@@ -70,6 +70,7 @@ describe('pollOpenPeppolDeliveries', () => {
   it('records the provider status through the lifecycle RPC with the delivery identity and fetches evidence', async () => {
     const transport = makeTransport()
     enqueue({ data: [openDelivery], error: null })                                       // open deliveries
+    enqueue({ data: [], error: null })                                                  // wrap-around read
     enqueue({ data: { ...openDelivery, status: 'transport_succeeded', status_at: '2026-08-21T11:00:00.000Z' }, error: null }) // event rpc
     enqueue({ data: 'evidence-1', error: null })                                        // evidence rpc
 
@@ -156,6 +157,48 @@ describe('pollOpenPeppolDeliveries', () => {
     const result = await pollOpenPeppolDeliveries({ service, transport, log })
     expect(result).toMatchObject({ polled: 2, failed: 1, unchanged: 1, deferred: 0 })
     expect(result.errors).toEqual([{ providerSubmissionId: 'int-1', reason: 'Connector: upstream' }])
+  })
+
+  it('starts at a rotating point in id order and wraps round, so no delivery is always behind the limit', async () => {
+    // Ordered by status_at, which does not move while nothing changes, the
+    // same oldest `limit` rows were asked about every run and newer ones never.
+    const pollDeliveryStatus = vi.fn().mockResolvedValue([])
+    const d = (id: string) => ({ ...openDelivery, id, provider_submission_id: `int-${id}` })
+    enqueue({ data: [d('c'), d('d')], error: null })                                     // after the pivot
+    enqueue({ data: [d('a')], error: null })                                             // wrapped round to the start
+
+    const result = await pollOpenPeppolDeliveries({
+      service, transport: makeTransport({ pollDeliveryStatus }), log, limit: 3, pivot: 'b',
+    })
+
+    expect(pollDeliveryStatus.mock.calls.map((c) => c[0])).toEqual(['int-c', 'int-d', 'int-a'])
+    expect(result).toMatchObject({ polled: 3, unchanged: 3, deferred: 0 })
+    expect(findCalls('peppol_deliveries', 'gt')).toEqual([['id', 'b']])
+    expect(findCalls('peppol_deliveries', 'lte')).toEqual([['id', 'b']])
+    expect(findCalls('peppol_deliveries', 'order')).toEqual([['id', { ascending: true }], ['id', { ascending: true }]])
+    expect(findCalls('peppol_deliveries', 'limit')).toEqual([[3], [1]])
+  })
+
+  it('starts somewhere new on every run when no pivot is given, and skips the wrap when the batch is full', async () => {
+    enqueue({ data: [openDelivery], error: null })
+    await pollOpenPeppolDeliveries({ service, transport: makeTransport({ pollDeliveryStatus: vi.fn().mockResolvedValue([]) }), log, limit: 1 })
+    enqueue({ data: [openDelivery], error: null })
+    await pollOpenPeppolDeliveries({ service, transport: makeTransport({ pollDeliveryStatus: vi.fn().mockResolvedValue([]) }), log, limit: 1 })
+    const pivots = findCalls('peppol_deliveries', 'gt').map((args) => args[1] as string)
+    expect(pivots).toHaveLength(2)
+    expect(pivots[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(pivots[0]).not.toBe(pivots[1])
+    expect(findCalls('peppol_deliveries', 'lte')).toHaveLength(0)
+  })
+
+  it('stops at its deadline and counts the rest as deferred', async () => {
+    const pollDeliveryStatus = vi.fn().mockResolvedValue([])
+    enqueue({ data: [openDelivery, { ...openDelivery, id: 'delivery-2', provider_submission_id: 'int-2' }], error: null })
+    const result = await pollOpenPeppolDeliveries({
+      service, transport: makeTransport({ pollDeliveryStatus }), log, deadline: Date.now() - 1,
+    })
+    expect(result).toEqual({ polled: 0, advanced: 0, unchanged: 0, failed: 0, deferred: 2, errors: [] })
+    expect(pollDeliveryStatus).not.toHaveBeenCalled()
   })
 
   it('is a no-op for a transport without polling', async () => {

@@ -2,9 +2,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { ExecutionBudgetExceeded, queryInExecutionBudget, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
-import { ProviderCallError } from '@/lib/providers/with-provider-call'
+import { isProviderRefusal, ProviderCallError } from '@/lib/providers/with-provider-call'
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
-import { fortnoxCompletionBlock, fortnoxCompletionRetrySeconds, type CompletionBlockReason } from '@/lib/providers/fortnox/completion-failure'
+import { fortnoxCompletionBlock, type CompletionBlockReason } from '@/lib/providers/fortnox/completion-failure'
+import { readProviderRefusal } from '@/lib/providers/read-refusal'
 import { fetchInvoiceCompletionDetail, fetchInvoiceCompletionPage, type InvoiceCompletionSource } from '@/lib/providers/provider-data-fetcher'
 import type { ProviderName } from '@/lib/providers/types'
 import { completeInvoiceRows } from '@/lib/invoices/complete-invoice-rows'
@@ -12,6 +13,8 @@ import { COMPLETE_INVOICE_LINES_SOURCE, planInvoiceLineCompletion, type Candidat
 
 const log = createLogger('invoice-completion-worker')
 const COMPANY_BUDGET_MS = 120_000
+/** How long a provider refusal waits before the next try (B11). */
+export const REFUSED_RETRY_SECONDS = 86_400
 const WRITE_RESERVE_MS = 15_000
 const QUERY_BUDGET_MS = 8_000
 
@@ -33,13 +36,15 @@ interface Receipt {
   status: string
   headerUpdated?: boolean
   eventId?: string | null
+  /** The invoice's last allowed try: it is parked for good, its status the reason (20261028042247). */
+  gaveUp?: boolean
 }
 
 export function emptyCompletionSummary() {
   return {
     companies: 0, completed: 0, alreadyCompleted: 0, headersUpdated: 0, historyAppended: 0,
     unmatched: 0, ambiguous: 0, providerEmpty: 0, totalMismatch: 0, rowsMismatch: 0, failed: 0,
-    deferred: 0, uncertain: 0, companiesFailed: 0, companiesBlocked: 0, pages: 0,
+    deferred: 0, uncertain: 0, companiesFailed: 0, companiesBlocked: 0, pages: 0, gaveUp: 0,
     budgetReachedAt: null as string | null,
     // Counts describe this invocation. Delayed retries and undiscovered work
     // are not a measured backlog, so never infer backlog completion from them.
@@ -54,10 +59,36 @@ function addReceipt(result: InvoiceCompletionSummary, receipt: Receipt) {
     rows_mismatch: 'rowsMismatch', failed: 'failed' }[receipt.status] as
     'completed' | 'alreadyCompleted' | 'unmatched' | 'ambiguous' | 'providerEmpty' | 'totalMismatch' | 'rowsMismatch' | 'failed' | undefined
   if (key) result[key]++
+  if (receipt.gaveUp) result.gaveUp++
   if (receipt.status === 'written') {
     if (receipt.headerUpdated) result.headersUpdated++
     if (receipt.eventId) result.historyAppended++
   }
+}
+
+/**
+ * How the provider refused this company's connection, or null when it did not.
+ * 'aged' is a bare 401 on a data call, the token ageing mid-run: the next run
+ * refreshes it. 'refused' answers the same until the customer acts (a closed
+ * register under any status, a dead grant, a missing licence): that is the
+ * customer's next step, not our fault.
+ */
+function providerRefusal(error: unknown): 'aged' | 'refused' | null {
+  if (!isProviderRefusal(error)) return null
+  return (error as { statusCode?: unknown }).statusCode === 401 ? 'aged' : 'refused'
+}
+
+/**
+ * One delay rule for every provider. A refusal waits a day, anything else an
+ * hour, and longer when the provider's Retry-After asks for it. A Visma and a
+ * Bokio 403 were asked, and logged, every run for weeks (B11), and an opaque
+ * Fortnox 403 every hour on a Fortnox-only hour floor (#51).
+ */
+function completionRetrySeconds(error: unknown, refusal: ReturnType<typeof providerRefusal>): number {
+  const floor = refusal === 'refused' ? REFUSED_RETRY_SECONDS : 3600
+  const retryAfter = error instanceof ProviderCallError ? error.retryAfterSeconds
+    : error instanceof FortnoxApiError && error.retryAfterMs !== undefined ? error.retryAfterMs / 1000 : undefined
+  return retryAfter !== undefined && Number.isFinite(retryAfter) ? Math.max(floor, Math.min(2_147_483_647, Math.ceil(retryAfter))) : floor
 }
 
 async function stage<T>(name: string, deadline: number, fields: Record<string, unknown>, operation: () => Promise<T>): Promise<T> {
@@ -135,10 +166,9 @@ export async function completeInvoiceCompletionWork(
               fetchInvoiceCompletionDetail(work.provider, resolved.accessToken, resolved.providerCompanyId, row.source_ref!))
           } catch (error) {
             if (error instanceof ExecutionBudgetExceeded) throw error
-            if (work.provider === 'fortnox' && (fortnoxCompletionBlock(error) ||
-              error instanceof ProviderCallError || (error instanceof FortnoxApiError && error.statusCode === 429))) throw error
-            const status = (error as { statusCode?: number }).statusCode
-            if (status === 401 || status === 403) throw error
+            if (providerRefusal(error)) throw error
+            if (work.provider === 'fortnox' && (error instanceof ProviderCallError ||
+              (error instanceof FortnoxApiError && error.statusCode === 429))) throw error
             log.warn('invoice detail failed; retry scheduled', { ...fields, invoiceId: row.id, error: String(error) })
             await record(row, 'failed'); pendingIds.delete(row.id); continue
           }
@@ -201,11 +231,27 @@ export async function completeInvoiceCompletionWork(
       log.info('invoice completion yielded at deadline', { ...fields, stage: currentStage })
     } else {
       result.companiesFailed++
-      retrySeconds = work.provider === 'fortnox' ? fortnoxCompletionRetrySeconds(error) : 3600
-      const reason = work.provider === 'fortnox' ? fortnoxCompletionBlock(error) : null
+      const refusal = providerRefusal(error)
+      retrySeconds = completionRetrySeconds(error, refusal)
+      // Only Fortnox work can be blocked (block_invoice_completion_work takes
+      // Fortnox consents only), and only on evidence: a code Fortnox
+      // documents, or an opaque 403 on a token that still answers, which
+      // refused the invoices and not the grant. That one was retried and
+      // logged every hour, and the user was never told (#51); the block shows
+      // the recovery card naming the missing permission.
       const revision = error instanceof ProviderCallError ? error.credentialRevision ?? connection?.credentialRevision : connection?.credentialRevision
+      let reason: CompletionBlockReason | null = null
+      if (work.provider === 'fortnox') {
+        reason = fortnoxCompletionBlock(error)
+        // The probe gets at most ten seconds. Out of time: no evidence this
+        // run, and the refusal waits a day.
+        if (!reason && revision && refusal === 'refused' && connection && await readProviderRefusal(error, work.provider, connection,
+          Math.min(providerDeadline, Date.now() + 10_000)).catch(() => error) !== error) reason = 'PROVIDER_RESOURCE_FORBIDDEN'
+      }
       if (reason && revision) block = { reason, revision }
-      log.error('invoice completion company interrupted', { ...fields, stage: currentStage, error: String(error) })
+      const logFields = { ...fields, provider: work.provider, stage: currentStage, error: String(error) }
+      if (refusal !== null) log.warn('invoice completion company refused by the provider', { ...logFields, retrySeconds })
+      else log.error('invoice completion company interrupted', logFields)
     }
   }
   // The provider deadline leaves room for receipt recovery and releasing the
@@ -223,6 +269,18 @@ export async function completeInvoiceCompletionWork(
   result.deferred = [...pendingIds].filter(id => !confirmed.has(id) && !uncertain.has(id)).length
   result.uncertain = uncertain.size
   for (const receipt of confirmed.values()) addReceipt(result, receipt)
+  // An invoice's last allowed try: the database parked it for good
+  // (20261028042247) and it stays without rows. That was only a number in the
+  // run's info summary. One error per company and run, on the run that parks
+  // them: a parked invoice is never a candidate again, so it is said once.
+  const parked = [...confirmed].filter(([, receipt]) => receipt.gaveUp)
+  if (parked.length) {
+    const byReason: Record<string, number> = {}
+    for (const [, receipt] of parked) byReason[receipt.status] = (byReason[receipt.status] ?? 0) + 1
+    log.error('invoice lines given up on: the invoices stay without rows', {
+      ...fields, provider: work.provider, count: parked.length, byReason, invoiceIds: parked.slice(0, 20).map(([id]) => id),
+    })
+  }
   try {
     if (block) {
       const blocked = await rpc<boolean>(supabase, 'block_invoice_completion_work', {

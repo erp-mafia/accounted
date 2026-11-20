@@ -6,24 +6,30 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { AgreementFactView, AgreementRecordView } from '@/app/api/arkiv/agreements/[id]/route'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { AgreementLinksGraph, type LinkNode } from './AgreementLinksGraph'
 import { DefList, DefRow, Section, SourceLink, inlineHref, shortFileName } from './DefList'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
- * The agreement page (canvas artboard Avtal): facts with their source page,
+ * The agreement page: facts with their source page,
  * what the agreement is tied to, the excerpt the amount was read from,
  * expected payments, the dates in Viktiga datum, the history of readings
  * and what refers to the agreement.
  */
 export function AgreementRecord({ agreementId }: { agreementId: string }) {
   const t = useTranslations('arkiv')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const [view, setView] = useState<AgreementRecordView | null>(null)
-  const [failed, setFailed] = useState(false)
+  // A 404 is an agreement that does not exist (or was not read from a document); anything else can be tried again.
+  const [failure, setFailure] = useState<'missing' | 'error' | null>(null)
+  // Bumped by "Försök igen" to run the fetch again.
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -33,18 +39,36 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
         const { data } = (await res.json()) as { data: AgreementRecordView }
         if (!cancelled) setView(data)
       })
-      .catch(() => {
-        if (!cancelled) setFailed(true)
+      .catch((error: unknown) => {
+        if (!cancelled) setFailure(error instanceof Error && error.message === '404' ? 'missing' : 'error')
       })
     return () => {
       cancelled = true
     }
-  }, [agreementId])
+  }, [agreementId, attempt])
 
-  if (failed) return <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
-  if (!view) return <Skeleton className="h-40 w-full" />
+  if (failure === 'missing') {
+    return <NotFoundState title={t('agreement_not_found')} description={t('record_not_found_hint')} backHref="/arkiv/avtal" backLabel={tCommon('back_to_list')} />
+  }
+  if (failure) {
+    return (
+      <LoadError
+        onRetry={() => {
+          setFailure(null)
+          setAttempt((n) => n + 1)
+        }}
+      />
+    )
+  }
+  if (!view) {
+    return (
+      <LateReveal>
+        <Skeleton className="h-40 w-full" />
+      </LateReveal>
+    )
+  }
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   const validity =
     view.starts_on && view.ends_on
       ? t('agreement_valid_between', { from: view.starts_on, to: view.ends_on })
@@ -118,11 +142,15 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
   return (
     <div className="space-y-8">
       <PageHeader
+        // The list this agreement sits under, as the way back.
+        parent={{ label: t('agreements_title'), href: '/arkiv/avtal' }}
         title={view.title}
         help={<HelpPopover>{t('agreement_help')}</HelpPopover>}
-        description={meta}
+        // The facts line stays in the top bar (a description is hidden there).
+        meta={meta ? <span data-ph-mask="">{meta}</span> : undefined}
         action={
-          <Button asChild size="sm">
+          // Opening the source file is a utility, so it is the raised button, never the filled one.
+          <Button asChild size="toolbar" variant="outline">
             <a href={inlineHref(view.source.document_id, view.source.page)} target="_blank" rel="noreferrer">
               {t('record_open_document')}
             </a>
@@ -150,12 +178,12 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
           <Section title={t('record_links')}>
             <AgreementLinksGraph title={view.title} nodes={nodes} />
           </Section>
-          <div className="space-y-2.5 rounded-lg border border-border p-4">
+          <div className="space-y-2.5 rounded-lg p-4 bg-control shadow-raised">
             <div className="rounded-sm bg-secondary px-4 py-3.5">
               <div className="mb-2 h-[5px] w-[46%] rounded-sm bg-border" />
               <div className="mb-1.5 h-[5px] w-[88%] rounded-sm bg-border" />
               <div className="mb-2.5 h-[5px] w-[80%] rounded-sm bg-border" />
-              <div className="w-[84%] rounded-sm border-[1.5px] border-attn/70 bg-attn/10 px-2 py-1 text-[11px] leading-snug">{view.source.quote ?? sourceFile}</div>
+              <div className="w-[84%] rounded-sm border-[1.5px] border-attn/70 bg-attn/10 px-2 py-1 text-xs leading-snug">{view.source.quote ?? sourceFile}</div>
               <div className="mt-2.5 h-[5px] w-[84%] rounded-sm bg-border" />
             </div>
             <p className="m-0 text-xs text-muted-foreground">
@@ -173,25 +201,25 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
             {view.obligations.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">{t('agreement_no_payments')}</p>
             ) : (
-              <table className="w-full border-collapse text-[13px]">
+              <table className="-mx-2 w-[calc(100%+1rem)] border-collapse text-[13px]">
                 <thead>
                   <tr>
-                    <th className={`${TH_CLASS} pl-0`}>{t('col_date')}</th>
+                    <th className={TH_CLASS}>{t('col_date')}</th>
                     <th className={TH_CLASS}>{t('col_what')}</th>
                     <th className={`${TH_CLASS} text-right`}>{t('col_amount')}</th>
-                    <th className={`${TH_CLASS} pr-0`}>{t('col_status')}</th>
+                    <th className={TH_CLASS}>{t('col_status')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {view.obligations.slice(0, 12).map((o) => (
                     <tr key={o.id}>
-                      <td className={`${TD_CLASS} pl-0 tabular-nums`}>{o.due_on}</td>
+                      <td className={`${TD_CLASS} tabular-nums`}>{o.due_on}</td>
                       <td className={TD_CLASS}>{what(o)}</td>
                       <td className={`${TD_CLASS} text-right tabular-nums`}>
-                        {formatCurrency(o.amount, o.currency)}
+                        {formatRowAmount(o.amount, o.currency)}
                         {o.estimate ? '*' : ''}
                       </td>
-                      <td className={`${TD_CLASS} pr-0 ${o.status === 'missed' ? 'text-destructive' : 'text-muted-foreground'}`}>{statusOf(o)}</td>
+                      <td className={`${TD_CLASS} ${o.status === 'missed' ? 'text-destructive' : 'text-muted-foreground'}`}>{statusOf(o)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -5,11 +5,12 @@
  *
  * The names are the invoice header's own vat_treatment vocabulary (and the
  * supplier-invoice one), plus 'standard' for "Swedish VAT at the rates on
- * the lines". Domestic reverse charge (construction, ML 16 kap. 13 §) is a
- * fact about the buyer's business, not about one delivery, and is not
- * offered here.
+ * the lines". 'reverse_charge_domestic' is omvänd betalningsskyldighet for
+ * construction services (ML 16 kap. 13 §). It needs both a buyer that is a
+ * construction business and a supply that is a construction service, so the
+ * invoice states it: the customer record alone cannot decide it.
  */
-export const INVOICE_VAT_TREATMENT_OVERRIDES = ['standard', 'export', 'reverse_charge'] as const
+export const INVOICE_VAT_TREATMENT_OVERRIDES = ['standard', 'export', 'reverse_charge', 'reverse_charge_domestic'] as const
 export type InvoiceVatTreatmentOverride = (typeof INVOICE_VAT_TREATMENT_OVERRIDES)[number]
 
 /** What an invoice says about its own supply. Both null = the customer decides. */

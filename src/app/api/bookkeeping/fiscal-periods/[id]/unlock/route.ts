@@ -2,9 +2,6 @@ import { NextResponse } from 'next/server'
 import { unlockFiscalPeriod } from '@/lib/core/bookkeeping/fiscal-year-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 // Unlock a locked, not closed, räkenskapsår. The refusal codes
 // (PERIOD_NOT_FOUND, PERIOD_UNLOCK_CLOSED, PERIOD_UNLOCK_NOT_LOCKED) come from

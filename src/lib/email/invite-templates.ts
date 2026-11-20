@@ -1,4 +1,12 @@
 import { getBranding } from '@/lib/branding/service'
+import { INVITE_TTL_HOURS } from '@/lib/auth/invite-ttl'
+
+/**
+ * How long the link in the mail works, as the mail says it ("24 timmar"):
+ * read from the invitation lifetime itself, so the mail cannot promise more
+ * than `expires_at` grants.
+ */
+const INVITE_VALIDITY = `${INVITE_TTL_HOURS} timmar`
 
 export interface InviteEmailData {
   companyName: string
@@ -52,7 +60,7 @@ export function generateInviteEmailHtml(data: InviteEmailData): string {
 
       <!-- Info -->
       <p style="margin: 0; color: #999; font-size: 13px;">
-        Länken är giltig i 7 dagar. Om du inte förväntade dig denna inbjudan kan du ignorera detta meddelande.
+        Länken är giltig i ${INVITE_VALIDITY}. Om du inte förväntade dig denna inbjudan kan du ignorera detta meddelande.
       </p>
     </div>
   </div>
@@ -66,7 +74,7 @@ export function generateInviteEmailText(data: InviteEmailData): string {
 
 Acceptera inbjudan: ${data.inviteUrl}
 
-Länken är giltig i 7 dagar.`
+Länken är giltig i ${INVITE_VALIDITY}.`
 }
 
 // =============================================================================
@@ -137,7 +145,7 @@ export function generateTeamInviteEmailHtml(data: TeamInviteEmailData): string {
 
       <!-- Info -->
       <p style="margin: 0; color: #999; font-size: 13px;">
-        Länken är giltig i 7 dagar. Om du inte förväntade dig denna inbjudan kan du ignorera detta meddelande.
+        Länken är giltig i ${INVITE_VALIDITY}. Om du inte förväntade dig denna inbjudan kan du ignorera detta meddelande.
       </p>
     </div>
   </div>
@@ -151,11 +159,11 @@ export function generateTeamInviteEmailText(data: TeamInviteEmailData): string {
 
 Acceptera inbjudan: ${data.inviteUrl}
 
-Länken är giltig i 7 dagar.`
+Länken är giltig i ${INVITE_VALIDITY}.`
   }
   return `Du har bjudits in som konsult till ett team på ${getBranding().appName.toLowerCase()} av ${data.inviterEmail}. Du får tillgång till alla företag i teamet.
 
 Acceptera inbjudan: ${data.inviteUrl}
 
-Länken är giltig i 7 dagar.`
+Länken är giltig i ${INVITE_VALIDITY}.`
 }

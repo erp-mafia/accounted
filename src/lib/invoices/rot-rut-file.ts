@@ -2,13 +2,13 @@ import { escapeXml } from '@/lib/xml/escape'
 import type { Invoice, InvoiceItem } from '@/types'
 import { truncateToWholeKronor } from '@/lib/money'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
-import { invoiceCustomerOutstanding } from './customer-share'
+import { invoiceCustomerOutstanding } from '@/lib/bookkeeping/customer-share'
 import {
   deductionSekConverter,
   SCHABLON_WORK_TYPES,
   type DeductionType,
   type HusDeductionType,
-} from './rot-rut-rules'
+} from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * Begäran om utbetalning: rot & rut (Skatteverkets husavdragstjänst).
@@ -46,7 +46,7 @@ import {
  *
  * Everything in this module is pure and deterministic: the caller passes the
  * invoices and `today`; blockers are named per invoice, never guessed.
- * File content stays Swedish (statutory surface, see .claude/rules/i18n.md).
+ * File content stays Swedish (statutory surface).
  */
 
 const ROOT_NS = 'http://xmls.skatteverket.se/se/skatteverket/ht/begaran/6.0'
@@ -216,7 +216,7 @@ export function readClaimReclaim(invoice: Invoice): ClaimStep<null> {
  * "Paid" for a claim means the buyer has paid their share: the deduction
  * itself is Skatteverket's to pay (fakturamodellen). The customer share
  * outstanding is DERIVED from the header fields through the one shared
- * definition (lib/invoices/customer-share.ts, twin of migration
+ * definition (lib/bookkeeping/customer-share.ts, twin of migration
  * 20260817191708), deliberately NOT read off remaining_amount: at least one
  * writer (payment-sync's storno path) once recomputed remaining_amount
  * without subtracting the deduction, so the stored column is not a

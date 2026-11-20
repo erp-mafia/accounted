@@ -2,16 +2,19 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { BookOpen } from 'lucide-react'
+import { BookOpenIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
-import { staticTemplateToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { useCompany } from '@/contexts/CompanyContext'
-import { roundOre } from '@/lib/money'
+import { useToast } from '@/components/ui/use-toast'
+import { fetchProposalPreview } from '@/lib/hooks/use-proposal-preview'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { parseAmountInput, formatAmountInput } from '@/lib/money'
 import type { BookingTemplateCategory, BookingTemplateLibrary, EntityType } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
@@ -26,8 +29,8 @@ interface Props {
 type Picked = { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate }
 
 function parseAmount(raw: string): number {
-  const n = parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
-  return Number.isFinite(n) && n > 0 ? roundOre(n) : 0
+  const n = parseAmountInput(raw)
+  return n !== null && n > 0 ? n : 0
 }
 
 /**
@@ -40,9 +43,11 @@ function parseAmount(raw: string): number {
 export default function TemplateApplyButton({ onApply, entityType, defaultAmount, disabled }: Props) {
   const t = useTranslations('tx_template_picker')
   const { company } = useCompany()
+  const { toast } = useToast()
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [amount, setAmount] = useState('')
   const [picked, setPicked] = useState<Picked | null>(null)
+  const [applying, setApplying] = useState(false)
   const amountRef = useRef<HTMLInputElement>(null)
   const resolvedEntity = entityType ?? company?.entity_type
 
@@ -51,25 +56,38 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
   // Opening starts clean: nothing held, the total the caller knows prefilled.
   const open = (button: HTMLElement) => {
     setPicked(null)
-    setAmount(defaultAmount != null && defaultAmount > 0 ? String(roundOre(defaultAmount)) : '')
+    setAmount(defaultAmount != null && defaultAmount > 0 ? formatAmountInput(defaultAmount) : '')
     setAnchor(button)
   }
 
   const apply = useCallback(
-    (choice: Picked, total: number) => {
+    async (choice: Picked, total: number) => {
       if (choice.kind === 'library') {
         onApply(applyTemplate(choice.raw.lines, total), choice.raw.name, choice.raw.category)
-      } else {
-        onApply(staticTemplateToFormLines(choice.template, total, resolvedEntity), choice.template.name_sv)
+        setAnchor(null)
+        return
       }
-      setAnchor(null)
+      // A catalog template books the total the way a bank row of that total
+      // is booked with it: the server builds the lines with the booking's
+      // own builders (moms, omvänd skattskyldighet settled with the company's
+      // momskoder), and the form posts them as they are.
+      setApplying(true)
+      try {
+        const lines = await fetchProposalPreview({ amount: total, template_id: choice.template.id })
+        onApply(proposalLinesToFormLines(lines), choice.template.name_sv)
+        setAnchor(null)
+      } catch (err) {
+        toast({ title: getErrorMessage(err), variant: 'destructive' })
+      } finally {
+        setApplying(false)
+      }
     },
-    [onApply, resolvedEntity],
+    [onApply, toast],
   )
 
   const choose = (choice: Picked) => {
     const total = parseAmount(amount)
-    if (total > 0) return apply(choice, total)
+    if (total > 0) return void apply(choice, total)
     setPicked(choice)
     amountRef.current?.focus()
     amountRef.current?.select()
@@ -77,7 +95,7 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
 
   const submit = () => {
     const total = parseAmount(amount)
-    if (picked && total > 0) apply(picked, total)
+    if (picked && total > 0) void apply(picked, total)
   }
 
   const pickedId = picked ? (picked.kind === 'library' ? picked.raw.id : picked.template.id) : undefined
@@ -87,11 +105,10 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
       <Button
         type="button"
         variant="outline"
-        size="sm"
         disabled={disabled}
         onClick={(e) => (anchor ? close() : open(e.currentTarget))}
       >
-        <BookOpen className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+        <BookOpenIcon className="h-3.5 w-3.5" aria-hidden />
         {t('use_template')}
       </Button>
       {anchor && (
@@ -109,13 +126,13 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
             />
           </div>
           <form
-            className="flex items-center gap-2 border-t border-border bg-background px-3 py-2"
+            className="flex items-center gap-2 border-t-hairline bg-background px-3 py-2"
             onSubmit={(e) => {
               e.preventDefault()
               submit()
             }}
           >
-            <label htmlFor="template-apply-amount" className="shrink-0 text-[12.5px] text-muted-foreground">
+            <label htmlFor="template-apply-amount" className="shrink-0 text-xs text-muted-foreground">
               {t('amount_label')}
             </label>
             <Input
@@ -127,7 +144,7 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
               onChange={(e) => setAmount(e.target.value)}
               className="h-8 flex-1 tabular-nums"
             />
-            <Button type="submit" size="sm" disabled={!picked || parseAmount(amount) <= 0}>
+            <Button type="submit" disabled={!picked || applying || parseAmount(amount) <= 0}>
               {t('apply')}
             </Button>
           </form>

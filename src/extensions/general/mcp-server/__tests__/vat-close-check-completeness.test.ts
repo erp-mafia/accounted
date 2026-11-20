@@ -30,9 +30,17 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
 
 import {
   computeVatCloseCheck,
+  RC_BASIS_ADVISORY_HINT,
   RC_BASIS_MISSING_HINT,
+  RC_BASIS_NEGATIVE_HINT,
   REVENUE_ACCOUNT_WITHOUT_RUTA_HINT,
-} from '../server'
+  VAT_ACCOUNT_WITHOUT_RUTA_HINT,
+  VAT_BELOW_ONE_KRONA_HINT,
+  vatFilingVerdict,
+} from '@/lib/reports/vat-close-check'
+import { vatCheckFingerprint } from '@/lib/vat/check-reviews'
+import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
+import { entriesWithAccountLinesRpcResult, vatTotalsRpcResult } from './vat-totals-rpc-double'
 
 interface MockLine {
   entry?: string
@@ -63,6 +71,7 @@ function mockSupabase(
     vat_taxable_base_over_40m: false,
   },
   companyEntityType: 'aktiebolag' | 'enskild_firma' | null = null,
+  extraTables: Record<string, unknown[]> = {},
 ) {
   const entries = [
     ...new Map(
@@ -118,16 +127,29 @@ function mockSupabase(
       if (table === 'companies') {
         return makeChain(companyEntityType ? [{ entity_type: companyEntityType }] : [])
       }
+      if (extraTables[table]) return makeChain(extraTables[table])
       return makeChain([])
     },
     // The missing-underlag blocker reads the verifikat_without_documents RPC,
     // which answers with an envelope rather than a row set. This fixture has no
     // opinion about underlag, so it answers "none missing"; the predicate itself
     // is covered by vat-close-check-missing-underlag.test.ts.
-    rpc: (fn: string) =>
-      fn === 'verifikat_without_documents'
-        ? Promise.resolve({ data: { ok: true, total_count: 0, verifikat: [] }, error: null })
-        : makeChain([]),
+    //
+    // The declaration totals come from get_vat_declaration_totals, the same
+    // aggregate the web filing reads; its double sums the fixture lines.
+    rpc: (fn: string, params?: { p_accounts?: string[]; p_statuses?: string[]; p_all_lines?: boolean }) => {
+      if (fn === 'verifikat_without_documents') {
+        return Promise.resolve({ data: { ok: true, total_count: 0, verifikat: [] }, error: null })
+      }
+      if (fn === 'get_vat_declaration_totals') {
+        return Promise.resolve(vatTotalsRpcResult({ lines: bareLines }, params))
+      }
+      // The reverse-charge basis scan reads its verifikat in one call.
+      if (fn === 'get_entries_with_account_lines') {
+        return Promise.resolve(entriesWithAccountLinesRpcResult(entries, bareLines, params))
+      }
+      return makeChain([])
+    },
   } as never
 }
 
@@ -346,8 +368,69 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     // The old mirror could not see this at all: ruta 48 carries the 2645 leg.
     expect(result.rutor.ruta48).toBe(1250)
     // And the agent now sees the empty basis boxes itself (#2919).
-    expect((result.rutor as Record<string, number>).ruta21).toBe(0)
-    expect((result.rutor as Record<string, number>).ruta22).toBe(0)
+    expect(result.rutor.ruta21).toBe(0)
+    expect(result.rutor.ruta22).toBe(0)
+  })
+
+  // #94: the negative FK004 case. A credit note on a reverse-charge purchase
+  // took the fiktiv moms back (2614 debited) but its basis stayed put, so ruta
+  // 30 is negative and rutor 20-24 are empty. The repair is the opposite of
+  // the positive case: the basis follows on 45xx credit, never another 45xx D.
+  it('gives the negative fiktiv moms its own repair, not "add 45xx D / 4598 K"', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase([
+        { entry: 'e1', account_number: '3001', credit_amount: 10000 },
+        { entry: 'e1', account_number: '2611', credit_amount: 2500 },
+        { entry: 'e1', account_number: '1510', debit_amount: 12500 },
+        { entry: 'e2', account_number: '2440', debit_amount: 1000 },
+        { entry: 'e2', account_number: '6540', credit_amount: 1000 },
+        { entry: 'e2', account_number: '2614', debit_amount: 250 },
+        { entry: 'e2', account_number: '2645', credit_amount: 250 },
+      ]),
+    )
+
+    expect(result.rutor.ruta30).toBe(-250)
+    const finding = result.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')!
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toMatch(/FK004/)
+    const blocker = result.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')!
+    expect(blocker.hint).toBe(RC_BASIS_NEGATIVE_HINT)
+    expect(blocker.hint).not.toBe(RC_BASIS_MISSING_HINT)
+    expect(blocker.hint).toMatch(/4598 D \/ 45xx K/)
+    expect(blocker.hint).toMatch(/storno/)
+  })
+
+  // crm#1822: a reverse-charge purchase of a few kronor books its fiktiv moms
+  // in full, but the moms is under a krona and files as nothing, so FK003
+  // refuses the period. The agent must hear that, not "review the ledger".
+  it('tells the agent not to correct the books when the fiktiv moms is booked but under a krona', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase([
+        { entry: 'e1', account_number: '6540', debit_amount: 3 },
+        { entry: 'e1', account_number: '1930', credit_amount: 3 },
+        { entry: 'e1', account_number: '4535', debit_amount: 3 },
+        { entry: 'e1', account_number: '4598', credit_amount: 3 },
+        { entry: 'e1', account_number: '2645', debit_amount: 0.75 },
+        { entry: 'e1', account_number: '2614', credit_amount: 0.75 },
+      ]),
+    )
+
+    expect(result.rutor.ruta21).toBe(3)
+    expect(result.rutor.ruta30).toBe(0.75)
+    expect(result.ready_to_close).toBe(false)
+    const finding = result.declaration_checks.find((c) => c.code === 'RC_OUTPUT_MISSING')!
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toMatch(/FK003/)
+    expect(finding.message).toMatch(/ruta 30 0,75 kr/)
+    expect(finding.message).toMatch(/momsen saknas inte i bokföringen/)
+    const blocker = result.blockers.find((b) => b.check_code === 'RC_OUTPUT_MISSING')!
+    expect(blocker.message).toBe(finding.message)
+    expect(blocker.hint).toBe(VAT_BELOW_ONE_KRONA_HINT)
+    expect(blocker.hint).not.toMatch(/huvudboken/)
   })
 
   it('one ordinary domestic receipt no longer suppresses the reverse-charge check', async () => {
@@ -495,7 +578,92 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     const blocker = result.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')!
     expect(blocker.severity).toBe('medium')
     expect(blocker.hint).not.toBe(RC_BASIS_MISSING_HINT)
-    expect((result.rutor as Record<string, number>).ruta21).toBe(5000)
+    expect(result.rutor.ruta21).toBe(5000)
+    // crm#1171: the agent is told where the basis is and how to accept it,
+    // and the finding says it can be marked reviewed.
+    expect(blocker.hint).toBe(RC_BASIS_ADVISORY_HINT)
+    expect(finding).toEqual(expect.objectContaining({ reviewable: true, review: null }))
+  })
+
+  // crm#1171: the user confirmed the basis in e2 belongs to e1's purchase and
+  // marked the advisory reviewed. It stays in declaration_checks with the
+  // review and leaves the blockers, until the figures change.
+  it('drops a reviewed advisory from the blockers and reports who reviewed it', async () => {
+    const lines: MockLine[] = [
+      { entry: 'e1', account_number: '6540', debit_amount: 5000 },
+      { entry: 'e1', account_number: '2440', credit_amount: 5000 },
+      { entry: 'e1', account_number: '2614', credit_amount: 1250 },
+      { entry: 'e1', account_number: '2645', debit_amount: 1250 },
+      { entry: 'e2', account_number: '4535', debit_amount: 5000 },
+      { entry: 'e2', account_number: '4598', credit_amount: 5000 },
+    ]
+    const plain = mockSupabase(lines)
+    const declaration = await calculateVatDeclaration(plain, 'company-1', 'monthly', 2026, 1)
+    const { checks, gaps } = await vatFilingVerdict(plain, 'company-1', declaration)
+    const advisory = checks.find((c) => c.code === 'RC_BASIS_MISSING')!
+    const reviewRow = {
+      check_code: 'RC_BASIS_MISSING',
+      action: 'reviewed',
+      fingerprint: vatCheckFingerprint(advisory, { declaration, gaps }),
+      note: 'Basbeloppet är bokat i e2',
+      source: 'agent',
+      actor: 'user-1',
+      created_at: '2026-10-15T09:00:00Z',
+    }
+
+    const reviewed = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(lines, [], undefined, null, { vat_check_reviews: [reviewRow] }),
+    )
+    expect(reviewed.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')).toBeUndefined()
+    expect(reviewed.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')).toEqual(
+      expect.objectContaining({
+        status: 'WARNING',
+        reviewable: true,
+        review: expect.objectContaining({ reviewed_by: 'user-1', note: 'Basbeloppet är bokat i e2', source: 'agent' }),
+      }),
+    )
+
+    // A review of other figures is no review: the warning is back.
+    const stale = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(lines, [], undefined, null, {
+        vat_check_reviews: [{ ...reviewRow, fingerprint: 'v1:0000000000000000' }],
+      }),
+    )
+    expect(stale.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')?.severity).toBe('medium')
+    expect(stale.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')?.review).toBeNull()
+  })
+
+  it('never lets a stored review quiet a blocking finding', async () => {
+    // The #1164 shape: fiktiv moms with no basbelopp anywhere. A review row for
+    // the code exists (say from before the basis was reversed); it does not apply.
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '6540', debit_amount: 5000 },
+          { entry: 'e1', account_number: '2440', credit_amount: 5000 },
+          { entry: 'e1', account_number: '2614', credit_amount: 1250 },
+          { entry: 'e1', account_number: '2645', debit_amount: 1250 },
+        ],
+        [],
+        undefined,
+        null,
+        {
+          vat_check_reviews: [
+            { check_code: 'RC_BASIS_MISSING', action: 'reviewed', fingerprint: 'v1:0000000000000000', note: null, source: 'web', actor: 'user-1', created_at: 't' },
+          ],
+        },
+      ),
+    )
+    const finding = result.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')
+    expect(finding).toEqual(expect.objectContaining({ status: 'ERROR', reviewable: false, review: null }))
+    expect(result.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')?.severity).toBe('high')
+    expect(result.ready_to_close).toBe(false)
   })
 
   // #3387: sales on a class 3 account with no momskod and no momssats reach no
@@ -533,6 +701,90 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(result.ready_to_close).toBe(true)
   })
 
+  // Moms on a moms account from a chart before BAS 2026 (2644, no momsruta)
+  // reaches no ruta at all. The close check names it from the same core
+  // helper the declaration uses, without blocking the close.
+  it('warns about moms on an account no ruta reads, naming it, without blocking', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '5010', debit_amount: 10000 },
+          { entry: 'e1', account_number: '2644', debit_amount: 2500 },
+          { entry: 'e1', account_number: '2440', credit_amount: 12500 },
+        ],
+        [{
+          account_number: '2644',
+          account_name: 'Ingående moms omvänd skattskyldighet',
+          account_class: 2,
+          default_vat_rate: null,
+          default_vat_treatment: null,
+        }],
+      ),
+    )
+
+    expect(result.rutor.ruta48).toBe(0)
+    const finding = result.declaration_checks.find((f) => f.code === 'VAT_ACCOUNT_WITHOUT_RUTA')!
+    expect(finding.status).toBe('WARNING')
+    expect(finding.message).toMatch(/2644 Ingående moms omvänd skattskyldighet/)
+    const blocker = result.blockers.find((b) => b.check_code === 'VAT_ACCOUNT_WITHOUT_RUTA')!
+    expect(blocker.severity).toBe('medium')
+    expect(blocker.hint).toBe(VAT_ACCOUNT_WITHOUT_RUTA_HINT)
+    expect(result.ready_to_close).toBe(true)
+  })
+
+  it('leaves a kundförlust recovery on 3950 out of the warning and keeps warning about 3950 booked by hand', async () => {
+    const chart: MockChartAccount[] = [{
+      account_number: '3950',
+      account_name: 'Återvunna, tidigare avskrivna kundfordringar',
+      account_class: 3,
+      default_vat_rate: null,
+      default_vat_treatment: null,
+    }]
+    const recovery = [{ id: 'w1', kind: 'recovered', net_amount: 400, reverses_id: null, vat_by_rate: [{ account: '2611', rate: 25, vat: 100, base: 400 }] }]
+    // Recovery only: 400 + 100 reported again through ruta 05, nothing to warn about.
+    const recovered = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '1930', debit_amount: 500 },
+          { entry: 'e1', account_number: '3950', credit_amount: 400 },
+          { entry: 'e1', account_number: '2611', credit_amount: 100 },
+        ],
+        chart,
+        undefined,
+        null,
+        { invoice_write_offs: recovery },
+      ),
+    )
+    expect(recovered.declaration_checks.find((f) => f.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')?.status ?? 'OK').not.toBe('WARNING')
+
+    // 250 more booked on 3950 by hand: that part is warned about.
+    const byHand = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '1930', debit_amount: 500 },
+          { entry: 'e1', account_number: '3950', credit_amount: 400 },
+          { entry: 'e1', account_number: '2611', credit_amount: 100 },
+          { entry: 'e2', account_number: '1930', debit_amount: 250 },
+          { entry: 'e2', account_number: '3950', credit_amount: 250 },
+        ],
+        chart,
+        undefined,
+        null,
+        { invoice_write_offs: recovery },
+      ),
+    )
+    const finding = byHand.declaration_checks.find((f) => f.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')!
+    expect(finding.status).toBe('WARNING')
+    expect(finding.message).toMatch(/3950/)
+    expect(finding.message).toMatch(/250/)
+  })
+
   it('stays silent once the account has a momskod', async () => {
     const result = await computeVatCloseCheck(
       PERIOD,
@@ -555,5 +807,28 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
 
     expect(result.rutor.ruta05).toBe(1250)
     expect(result.declaration_checks).toEqual([])
+  })
+})
+
+// Decision 3 (2026-10-13): the close check (and the v1 compliance check that
+// returns its rutor as details.rutor) shows the declaration as filed.
+describe('gnubok_vat_close_check: rutor are the filed declaration', () => {
+  it('returns the signed rutor calculateVatDeclaration files, a net-negative ruta 05 included', async () => {
+    const supabase = mockSupabase([
+      { entry: 'sale', account_number: '3001', credit_amount: 200 },
+      { entry: 'sale', account_number: '2611', credit_amount: 50 },
+      { entry: 'sale', account_number: '1510', debit_amount: 250 },
+      { entry: 'credit', account_number: '3001', debit_amount: 700 },
+      { entry: 'credit', account_number: '2611', debit_amount: 175 },
+      { entry: 'credit', account_number: '1510', credit_amount: 875 },
+    ])
+    const [result, declaration] = await Promise.all([
+      computeVatCloseCheck(PERIOD, 'company-1', supabase),
+      calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1),
+    ])
+
+    expect(result.rutor.ruta05).toBe(-500)
+    expect(result.rutor).toEqual(declaration.rutor)
+    expect(result.payment).toMatchObject({ net_due: -125, direction: 'refund' })
   })
 })

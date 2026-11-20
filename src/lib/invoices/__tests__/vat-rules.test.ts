@@ -4,16 +4,11 @@ import {
   getAvailableVatRates,
   getArticleVatRateAdoptionSet,
   getPermittedVatRates,
-  getVatTreatmentForRate,
   getVatRules,
-  calculateVat,
-  calculateTotal,
-  formatVatRate,
   getVatTreatmentLabel,
-  getVatSummaryFromItems,
-  getMomsRutaDescription,
   requiresSwedishVatAcknowledgement,
 } from '../vat-rules'
+import { getVatTreatmentForRate } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 
 // ============================================================
 // getAvailableVatRates
@@ -237,63 +232,6 @@ describe('getVatRules', () => {
 })
 
 // ============================================================
-// calculateVat
-// Pin: vatRate is a whole number (25, not 0.25).
-// Formula: Math.round(subtotal * vatRate) / 100
-// ============================================================
-
-describe('calculateVat', () => {
-  it('calculates 25% of 10000 → 2500', () => {
-    expect(calculateVat(10000, 25)).toBe(2500)
-  })
-
-  it('calculates 12% of 5000 → 600', () => {
-    expect(calculateVat(5000, 12)).toBe(600)
-  })
-
-  it('calculates 6% of 3000 → 180', () => {
-    expect(calculateVat(3000, 6)).toBe(180)
-  })
-
-  it('calculates 0% of 10000 → 0', () => {
-    expect(calculateVat(10000, 0)).toBe(0)
-  })
-
-  it('rounds correctly: 99.99 at 25% → 25', () => {
-    // Math.round(99.99 * 25) / 100 = Math.round(2499.75) / 100 = 2500 / 100 = 25
-    expect(calculateVat(99.99, 25)).toBe(25)
-  })
-})
-
-// ============================================================
-// calculateTotal
-// ============================================================
-
-describe('calculateTotal', () => {
-  it('returns subtotal + VAT rounded: 10000 at 25% → 12500', () => {
-    expect(calculateTotal(10000, 25)).toBe(12500)
-  })
-
-  it('handles 0% VAT: total equals subtotal', () => {
-    expect(calculateTotal(5000, 0)).toBe(5000)
-  })
-})
-
-// ============================================================
-// formatVatRate
-// ============================================================
-
-describe('formatVatRate', () => {
-  it('formats 25 as "25%"', () => {
-    expect(formatVatRate(25)).toBe('25%')
-  })
-
-  it('formats 0 as "0%"', () => {
-    expect(formatVatRate(0)).toBe('0%')
-  })
-})
-
-// ============================================================
 // getVatTreatmentLabel
 // ============================================================
 
@@ -305,57 +243,6 @@ describe('getVatTreatmentLabel', () => {
     expect(getVatTreatmentLabel('reverse_charge')).toBe('Omvänd skattskyldighet (0%)')
     expect(getVatTreatmentLabel('export')).toBe('Export (0%)')
     expect(getVatTreatmentLabel('exempt')).toBe('Momsfritt')
-  })
-})
-
-// ============================================================
-// getVatSummaryFromItems
-// ============================================================
-
-describe('getVatSummaryFromItems', () => {
-  it('returns single rate info when all items have same rate', () => {
-    const result = getVatSummaryFromItems([{ vat_rate: 25 }, { vat_rate: 25 }])
-    expect(result.isMixed).toBe(false)
-    expect(result.rate).toBe(25)
-    expect(result.treatment).toBe('standard_25')
-    expect(result.label).toBe('25% moms')
-  })
-
-  it('returns isMixed=true when items have different rates', () => {
-    const result = getVatSummaryFromItems([{ vat_rate: 25 }, { vat_rate: 12 }])
-    expect(result.isMixed).toBe(true)
-    expect(result.rate).toBeNull()
-    expect(result.treatment).toBeNull()
-    expect(result.label).toBe('Blandade momssatser')
-  })
-
-  it('treats null vat_rate as 0', () => {
-    const result = getVatSummaryFromItems([{ vat_rate: null }, { vat_rate: null }])
-    expect(result.isMixed).toBe(false)
-    expect(result.rate).toBe(0)
-    expect(result.treatment).toBe('exempt')
-  })
-})
-
-// ============================================================
-// getMomsRutaDescription
-// ============================================================
-
-describe('getMomsRutaDescription', () => {
-  it('maps ruta 05 → "Utgående moms 25%"', () => {
-    expect(getMomsRutaDescription('05')).toBe('Utgående moms 25%')
-  })
-
-  it('maps ruta 39 → "Försäljning av tjänster till annat EU-land"', () => {
-    expect(getMomsRutaDescription('39')).toBe('Försäljning av tjänster till annat EU-land')
-  })
-
-  it('maps ruta 40 → "Export utanför EU"', () => {
-    expect(getMomsRutaDescription('40')).toBe('Export utanför EU')
-  })
-
-  it('returns the ruta string itself for unknown rutor', () => {
-    expect(getMomsRutaDescription('99')).toBe('99')
   })
 })
 

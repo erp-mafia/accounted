@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { ARKIV } from './palette'
 
 /**
- * The "Kopplingar" figure of the agreement page (canvas artboard Avtal): the
+ * The "Kopplingar" figure of the agreement page: the
  * agreement in the middle, and around it what it is tied to: the
  * counterparty, its documents (the source one lit), the stream of expected
  * payments, a deposit, the asset, the notice date. Only what exists is drawn.
@@ -40,7 +40,10 @@ const ANGLES: Record<string, { deg: number; r: number }> = {
   notice: { deg: 150, r: 92 },
 }
 
-const COLOR = { sage: ARKIV.sage, ochre: ARKIV.ochre, dark: 'var(--foreground)', grey: 'var(--border)' }
+// The colour tokens are HSL triplets, so an SVG paint wraps them in hsl(): a bare var() is no colour and paints black or nothing.
+const INK = 'hsl(var(--foreground))'
+const LINE = 'hsl(var(--border))'
+const COLOR = { sage: ARKIV.sage, ochre: ARKIV.ochre, dark: INK, grey: LINE }
 
 const point = (deg: number, r: number) => ({ x: CX + r * Math.cos((deg * Math.PI) / 180), y: CY + r * Math.sin((deg * Math.PI) / 180) })
 
@@ -57,11 +60,11 @@ export function AgreementLinksGraph({ title, nodes }: { title: string; nodes: Ar
           const anchor = left ? 'end' : 'start'
           return (
             <g key={n.key}>
-              <line x1={CX} y1={CY} x2={p.x} y2={p.y} stroke={n.lit ? 'var(--foreground)' : 'var(--border)'} strokeWidth={1.2} />
+              <line x1={CX} y1={CY} x2={p.x} y2={p.y} stroke={n.lit ? INK : LINE} strokeWidth={1.2} />
               {n.stream &&
                 Array.from({ length: 12 }, (_, i) => {
                   const q = point(a.deg + (i % 2 ? 4 : -4), a.r + 8 + i * 9)
-                  return <circle key={i} cx={q.x} cy={q.y} r={1.25} fill="var(--border)" />
+                  return <circle key={i} cx={q.x} cy={q.y} r={1.25} fill={LINE} />
                 })}
               {n.lit && <circle cx={p.x} cy={p.y} r={10} fill={ARKIV.sageGlow} />}
               <circle cx={p.x} cy={p.y} r={n.lit ? 5.5 : 4} fill={COLOR[n.color]} />

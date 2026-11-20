@@ -45,6 +45,8 @@ const ArchivedPaymentFile = z.object({
   employee_count: z.number().int().describe('Employees paid in the file (positive net payout).'),
   total_amount: z.number().describe('Sum of the net payouts in the file, SEK.'),
   generated_at: z.string(),
+  version: z.number().int().describe('File version: from 2 the file has new message ids (a confirmed new version).'),
+  previous_not_approved_confirmed: z.boolean(),
 })
 
 export const salaryRunsPaymentFilesList = defineOperation({
@@ -83,6 +85,8 @@ export const salaryRunsPaymentFilesList = defineOperation({
               employee_count: 3,
               total_amount: 76500,
               generated_at: '2026-05-20T08:00:00.000Z',
+              version: 1,
+              previous_not_approved_confirmed: false,
             },
           ],
           next_cursor: null,

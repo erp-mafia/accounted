@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Copy, Check, AlertTriangle } from 'lucide-react'
+import { CheckIcon, ExclamationTriangleIcon, Square2StackIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 
@@ -35,7 +35,7 @@ export function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel
       </pre>
       <Button
         variant="outline"
-        size="icon-sm"
+        size="icon"
         className={cn(
           'absolute right-1.5 top-1.5 transition-opacity focus-visible:opacity-100 pointer-coarse:opacity-100',
           state === 'failed' ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
@@ -44,11 +44,11 @@ export function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel
         aria-label={copyAriaLabel}
       >
         {state === 'copied' ? (
-          <Check className="h-3.5 w-3.5 text-success" />
+          <CheckIcon className="h-3.5 w-3.5 text-success" />
         ) : state === 'failed' ? (
-          <AlertTriangle className="h-3.5 w-3.5 text-attn" />
+          <ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn" />
         ) : (
-          <Copy className="h-3.5 w-3.5" />
+          <Square2StackIcon className="h-3.5 w-3.5" />
         )}
       </Button>
       {/* Live region is always mounted so the message is announced when it

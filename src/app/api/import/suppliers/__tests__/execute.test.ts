@@ -110,6 +110,48 @@ describe('POST /api/import/suppliers/execute', () => {
     expect(findCall('suppliers', 'insert')).toBeUndefined()
   })
 
+  describe('the terms', () => {
+    const matched = { id: 'x', name: 'Kontorsvaror AB', org_number: '5560217780', email: null, default_payment_terms: 14 }
+
+    it('leaves the terms of a matched supplier alone when the file has none', async () => {
+      mockFetchAllRows.mockResolvedValue([matched])
+      enqueue({ data: { id: 'x', name: 'Kontorsvaror AB' } })
+
+      await post({ rows: [row({ org_number: '5560217780', default_payment_terms: null })], update_duplicates: true })
+
+      const [payload] = findCall('suppliers', 'update') as [Record<string, unknown>]
+      expect(payload).not.toHaveProperty('default_payment_terms')
+    })
+
+    it('merges 0 days from the file: betalning direkt is a term', async () => {
+      mockFetchAllRows.mockResolvedValue([matched])
+      enqueue({ data: { id: 'x', name: 'Kontorsvaror AB' } })
+
+      await post({ rows: [row({ org_number: '5560217780', default_payment_terms: 0 })], update_duplicates: true })
+
+      const [payload] = findCall('suppliers', 'update') as [Record<string, unknown>]
+      expect(payload.default_payment_terms).toBe(0)
+    })
+
+    it('a new supplier the file gives 0 days keeps them', async () => {
+      enqueue({ data: { id: 's1', name: 'Kontorsvaror AB' } })
+
+      await post({ rows: [row({ default_payment_terms: 0 })], update_duplicates: false })
+
+      const [payload] = findCall('suppliers', 'insert') as [Record<string, unknown>]
+      expect(payload.default_payment_terms).toBe(0)
+    })
+
+    it('a new supplier the file gives no terms gets 30 days', async () => {
+      enqueue({ data: { id: 's1', name: 'Kontorsvaror AB' } })
+
+      await post({ rows: [row({ default_payment_terms: null })], update_duplicates: false })
+
+      const [payload] = findCall('suppliers', 'insert') as [Record<string, unknown>]
+      expect(payload.default_payment_terms).toBe(30)
+    })
+  })
+
   it('creates a new supplier when only the name matches and the user did not confirm', async () => {
     mockFetchAllRows.mockResolvedValue([
       { id: KONTOR_ID, name: 'Kontorsvaror AB', org_number: null, email: null },

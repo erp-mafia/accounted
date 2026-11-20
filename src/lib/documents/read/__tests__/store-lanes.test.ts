@@ -113,6 +113,24 @@ describe('readUnreadDocuments, the lanes and the budget', () => {
     ])
   })
 
+  // accounted#18: the vision budget is read on the Swedish calendar day, the
+  // day recordArkivUsage keys its adds on. 23:30 UTC is already the next day
+  // in Stockholm, in summer (UTC+2) and in winter (UTC+1).
+  it.each([
+    ['summer', '2026-07-01T23:30:00Z', '2026-07-02'],
+    ['winter', '2026-01-15T23:30:00Z', '2026-01-16'],
+  ])('%s: at %s the budget reads the vision pages spent on %s', async (_season, instant, day) => {
+    asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'claude_vision']]))
+    const at = new Date(instant)
+    const tied = { ...base, id: 'tied', created_at: new Date(at.getTime() - 60 * 86_400_000).toISOString(), journal_entry_id: 'je', pages_read_at: 'x', read_error: 'ai_gated', mime_type: 'image/jpeg' }
+    enqueue({ data: [tied] }) // retry batch
+    enqueue({ data: { units: 0 } }) // vision pages spent today
+    for (let i = 0; i < 3; i++) enqueue({}) // one read: delete, insert, stamp
+    enqueue({ data: [] }) // unread batch
+    await readUnreadDocuments(supabase, 10, { now: at, budgetPagesPerDay: 4 })
+    expect(findCalls('arkiv_usage_daily', 'eq')).toContainEqual(['day', day])
+  })
+
   it('finishes a loose history document that turned out to be an acting type under a budget, and skips one that did not', async () => {
     asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'claude_vision']]))
     const retryRows = [

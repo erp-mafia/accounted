@@ -18,7 +18,7 @@ import {
   PayeeAccountError,
   resolveDomesticBankAccount,
   validateEmployeeBankAccount,
-} from '@/lib/salary/payment/bank-account'
+} from '@/lib/payments/bank-account'
 import { generateBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generatePain001 } from '@/lib/salary/payment/pain001-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
@@ -34,6 +34,8 @@ const painCompany = {
   iban: 'SE3550000000054910000003',
   bic: 'ESSESESS',
 }
+// A debtor bank that reads the clearing inside the BBAN (creditor-account.ts).
+const fullBbanCompany = { ...painCompany, iban: 'SE7212000000012200111878', bic: 'DABASESX' }
 const painOptions = { messageId: 'TEST-5566778899-2026-09', paymentDate: '2026-09-25', periodLabel: '2026-09' }
 const supplierOptions = { messageId: 'TEST-5566778899-B1', createdAt: '2026-09-21T08:00:00.000Z' }
 
@@ -45,17 +47,17 @@ function runBgLb(clearing: string, account: string) {
   )
 }
 
-function runSalaryPain001(clearing: string, account: string) {
+function runSalaryPain001(clearing: string, account: string, company = painCompany) {
   return generatePain001(
-    painCompany,
+    company,
     [{ name: PAYEE_NAME, clearingNumber: clearing, bankAccountNumber: account, netSalary: 25000 }],
     painOptions,
   )
 }
 
-function runSupplierPain001(clearing: string, account: string) {
+function runSupplierPain001(clearing: string, account: string, company = painCompany) {
   return generateSupplierPain001(
-    painCompany,
+    company,
     [
       {
         payee: { type: 'bank_account', clearing, account },
@@ -74,6 +76,8 @@ const GENERATORS = [
   { label: 'Bankgirot LB (salary)', run: runBgLb },
   { label: 'pain.001 (salary)', run: runSalaryPain001 },
   { label: 'pain.001 (supplier)', run: runSupplierPain001 },
+  { label: 'pain.001 (salary, full BBAN)', run: (c: string, a: string) => runSalaryPain001(c, a, fullBbanCompany) },
+  { label: 'pain.001 (supplier, full BBAN)', run: (c: string, a: string) => runSupplierPain001(c, a, fullBbanCompany) },
 ] as const
 
 function caught(fn: () => unknown): unknown {
@@ -176,6 +180,25 @@ describe('payable account contract: entry and payout share one definition', () =
     for (const xml of [salaryXml, supplierXml]) {
       expect(xml).toContain(`<MmbId>${resolved.clearing4}</MmbId>`)
       expect(xml).toContain(`<Id>${resolved.accountDigits}</Id>`)
+    }
+
+    // A bank that reads the clearing inside the BBAN gets the same parts,
+    // joined: clearing + account, or for an 8xxx clearing the 15 digits
+    // 8CCCC + zero-filled account (the fifth digit the resolver carried in
+    // front of the account, or the check digit of a 4-digit 8xxx).
+    const fiveDigitClearing = clearing.replace(/\D/g, '').length === 5
+    for (const xml of [runSalaryPain001(clearing, account, fullBbanCompany), runSupplierPain001(clearing, account, fullBbanCompany)]) {
+      expect(xml).toContain(`<MmbId>${resolved.clearing4}</MmbId>`)
+      const bban = xml.match(/<CdtrAcct>\s*<Id>\s*<Othr>\s*<Id>(\d+)<\/Id>/)![1]
+      if (resolved.clearing4.startsWith('8')) {
+        expect(bban).toMatch(/^8\d{14}$/)
+        expect(bban.slice(0, 4)).toBe(resolved.clearing4)
+        // The account itself, zero-filled to ten digits after the 5-digit clearing.
+        const accountOnly = fiveDigitClearing ? resolved.accountDigits.slice(1) : resolved.accountDigits
+        expect(bban.slice(5)).toBe(accountOnly.padStart(10, '0'))
+      } else {
+        expect(bban).toBe(`${resolved.clearing4}${resolved.accountDigits}`)
+      }
     }
 
     // The LB file: TK40 carries the 4-digit clearing and the account in the

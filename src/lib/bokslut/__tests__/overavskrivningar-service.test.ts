@@ -1,96 +1,60 @@
 import { describe, it, expect } from 'vitest'
-import {
-  compute30Rule,
-  compute20Rule,
-  compute20RuleForFiscalPeriods,
-  pickLowerResidual,
-  proposeOveravskrivningar,
-  OVERAVSKRIVNING_30_RULE,
-} from '../reserves/overavskrivningar-service'
+import { proposeOveravskrivningar } from '../reserves/overavskrivningar-service'
+import { computeTaxDepreciation, type TaxDepreciationInput } from '../assets/tax-depreciation'
 
-describe('compute30Rule', () => {
-  it('returns minimum residual = 70% of base', () => {
-    const result = compute30Rule({
-      openingBookValue: 100_000,
-      additions: 50_000,
-      disposals: 20_000,
-    })
-    // base = 100 + 50 - 20 = 130_000, residual = 91_000, maxAllowed = 39_000
-    expect(result.base).toBe(130_000)
-    expect(result.minimumResidual).toBe(91_000)
-    expect(result.maxAllowedAccumulated).toBe(39_000)
+// The 30- and 20-rule had a second implementation here (compute30Rule,
+// compute20Rule, pickLowerResidual) beside computeTaxDepreciation. The
+// överavskrivningar calculator now uses computeTaxDepreciation; these are the
+// old copy's assertions, kept against the one implementation.
+function closing(input: Omit<TaxDepreciationInput, 'method' | 'selectedRule' | 'cohorts'> & Partial<Pick<TaxDepreciationInput, 'cohorts'>>) {
+  const result = computeTaxDepreciation({ method: 'rakenskapsenlig', selectedRule: 'huvudregel_30', cohorts: [], ...input })
+  const of = (rule: string) => result.alternatives.find((a) => a.rule === rule)!.closingTaxValue
+  return { basis: result.basis, rule30: of('huvudregel_30'), rule20: of('kompletteringsregel_20') }
+}
+
+describe('30-regeln (IL 18 kap. 14 §), via computeTaxDepreciation', () => {
+  it('leaves 70 % of opening value + additions - disposals', () => {
+    const result = closing({ openingTaxValue: 100_000, additions: 50_000, disposals: 20_000, periodMonths: 12 })
+    expect(result.basis).toBe(130_000)
+    expect(result.rule30).toBe(91_000)
   })
 
-  it('uses 0.7 rate per constant', () => {
-    expect(OVERAVSKRIVNING_30_RULE).toBe(0.7)
+  it('pro-rates the 30 % rate for a six-month period', () => {
+    expect(closing({ openingTaxValue: 100_000, additions: 0, disposals: 0, periodMonths: 6 }).rule30).toBe(85_000)
+  })
+
+  it('never produces a negative basis when proceeds exceed it', () => {
+    const result = closing({ openingTaxValue: 10_000, additions: 0, disposals: 20_000, periodMonths: 12 })
+    expect(result.basis).toBe(0)
+    expect(result.rule30).toBe(0)
   })
 })
 
-describe('compute20Rule', () => {
-  it('residual = sum of cost × (5 − age) / 5 per cohort', () => {
-    const result = compute20Rule({
-      // current year, year-1, year-2, year-3, year-4
-      acquisitionCostByYearOffset: [100_000, 100_000, 100_000, 100_000, 100_000],
-    })
-    // The acquisition period gets the first 20% deduction. Residuals are
-    // therefore 80 + 60 + 40 + 20 + 0 = 200.
-    expect(result.minimumResidual).toBe(200_000)
-  })
+describe('20-regeln (IL 18 kap. 17 §), via computeTaxDepreciation', () => {
+  const cohort = (acquisitionCost: number, elapsedMonths: number) => ({ label: `c${elapsedMonths}`, acquisitionCost, elapsedMonths })
 
-  it('skips cohorts where no acquisitions happened', () => {
-    const result = compute20Rule({
-      acquisitionCostByYearOffset: [50_000, 0, 0, 0, 0],
+  it('residual = cost × (5 - age) / 5 per cohort, the acquisition period included', () => {
+    const result = closing({
+      openingTaxValue: 400_000,
+      additions: 100_000,
+      disposals: 0,
+      periodMonths: 12,
+      cohorts: [cohort(100_000, 12), cohort(100_000, 24), cohort(100_000, 36), cohort(100_000, 48), cohort(100_000, 60)],
     })
-    expect(result.minimumResidual).toBe(40_000)
+    // 80 + 60 + 40 + 20 + 0
+    expect(result.rule20).toBe(200_000)
   })
 
   it('pro-rates shortened fiscal periods', () => {
-    const result = compute20RuleForFiscalPeriods({
-      acquisitionCostByPeriod: [100_000, 100_000],
-      fiscalPeriodMonths: [6, 12],
-    })
-    // Current cohort: 10% deducted. Prior cohort: 30% cumulative.
-    expect(result.minimumResidual).toBe(160_000)
-  })
-})
-
-describe('compute30Rule: fiscal period length', () => {
-  it('pro-rates the 30% rate for a six-month period', () => {
-    const result = compute30Rule({
-      openingBookValue: 100_000,
-      additions: 0,
+    const result = closing({
+      openingTaxValue: 100_000,
+      additions: 100_000,
       disposals: 0,
-      fiscalPeriodMonths: 6,
+      periodMonths: 6,
+      // Current cohort: 6 months (10 %). Prior: 6 + 12 months (30 %).
+      cohorts: [cohort(100_000, 6), cohort(100_000, 18)],
     })
-    expect(result.minimumResidual).toBe(85_000)
-    expect(result.maxAllowedAccumulated).toBe(15_000)
-  })
-
-  it('never produces a negative tax base when proceeds exceed the basis', () => {
-    const result = compute30Rule({
-      openingBookValue: 10_000,
-      additions: 0,
-      disposals: 20_000,
-    })
-    expect(result.base).toBe(0)
-    expect(result.minimumResidual).toBe(0)
-  })
-})
-
-describe('pickLowerResidual', () => {
-  it('returns whichever rule yields the lower residual (= more deduction)', () => {
-    const r30 = { base: 100_000, minimumResidual: 70_000, maxAllowedAccumulated: 30_000 }
-    const r20 = { minimumResidual: 60_000 }
-    const pick = pickLowerResidual(r30, r20)
-    expect(pick.residual).toBe(60_000)
-    expect(pick.rule).toBe('20-regeln')
-  })
-
-  it('prefers 30-rule on tie (default behaviour)', () => {
-    const r30 = { base: 100_000, minimumResidual: 70_000, maxAllowedAccumulated: 30_000 }
-    const r20 = { minimumResidual: 70_000 }
-    const pick = pickLowerResidual(r30, r20)
-    expect(pick.rule).toBe('30-regeln')
+    expect(result.rule20).toBe(160_000)
   })
 })
 

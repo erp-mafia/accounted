@@ -1,6 +1,6 @@
 /**
  * Unit tests for lib/salary/employee-soft-delete.ts: the soft delete behind
- * the v1 DELETE /employees/{id} and gnubok_delete_employee. The row is never
+ * the dashboard and v1 DELETE /employees/{id} and gnubok_delete_employee. The row is never
  * removed (BFL 7 kap), deactivating an inactive employee writes nothing, a
  * dry run writes nothing, and every query is scoped to the company.
  */
@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { softDeleteEmployee } from '@/lib/salary/employee-soft-delete'
+import { JAMKNING_END_REQUIRED } from '@/lib/salary/jamkning-rules'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -96,12 +97,33 @@ describe('softDeleteEmployee', () => {
   })
 
   it('hands a refused update to the caller as the raw database error', async () => {
-    const dbError = { code: '23514', message: 'new row violates check constraint "employees_jamkning_dates_check"' }
+    const dbError = { code: '23514', message: 'new row violates check constraint "employees_tax_column_check"' }
     mock.enqueue({ data: ACTIVE })
     mock.enqueue({ error: dbError })
 
     const result = await softDeleteEmployee(supabase, args())
 
     expect(result).toEqual({ ok: false, code: 'INTERNAL_ERROR', cause: dbError })
+  })
+
+  it('answers a legacy incomplete jämkning beslut with what to complete, not a database error (#2697)', async () => {
+    // Stored before #2240: a percentage and a start date, no end date. The
+    // NOT VALID check refuses ANY update of the row, the deactivation too.
+    const dbError = {
+      code: '23514',
+      message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+    }
+    mock.enqueue({
+      data: { ...ACTIVE, jamkning_percentage: 30, jamkning_valid_from: '2025-09-29', jamkning_valid_to: null },
+    })
+    mock.enqueue({ error: dbError })
+
+    const result = await softDeleteEmployee(supabase, args())
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'jamkning_valid_to', message: JAMKNING_END_REQUIRED },
+    })
   })
 })

@@ -1,5 +1,6 @@
 import type { KPIPreferences } from '@/types'
 import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 export interface KPIDefinition {
   id: string
@@ -40,7 +41,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'outstandingReceivables',
-    defaultAccounts: ['1510'],
+    defaultAccounts: [resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable')],
     customizableAccounts: false,
     defaultVisible: true,
     format: 'currency',

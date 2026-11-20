@@ -22,7 +22,7 @@
  * Once a begäran row exists for it (the Begaran GRON_TEKNIK file), that row
  * speaks for it like any other.
  */
-import { deductionKindsOf } from './rot-rut-rules'
+import { deductionKindsOf } from '@/lib/bookkeeping/rot-rut-rules'
 
 export const ROT_RUT_REQUEST_STATUSES = [
   'generated',

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { getEmailService } from '@/lib/email/service'
 import { getBranding } from '@/lib/branding/service'
@@ -12,10 +11,6 @@ import {
   getCanonicalAppOrigin,
   resolveTrustedAppOrigin,
 } from '@/lib/domains/trusted-app-origin'
-
-// Loads the email extension so getEmailService() returns the Resend
-// implementation instead of the noop default.
-ensureInitialized()
 
 const log = createLogger('auth-email-hook')
 
@@ -80,9 +75,10 @@ interface SendEmailHookPayload {
 /**
  * Build the verify URL on the ORIGINATING host using the token_hash +
  * verifyOtp pattern (browser- and host-independent, per the WL-05 research):
- * /auth/callback consumes token_hash + type server-side and then honors the
- * `next` path. If redirect_to already points at /auth/callback (our client
- * flows do), its query (e.g. next=/reset-password) is preserved.
+ * /auth/callback holds token_hash until the user clicks on /auth/confirm
+ * (lib/auth/confirm-link.ts), verifies it server-side with type and then
+ * honors the `next` path. If redirect_to already points at /auth/callback
+ * (our client flows do), its query (e.g. next=/reset-password) is preserved.
  *
  * `origin` is the already-trusted application origin; `redirectUrl` is the
  * requested redirect_to only when it sits on that origin, else null (the
@@ -249,7 +245,7 @@ export async function POST(request: Request) {
     })
   }
 
-  const emailService = getEmailService()
+  const emailService = await getEmailService()
   for (const mail of mails) {
     const built = buildAuthEmail({
       actionType: mail.actionType,

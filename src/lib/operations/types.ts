@@ -35,6 +35,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import type { StructuredErrorRemediation } from '@/lib/errors/structured-errors'
 import type { Logger } from '@/lib/logger'
 import type { PendingOperationType } from '@/types'
 
@@ -47,6 +48,17 @@ export interface OperationContext {
   companyId: string
   userId: string
   log: Logger
+  /**
+   * Set only by the staged-operation commit path: this run is the approval
+   * of that pending operation, not a direct call through a door.
+   */
+  pendingOperationId?: string
+  /**
+   * Set to 'mcp' by the MCP door of a direct write (OperationMcpBinding.direct),
+   * for an operation that records who wrote a row (a forecast row's source);
+   * undefined on every other door.
+   */
+  door?: 'mcp'
 }
 
 /** A non-blocking note about a write that went through, in both languages. */
@@ -61,7 +73,13 @@ export interface OperationWarning {
  * failure carries a code from lib/errors/structured-errors.ts; `messageSv`
  * overrides the registry sentence when the failure names something specific
  * (a DB guard's message that names the dimension), and `error` hands a
- * BookkeepingError to the door verbatim.
+ * BookkeepingError to the door verbatim. A failure that keeps a published
+ * code but speaks another registry entry's answer (a document on a locked
+ * year: PERIOD_LOCKED with DOC_UPLOAD_PERIOD_LOCKED's) brings `messageEn`
+ * and `remediation` too. The v1 and dashboard doors answer all three in the
+ * envelope; a thrown failure (MCP) keeps the Swedish and the next step; an
+ * approved staged operation keeps the Swedish as its error and the other two
+ * in its result data.
  */
 export type OperationOutcome<O> =
   | { ok: true; dryRun: true; preview: Record<string, unknown> }
@@ -71,6 +89,10 @@ export type OperationOutcome<O> =
       code: string
       details?: Record<string, unknown>
       messageSv?: string
+      /** The English of `messageSv`: only read together with it, so the pair never drifts apart. */
+      messageEn?: string
+      /** Replaces the registry's next step for `code`. */
+      remediation?: StructuredErrorRemediation
       error?: unknown
       /**
        * Set when the operation already made an irreversible change before
@@ -128,6 +150,21 @@ export interface OperationMcpBinding {
   /** Lowercase matcher synonyms (Swedish domain terms). Never serialized. */
   keywords?: string[]
   /**
+   * MCP annotation hints for a write: `destructive` asks the client to
+   * confirm before calling, `idempotent` tells it a retry with the same
+   * input is safe. Both default to false.
+   */
+  hints?: { destructive?: boolean; idempotent?: boolean }
+  /**
+   * A write that is not bookkeeping and so commits on the call, like its v1
+   * endpoint, instead of staging: the tool replays `idempotency_key`
+   * (withRetryKey) and answers the operation's output. Only for a scope in
+   * DIRECT_WRITE_SCOPES (lib/auth/scope-catalog.ts), today forecast:write
+   * (the liquidity forecast's rows, decision 2026-10-28); exclusive with
+   * `stage`. operation-contract.test.ts holds both.
+   */
+  direct?: true
+  /**
    * Present on writes: the tool stages a pending operation of this type and
    * the approval path runs `run()` with the staged input. The type must be in
    * PendingOperationType, OPERATION_RISK_TIERS, the approval vocabulary and
@@ -136,12 +173,20 @@ export interface OperationMcpBinding {
    */
   stage?: {
     pendingType: PendingOperationType
-    /** The one-line title the approver sees, in Swedish. */
-    title: (input: Record<string, unknown>) => string
+    /**
+     * The one-line title the approver sees, in Swedish. `preview` is the dry
+     * run's preview the operation is staged with, for a title that names what
+     * the input only points at (the invoice number behind an id).
+     */
+    title: (input: Record<string, unknown>, preview?: Record<string, unknown>) => string
     /**
      * For a pending type that existed before its operation did: rewrites
      * params staged in the old shape into the operation's input, so a row
      * staged before the switch still commits. Runs before validation.
+     * Removal rule: delete an upgrade 30 days after
+     * the switch reached production, once no pending row of the type is
+     * older than the switch; an older row is then rejected as
+     * VALIDATION_ERROR and re-staged.
      */
     upgradeParams?: (params: Record<string, unknown>) => Record<string, unknown>
     /**
@@ -152,7 +197,40 @@ export interface OperationMcpBinding {
      * the commit when the pinned values no longer hold. Pure: no I/O.
      */
     pinParams?: (input: Record<string, unknown>, preview: Record<string, unknown>) => Record<string, unknown>
+    /**
+     * What the staging answer carries beside the preview, from the input and
+     * the dry run's preview: the obvious follow-up call (`next`), the date
+     * whose period status the answer reports (`periodDate`), and an advisory
+     * warning the approver sees (`complianceNote`). Pure: no I/O.
+     */
+    extras?: (input: Record<string, unknown>, preview: Record<string, unknown>) => OperationStageExtras
+    /**
+     * The preview the approver and the agent see, when the dry run's preview
+     * (the v1 contract) does not read well on the approval card: renames to
+     * the keys pending.preview_field labels. Defaults to the dry run's
+     * preview. Pure: no I/O, and nothing the dry run did not answer.
+     */
+    preview?: (input: Record<string, unknown>, preview: Record<string, unknown>) => Record<string, unknown>
+    /**
+     * The error a refusal of the staging dry run reaches the agent as, when
+     * the registry sentence is not enough to act on: the call that resolves
+     * it, with the ids from the refusal's details. `keyScopes` is the calling
+     * key's grant when the dispatcher passes it, so the answer never points
+     * at a tool the key cannot call. Undefined keeps the registry sentence.
+     * Pure: no I/O.
+     */
+    refusal?: (
+      failure: { code: string; details?: Record<string, unknown> },
+      input: Record<string, unknown>,
+      keyScopes?: readonly ApiKeyScope[],
+    ) => Error | undefined
   }
+}
+
+export interface OperationStageExtras {
+  next?: { description: string; tool?: string; args?: Record<string, unknown> }
+  periodDate?: string
+  complianceNote?: string
 }
 
 export interface Operation<I = Record<string, unknown>, O = unknown> {
@@ -170,8 +248,18 @@ export interface Operation<I = Record<string, unknown>, O = unknown> {
   output: z.ZodType<O>
   /** Stable error codes the operation can answer (documentation). */
   errorCodes?: string[]
+  /** A direct v1 write with one of these refusals is staged through its MCP binding instead. */
+  stageOnErrorCodes?: readonly string[]
   http?: OperationHttpBinding
   mcp?: OperationMcpBinding
+  /**
+   * Top-level keys of the dry run's preview that its preview token leaves
+   * out (./preview-token.ts): a value recomputed on every call that the
+   * commit recomputes too (a timestamp defaulting to now), which would
+   * otherwise make every token stale. Never a value that moves with the
+   * calendar or with other writers: a pin exists to notice those.
+   */
+  volatilePreviewKeys?: readonly string[]
   run: (ctx: OperationContext, input: I, options: { dryRun: boolean }) => Promise<OperationOutcome<O>>
 }
 

@@ -3,11 +3,49 @@ import { createHash } from 'node:crypto'
 export const SIE_JOB_VERSION = 1
 export const SIE_LIMITS = Object.freeze({
   fileBytes: 50 * 1024 * 1024,
-  fileVouchers: 50_000,
+  // A year's vouchers in one file. 50 000 refused a company's years of about
+  // 50 000 to 113 000 vouchers (2026-11-10, estimated from file sizes), while
+  // the job works in 200-voucher chunks and resumes across invocations: the
+  // count only makes a run longer (about 20 s per 1 000 vouchers in
+  // production). The vouchers take source ordinals 0 to 149 999, and no more:
+  // an undo receipt is numbered by the lowest ordinal it reverses, and the
+  // name and VAT restore receipts start at 150 000 (sieFinalOrdinals).
+  fileVouchers: 150_000,
   chunkVouchers: 200,
   chunkLines: 2_000,
   chunkBytes: 1024 * 1024,
 })
+
+/** The source ordinals of the two entries a job writes after the file's vouchers. */
+export interface SIEFinalOrdinals { openingBalance: number; adjustment: number }
+
+const LEGACY_FINAL_ORDINALS: SIEFinalOrdinals = Object.freeze({ openingBalance: 50_000, adjustment: 50_001 })
+const LARGE_FILE_FINAL_ORDINALS: SIEFinalOrdinals = Object.freeze({ openingBalance: 1_000_000, adjustment: 1_000_001 })
+
+/**
+ * Where a job puts its IB and its migration adjustment, given the first
+ * source ordinal past the file's vouchers (they take 0 to vouchers - 1).
+ *
+ * Up to the old limit of 50 000 vouchers they keep 50 000 and 50 001, as every
+ * job before it was raised, so a job prepared across that deploy saves the
+ * same final chunk again (save_sie_import_chunk refuses a changed one). A
+ * larger file would collide with them (journal_import_batch_ordinal_idx), so
+ * it puts them at 1 000 000 and 1 000 001: past every voucher, and clear of
+ * the undo receipts at 150 000 to 179 999 that restore account names and VAT
+ * defaults. The job seals the pair in its manifest (sealedSIEFinalOrdinals),
+ * where complete_sie_import_job reads it.
+ */
+export function sieFinalOrdinals(pastLastVoucher: number): SIEFinalOrdinals {
+  return pastLastVoucher <= LEGACY_FINAL_ORDINALS.openingBalance ? LEGACY_FINAL_ORDINALS : LARGE_FILE_FINAL_ORDINALS
+}
+
+/** The pair a prepared job sealed; a job sealed before the manifest carried it used 50 000 and 50 001. */
+export function sealedSIEFinalOrdinals(manifest: Record<string, unknown>): SIEFinalOrdinals {
+  const sealed = manifest.finalOrdinals as { openingBalance?: unknown; adjustment?: unknown } | undefined
+  return Number.isInteger(sealed?.openingBalance) && Number.isInteger(sealed?.adjustment)
+    ? { openingBalance: sealed!.openingBalance as number, adjustment: sealed!.adjustment as number }
+    : LEGACY_FINAL_ORDINALS
+}
 
 export type SIEJobState =
   | 'queued' | 'preparing' | 'running' | 'reconciling' | 'paused'
@@ -36,6 +74,13 @@ export interface SIEPreparedEntry {
   sourceNumber: number | null
   sourceType: 'import' | 'opening_balance'
   sieImportId: string
+  /**
+   * Source vouchers of this series the import skipped right before this one
+   * (crm#1599): write_sie_job_entries holds that many numbers before it and
+   * records them as one explained gap. Left out of source_content_hash: it
+   * places the voucher, it is not its content.
+   */
+  numberGap?: { count: number; explanation: string }
   lines: SIEPreparedLine[]
   corrections?: {
     struck: unknown[]
@@ -78,6 +123,8 @@ export interface SIEJob {
   manifest: Record<string, unknown>
   job_result: Record<string, unknown> | null
   supersedes_import_id: string | null
+  /** The import this batch appends to (issue #108); null for every import. */
+  base_import_id?: string | null
   file_storage_path: string
   file_hash: string
   prepared_through: number

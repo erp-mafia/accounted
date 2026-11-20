@@ -1,5 +1,5 @@
 import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
-import { TokenBucketRateLimiter } from '../rate-limiter';
+import { TokenBucketRateLimiter, connectionRateKey } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { BL_BASE_URL, BL_BATCH_PAGE_SIZE, BL_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
@@ -96,7 +96,7 @@ export class BjornLundenClient {
   ): Promise<T> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(userKey));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {
@@ -179,7 +179,7 @@ export class BjornLundenClient {
   async getBytes(accessToken: string, userKey: string, path: string): Promise<ArrayBuffer> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(userKey));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {

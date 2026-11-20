@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -22,28 +22,34 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
-  ArrowRight,
-  Search,
-  Check,
-  CheckCircle,
-  AlertCircle,
-  XCircle,
-  Filter,
-} from 'lucide-react'
+  ArrowRightIcon,
+  CheckCircleIcon,
+  CheckIcon,
+  ExclamationCircleIcon,
+  FunnelIcon,
+  MagnifyingGlassIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import type { AccountMapping } from '@/lib/import/types'
-import { isValidBASRange } from '@/lib/import/account-mapper'
+import { isValidBASRange, resolveAccountMatch, type AccountMatchKind } from '@/lib/import/account-mapper'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
 import { ImportNotices } from '@/components/import/ImportNotices'
+import { AttnLine } from '@/components/ui/attn-line'
 import type { ImportNotice } from '@/lib/import/notices'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import type { BASAccount } from '@/types'
-import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
   defaultRateForVatTreatment,
   vatTreatmentsForAccountClass,
   type AccountVatTreatment,
 } from '@/lib/vat/account-vat-treatment'
+import {
+  countsRcBasisTwice,
+  rcBasisPairFindings,
+  rcMomskodSetAside,
+} from '@/lib/import/account-vat-treatment'
+import type { RcBasisPairFinding } from '@/lib/import/rc-basis-pairs'
 import {
   InfoTooltip,
   Tooltip,
@@ -76,9 +82,53 @@ interface AccountMappingStepProps {
   onBack: () => void
 }
 
-type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confidence' | 'manual'
+export type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confidence' | 'manual'
 
 const PAGE_SIZE = 50
+
+function matchesFilter(m: AccountMapping, filter: FilterType, knownTargets: ReadonlySet<string>): boolean {
+  switch (filter) {
+    case 'unmapped':
+      return !m.targetAccount
+    case 'new_account':
+      return !!m.targetAccount && !knownTargets.has(m.targetAccount)
+    case 'low_confidence':
+      return !!m.targetAccount && m.confidence < 0.7
+    case 'vat_review':
+      return !!m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
+    case 'manual':
+      return m.isOverride
+    default:
+      return true
+  }
+}
+
+/**
+ * The rows the table shows: those matching the filter and the search, plus
+ * the rows the user answered in this view. Without the second set the review
+ * filter was a shrinking queue: a confirmed row left at once, the next row
+ * moved up under the pointer, and a quick second click confirmed a momskod
+ * nobody had read (O20). The caller empties `answered` when the filter or the
+ * search changes; that is when the answered rows leave.
+ */
+export function rowsInView(
+  mappings: AccountMapping[],
+  filter: FilterType,
+  searchTerm: string,
+  knownTargets: ReadonlySet<string>,
+  answered: ReadonlySet<string>,
+): AccountMapping[] {
+  const term = searchTerm.toLowerCase()
+  return mappings.filter((m) => {
+    if (answered.has(m.sourceAccount)) return true
+    if (!matchesFilter(m, filter, knownTargets)) return false
+    return !term ||
+      m.sourceAccount.includes(term) ||
+      m.sourceName.toLowerCase().includes(term) ||
+      !!m.targetAccount?.includes(term) ||
+      !!m.targetName?.toLowerCase().includes(term)
+  })
+}
 
 /**
  * How many account numbers the untranslated-code line names before it stops
@@ -89,8 +139,8 @@ const UNTRANSLATED_ACCOUNTS_LISTED = 6
 
 /**
  * The momsdeklaration box the built-in BAS mapping already routes this account
- * to, or undefined when it has none. Kept in sync with ACCOUNT_RUTA by the
- * drift test in lib/vat/__tests__/moms-box-mapping.test.ts.
+ * to, or undefined when it has none. ACCOUNT_TO_BOX and ACCOUNT_RUTA are both
+ * read from VAT_ACCOUNT_TABLE (lib/vat/moms-box-mapping.ts).
  */
 function basBoxFor(mapping: AccountMapping): string | undefined {
   return ACCOUNT_TO_BOX[mapping.targetAccount ?? mapping.sourceAccount]
@@ -113,6 +163,31 @@ function untranslatedAccountList(
   })
 }
 
+/**
+ * The line under a row whose file books the reverse-charge basis on a separate
+ * pair beside the account (crm#1096), or null. A warning whenever the row's
+ * momskod would count those purchases twice, whoever set it. Otherwise only
+ * where the prefill set a reverse-charge momskod aside and the row carries
+ * none: why, with the source code named when it was the code's. Then it takes
+ * the source-code line's place; every other row keeps that line.
+ */
+function rcBasisNote(
+  mapping: AccountMapping,
+  finding: RcBasisPairFinding | undefined,
+  t: ReturnType<typeof useTranslations<'chart_of_accounts'>>,
+): string | null {
+  if (!finding) return null
+  const values = { count: finding.vouchers, accounts: finding.accounts.join(', ') }
+  if (countsRcBasisTwice(mapping.sourceAccount, mapping.defaultVatTreatment, finding)) {
+    return t('vat_treatment_rc_basis_twice', values)
+  }
+  const setAside = rcMomskodSetAside(mapping, finding)
+  if (!setAside) return null
+  return mapping.providerVatCode && mapping.providerVatTreatment === setAside
+    ? t('vat_treatment_rc_basis_apart_code', { ...values, code: mapping.providerVatCode })
+    : t('vat_treatment_rc_basis_apart', values)
+}
+
 export default function AccountMappingStep({
   mappings,
   basAccounts,
@@ -125,6 +200,8 @@ export default function AccountMappingStep({
   onBack,
 }: AccountMappingStepProps) {
   const t = useTranslations('chart_of_accounts')
+  const tStep = useTranslations('chart_of_accounts.mapping_step')
+  const tCommon = useTranslations('common')
   const [searchTerm, setSearchTerm] = useState('')
   // Default to showing unmapped accounts first (most actionable)
   const [filter, setFilter] = useState<FilterType>(() => {
@@ -148,43 +225,30 @@ export default function AccountMappingStep({
     [basAccounts],
   )
 
-  // Filter and search mappings
-  const filteredMappings = useMemo(() => {
-    let result = mappings
+  // Which rows the file books beside a basis pair that reports ruta 20-24,
+  // judged over all rows: a pair's legs are other rows (crm#1096).
+  const rcBasisFindings = useMemo(() => rcBasisPairFindings(mappings), [mappings])
 
-    // Apply filter
-    switch (filter) {
-      case 'unmapped':
-        result = result.filter((m) => !m.targetAccount)
-        break
-      case 'new_account':
-        result = result.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount))
-        break
-      case 'low_confidence':
-        result = result.filter((m) => m.targetAccount && m.confidence < 0.7)
-        break
-      case 'vat_review':
-        result = result.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
-        break
-      case 'manual':
-        result = result.filter((m) => m.isOverride)
-        break
-    }
+  // Rows answered (target, momskod, rate or confirm) since the filter or the
+  // search last changed. They stay where they are until it changes again.
+  const [answeredInView, setAnsweredInView] = useState<ReadonlySet<string>>(() => new Set())
+  const keepInView = (sourceAccount: string) =>
+    setAnsweredInView((prev) => (prev.has(sourceAccount) ? prev : new Set(prev).add(sourceAccount)))
 
-    // Apply search
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase()
-      result = result.filter(
-        (m) =>
-          m.sourceAccount.includes(term) ||
-          m.sourceName.toLowerCase().includes(term) ||
-          m.targetAccount?.includes(term) ||
-          m.targetName?.toLowerCase().includes(term)
-      )
-    }
+  const handleMappingChange: AccountMappingStepProps['onMappingChange'] = (sourceAccount, targetAccount, targetName) => {
+    keepInView(sourceAccount)
+    onMappingChange(sourceAccount, targetAccount, targetName)
+  }
 
-    return result
-  }, [mappings, filter, searchTerm, knownTargets])
+  const handleVatTreatmentChange: AccountMappingStepProps['onVatTreatmentChange'] = (sourceAccount, treatment, rate) => {
+    keepInView(sourceAccount)
+    onVatTreatmentChange(sourceAccount, treatment, rate)
+  }
+
+  const filteredMappings = useMemo(
+    () => rowsInView(mappings, filter, searchTerm, knownTargets, answeredInView),
+    [mappings, filter, searchTerm, knownTargets, answeredInView],
+  )
 
   // Pagination
   const totalPages = Math.ceil(filteredMappings.length / PAGE_SIZE)
@@ -193,15 +257,17 @@ export default function AccountMappingStep({
     return filteredMappings.slice(start, start + PAGE_SIZE)
   }, [filteredMappings, currentPage])
 
-  // Reset page when filter or search changes
+  // A new filter or search is a new view: back to page 1, answered rows leave
   const handleFilterChange = (newFilter: FilterType) => {
     setFilter(newFilter)
     setCurrentPage(1)
+    setAnsweredInView(new Set())
   }
 
   const handleSearchChange = (term: string) => {
     setSearchTerm(term)
     setCurrentPage(1)
+    setAnsweredInView(new Set())
   }
 
   // Calculate stats
@@ -224,32 +290,54 @@ export default function AccountMappingStep({
 
   const canContinue = stats.unmapped === 0 && stats.vatReview === 0
 
-  // Group BAS accounts by class for the dropdown
-  const accountsByClass = useMemo(() => {
+  // Group BAS accounts by class for the dropdown, and index the same accounts
+  // by number so a closed picker can name its selection without the list.
+  // The class headings are the chart of accounts page's own (class_1 to 8).
+  const { accountsByClass, accountByNumber } = useMemo(() => {
     const groups: { [key: string]: BASAccount[] } = {}
+    const byNumber = new Map<string, BASAccount>()
     for (const account of basAccounts) {
       if (!isAccountNumber(account.account_number)) continue
-      const className = getAccountClassName(account.account_class)
+      const cls = account.account_class
+      const className = `${cls}xxx - ${
+        cls >= 1 && cls <= 8 ? t(`class_${cls as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}`) : tStep('class_other')
+      }`
       if (!groups[className]) {
         groups[className] = []
       }
       groups[className].push(account)
+      byNumber.set(account.account_number, account)
     }
-    return groups
-  }, [basAccounts])
+    return { accountsByClass: groups, accountByNumber: byNumber }
+  }, [basAccounts, t, tStep])
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Kontomappning</CardTitle>
           <CardDescription>
-            Varje konto i SIE-filen kopplas till ett konto i din kontoplan.
-            De flesta matchas automatiskt: granska de osäkra nedan.{' '}
+            {tStep('intro')}{' '}
             {t('mapping_new_accounts_note')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* The gate on Continue, said where the step opens: its button and
+              the bulk confirm sit below up to 50 table rows, which on a phone
+              is several screens of scrolling before the way on is visible.
+              It yields to a chart file's own attention sentence (one per
+              page). */}
+          {stats.vatReview > 0 && stats.unmapped === 0 &&
+            !sourceChart?.notices.some((notice) => notice.severity === 'action') && (
+            <AttnLine
+              action={{
+                label: t('vat_review_confirm_all', { count: stats.vatReview }),
+                onClick: onConfirmAllVatTreatments,
+              }}
+            >
+              {t('vat_review_gate', { count: stats.vatReview })}
+            </AttnLine>
+          )}
+
           {/* Stats */}
           <div className="flex gap-4 flex-wrap">
             <Badge
@@ -257,7 +345,7 @@ export default function AccountMappingStep({
               className="cursor-pointer"
               onClick={() => handleFilterChange('vat_review')}
             >
-              <AlertCircle className="h-3 w-3 mr-1" />
+              <ExclamationCircleIcon className="h-3 w-3 mr-1" />
               {t('vat_review_filter', { count: stats.vatReview })}
             </Badge>
             <Badge
@@ -265,15 +353,15 @@ export default function AccountMappingStep({
               className="cursor-pointer"
               onClick={() => handleFilterChange('unmapped')}
             >
-              <XCircle className="h-3 w-3 mr-1" />
-              {stats.unmapped} ej mappade
+              <XCircleIcon className="h-3 w-3 mr-1" />
+              {tStep('filter_unmapped_count', { count: stats.unmapped })}
             </Badge>
             <Badge
               variant={filter === 'new_account' ? 'default' : stats.newAccounts > 0 ? 'secondary' : 'outline'}
               className="cursor-pointer"
               onClick={() => handleFilterChange('new_account')}
             >
-              <CheckCircle className="h-3 w-3 mr-1" />
+              <CheckCircleIcon className="h-3 w-3 mr-1" />
               {t('new_account_filter', { count: stats.newAccounts })}
             </Badge>
             <Badge
@@ -281,23 +369,23 @@ export default function AccountMappingStep({
               className="cursor-pointer"
               onClick={() => handleFilterChange('low_confidence')}
             >
-              <AlertCircle className="h-3 w-3 mr-1" />
-              {stats.lowConfidence} osäkra
+              <ExclamationCircleIcon className="h-3 w-3 mr-1" />
+              {tStep('filter_low_confidence_count', { count: stats.lowConfidence })}
             </Badge>
             <Badge
               variant={filter === 'manual' ? 'default' : 'outline'}
               className="cursor-pointer"
               onClick={() => handleFilterChange('manual')}
             >
-              <CheckCircle className="h-3 w-3 mr-1" />
-              {stats.manual} manuellt satta
+              <CheckCircleIcon className="h-3 w-3 mr-1" />
+              {tStep('filter_manual_count', { count: stats.manual })}
             </Badge>
             <Badge
               variant={filter === 'all' ? 'default' : 'outline'}
               className="cursor-pointer"
               onClick={() => handleFilterChange('all')}
             >
-              Visa alla ({mappings.length})
+              {tStep('filter_all_count', { count: mappings.length })}
             </Badge>
           </div>
 
@@ -344,7 +432,6 @@ export default function AccountMappingStep({
               />
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => fileInputRef.current?.click()}
               >
                 {/* Keyed to the same thing as the line beside it: a file
@@ -394,9 +481,9 @@ export default function AccountMappingStep({
           {/* Search and filter */}
           <div className="flex gap-4">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Sök konto..."
+                placeholder={tStep('search_placeholder')}
                 value={searchTerm}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 className="pl-9"
@@ -404,38 +491,42 @@ export default function AccountMappingStep({
             </div>
             <Select value={filter} onValueChange={(v) => handleFilterChange(v as FilterType)}>
               <SelectTrigger className="w-48">
-                <Filter className="h-4 w-4 mr-2" />
+                <FunnelIcon className="h-4 w-4 mr-2" />
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Visa alla</SelectItem>
-                <SelectItem value="unmapped">Ej mappade</SelectItem>
+                <SelectItem value="all">{tStep('filter_all')}</SelectItem>
+                <SelectItem value="unmapped">{tStep('filter_unmapped')}</SelectItem>
                 <SelectItem value="new_account">{t('new_account_filter', { count: stats.newAccounts })}</SelectItem>
                 <SelectItem value="vat_review">{t('vat_review_filter', { count: stats.vatReview })}</SelectItem>
-                <SelectItem value="low_confidence">Osäkra</SelectItem>
-                <SelectItem value="manual">Manuellt satta</SelectItem>
+                <SelectItem value="low_confidence">{tStep('filter_low_confidence')}</SelectItem>
+                <SelectItem value="manual">{tStep('filter_manual')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           {/* Mapping table */}
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden">
             {/* Under table-fixed the header widths ARE the layout: cells never
-                grow them. The budget is ~990px so the table fits a laptop
-                content column at 100 % zoom (#2125: 1216px overflowed, with
-                144px spent on a four-digit source account); beyond that the
-                wrapper scrolls and the confirm column stays sticky (#1668).
+                grow them. The budget is 960px, inside the 966px content
+                column of a 1440px window, where the sidebar turns wide
+                (#2125: 1216px overflowed, with 144px spent on a four-digit
+                source account). The arrow column is as wide as its icon, and
+                the source name is the column that gives way: it truncates and
+                keeps the whole name in its tooltip. In a narrower column (a
+                window under 1334px) the wrapper scrolls and the confirm
+                column stays sticky (#1668).
                 13px text and px-3 cells match the page-level list density. */}
             <Table className="table-fixed text-[13px] [&_td]:px-3 [&_th]:px-3">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-20">Källkonto</TableHead>
-                  <TableHead className="w-40">Källnamn</TableHead>
-                  <TableHead className="w-8 !px-0" aria-hidden="true"></TableHead>
-                  <TableHead className="w-56">Målkonto</TableHead>
+                  <TableHead className="w-20">{tStep('col_source_account')}</TableHead>
+                  <TableHead className="w-36">{tStep('col_source_name')}</TableHead>
+                  <TableHead className="w-4 !px-0" aria-hidden="true"></TableHead>
+                  <TableHead className="w-56">{tStep('col_target_account')}</TableHead>
                   <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
-                  <TableHead className="w-24">Konfidens</TableHead>
-                  <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l border-border bg-background text-right">
+                  <TableHead className="w-24">{tStep('col_match')}</TableHead>
+                  <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l-hairline bg-background text-right">
                     <span className="inline-flex items-center gap-1">
                       {t('vat_treatment_confirm')}
                       <InfoTooltip content={t('vat_treatment_confirm_help')} side="left" />
@@ -458,57 +549,16 @@ export default function AccountMappingStep({
                       )}
                     </TableCell>
                     <TableCell className="!px-0">
-                      <ArrowRight className="mx-auto h-4 w-4 text-muted-foreground" />
+                      <ArrowRightIcon className="mx-auto h-4 w-4 text-muted-foreground" />
                     </TableCell>
                     <TableCell>
-                      <Select
-                        value={mapping.targetAccount || 'none'}
-                        onValueChange={(value) => {
-                          const account = basAccounts.find((a) => a.account_number === value)
-                          // A target outside the list is created on import
-                          // under the file's name (the identity option) or
-                          // the name the row already carries.
-                          const createdName =
-                            value === mapping.sourceAccount ? mapping.sourceName : mapping.targetName
-                          onMappingChange(
-                            mapping.sourceAccount,
-                            value === 'none' ? '' : value,
-                            account?.account_name ?? createdName ?? ''
-                          )
-                        }}
-                      >
-                        <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
-                          <SelectValue placeholder="Välj konto..." />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-80">
-                          <SelectItem value="none">-- Välj konto --</SelectItem>
-                          {createdOptionsFor(mapping, knownTargets).map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              <span className="font-mono mr-2">{option.value}</span>
-                              {option.name}
-                              <span className="ml-2 text-muted-foreground">
-                                ({t('new_account_option')})
-                              </span>
-                            </SelectItem>
-                          ))}
-                          {Object.entries(accountsByClass).map(([className, accounts]) => (
-                            <div key={className}>
-                              <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
-                                {className}
-                              </div>
-                              {accounts.map((account) => (
-                                <SelectItem
-                                  key={account.account_number}
-                                  value={account.account_number}
-                                >
-                                  <span className="font-mono mr-2">{account.account_number}</span>
-                                  {account.account_name}
-                                </SelectItem>
-                              ))}
-                            </div>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <TargetAccountSelect
+                        mapping={mapping}
+                        knownTargets={knownTargets}
+                        accountsByClass={accountsByClass}
+                        accountByNumber={accountByNumber}
+                        onMappingChange={handleMappingChange}
+                      />
                     </TableCell>
                     <TableCell>
                       {mapping.sourceAccount === mapping.targetAccount &&
@@ -527,13 +577,19 @@ export default function AccountMappingStep({
                                   ? defaultRateForVatTreatment(treatment, accountClass)
                                   : mapping.defaultVatRate
                                 : mapping.defaultVatRate ?? null
-                              onVatTreatmentChange(mapping.sourceAccount, treatment, rate)
+                              handleVatTreatmentChange(mapping.sourceAccount, treatment, rate)
                             }}
                           >
                             <SelectTrigger
                               className={cn(
                                 'min-w-0 flex-1',
-                                mapping.requiresVatTreatmentReview && 'border-warning/60',
+                                ((mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed) ||
+                                  countsRcBasisTwice(
+                                    mapping.sourceAccount,
+                                    mapping.defaultVatTreatment,
+                                    rcBasisFindings.get(mapping.sourceAccount),
+                                  )) &&
+                                  'border-warning/60',
                               )}
                             >
                               <SelectValue />
@@ -553,7 +609,7 @@ export default function AccountMappingStep({
                             value={mapping.defaultVatRate === null || mapping.defaultVatRate === undefined
                               ? 'none'
                               : String(mapping.defaultVatRate)}
-                            onValueChange={(value) => onVatTreatmentChange(
+                            onValueChange={(value) => handleVatTreatmentChange(
                               mapping.sourceAccount,
                               mapping.defaultVatTreatment ?? null,
                               value === 'none' ? null : Number(value),
@@ -605,7 +661,11 @@ export default function AccountMappingStep({
                             one the label is the last line of defence, which is
                             why a descriptive account name lands in the third
                             state instead. */}
-                        {mapping.providerVatCode ? (
+                        {rcBasisNote(mapping, rcBasisFindings.get(mapping.sourceAccount), t) ? (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {rcBasisNote(mapping, rcBasisFindings.get(mapping.sourceAccount), t)}
+                          </p>
+                        ) : mapping.providerVatCode ? (
                           <p className="mt-1 text-xs text-muted-foreground">
                             {mapping.providerVatTreatment
                               ? t('vat_treatment_source_code', { code: mapping.providerVatCode })
@@ -625,21 +685,23 @@ export default function AccountMappingStep({
                       )}
                     </TableCell>
                     <TableCell>
-                      {mapping.targetAccount && (
-                        <ConfidenceBadge
-                          confidence={mapping.confidence}
-                          matchType={mapping.matchType}
-                          isOverride={mapping.isOverride}
-                        />
-                      )}
+                      <AccountMatchBadge mapping={mapping} />
                     </TableCell>
                     <TableCell
                       className={cn(
-                        'sticky right-0 z-10 w-28 min-w-28 border-l border-border text-right transition-colors',
+                        'sticky right-0 z-10 w-28 min-w-28 border-l-hairline text-right transition-colors',
                         mapping.targetAccount ? 'bg-background' : 'bg-destructive/5',
                         'group-hover:bg-muted/50 group-focus-within:bg-muted/50',
                       )}
                     >
+                      {/* An answered row stays in view (rowsInView), so it says
+                          it is done here instead of leaving the table. */}
+                      {mapping.requiresVatTreatmentReview && mapping.vatTreatmentReviewed && (
+                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                          <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                          {t('vat_treatment_confirmed')}
+                        </span>
+                      )}
                       {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
                         /* Icon-only: the column header carries the label and
                            the tooltip repeats it on hover; the accessible name
@@ -649,15 +711,15 @@ export default function AccountMappingStep({
                             <Button
                               type="button"
                               variant="outline"
-                              size="icon-sm"
+                              size="icon"
                               aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
-                              onClick={() => onVatTreatmentChange(
+                              onClick={() => handleVatTreatmentChange(
                                 mapping.sourceAccount,
                                 mapping.defaultVatTreatment ?? null,
                                 mapping.defaultVatRate ?? null,
                               )}
                             >
-                              <Check className="h-4 w-4" />
+                              <CheckIcon className="h-4 w-4" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent side="left">{t('vat_treatment_confirm')}</TooltipContent>
@@ -667,9 +729,17 @@ export default function AccountMappingStep({
                   </TableRow>
                 ))}
                 {paginatedMappings.length === 0 && (
+                  // No hits: one muted line in the list, not a centred block.
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                      Inga konton matchar filtret
+                    <TableCell colSpan={7} className="py-3 text-[13px] text-muted-foreground">
+                      <span className="flex flex-wrap items-center gap-x-3">
+                        <span>{tStep('no_matches')}</span>
+                        {searchTerm && (
+                          <Button variant="link" onClick={() => handleSearchChange('')}>
+                            {tCommon('clear_search')}
+                          </Button>
+                        )}
+                      </span>
                     </TableCell>
                   </TableRow>
                 )}
@@ -681,27 +751,29 @@ export default function AccountMappingStep({
           {totalPages > 1 && (
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Visar {((currentPage - 1) * PAGE_SIZE) + 1}-{Math.min(currentPage * PAGE_SIZE, filteredMappings.length)} av {filteredMappings.length}
+                {tStep('showing_range', {
+                  from: ((currentPage - 1) * PAGE_SIZE) + 1,
+                  to: Math.min(currentPage * PAGE_SIZE, filteredMappings.length),
+                  total: filteredMappings.length,
+                })}
               </p>
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                   disabled={currentPage === 1}
                 >
-                  Föregående
+                  {tStep('previous')}
                 </Button>
                 <div className="flex items-center gap-1 px-2">
-                  <span className="text-sm">Sida {currentPage} av {totalPages}</span>
+                  <span className="text-sm">{tStep('page_of', { page: currentPage, total: totalPages })}</span>
                 </div>
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                   disabled={currentPage === totalPages}
                 >
-                  Nästa
+                  {tStep('next')}
                 </Button>
               </div>
             </div>
@@ -712,7 +784,7 @@ export default function AccountMappingStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          Tillbaka
+          {tCommon('back')}
         </Button>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           {stats.vatReview > 0 && stats.unmapped === 0 && (
@@ -720,17 +792,17 @@ export default function AccountMappingStep({
               variant="outline"
               onClick={onConfirmAllVatTreatments}
             >
-              <CheckCircle className="mr-2 h-4 w-4" />
+              <CheckCircleIcon className="h-4 w-4" />
               {t('vat_review_confirm_all', { count: stats.vatReview })}
             </Button>
           )}
           <Button onClick={onContinue} disabled={!canContinue}>
             {canContinue
-              ? 'Fortsätt till granskning'
+              ? tStep('continue_to_review')
               : stats.unmapped > 0
-                ? `${stats.unmapped} konton saknar mappning`
-                : `${stats.vatReview} momskoder återstår att bekräfta`}
-            <ArrowRight className="ml-2 h-4 w-4" />
+                ? tStep('unmapped_remaining', { count: stats.unmapped })
+                : tStep('vat_review_remaining', { count: stats.vatReview })}
+            <ArrowRightIcon className="h-4 w-4" />
           </Button>
         </div>
       </div>
@@ -748,12 +820,13 @@ export default function AccountMappingStep({
 function createdOptionsFor(
   mapping: AccountMapping,
   knownTargets: ReadonlySet<string>,
+  unnamed: (number: string) => string,
 ): Array<{ value: string; name: string }> {
   const options: Array<{ value: string; name: string }> = []
   if (!knownTargets.has(mapping.sourceAccount) && isValidBASRange(mapping.sourceAccount)) {
     options.push({
       value: mapping.sourceAccount,
-      name: mapping.sourceName || `Konto ${mapping.sourceAccount}`,
+      name: mapping.sourceName || unnamed(mapping.sourceAccount),
     })
   }
   if (
@@ -763,10 +836,159 @@ function createdOptionsFor(
   ) {
     options.push({
       value: mapping.targetAccount,
-      name: mapping.targetName || `Konto ${mapping.targetAccount}`,
+      name: mapping.targetName || unnamed(mapping.targetAccount),
     })
   }
   return options
+}
+
+/**
+ * One row's target-account picker. Its option list is mounted only while the
+ * list is on screen: open, or fading out after it closed.
+ *
+ * Radix keeps a closed Select's items mounted in a detached fragment (the
+ * trigger shows the selected item's text from there) and registers a native
+ * option per item in state. The list is the BAS catalogue plus the company
+ * chart, about 1,300 accounts, on each of the page's 50 rows: some 65,000
+ * mounted items nobody could see. A laptop spends seconds on that; on an
+ * iPhone, WebKit ran out of memory and reloaded the tab every time a Fortnox
+ * migration reached this step, back at the start of the wizard (crm#1118).
+ * Closed, the picker mounts the selected option alone, which is all its
+ * trigger shows. Typeahead on a focused but closed trigger therefore no longer
+ * jumps through the chart; it does as soon as the list is open.
+ */
+function TargetAccountSelect({
+  mapping,
+  knownTargets,
+  accountsByClass,
+  accountByNumber,
+  onMappingChange,
+}: {
+  mapping: AccountMapping
+  knownTargets: ReadonlySet<string>
+  accountsByClass: Record<string, BASAccount[]>
+  accountByNumber: ReadonlyMap<string, BASAccount>
+  onMappingChange: AccountMappingStepProps['onMappingChange']
+}) {
+  const tStep = useTranslations('chart_of_accounts.mapping_step')
+  const [open, setOpen] = useState(false)
+  // Set on open, cleared once the content has left the screen. Radix keeps a
+  // closing Select's content mounted for its fade-out, and the fade shows the
+  // list it opened with: keyed on `open` alone, the list would shrink to the
+  // selected row as it faded.
+  const [listMounted, setListMounted] = useState(false)
+
+  return (
+    <Select
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) setListMounted(true)
+      }}
+      value={mapping.targetAccount || 'none'}
+      onValueChange={(value) => {
+        const account = accountByNumber.get(value)
+        // A target outside the list is created on import under the file's
+        // name (the identity option) or the name the row already carries.
+        const createdName =
+          value === mapping.sourceAccount ? mapping.sourceName : mapping.targetName
+        onMappingChange(
+          mapping.sourceAccount,
+          value === 'none' ? '' : value,
+          account?.account_name ?? createdName ?? ''
+        )
+      }}
+    >
+      <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
+        <SelectValue placeholder={tStep('select_account')} />
+      </SelectTrigger>
+      <SelectContent
+        className="max-h-80"
+        // The fade-out ended: Radix unmounts the content in this same render,
+        // so the closed picker goes straight to its one option. Cleared any
+        // later, the detached fragment would mount the whole list again first.
+        onAnimationEnd={(event) => {
+          if (event.target === event.currentTarget && event.currentTarget.dataset.state === 'closed') {
+            setListMounted(false)
+          }
+        }}
+        // Called once the content has unmounted, faded or not: the fallback
+        // when no exit animation runs, which would leave the list mounted.
+        onCloseAutoFocus={() => setListMounted(false)}
+      >
+        <TargetAccountOptions
+          mapping={mapping}
+          knownTargets={knownTargets}
+          accountsByClass={accountsByClass}
+          accountByNumber={accountByNumber}
+          selectedOnly={!listMounted}
+        />
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * The options of one row's target picker: the whole list, or with
+ * `selectedOnly` just the selected option, rendered exactly as the list
+ * renders it so a closed trigger names it the same way.
+ */
+export function TargetAccountOptions({
+  mapping,
+  knownTargets,
+  accountsByClass,
+  accountByNumber,
+  selectedOnly,
+}: {
+  mapping: AccountMapping
+  knownTargets: ReadonlySet<string>
+  accountsByClass: Record<string, BASAccount[]>
+  accountByNumber: ReadonlyMap<string, BASAccount>
+  selectedOnly: boolean
+}) {
+  const t = useTranslations('chart_of_accounts')
+  const tStep = useTranslations('chart_of_accounts.mapping_step')
+  const created = createdOptionsFor(mapping, knownTargets, (number) => tStep('account_fallback', { number }))
+
+  const noneItem = <SelectItem value="none">{tStep('no_account_option')}</SelectItem>
+  const createdItem = (option: { value: string; name: string }) => (
+    <SelectItem key={option.value} value={option.value}>
+      <span className="font-mono mr-2">{option.value}</span>
+      {option.name}
+      <span className="ml-2 text-muted-foreground">
+        ({t('new_account_option')})
+      </span>
+    </SelectItem>
+  )
+  const accountItem = (account: BASAccount) => (
+    <SelectItem key={account.account_number} value={account.account_number}>
+      <span className="font-mono mr-2">{account.account_number}</span>
+      {account.account_name}
+    </SelectItem>
+  )
+
+  if (selectedOnly) {
+    if (!mapping.targetAccount) return noneItem
+    const createdOption = created.find((option) => option.value === mapping.targetAccount)
+    if (createdOption) return createdItem(createdOption)
+    const account = accountByNumber.get(mapping.targetAccount)
+    return account ? accountItem(account) : null
+  }
+
+  return (
+    <>
+      {noneItem}
+      {created.map(createdItem)}
+      {Object.entries(accountsByClass).map(([className, accounts]) => (
+        <div key={className}>
+          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
+            {className}
+          </div>
+          {accounts.map(accountItem)}
+        </div>
+      ))}
+    </>
+  )
 }
 
 function TruncatedSourceName({ sourceName }: { sourceName: string }) {
@@ -795,26 +1017,28 @@ function TruncatedSourceName({ sourceName }: { sourceName: string }) {
   )
 }
 
-function ConfidenceBadge({
-  confidence,
-  isOverride,
-}: {
-  confidence: number
-  matchType: string  // Keep for potential future use
-  isOverride: boolean
-}) {
-  if (isOverride) {
-    return <Badge variant="default">Manuell</Badge>
-  }
+/**
+ * The match kinds that get a chip, and which one. A recognised account and
+ * one kept from the file are what happens to most rows of a migration, so
+ * they read as muted text; a chip marks the rows where the target is another
+ * number, the mapper asks for a look, or the person chose.
+ */
+const MATCH_CHIP: Partial<Record<AccountMatchKind, 'default' | 'secondary' | 'outline'>> = {
+  redirected: 'secondary',
+  uncertain: 'outline',
+  manual: 'default',
+}
 
-  if (confidence >= 0.9) {
-    return <span className="text-xs text-muted-foreground">Exakt</span>
-  }
-
-  if (confidence >= 0.7) {
-    return <Badge variant="secondary">Trolig</Badge>
-  }
-
-  return <Badge variant="outline">Osäker</Badge>
+/** What the mapper did with the row (resolveAccountMatch); nothing on an unmapped row. */
+function AccountMatchBadge({ mapping }: { mapping: AccountMapping }) {
+  const tStep = useTranslations('chart_of_accounts.mapping_step')
+  const kind = resolveAccountMatch(mapping)
+  if (!kind) return null
+  const chip = MATCH_CHIP[kind]
+  return chip ? (
+    <Badge variant={chip}>{tStep(`match_${kind}`)}</Badge>
+  ) : (
+    <span className="whitespace-nowrap text-xs text-muted-foreground">{tStep(`match_${kind}`)}</span>
+  )
 }
 

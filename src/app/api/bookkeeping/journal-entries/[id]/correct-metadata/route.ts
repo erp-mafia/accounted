@@ -4,9 +4,6 @@ import { validateBody } from '@/lib/api/validate'
 import { CorrectEntryMetadataSchema } from '@/lib/api/schemas'
 import { correctJournalEntryMetadata } from '@/lib/core/bookkeeping/journal-entry-corrections'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * POST /api/bookkeeping/journal-entries/[id]/correct-metadata

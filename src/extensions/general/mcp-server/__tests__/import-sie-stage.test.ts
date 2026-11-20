@@ -48,6 +48,7 @@ const UNBALANCED_SIE = [
 const COVER_VALID_SIE = [
   { sourceAccount: '6110', sourceName: 'Kontorsmaterial', targetAccount: '6110', targetName: 'Kontorsmaterial', confidence: 1, matchType: 'exact', isOverride: false },
   { sourceAccount: '1930', sourceName: 'Företagskonto', targetAccount: '1930', targetName: 'Företagskonto', confidence: 1, matchType: 'exact', isOverride: false },
+  { sourceAccount: '2081', sourceName: 'Aktiekapital', targetAccount: '2081', targetName: 'Aktiekapital', confidence: 1, matchType: 'exact', isOverride: false },
 ]
 
 beforeEach(() => {
@@ -57,6 +58,7 @@ beforeEach(() => {
 describe('gnubok_import_sie: stage-time validation', () => {
   it('stages a valid file with a parsed, content-rich preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5566778899' }, error: null }) // company_settings: the file's own number
     enqueue({ data: { id: 'op-sie' }, error: null }) // pending_operations insert
 
     const result = (await importSie.execute(
@@ -75,8 +77,130 @@ describe('gnubok_import_sie: stage-time validation', () => {
     expect(result.preview.account_count).toBe(3)
     expect(result.preview.fiscal_year).toMatchObject({ start: '2024-01-01', end: '2024-12-31' })
     expect(result.preview.opening_balance).toMatchObject({ total: 0, is_balanced: true })
-    expect(result.preview.accounts_mapped).toMatchObject({ covered: 2, total: 2 })
+    // The IB is imported by default, so its 2081 counts (unmapped here).
+    expect(result.preview.accounts_mapped).toMatchObject({ covered: 3, total: 3 })
     expect(result.preview.would_skip_all_vouchers).toBe(false)
+  })
+
+  // Omitted flags take the job's defaults (import everything), as on the
+  // dashboard and v1. They used to stage Boolean(undefined) = false, so an
+  // omitted set imported nothing (refused after approval) or a first year
+  // without its IB (decision 5, 2026-10-13).
+  // crm#1684: the approver signed off on a mapping count; an account the
+  // agent's mappings move to another number now shows on the approval card.
+  it('names an account the mappings book on another number on the approval card', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5566778899' }, error: null })
+    enqueue({ data: { id: 'op-sie' }, error: null })
+    const remapped = COVER_VALID_SIE.map((m) => (m.sourceAccount === '6110' ? { ...m, targetAccount: '6100', matchType: 'manual', isOverride: true } : m))
+
+    const result = (await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: remapped },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview.remapped_accounts).toEqual([{ source: '6110', target: '6100' }])
+    expect(result.preview.compliance_warning).toContain('6110 → 6100')
+    const insert = findCall('pending_operations', 'insert')?.[0] as { preview_data: Record<string, unknown> }
+    expect(insert.preview_data.compliance_warning).toContain('6110 → 6100')
+  })
+
+  it('adds no remap note when every account keeps its own number', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5566778899' }, error: null })
+    enqueue({ data: { id: 'op-sie' }, error: null })
+    const result = (await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+    expect(result.preview).not.toHaveProperty('remapped_accounts')
+    expect(result.preview).not.toHaveProperty('compliance_warning')
+  })
+
+  it('stages the job\'s defaults for omitted flags, and explicit ones as given', async () => {
+    const omitted = createQueuedMockSupabase()
+    omitted.enqueue({ data: { org_number: '5566778899' }, error: null })
+    omitted.enqueue({ data: { id: 'op-sie' }, error: null })
+    const staged = (await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE },
+      'company-1',
+      'user-1',
+      omitted.supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+    const params = (omitted.findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }).params
+    expect(params).toMatchObject({ create_fiscal_period: true, import_opening_balances: true, import_transactions: true, update_account_names: true })
+    expect(staged.preview).toMatchObject({ create_fiscal_period: true, import_opening_balances: true, import_transactions: true })
+
+    const explicit = createQueuedMockSupabase()
+    explicit.enqueue({ data: { org_number: '5566778899' }, error: null })
+    explicit.enqueue({ data: { id: 'op-sie-2' }, error: null })
+    await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE, import_opening_balances: false },
+      'company-1',
+      'user-1',
+      explicit.supabase as never,
+      { type: 'api_key' },
+    )
+    expect((explicit.findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }).params).toMatchObject({
+      import_opening_balances: false,
+      import_transactions: true,
+    })
+  })
+
+  // crm#1294: with import_opening_balances=false the approval card still said
+  // the import books opening balances, and warned about an IB adjustment entry
+  // the job never books.
+  it('describes an import without its IB as one: no IB in will, no IB warnings', async () => {
+    const unbalancedIb = VALID_SIE.replace('#IB 0 2081 -50000.00', '#IB 0 2081 -49000.00')
+    const stageWith = async (flags: Record<string, unknown>) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { org_number: '5566778899' }, error: null })
+      enqueue({ data: { id: 'op-sie' }, error: null })
+      return (await importSie.execute(
+        { file_content: unbalancedIb, filename: 'bok.se', mappings: COVER_VALID_SIE, ...flags },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      )) as { preview: { will: string; warnings: string[] } }
+    }
+
+    const withIb = await stageWith({})
+    expect(withIb.preview.will).toBe('create fiscal period + opening balances + journal entries from the parsed SIE')
+    expect(withIb.preview.warnings.join(' ')).toContain('Ingående balanser balanserar inte')
+
+    const withoutIb = await stageWith({ import_opening_balances: false })
+    expect(withoutIb.preview.will).toBe(
+      'create fiscal period + journal entries from the parsed SIE; the file\'s opening balances are not imported (import_opening_balances=false)',
+    )
+    expect(withoutIb.preview.warnings.join(' ')).not.toMatch(/Ingående balanser|ingående balanser/)
+  })
+
+  it('refuses at staging what the job would refuse after approval: nothing to import', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+    await expect(
+      importSie.execute(
+        {
+          file_content: VALID_SIE,
+          filename: 'bok.se',
+          mappings: COVER_VALID_SIE,
+          import_opening_balances: false,
+          import_transactions: false,
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      ),
+    ).rejects.toThrow(/Välj vad som ska importeras/)
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
   it('rejects an unbalanced file at stage time (no blind staging)', async () => {
@@ -106,14 +230,14 @@ describe('gnubok_import_sie: stage-time validation', () => {
     ).rejects.toThrow(/file_content/)
   })
 
-  // Lookma AB regression (support case 2026-05-28): staging with mappings=[]
+  // Regression (support case 2026-05-28): staging with mappings=[]
   // committed a 0-entry 'completed' sie_imports row that then blocked retry.
   // The fix refuses to stage when the mappings can't cover the file.
   it('rejects when mappings is empty and the file has vouchers', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
       importSie.execute(
-        { file_content: VALID_SIE, filename: 'lookma.se', mappings: [] },
+        { file_content: VALID_SIE, filename: 'empty-mappings.se', mappings: [] },
         'company-1',
         'user-1',
         supabase as never,
@@ -138,10 +262,11 @@ describe('gnubok_import_sie: stage-time validation', () => {
     ).rejects.toThrow(/täcker inga konton/i)
   })
 
-  it('rejects when targetAccount is null on every mapping (Lookma shape)', async () => {
+  it('rejects when targetAccount is null on every mapping (support-case shape)', async () => {
     const { supabase } = createQueuedMockSupabase()
-    // The original Lookma agent sent #KONTO rows formatted as mapping objects
-    // but with no targetAccount resolved. Coverage check ignores those.
+    // The original agent sent #KONTO rows formatted as mapping objects
+    // but with no targetAccount resolved. The job's mapping schema refuses
+    // them at staging, as submitSIEJob would after approval.
     const halfBakedMappings = [
       { sourceAccount: '6110', sourceName: 'Kontorsmaterial', targetAccount: null, targetName: '', confidence: 0, matchType: 'manual', isOverride: false },
       { sourceAccount: '1930', sourceName: 'Företagskonto', targetAccount: null, targetName: '', confidence: 0, matchType: 'manual', isOverride: false },
@@ -154,37 +279,42 @@ describe('gnubok_import_sie: stage-time validation', () => {
         supabase as never,
         { type: 'api_key' },
       ),
-    ).rejects.toThrow(/täcker inga konton/i)
+    ).rejects.toThrow(/targetAccount/)
   })
 
-  it('stages when partial overlap exists (1 of 2 accounts mapped)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-sie-partial' }, error: null })
-
+  // 2026-11-11: an agent sent 14 of the 47 mappings a file needed. It was
+  // staged (the card showed "accounts_mapped 14 of 47"), approved, and the
+  // job skipped 410 of 411 vouchers and finished as completed.
+  it('refuses a list that leaves out accounts with amounts, naming them, before anything is staged', async () => {
+    const { supabase } = createQueuedMockSupabase()
     const partial = [
       { sourceAccount: '6110', sourceName: 'Kontorsmaterial', targetAccount: '6110', targetName: 'Kontorsmaterial', confidence: 1, matchType: 'exact', isOverride: false },
     ]
-    const result = (await importSie.execute(
+    const staging = importSie.execute(
       { file_content: VALID_SIE, filename: 'bok.se', mappings: partial },
       'company-1',
       'user-1',
       supabase as never,
       { type: 'api_key' },
-    )) as { staged: boolean; preview: Record<string, unknown> }
-
-    expect(result.staged).toBe(true)
-    expect(result.preview.accounts_mapped).toMatchObject({ covered: 1, total: 2 })
-    expect(result.preview.would_skip_all_vouchers).toBe(false)
+    )
+    await expect(staging).rejects.toMatchObject({
+      code: 'SIE_IMPORT_UNMAPPED_ACCOUNTS',
+      details: { accounts_without_target_count: 2 },
+    })
+    await expect(staging).rejects.toThrow(/2 konton med belopp i SIE-filen saknar målkonto: 1930 Företagskonto \(1 verifikation, till exempel A1; ingående balans .*\), 2081 Aktiekapital/)
   })
 })
 
 describe('gnubok_import_sie: update_account_names staging', () => {
   // Captures the pending_operations insert payload so the staged params can
   // be asserted (createQueuedMockSupabase cannot inspect arguments).
-  function buildCapturingSupabase() {
+  function buildCapturingSupabase(companyOrg = '5566778899') {
     const staged: Array<Record<string, unknown>> = []
     const supabase = {
       from: (table: string) => {
+        if (table === 'company_settings') {
+          return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { org_number: companyOrg }, error: null }) }) }) }
+        }
         if (table !== 'pending_operations') throw new Error(`Unexpected table: ${table}`)
         return {
           insert: (row: Record<string, unknown>) => {
@@ -233,6 +363,44 @@ describe('gnubok_import_sie: update_account_names staging', () => {
     )
 
     expect((staged[0].params as Record<string, unknown>).update_account_names).toBe(false)
+  })
+
+  // #63: submitSIEJob drops the unused definitions' mappings at approval;
+  // the approver sees how many are left out.
+  it('stages only_used_accounts when asked and shows how many mappings it leaves out', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+    const unused = { sourceAccount: '2440', sourceName: 'Leverantörsskulder', targetAccount: '2440', targetName: 'Leverantörsskulder', confidence: 1, matchType: 'exact', isOverride: false }
+
+    const result = (await importSie.execute(
+      {
+        file_content: VALID_SIE.replace('#KONTO 6110', '#KONTO 2440 "Leverantörsskulder"\n#KONTO 6110'),
+        filename: 'bok.se',
+        mappings: [...COVER_VALID_SIE, unused],
+        only_used_accounts: true,
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+
+    expect((staged[0].params as Record<string, unknown>).only_used_accounts).toBe(true)
+    expect(result.preview.only_used_accounts).toEqual({ mappings_kept: 3, mappings_left_out: 1 })
+  })
+
+  it('leaves only_used_accounts out of the staged params by default', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+
+    const result = (await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+
+    expect(staged[0].params as Record<string, unknown>).not.toHaveProperty('only_used_accounts')
+    expect(result.preview).not.toHaveProperty('only_used_accounts')
   })
 
   it('passes opening_balance_series through to the staged params (issue #1882)', async () => {
@@ -286,5 +454,57 @@ describe('gnubok_import_sie: update_account_names staging', () => {
     )
 
     expect((staged[0].params as Record<string, unknown>).opening_balance_series).toBeUndefined()
+  })
+})
+
+describe('gnubok_import_sie: the file\'s #ORGNR against the company', () => {
+  function buildCapturingSupabase(companyOrg: string) {
+    const staged: Array<Record<string, unknown>> = []
+    const supabase = {
+      from: (table: string) => table === 'company_settings'
+        ? { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { org_number: companyOrg }, error: null }) }) }) }
+        : { insert: (row: Record<string, unknown>) => {
+            staged.push(row)
+            return { select: () => ({ single: () => Promise.resolve({ data: { id: 'op-sie' }, error: null }) }) }
+          } },
+    }
+    return { supabase, staged }
+  }
+  const stage = (supabase: unknown, extra: Record<string, unknown> = {}) => importSie.execute(
+    { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE, ...extra },
+    'company-1', 'user-1', supabase as never, { type: 'api_key' },
+  )
+
+  it('refuses to stage another organisation\'s file without a confirmation', async () => {
+    const { supabase, staged } = buildCapturingSupabase('5599887766')
+
+    await expect(stage(supabase)).rejects.toMatchObject({ code: 'SIE_IMPORT_ORG_NUMBER_MISMATCH' })
+    expect(staged).toHaveLength(0)
+  })
+
+  it('stages it on confirm_org_number_mismatch=true and shows the approver both numbers', async () => {
+    const { supabase, staged } = buildCapturingSupabase('5599887766')
+
+    const result = (await stage(supabase, { confirm_org_number_mismatch: true })) as { preview: Record<string, unknown> }
+
+    expect((staged[0].params as Record<string, unknown>).confirm_org_number_mismatch).toBe(true)
+    expect(result.preview).toMatchObject({ org_number: '5566778899', org_number_mismatch: true, company_org_number: '5599887766' })
+  })
+
+  it('stages the company\'s own number in its 12-digit form without a confirmation', async () => {
+    const { supabase, staged } = buildCapturingSupabase('165566778899')
+
+    const result = (await stage(supabase)) as { preview: Record<string, unknown> }
+
+    expect(staged[0].params as Record<string, unknown>).not.toHaveProperty('confirm_org_number_mismatch')
+    expect(result.preview.org_number_mismatch).toBe(false)
+  })
+})
+
+describe('gnubok_import_sie: voucher series guidance', () => {
+  it('says the override applies only when the source voucher has no series', () => {
+    const schema = importSie.inputSchema as { properties: { voucher_series: { description: string } } }
+    expect(schema.properties.voucher_series.description).toContain('without one in the file')
+    expect(schema.properties.voucher_series.description).toContain('with a series keep it')
   })
 })

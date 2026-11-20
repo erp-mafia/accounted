@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
 
@@ -63,7 +64,7 @@ function txSek(tx: {
   }
   const rate = tx.exchange_rate == null ? null : Number(tx.exchange_rate)
   if (rate == null || !Number.isFinite(rate) || rate <= 0) return null
-  const sek = Number(tx.amount) * rate
+  const sek = sekOfForeign(Number(tx.amount), rate)
   return Number.isFinite(sek) ? Math.abs(sek) : null
 }
 
@@ -188,7 +189,7 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
 
     if (captured.items.length === 0) {
       return [
-        'Användaren öppnade hjälpfönstret från en markering i Dokumentinkorgen, men inga underlag kunde läsas.',
+        'Användaren öppnade hjälpfönstret från en markering under Underlag, men inga underlag kunde läsas.',
         'Be användaren markera underlagen igen och försök på nytt.',
       ].join(' ')
     }
@@ -197,7 +198,7 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
     const notMatched = captured.items.filter((i) => i.status === 'not_matched')
     const alreadyBooked = captured.items.filter((i) => i.status === 'already_booked')
 
-    lines.push(`Användaren har markerat ${captured.items.length} underlag i Dokumentinkorgen och vill bulkbokföra dem.`)
+    lines.push(`Användaren har markerat ${captured.items.length} underlag under Underlag och vill bulkbokföra dem.`)
     lines.push('')
     lines.push(
       `MARKERADE UNDERLAG (${bookable.length} bokförbara, ${notMatched.length} saknar matchad transaktion, ${alreadyBooked.length} redan bokförda):`,
@@ -227,12 +228,12 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
       lines.push('- VÄXELKURS SAKNAS på minst en bankrad ovan (markerad "SEK-belopp saknas"). Det beloppet är i utländsk valuta, INTE i SEK: behandla det aldrig som ett SEK-belopp. Bulkbokför inte den raden på egen hand: säg till användaren att transaktionens växelkurs/SEK-belopp behöver fyllas i först, och bokför de övriga raderna som vanligt.')
     }
     lines.push('- GRUPPERA de bokförbara underlagen efter leverantör/typ. Samma slags kostnad → samma kategori + momsbehandling. För varje homogen grupp anropar du gnubok_bulk_book_inbox_items med gruppens item_ids, en kategori (enum) och vat_treatment.')
-    lines.push('- MOMS: en utländsk tjänst (t.ex. USD/EUR-prenumeration som Cursor/Anysphere där säljaren INTE debiterat svensk moms) är omvänd skattskyldighet → vat_treatment="reverse_charge". En svensk faktura med debiterad moms → standard_25 (eller den sats kvittot visar). Gissa aldrig: utgå från valuta + om underlaget visar moms.')
+    lines.push('- MOMS: säljarens land och om säljaren har debiterat moms avgör, aldrig valutan (en svensk säljare kan fakturera i EUR med 25 % moms, en utländsk i SEK utan moms). En tjänst från en säljare i ett annat land som INTE har debiterat moms på underlaget är omvänd skattskyldighet → vat_treatment="reverse_charge"; verktyget läser rutan på varje underlag (21 EU, 22 utanför EU, 20 varor från EU) och hoppar över underlag där landet inte går att läsa eller där säljaren har debiterat moms. En svensk säljare med debiterad moms → standard_25 (eller den sats underlaget visar). Gissa aldrig: läs säljarens land (VAT-nummer, adress) och momsen på underlaget, med gnubok_get_inbox_item när du är osäker.')
     lines.push('- KOLLA HUR MOTPARTEN BOKFÖRTS FÖRUT med gnubok_query_journal({ text: "<leverantör>", limit: 5 }) innan du väljer kategori. Följ ett tydligt tidigare mönster om inte underlaget motsäger det.')
-    lines.push('- HOPPA ÖVER ej matchade underlag: be användaren matcha dem mot en banktransaktion först ("Matcha mot transaktion" i Dokumentinkorgen), så kan de bulkbokföras i nästa runda. Bokför ALDRIG ett underlag utan matchad transaktion via det här flödet.')
-    lines.push('- Förklara kort på svenska VARFÖR du valde kategori + momsbehandling: använd kategori-namn (t.ex. "Programvara/IT-tjänster"), aldrig ett BAS-kontonummer. Godkännandekortet visar antal, konto och moms; upprepa inte de siffrorna och säg inte att operationen är "stagead".')
+    lines.push('- HOPPA ÖVER ej matchade underlag: be användaren matcha dem mot en banktransaktion först ("Matcha mot transaktion" under Underlag), så kan de bulkbokföras i nästa runda. Bokför ALDRIG ett underlag utan matchad transaktion via det här flödet.')
+    lines.push('- Förklara kort VARFÖR du valde kategori + momsbehandling: använd kategori-namn (t.ex. "Programvara/IT-tjänster"), aldrig ett BAS-kontonummer. Godkännandekortet visar antal, konto och moms; upprepa inte de siffrorna och säg inte att operationen är "stagead".')
     lines.push('')
-    lines.push('Svara på svenska och var direkt.')
+    lines.push('Var direkt.')
     return lines.join('\n')
   },
 })

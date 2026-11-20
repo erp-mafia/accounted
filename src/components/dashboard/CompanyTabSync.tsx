@@ -262,7 +262,7 @@ export default function CompanyTabSync() {
           blocking, its two buttons are the only exits (WL-09). */}
       <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" aria-hidden="true" />
       <div className="relative w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-[var(--shadow-lg)]">
-        <h2 id="company-tab-guard-title" className="font-display text-lg leading-6">
+        <h2 id="company-tab-guard-title" className="text-lg leading-6">
           {t('title')}
         </h2>
         <p className="mt-2 text-sm text-muted-foreground">

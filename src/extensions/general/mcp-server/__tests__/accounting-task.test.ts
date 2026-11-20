@@ -77,6 +77,21 @@ describe('get_task', () => {
     await expect(getAccountingTask(input, 'company', db() as never)).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
     expect(loadSkillCatalog).not.toHaveBeenCalled()
   })
+  // 2026-10 session autopsy: "Unrecognized key: company_id" 15 times in 30
+  // days. The prompts say to pass company_id on every call, and agents put it
+  // in scope as well as beside kind, where the dispatcher reads it.
+  it('accepts a company_id in scope that names the company the call runs for', async () => {
+    const task = await getAccountingTask({ kind: 'bookkeep', scope: { company_id: 'COMPANY-A', date_from: '2026-01-01' } }, 'company-a', db() as never)
+    expect(task.company_id).toBe('company-a')
+    expect(task.scope).toEqual({ date_from: '2026-01-01' })
+  })
+  it('refuses a company_id in scope that names another company, instead of picking one', async () => {
+    await expect(getAccountingTask({ kind: 'bookkeep', scope: { company_id: 'company-b' } }, 'company-a', db() as never)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: expect.stringContaining('Send company_id next to kind, not inside scope'),
+    })
+    expect(loadSkillCatalog).not.toHaveBeenCalled()
+  })
   it('names the company first, so the AI says which books it works in', async () => {
     const task = await getAccountingTask({ kind: 'bookkeep' }, 'company-a', db({ companies: { name: 'Arcim Technology AB' } }) as never)
     expect(task.goal).toMatch(/^For Arcim Technology AB: /)

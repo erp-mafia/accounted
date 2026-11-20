@@ -24,11 +24,16 @@
  *       script refuses a production base URL.
  *   npx tsx scripts/peppol/qvalia-probe.ts webhook
  *       Shows the partner webhook subscription (URL, event types, auth type).
- *   npx tsx scripts/peppol/qvalia-probe.ts webhook-configure https://host/api/webhooks/peppol/qvalia
+ *   npx tsx scripts/peppol/qvalia-probe.ts webhook-configure https://host/api/webhooks/peppol/qvalia [--production]
  *       Creates or updates the partner webhook subscription for all three
  *       event types and attaches QVALIA_WEBHOOK_SECRET as the api_key header
  *       (QVALIA_WEBHOOK_HEADER) that our route verifies. Requires the secret
- *       in the environment; prints the webhook id.
+ *       in the environment; prints the webhook id. Against the production
+ *       base URL it also needs --production: Qvalia keeps one subscription
+ *       per account, and Arcim's production account belongs to Accounted
+ *       Connect (its scripts/qvalia-webhook.ts), so pointing it here would
+ *       take every event away from Connect. --production is for an
+ *       installation on its own Qvalia account.
  *
  * Nothing here touches Accounted's database. The API key is never printed.
  */
@@ -136,6 +141,13 @@ async function main(): Promise<void> {
     case 'webhook-configure': {
       if (!argument || !/^https:\/\//.test(argument)) {
         throw new Error('webhook-configure expects an https URL, e.g. https://app.accounted.se/api/webhooks/peppol/qvalia')
+      }
+      if (config!.baseUrl === QVALIA_PRODUCTION_BASE_URL && !process.argv.includes('--production')) {
+        throw new Error(
+          'Refusing to move the production webhook subscription without --production. '
+          + 'Qvalia keeps one subscription per account, and Arcim\'s belongs to Accounted Connect '
+          + '(scripts/qvalia-webhook.ts there). Pass --production only for your own Qvalia account.',
+        )
       }
       if (!config!.webhookSecret) throw new Error('Set QVALIA_WEBHOOK_SECRET first (openssl rand -hex 32)')
       const configured = await show(

@@ -5,10 +5,14 @@ import { useTranslations } from 'next-intl'
 import { HelpLink } from '@/components/ui/info-tooltip'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { EmptyState } from '@/components/ui/empty-state'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { Button } from '@/components/ui/button'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { Search, FileDown, ExternalLink, ChevronDown } from 'lucide-react'
+import {
+  ArrowTopRightOnSquareIcon,
+  ChevronDownIcon,
+  DocumentArrowDownIcon,
+} from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { SupportLink } from '@/components/ui/support-link'
 
@@ -190,9 +194,13 @@ const glossaryTerms: GlossaryTerm[] = [
   },
   {
     term: 'Eget utlägg',
-    simpleTerm: 'Betalat privat för bolagets räkning',
+    simpleTerm: 'Kvitto du betalat med egna pengar',
+    // The path names the buttons as they read today (inkorg.action_expense,
+    // inbox_workspace.payer_*, supplier_invoices.register_invoice, nav.*):
+    // __tests__/help-utlagg-path.test.ts pins each one, so a renamed button
+    // fails a test instead of leaving a dead instruction here (PH 201).
     definition:
-      'När du som ägare lägger ut pengar privat för en kostnad som bolaget ska stå för. Registrera under Leverantörsfakturor → Ny, kryssa i "Jag har betalat detta privat". Verifikatet bokförs då direkt mot skuld till ägare (2893 för AB, 2018 för EF) istället för via leverantörsskuld. När bolaget senare ersätter dig kategoriserar du den utgående banktransaktionen mot samma konto.',
+      'När du betalar en kostnad för företaget med egna pengar, till exempel med ditt privata kort. Ladda upp kvittot i Inkorgen och öppna det. Under Vem betalade? väljer du Privat, som utlägg och sedan Jag, privat (eller En anställd). Är det en faktura du har betalat privat: Inköp → Leverantörsfakturor → Registrera faktura, och välj Jag, privat under Vem betalade?. I ett aktiebolag bokförs kostnaden och momsen mot företagets skuld till dig (2893), och utbetalningen väntar i Att göra. I en enskild firma är det en egen insättning (2018): du och firman är samma person, så det finns inget att betala ut. När företaget betalar tillbaka väljer du Matcha mot utlägg på den utgående transaktionen. Sidan Utlägg under Inköp visas när det första utlägget finns.',
     category: 'bokföring',
     relatedTerms: ['Aktiebolag', 'Enskild firma'],
   },
@@ -215,7 +223,7 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
   const t = useTranslations('help')
 
   return (
-    <div className="border-b border-border">
+    <div className="border-b-hairline">
       <button
         type="button"
         onClick={onToggle}
@@ -228,7 +236,7 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
             <span className="truncate text-[13px] text-muted-foreground">{term.simpleTerm}</span>
           )}
         </span>
-        <ChevronDown
+        <ChevronDownIcon
           className={cn(
             'h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150',
             isExpanded && 'rotate-180',
@@ -252,7 +260,7 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
           {term.skatteverketUrl && (
             <HelpLink href={term.skatteverketUrl}>
               {t('read_more_skv')}
-              <ExternalLink className="h-3 w-3" />
+              <ArrowTopRightOnSquareIcon className="h-3 w-3" />
             </HelpLink>
           )}
         </div>
@@ -264,10 +272,11 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
 // Quiet link row for the resources below the glossary: title with the muted
 // description on the same line, hairline between rows.
 const LINK_ROW_CLASS =
-  'flex items-baseline gap-3 border-b border-border px-1 py-3 text-sm text-foreground transition-colors duration-150 hover:bg-secondary/35 hover:text-foreground hover:no-underline'
+  'flex items-baseline gap-3 border-b-hairline px-1 py-3 text-sm text-foreground transition-colors duration-150 hover:bg-secondary/35 hover:text-foreground hover:no-underline'
 
 export default function HelpPage() {
   const t = useTranslations('help')
+  const tCommon = useTranslations('common')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [expandedTerms, setExpandedTerms] = useState<Set<string>>(new Set())
@@ -322,14 +331,8 @@ export default function HelpPage() {
         }
       />
 
-      {/* Toolbar: search + category filter on one row */}
-      <div className="flex flex-wrap items-center gap-3">
-        <ToolbarSearch
-          placeholder={t('search_placeholder')}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          aria-label={t('search_placeholder')}
-        />
+      {/* Toolbar: the category segments first, search at the right end (V7 list toolbars) */}
+      <div className="flex flex-wrap items-center gap-2">
         <div className="max-w-full overflow-x-auto">
           <SegmentedControl
             value={selectedCategory ?? 'all'}
@@ -338,16 +341,27 @@ export default function HelpPage() {
             aria-label={t('category_filter_label')}
           />
         </div>
+        <ToolbarSearch
+          placeholder={t('search_placeholder')}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label={t('search_placeholder')}
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
+        />
       </div>
 
       {/* Terms list */}
       <div>
         {filteredTerms.length === 0 ? (
-          <EmptyState
-            icon={Search}
-            title={t('no_results_title')}
-            description={<span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>}
-          />
+          // No hits: one muted line in the list, not a block.
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>
+            {searchQuery && (
+              <Button variant="link" onClick={() => setSearchQuery('')}>
+                {tCommon('clear_search')}
+              </Button>
+            )}
+          </div>
         ) : (
           <div className="stagger-enter">
             {filteredTerms.map((term) => (
@@ -364,19 +378,19 @@ export default function HelpPage() {
 
       {/* Document templates */}
       <section>
-        <h2 className="flex items-center gap-2 px-1 pb-2 text-sm font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="flex items-center gap-2 px-1 pb-2 text-sm font-medium text-muted-foreground">
           {t('templates_title')}
           <HelpPopover className="shrink-0">{t('templates_subtitle')}</HelpPopover>
         </h2>
         <a href="/docs/arkivplan-mall.md" download className={LINK_ROW_CLASS}>
-          <FileDown className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <DocumentArrowDownIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Arkivplan</span>
           <span className="truncate text-xs text-muted-foreground">
             Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
           </span>
         </a>
         <a href="/docs/systemdokumentation-mall.md" download className={LINK_ROW_CLASS}>
-          <FileDown className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <DocumentArrowDownIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Systemdokumentation</span>
           <span className="truncate text-xs text-muted-foreground">
             Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
@@ -386,19 +400,19 @@ export default function HelpPage() {
 
       {/* External resources */}
       <section>
-        <h2 className="px-1 pb-2 text-sm font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="px-1 pb-2 text-sm font-medium text-muted-foreground">
           {t('external_resources_title')}
         </h2>
         <HelpLink
           href="https://www.skatteverket.se/foretag/foretagarguiden.4.361dc8c15312eff6fd1f87f.html"
           className={LINK_ROW_CLASS}
         >
-          <ExternalLink className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Skatteverkets företagarguide</span>
           <span className="truncate text-xs text-muted-foreground">Omfattande guide för nya företagare</span>
         </HelpLink>
         <HelpLink href="https://www.verksamt.se/" className={LINK_ROW_CLASS}>
-          <ExternalLink className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Verksamt.se</span>
           <span className="truncate text-xs text-muted-foreground">Starta och driva företag i Sverige</span>
         </HelpLink>

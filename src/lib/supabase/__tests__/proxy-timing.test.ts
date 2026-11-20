@@ -4,6 +4,7 @@ import {
   createProxyTimings,
   formatProxyServerTiming,
   proxyRouteTemplate,
+  shouldLogProxyCompletion,
   timed,
 } from '../proxy-timing'
 
@@ -79,5 +80,25 @@ describe('timed', () => {
       }),
     ).rejects.toThrow('boom')
     expect(timing.authMs).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('shouldLogProxyCompletion', () => {
+  it('always logs pages, RSC and prefetches, signed in or not', () => {
+    expect(shouldLogProxyCompletion('page', [])).toBe(true)
+    expect(shouldLogProxyCompletion('rsc', [])).toBe(true)
+    expect(shouldLogProxyCompletion('prefetch', [])).toBe(true)
+  })
+
+  it('logs an /api call that carries the session cookie or one of its chunks', () => {
+    expect(shouldLogProxyCompletion('api', ['sb-abcdef-auth-token'])).toBe(true)
+    expect(shouldLogProxyCompletion('api', ['other', 'sb-abcdef-auth-token.0'])).toBe(true)
+  })
+
+  it('skips a sessionless /api call (Bearer, cron, webhook, OAuth token)', () => {
+    expect(shouldLogProxyCompletion('api', [])).toBe(false)
+    expect(shouldLogProxyCompletion('api', ['gnubok-company-id', 'NEXT_LOCALE'])).toBe(false)
+    // The PKCE verifier alone is not a session.
+    expect(shouldLogProxyCompletion('api', ['sb-abcdef-auth-token-code-verifier'])).toBe(false)
   })
 })

@@ -10,7 +10,7 @@ function buildXlsx(rows: (string | number)[][]): ArrayBuffer {
 }
 
 describe('parseArticlesFile: grön teknik installation types', () => {
-  it('keeps an installation type on goods (grön teknik covers material) and still drops ROT/RUT on goods', () => {
+  it('keeps an installation type on goods (grön teknik covers material) and still drops ROT/RUT on goods', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris', 'Typ', 'Husarbete'],
       ['Solpanel 430 W', '2400', 'vara', 'installation_solceller'],
@@ -19,7 +19,7 @@ describe('parseArticlesFile: grön teknik installation types', () => {
       ['Kakel', '400', 'vara', 'BYGG'],
     ])
 
-    const result = parseArticlesFile(buffer, 'artiklar.xlsx')
+    const result = await parseArticlesFile(buffer, 'artiklar.xlsx')
 
     expect(result.rows.map((r) => [r.name, r.type, r.housework_type])).toEqual([
       ['Solpanel 430 W', 'vara', 'INSTALLATION_SOLCELLER'],

@@ -3,7 +3,7 @@
  * (toToolError → getStructuredError): a stable code and an explicit
  * retryable, not UNKNOWN_ERROR.
  *
- * Production, 2026-09-23..28: MCP calls from dozens of companies came back as
+ * Seen 2026-09-23..28: MCP calls from dozens of companies came back as
  * UNKNOWN_ERROR, "Något gick fel. Försök igen.", for failures the agent could
  * only fix by changing its call (an ambiguous voucher ref, a closed period, an
  * unknown group_by, a missing document id). "Try again" was the wrong advice
@@ -103,7 +103,7 @@ describe('NOT_FOUND and CONFLICT: pending operations', () => {
 
   it('reject: an operation already rejected is CONFLICT (REST answers 409), not retryable', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: OP_ID, status: 'rejected', operation_type: 'create_voucher', risk_level: 'medium' } })
+    enqueue({ data: [{ id: OP_ID, status: 'rejected', operation_type: 'create_voucher', risk_level: 'medium' }] })
     expect(await refusal('gnubok_reject_pending_operation', { operation_id: OP_ID }, supabase)).toMatchObject({
       code: 'CONFLICT',
       retryable: false,
@@ -113,7 +113,7 @@ describe('NOT_FOUND and CONFLICT: pending operations', () => {
 
   it('reject: losing the claim to a parallel approval is CONFLICT as well', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: OP_ID, status: 'pending', operation_type: 'create_voucher', risk_level: 'medium' } })
+    enqueue({ data: [{ id: OP_ID, status: 'pending', operation_type: 'create_voucher', risk_level: 'medium' }] })
     enqueue({ data: [] }) // CAS update: 0 rows
     expect((await refusal('gnubok_reject_pending_operation', { operation_id: OP_ID }, supabase)).code).toBe('CONFLICT')
   })
@@ -280,10 +280,13 @@ describe('the server\'s own parse is not the caller\'s fault', () => {
 })
 
 describe('registry codes the refusal already had', () => {
+  // gnubok_unlock_period is generated from fiscal-periods.unlock, whose input takes a uuid.
+  const FP = 'a8f1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+
   it('unlock_period: a closed period is PERIOD_UNLOCK_CLOSED', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'p1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: true, locked_at: '2026-02-01T00:00:00Z' } })
-    expect(await refusal('gnubok_unlock_period', { fiscal_period_id: 'p1' }, supabase)).toMatchObject({
+    enqueue({ data: { id: FP, name: '2025', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: true, locked_at: '2026-02-01T00:00:00Z' } })
+    expect(await refusal('gnubok_unlock_period', { fiscal_period_id: FP }, supabase)).toMatchObject({
       code: 'PERIOD_UNLOCK_CLOSED',
       retryable: false,
       message_sv: getErrorEntry('PERIOD_UNLOCK_CLOSED')!.message_sv,
@@ -292,28 +295,25 @@ describe('registry codes the refusal already had', () => {
 
   it('unlock_period: a period that is not locked is PERIOD_UNLOCK_NOT_LOCKED', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'p1', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null } })
-    expect((await refusal('gnubok_unlock_period', { fiscal_period_id: 'p1' }, supabase)).code).toBe('PERIOD_UNLOCK_NOT_LOCKED')
+    enqueue({ data: { id: FP, name: '2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null } })
+    expect((await refusal('gnubok_unlock_period', { fiscal_period_id: FP }, supabase)).code).toBe('PERIOD_UNLOCK_NOT_LOCKED')
   })
 
-  it('bulk_book_transactions: unbalanced new_entry lines are JOURNAL_ENTRY_NOT_BALANCED with both totals', async () => {
+  it('bulk_book_transactions: unbalanced manual_lines are BULK_BOOK_UNBALANCED with both totals, before any query', async () => {
     const from = vi.fn()
     const error = await refusal(
       'gnubok_bulk_book_transactions',
       {
-        tx_ids: ['tx-1'],
-        new_entry: {
-          description: 'Skatteverket',
-          lines: [
-            { account_number: '2710', debit_amount: 3001.41, credit_amount: 0, currency: 'SEK' },
-            { account_number: '2731', debit_amount: 0, credit_amount: 590.28, currency: 'SEK' },
-          ],
-        },
+        tx_ids: ['11111111-1111-4111-8111-111111111111'],
+        entry_description: 'Skatteverket',
+        manual_lines: [
+          { account_number: '2710', debit_amount: 3001.41, credit_amount: 0, currency: 'SEK' },
+          { account_number: '2731', debit_amount: 0, credit_amount: 590.28, currency: 'SEK' },
+        ],
       },
       { from },
     )
-    expect(error).toMatchObject({ code: 'JOURNAL_ENTRY_NOT_BALANCED', retryable: false })
-    expect(error.message_en).toBe('new_entry.lines must balance: debits=3001.41 credits=590.28')
+    expect(error).toMatchObject({ code: 'BULK_BOOK_UNBALANCED' })
     // Intl separates thousands and the currency with no-break spaces.
     expect(error.message_sv).toMatch(/^Verifikationen balanserar inte \(3\s001,41\skr debet vs 590,28\skr kredit\)\.$/)
     expect(from).not.toHaveBeenCalled()

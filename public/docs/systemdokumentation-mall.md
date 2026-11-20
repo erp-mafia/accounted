@@ -292,7 +292,7 @@ Varje verifikation registreras i behandlingshistoriken med tidpunkt, sätt och u
 
 ## 12. API-nycklar och maskinell åtkomst
 
-12.1. Externa system och AI-assistenter kan ges åtkomst till bokföringen via API-nycklar. Nycklarna skapas och återkallas under **Inställningar > AI och kopplingar > API och MCP**.
+12.1. Externa system och AI-assistenter kan ges åtkomst till bokföringen via API-nycklar. Nycklarna skapas och återkallas under **Inställningar > Kopplingar > API och MCP**.
 
 12.2. Varje nyckel har avgränsade behörigheter (scopes), t.ex. enbart läsning av rapporter eller skrivning av transaktioner. En nyckel kan aldrig göra mer än sina tilldelade behörigheter.
 

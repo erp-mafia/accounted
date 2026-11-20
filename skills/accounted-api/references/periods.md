@@ -2,10 +2,73 @@
 
 # Periods and registers endpoints
 
-Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, and reading filed VAT declarations (and beslut) from Skatteverket.
+Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, the company's deadlines (list them, tick one off), reading filed VAT declarations (and beslut) from Skatteverket, the register of prior years' tax losses (underskott, IL 40 kap.) per fiscal year, and the company's commitments: agreements with their expected payments, ställda säkerheter and eventualförpliktelser, and the group structure. Under K3: the deferred tax inputs of a year, the 18.7 model for own development, and the transition to K3 (kap. 35: start, relief and note facts, commit).
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
+
+### `PATCH /api/v1/companies/{companyId}/accounting-policies`
+
+**Choose the K3 model for internally generated intangible assets: expense or capitalise (punkt 18.7).**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+K3 punkt 18.7: a company applies either the kostnadsföringsmodell (expense) or the aktiveringsmodell (capitalise) to all its own development. Only the aktiveringsmodell lets own development be capitalised on 1010/1019, and a capitalised amount is moved to the fond för utvecklingsutgifter at year-end (ÅRL 4:2). K3 companies only. Switching away from capitalise while capitalised own development is on the register is a change of accounting policy (K3 kap. 10) and is refused. Owners and admins only. Dry-runnable.
+
+**Use when:** A K3 company starts capitalising own development, or states that it expenses it.
+**Do not use for:** Purchased intangibles (always capitalised on 1090/1099) or K2 companies (own development is always expensed).
+
+**Pitfalls:**
+- 422 DEVELOPMENT_MODEL_REFUSED for a K2 company or a switch away from capitalise with own development capitalised.
+- 403 FORBIDDEN for a member who is not an owner or admin.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ development_expenditure_model: "expense" | "capitalise" }
+```
+
+Example request:
+```json
+{
+  "development_expenditure_model": "capitalise"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { development_expenditure_model: "expense" | "capitalise" },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "development_expenditure_model": "capitalise"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
 
 ### `GET /api/v1/companies/{companyId}/accounts`
 
@@ -119,6 +182,7 @@ Adds an account to the company's kontoplan. A BAS 2026 number needs nothing but 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -229,6 +293,7 @@ Sparse update of one kontoplan account: name, description, VAT defaults (code, b
 | `companyId` | path | `string` | yes |  |
 | `number` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -336,6 +401,7 @@ Removes an account from the kontoplan. Refused for system accounts and for any a
 | `companyId` | path | `string` | yes |  |
 | `number` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts
@@ -388,6 +454,7 @@ Makes each listed account bookable: a standard BAS 2026 number missing from the 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -468,6 +535,7 @@ Deactivates each listed account so it stops being offered for new bookings; hist
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -533,27 +601,865 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/accrual-schedules`
+
+**Create a periodisering by hand for an amount on 17xx/29xx that no invoice line in Accounted carries, with monthly catch-up.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Ny periodisering. Spreads amount_sek over calendar months with the same installments and catch-up as an invoice plan. For a deferral (förutbetald kostnad on 17xx, förutbetald intäkt on 29xx) amount_sek is what remains to dissolve: it may not exceed the balance left on balance_account (from its latest ingående balans on, after every month already dissolved, by Accounted, by hand or by an imported voucher from an earlier system) less the months not yet posted of other active plans on the account, nor what the origin verifikat or ingående balans put there. Start at the first month not yet dissolved. An upplupen kostnad (29xx) or intäkt (17xx) has no such limit. Months already begun post at approval; the rest post through the nightly accrual run. Dry-runnable: the dry run answers the months and available_sek and writes nothing.
+
+**Use when:** A migration brought a running periodisering whose remaining months must keep dissolving, or a bank booking or the ingående balans put an annual insurance, licence or rent on 17xx/29xx without an invoice line in Accounted.
+**Do not use for:** An invoice line in Accounted (periodisera on that line), changing an existing plan (replan it), or undoing one (cancel it).
+
+**Pitfalls:**
+- For a migrated plan give the REMAINING amount and the first month not yet dissolved: the earlier system's dissolutions are already in the books, and booking a month twice is refused with 400 ACCRUAL_BALANCE_EXCEEDED (details.available_sek says what is left).
+- Without origin_journal_entry_id a deferral comes from the ingående balans: 400 ACCRUAL_OPENING_BALANCE_MISSING when the account has none. A reversed origin is refused (ACCRUAL_ORIGIN_REVERSED).
+- Give either months (1-120) or period_end. The amount is split in öre over every calendar month and sums exactly to amount_sek. target_account must be a resultatkonto, 3xxx-8xxx.
+- Reversing the origin verifikat later cancels the plan and stornoes the months it posted.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  direction: "expense" | "revenue",
+  amount_sek: number,
+  balance_account: string,
+  target_account: string,
+  period_start: string,
+  months?: number,
+  period_end?: string,
+  description: string,
+  dimensions?: Record<string, string>,
+  origin_journal_entry_id?: string
+}
+```
+
+Example request:
+```json
+{
+  "direction": "expense",
+  "amount_sek": 6000,
+  "balance_account": "1790",
+  "target_account": "6570",
+  "period_start": "2026-07-01",
+  "months": 6,
+  "description": "Årsavgift bankpaket, resterande månader",
+  "origin_journal_entry_id": "5b1e…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    accrual_schedule_id: string,
+    source_kind: "manual",
+    direction: "expense" | "revenue",
+    balance_account: string,
+    target_account: string,
+    total_amount: number,
+    period_start: string,
+    period_end: string,
+    months: number,
+    origin_journal_entry_id: string | null,
+    posting_floor_date: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accrual_schedule_id": "7f3c…",
+    "source_kind": "manual",
+    "direction": "expense",
+    "balance_account": "1790",
+    "target_account": "6570",
+    "total_amount": 6000,
+    "period_start": "2026-07-01",
+    "period_end": "2026-12-31",
+    "months": 6,
+    "origin_journal_entry_id": "5b1e…",
+    "posting_floor_date": "2026-01-10"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/accrual-schedules/{id}/cancel`
+
+**Undo a periodisering set up by hand: cancel its months not yet posted and storno the months it posted.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+Ångra periodisering. The months not yet posted are cancelled and every month the plan posted is stornoed (dated today when today lies in that month's fiscal year, else on the month's own date), so the whole amount is back on the balance account. Only a manual plan: an invoice's plan is cancelled by crediting the invoice. Dry-runnable: the dry run lists the months it would cancel and reverse.
+
+**Use when:** A manual periodisering was set up wrong (amount, accounts, months), or the item it spreads no longer exists.
+**Do not use for:** Booking the rest now (Lös upp nu), moving the end or the booking day (replan it), or an invoice's plan (credit the invoice).
+
+**Pitfalls:**
+- A month whose storno fails (a locked or closed year) keeps the plan active with failed_reversals > 0 and a last_error on the month: unlock and cancel again.
+- Reversing the origin verifikat runs the same undo on its own.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Response `200`:
+```ts
+{
+  data: {
+    accrual_schedule_id: string,
+    status: "cancelled" | "active",
+    cancelled_months: number,
+    reversed_entries: number,
+    failed_reversals: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accrual_schedule_id": "7f3c…",
+    "status": "cancelled",
+    "cancelled_months": 4,
+    "reversed_entries": 2,
+    "failed_reversals": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/accrual-schedules/{id}/replan`
+
+**Re-plan the months of a periodisering that are not yet posted: a new period end and/or the day each month books on.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Ändra periodisering. Posted months and their verifikat stay exactly as they are; what remains (total minus posted) is split equally over the calendar months of the new period that have no posted month, the same split a new schedule gets. release_day sets the day each month books on (1-31, clamped to the month end, so 31 is the last day; null is the first of the month). Months whose day has already come are booked at once. A deferral only (förutbetald kostnad 17xx, förutbetald intäkt 29xx): an upplupen kostnad is refused. Dry-runnable: the dry run answers the months before and after and writes nothing.
+
+**Use when:** The service period of a periodiserad invoice line changed (a contract ends early or runs longer), or the months should book on the day the period starts, e.g. the 14th for a rent running 14th to 13th.
+**Do not use for:** Changing months already posted (correct those verifikat, or credit the invoice), booking the whole remainder now (Lös upp nu), or an upplupen kostnad on 29xx.
+
+**Pitfalls:**
+- period_end must be on or after the last posted month and leave at least one unposted month: 400 ACCRUAL_REPLAN_INVALID with details.reason otherwise.
+- A schedule a credit is still settling (cancelled months) or that is not active cannot be re-planned.
+- A month the posting run books between the dry run and the commit makes the commit answer 409 ACCRUAL_REPLAN_CONFLICT: re-read and retry.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ period_end?: string, release_day?: number | null }
+```
+
+Example request:
+```json
+{
+  "period_end": "2027-06-30",
+  "release_day": 14
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    accrual_schedule_id: string,
+    period_start: string,
+    period_end_before: string,
+    period_end_after: string,
+    release_day_before: number | null,
+    release_day_after: number | null,
+    remaining_amount: number,
+    before: { period_month: string, amount: number, booking_date: string }[],
+    after: { period_month: string, amount: number, booking_date: string }[],
+    posted_now?: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accrual_schedule_id": "7f3c…",
+    "period_start": "2026-07-01",
+    "period_end_before": "2026-12-31",
+    "period_end_after": "2027-06-30",
+    "release_day_before": null,
+    "release_day_after": 14,
+    "remaining_amount": 4000,
+    "before": [
+      {
+        "period_month": "2026-11-01",
+        "amount": 2000,
+        "booking_date": "2026-11-01"
+      }
+    ],
+    "after": [
+      {
+        "period_month": "2026-11-01",
+        "amount": 500,
+        "booking_date": "2026-11-14"
+      }
+    ],
+    "posted_now": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/agreement-obligations`
+
+**List the payments the agreements say fall due, oldest first, with whether each arrived in the bank.**
+`scope:companies:read · risk:low · idempotent`
+
+From 60 days back by default (from, to narrow it). status expected: not seen yet; matched: a bank transaction (transaction_id) has the amount and date; missed: nothing arrived two weeks after the due date. Observation only: nothing is booked from these rows.
+
+**Use when:** You need the upcoming payments of the company's agreements, or to see which rent or instalment was missed.
+**Do not use for:** Supplier invoices or bank payments (they have their own lists).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- AGREEMENT_NOT_FOUND: agreement_id is not an agreement of the company.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `agreement_id` | query | `string` | no | Only this agreement's payments. |
+| `status` | query | `"expected" \| "matched" \| "missed" \| "waived"` | no |  |
+| `from` | query | `string` | no | yyyy-MM-dd, default 60 days back. |
+| `to` | query | `string` | no | yyyy-MM-dd, inclusive. |
+
+Response `200`:
+```ts
+{
+  data: {
+    obligations: { obligation_id: string, agreement_id: string, agreement_title: string, kind: string, due_on: string, amount: number, currency: string, direction: "out" | "in", status: "expected" | "matched" | "missed" | "waived", amount_is_estimate: boolean, transaction_id: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "obligations": [
+      {
+        "obligation_id": "c1d2…",
+        "agreement_id": "6b2e…",
+        "agreement_title": "Hyresavtal kontor Vasagatan",
+        "kind": "payment",
+        "due_on": "2026-11-01",
+        "amount": 12500,
+        "currency": "SEK",
+        "direction": "out",
+        "status": "expected",
+        "amount_is_estimate": false,
+        "transaction_id": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/agreements`
+
+**List the company's agreements (rent, leases, loans, subscriptions, insurance, permits, IP, domains, guarantees and more) with the next payment and the notice and end dates.**
+`scope:companies:read · risk:low · idempotent`
+
+Both the agreements registered by hand (origin manual) and the ones the archive read from documents (origin derived). next_payment is observed against the bank daily and never booked from; notice_deadline and end_deadline are the dates in Viktiga datum.
+
+**Use when:** You need to know what the company has signed: what it pays and when, and when something must be terminated or renewed.
+**Do not use for:** Booking payments (the agreements never post) or reading the agreement text (read the linked document).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"active" \| "ended"` | no | Only active or ended agreements. |
+| `kind` | query | `"rental" \| "lease" \| "loan" \| "subscription" \| "insurance" \| "employment" \| "shareholder" \| "investment" \| "customer" \| "permit" \| "ip_right" \| "domain" \| "guarantee" \| "other"` | no | Only this kind. |
+| `origin` | query | `"derived" \| "manual"` | no | Only derived or manual agreements. |
+
+Response `200`:
+```ts
+{
+  data: {
+    agreements: { agreement_id: string, kind: string, origin: "derived" | "manual", title: string, status: "active" | "ended", counterparty_party_id: string | null, counterparty_name: string | null, starts_on: string | null, ends_on: string | null, notice_months: number | null, renewal_terms: string | null, amount: number | null, currency: string, period: "monthly" | "quarterly" | "yearly" | "one_time" | null, first_due_on: string | null, principal: number | null, interest_rate: number | null, document_id: string | null, source_document_id: string | null, notes: string | null, next_payment: { due_on: string, amount: number, currency: string, status: "expected" | "matched" | "missed" | "waived", direction: "out" | "in" } | null, notice_deadline: { due_date: string, title: string } | null, end_deadline: { due_date: string, title: string } | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "agreements": [
+      {
+        "agreement_id": "6b2e…",
+        "kind": "rental",
+        "origin": "manual",
+        "title": "Hyresavtal kontor Vasagatan",
+        "status": "active",
+        "counterparty_party_id": null,
+        "counterparty_name": "Fastighets AB Kvarnen",
+        "starts_on": "2026-01-01",
+        "ends_on": "2028-12-31",
+        "notice_months": 9,
+        "renewal_terms": "Förlängs tre år i taget",
+        "amount": 12500,
+        "currency": "SEK",
+        "period": "monthly",
+        "first_due_on": null,
+        "principal": null,
+        "interest_rate": null,
+        "document_id": null,
+        "source_document_id": null,
+        "notes": null,
+        "next_payment": {
+          "due_on": "2026-11-01",
+          "amount": 12500,
+          "currency": "SEK",
+          "status": "expected",
+          "direction": "out"
+        },
+        "notice_deadline": {
+          "due_date": "2028-03-31",
+          "title": "Sista dag att säga upp: Hyresavtal kontor Vasagatan"
+        },
+        "end_deadline": {
+          "due_date": "2028-12-31",
+          "title": "Hyresavtal kontor Vasagatan löper ut, förlängs annars"
+        }
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/agreements`
+
+**Register an agreement by hand: what it is, the counterparty, the dates, notice and what it costs.**
+`scope:companies:write · risk:low · idempotent · dry-run`
+
+With amount and period, the expected payments a year ahead are written and compared with the bank daily. With ends_on, the end (or a loan's maturity) goes to Viktiga datum, and with notice_months also the last day to give notice. A document is linked by document_id, never read into fields. Dry-runnable.
+
+**Use when:** The company has an agreement the books should remember: rent, a lease, a loan, a subscription, an insurance, a permit, an IP right, a domain, a guarantee.
+**Do not use for:** Booking anything (agreements never post) or changing an agreement the archive read from a document (origin derived).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- VALIDATION_ERROR: an amount needs a period, and ends_on cannot be before starts_on.
+- COMMITMENTS_REFERENCE_NOT_FOUND: counterparty_party_id or document_id is not the company's (details.field).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  kind: "rental" | "lease" | "loan" | "subscription" | "insurance" | "employment" | "shareholder" | "investment" | "customer" | "permit" | "ip_right" | "domain" | "guarantee" | "other",
+  title: string,
+  counterparty_name?: string | null,
+  counterparty_party_id?: string | null,
+  starts_on?: string | null,
+  ends_on?: string | null,
+  notice_months?: number | null,
+  renewal_terms?: string | null,
+  amount?: number | null,
+  currency?: string,
+  period?: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+  first_due_on?: string | null,
+  principal?: number | null,
+  interest_rate?: number | null,
+  document_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "kind": "rental",
+  "title": "Hyresavtal kontor Vasagatan",
+  "counterparty_name": "Fastighets AB Kvarnen",
+  "starts_on": "2026-01-01",
+  "ends_on": "2028-12-31",
+  "notice_months": 9,
+  "amount": 12500,
+  "period": "monthly"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    agreement_id: string,
+    kind: string,
+    origin: "derived" | "manual",
+    title: string,
+    status: "active" | "ended",
+    counterparty_party_id: string | null,
+    counterparty_name: string | null,
+    starts_on: string | null,
+    ends_on: string | null,
+    notice_months: number | null,
+    renewal_terms: string | null,
+    amount: number | null,
+    currency: string,
+    period: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+    first_due_on: string | null,
+    principal: number | null,
+    interest_rate: number | null,
+    document_id: string | null,
+    source_document_id: string | null,
+    notes: string | null,
+    next_payment: { due_on: string, amount: number, currency: string, status: "expected" | "matched" | "missed" | "waived", direction: "out" | "in" } | null,
+    notice_deadline: { due_date: string, title: string } | null,
+    end_deadline: { due_date: string, title: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "agreement_id": "6b2e…",
+    "kind": "rental",
+    "origin": "manual",
+    "title": "Hyresavtal kontor Vasagatan",
+    "status": "active",
+    "counterparty_party_id": null,
+    "counterparty_name": "Fastighets AB Kvarnen",
+    "starts_on": "2026-01-01",
+    "ends_on": "2028-12-31",
+    "notice_months": 9,
+    "renewal_terms": "Förlängs tre år i taget",
+    "amount": 12500,
+    "currency": "SEK",
+    "period": "monthly",
+    "first_due_on": null,
+    "principal": null,
+    "interest_rate": null,
+    "document_id": null,
+    "source_document_id": null,
+    "notes": null,
+    "next_payment": {
+      "due_on": "2026-11-01",
+      "amount": 12500,
+      "currency": "SEK",
+      "status": "expected",
+      "direction": "out"
+    },
+    "notice_deadline": {
+      "due_date": "2028-03-31",
+      "title": "Sista dag att säga upp: Hyresavtal kontor Vasagatan"
+    },
+    "end_deadline": {
+      "due_date": "2028-12-31",
+      "title": "Hyresavtal kontor Vasagatan löper ut, förlängs annars"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/agreements/{id}`
+
+**Change a manual agreement; its expected payments and its dates follow.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Send only the fields that change; null clears one. Payments already matched or missed stay. Dry-runnable.
+
+**Use when:** The rent changed, the agreement was extended, the notice period was wrong.
+**Do not use for:** Ending an agreement (POST /agreements/{id}/end) or an agreement the archive read from a document.
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- AGREEMENT_DERIVED: the agreement was read from an archived document; correct the reading there.
+- AGREEMENT_NOT_FOUND
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  kind?: "rental" | "lease" | "loan" | "subscription" | "insurance" | "employment" | "shareholder" | "investment" | "customer" | "permit" | "ip_right" | "domain" | "guarantee" | "other",
+  title?: string,
+  counterparty_name?: string | null,
+  counterparty_party_id?: string | null,
+  starts_on?: string | null,
+  ends_on?: string | null,
+  notice_months?: number | null,
+  renewal_terms?: string | null,
+  amount?: number | null,
+  currency?: string,
+  period?: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+  first_due_on?: string | null,
+  principal?: number | null,
+  interest_rate?: number | null,
+  document_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "amount": 13000
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    agreement_id: string,
+    kind: string,
+    origin: "derived" | "manual",
+    title: string,
+    status: "active" | "ended",
+    counterparty_party_id: string | null,
+    counterparty_name: string | null,
+    starts_on: string | null,
+    ends_on: string | null,
+    notice_months: number | null,
+    renewal_terms: string | null,
+    amount: number | null,
+    currency: string,
+    period: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+    first_due_on: string | null,
+    principal: number | null,
+    interest_rate: number | null,
+    document_id: string | null,
+    source_document_id: string | null,
+    notes: string | null,
+    next_payment: { due_on: string, amount: number, currency: string, status: "expected" | "matched" | "missed" | "waived", direction: "out" | "in" } | null,
+    notice_deadline: { due_date: string, title: string } | null,
+    end_deadline: { due_date: string, title: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "agreement_id": "6b2e…",
+    "kind": "rental",
+    "origin": "manual",
+    "title": "Hyresavtal kontor Vasagatan",
+    "status": "active",
+    "counterparty_party_id": null,
+    "counterparty_name": "Fastighets AB Kvarnen",
+    "starts_on": "2026-01-01",
+    "ends_on": "2028-12-31",
+    "notice_months": 9,
+    "renewal_terms": "Förlängs tre år i taget",
+    "amount": 13000,
+    "currency": "SEK",
+    "period": "monthly",
+    "first_due_on": null,
+    "principal": null,
+    "interest_rate": null,
+    "document_id": null,
+    "source_document_id": null,
+    "notes": null,
+    "next_payment": {
+      "due_on": "2026-11-01",
+      "amount": 12500,
+      "currency": "SEK",
+      "status": "expected",
+      "direction": "out"
+    },
+    "notice_deadline": {
+      "due_date": "2028-03-31",
+      "title": "Sista dag att säga upp: Hyresavtal kontor Vasagatan"
+    },
+    "end_deadline": {
+      "due_date": "2028-12-31",
+      "title": "Hyresavtal kontor Vasagatan löper ut, förlängs annars"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/agreements/{id}/end`
+
+**End a manual agreement: no more expected payments after the day it ended, its dates leave Viktiga datum.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+ended_on defaults to today; an earlier ends_on stays. Ending twice answers the same. Dry-runnable.
+
+**Use when:** The agreement was terminated, expired or replaced.
+**Do not use for:** Removing an agreement that never existed (end it with the day it started) or an agreement the archive read from a document.
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- AGREEMENT_DERIVED
+- AGREEMENT_NOT_FOUND
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ ended_on?: string }
+```
+
+Example request:
+```json
+{
+  "ended_on": "2026-10-31"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    agreement_id: string,
+    kind: string,
+    origin: "derived" | "manual",
+    title: string,
+    status: "active" | "ended",
+    counterparty_party_id: string | null,
+    counterparty_name: string | null,
+    starts_on: string | null,
+    ends_on: string | null,
+    notice_months: number | null,
+    renewal_terms: string | null,
+    amount: number | null,
+    currency: string,
+    period: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+    first_due_on: string | null,
+    principal: number | null,
+    interest_rate: number | null,
+    document_id: string | null,
+    source_document_id: string | null,
+    notes: string | null,
+    next_payment: { due_on: string, amount: number, currency: string, status: "expected" | "matched" | "missed" | "waived", direction: "out" | "in" } | null,
+    notice_deadline: { due_date: string, title: string } | null,
+    end_deadline: { due_date: string, title: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "agreement_id": "6b2e…",
+    "kind": "rental",
+    "origin": "manual",
+    "title": "Hyresavtal kontor Vasagatan",
+    "status": "ended",
+    "counterparty_party_id": null,
+    "counterparty_name": "Fastighets AB Kvarnen",
+    "starts_on": "2026-01-01",
+    "ends_on": "2026-10-31",
+    "notice_months": 9,
+    "renewal_terms": "Förlängs tre år i taget",
+    "amount": 12500,
+    "currency": "SEK",
+    "period": "monthly",
+    "first_due_on": null,
+    "principal": null,
+    "interest_rate": null,
+    "document_id": null,
+    "source_document_id": null,
+    "notes": null,
+    "next_payment": {
+      "due_on": "2026-11-01",
+      "amount": 12500,
+      "currency": "SEK",
+      "status": "expected",
+      "direction": "out"
+    },
+    "notice_deadline": {
+      "due_date": "2028-03-31",
+      "title": "Sista dag att säga upp: Hyresavtal kontor Vasagatan"
+    },
+    "end_deadline": {
+      "due_date": "2028-12-31",
+      "title": "Hyresavtal kontor Vasagatan löper ut, förlängs annars"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/compliance/check`
 
 **Run a structured compliance pre-flight check.**
 `scope:compliance:read · risk:low · idempotent`
 
-Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity). vat_close is planned for a follow-up PR (the underlying function currently lives in the MCP extension and core routes cannot import from extensions; it will be extracted into lib/reports/ then exposed here). New types can be added without changing the response shape.
+Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity), vat_close (can the momsperiod be closed: SKV 4700 rutor, bookkeeping blockers and the momsdeklaration completeness checks the web filing UI uses; the same answer as the MCP tool accounted_vat_close_check). New types can be added without changing the response shape.
 
 **Use when:** Before committing to an irreversible action (VAT close, year-end close), or as a periodic audit sweep to surface blockers before they become urgent.
 **Do not use for:** Executing the underlying action: this is read-only. After a passing check, call the corresponding async endpoint (POST /fiscal-periods/{id}/year-end, etc).
 
 **Pitfalls:**
-- year_end_readiness and voucher_gaps require fiscal_period_id (UUID).
+- year_end_readiness and voucher_gaps require fiscal_period_id (UUID); vat_close requires period_type, year and period.
 - voucher_gaps covers EVERY voucher series registered for the period (A, B, F, ...), not only series A.
 - A passing check is a SNAPSHOT: the state can change between the check and the action. The same blocker logic runs again on commit.
-- vat_close is documented in the plan but NOT yet supported by this endpoint: call gnubok_vat_close_check via the MCP server until the function is extracted into lib/reports/.
+- vat_close: details carries the rutor signed exactly as the momsdeklaration files them (ruta49 = to pay, negative = refund; a box whose credit notes exceed its sales is negative), the payment block with the deadline, and sanity, a comparison with the previous period of the same length.
+- vat_close: details.sanity is advisory and never changes ready. ratios.rate_shares gives each rate's share (25/12/6, percent) of the taxable base derived from output VAT (ruta 10/11/12 divided by the rate), for the current and previous period, null when a period has no sales or a negative rate. anomalies: rate_share_shift (one per rate whose share moved at least 15 percentage points while its base moved at least max(25000 kr, 10 % of the larger total); delta_pct is in percentage points), revenue_drop and revenue_spike (ruta 05 down more than 50 % or up more than 200 %, skipped when both periods are below 25000 kr). ratios.output_vat_ratio_25/12/6 are deprecated: read rate_shares.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
-| `type` | query | `"year_end_readiness" \| "voucher_gaps"` | yes | Which check to run. |
-| `fiscal_period_id` | query | `string` | yes | Fiscal period to check (id from GET /fiscal-periods). Both current check types require it. |
+| `type` | query | `"year_end_readiness" \| "voucher_gaps" \| "vat_close"` | yes | Which check to run. |
+| `fiscal_period_id` | query | `string` | no | Fiscal period to check (id from GET /fiscal-periods). Required by year_end_readiness and voucher_gaps. |
+| `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | no | vat_close: the momsperiod length. |
+| `year` | query | `number` | no | vat_close: the year; for yearly, the year the räkenskapsår ends. |
+| `period` | query | `number` | no | vat_close: 1-12 monthly, 1-4 quarterly, 1 yearly. |
 
 Response `200`:
 ```ts
@@ -609,10 +1515,168 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/deadlines`
+
+**List the company's deadlines, the open ones by default.**
+`scope:reports:read · risk:low · idempotent`
+
+The deadlines under Deadlines in the app, earliest due date first: tax and filing deadlines generated from the tax settings and the ones added by hand. status open (the default) is what is left to do; completed and all include what is ticked off. A deadline the company removed from its list is never returned. overdue is computed from the due date and only for an open deadline.
+
+**Use when:** Seeing what is due, or finding the deadline_id to tick off after the work is done.
+**Do not use for:** Which moms periods are on record as filed (GET /reports/vat-declaration/filings, accounted_list_vat_filings) or what Skatteverket has on file (GET /skatteverket/vat-declarations, accounted_vat_declaration_status).
+
+**Pitfalls:**
+- has_more true means more deadlines match than limit returned: narrow with due_from and due_to.
+- A completed deadline says the company ticked it off or a filing was recorded, not that Skatteverket received anything.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"open" \| "completed" \| "all"` | no | open: not ticked off (default). |
+| `due_from` | query | `string` | no | Earliest due date, YYYY-MM-DD. |
+| `due_to` | query | `string` | no | Latest due date, YYYY-MM-DD. |
+| `limit` | query | `number` | no |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    deadlines: { deadline_id: string, title: string, due_date: string, due_time: string | null, deadline_type: string, tax_deadline_type: string | null, tax_period: string | null, priority: string, source: string, is_completed: boolean, completed_at: string | null, overdue: boolean, days_until_due: number, notes: string | null }[],
+    has_more: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deadlines": [
+      {
+        "deadline_id": "11111111-1111-4111-8111-111111111111",
+        "title": "Årsredovisning till Bolagsverket",
+        "due_date": "2026-07-31",
+        "due_time": null,
+        "deadline_type": "report",
+        "tax_deadline_type": null,
+        "tax_period": null,
+        "priority": "important",
+        "source": "user",
+        "is_completed": false,
+        "completed_at": null,
+        "overdue": false,
+        "days_until_due": 12,
+        "notes": null
+      }
+    ],
+    "has_more": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/deadlines/{id}/complete`
+
+**Tick a deadline off, or put it back on the list.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Sets one deadline completed (is_completed true) or open again (false), as the checkbox under Deadlines in the app does. Only the tick changes: no verifikat, period or filing is touched and nothing is sent to Skatteverket. Asking for the state the deadline already has changes nothing (changed false). Dry-runnable.
+
+**Use when:** The work a deadline stands for is done (or was ticked off by mistake) and it should leave (or return to) the open list.
+**Do not use for:** A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or accounted_mark_vat_period_filed; AGI: accounted_mark_agi_period_filed), which completes the deadline with the filing date.
+
+**Pitfalls:**
+- DEADLINE_NOT_FOUND for an id that is not one of the company's listed deadlines (GET /deadlines, accounted_list_deadlines), including one the company removed.
+- DEADLINE_CONFIRMED_BY_SKATTEVERKET when is_completed false targets a deadline whose filing Skatteverket confirmed through the connection.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ is_completed: boolean }
+```
+
+Example request:
+```json
+{
+  "deadline_id": "11111111-1111-4111-8111-111111111111",
+  "is_completed": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    deadline: { deadline_id: string, title: string, due_date: string, due_time: string | null, deadline_type: string, tax_deadline_type: string | null, tax_period: string | null, priority: string, source: string, is_completed: boolean, completed_at: string | null, overdue: boolean, days_until_due: number, notes: string | null },
+    changed: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deadline": {
+      "deadline_id": "11111111-1111-4111-8111-111111111111",
+      "title": "Årsredovisning till Bolagsverket",
+      "due_date": "2026-07-31",
+      "due_time": null,
+      "deadline_type": "report",
+      "tax_deadline_type": null,
+      "tax_period": null,
+      "priority": "important",
+      "source": "user",
+      "is_completed": true,
+      "completed_at": "2026-07-19T08:30:00.000Z",
+      "overdue": false,
+      "days_until_due": 12,
+      "notes": null
+    },
+    "changed": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/dimensions`
 
 **List dimensions (kostnadsställe/projekt) with their values.**
-`scope:reports:read · risk:low · idempotent`
+`scope:dimensions:read · risk:low · idempotent`
 
 Returns the company's dimension registry: SIE #DIM entries keyed by sie_dim_no (1 = Kostnadsställe, 6 = Projekt; both always exist): with the registered values (#OBJEKT) nested under each dimension. Dimensions are ordered by sort_order, values by code. Line-level tags on journal entries reference these values as {"<sie_dim_no>":"<code>"} in the `dimensions` map.
 
@@ -633,7 +1697,7 @@ Response `200`:
 ```ts
 {
   data: {
-    dimensions: { id: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
+    dimensions: { id: string, handle?: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
   },
   meta: {
     request_id: string,
@@ -702,6 +1766,7 @@ Adds a dimension to the registry (SIE #DIM). Omit sie_dim_no and the next free n
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -719,7 +1784,7 @@ Response `200`:
 ```ts
 {
   data: {
-    dimension: { id: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number }
+    dimension: { id: string, handle?: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number }
   },
   meta: {
     request_id: string,
@@ -776,6 +1841,7 @@ Sparse update of a dimension: name, is_active (false archives it, hiding it from
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -794,6 +1860,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     sie_dim_no: number,
     name: string,
     parent_sie_dim_no: number | null,
@@ -855,6 +1922,7 @@ Removes a custom dimension and its values. Refused for the system dimensions and
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts
@@ -893,7 +1961,7 @@ Example response `200`:
 **Create a dimension value (kostnadsställe/projekt code).**
 `scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
 
-Registers a new value (SIE #OBJEKT) under a dimension: e.g. a new project code under dimension 6. Requires Idempotency-Key (UUID). Supports ?dry_run=true to validate the code format without committing. The `:id` path segment is the dimension row id (from GET …/dimensions), not the sie_dim_no. Send is_active=false to create the value archived. start_date/end_date are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt). Duplicate codes within the dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE.
+Registers a new value (SIE #OBJEKT) under a dimension: e.g. a new project code under dimension 6. Requires Idempotency-Key (UUID). Supports ?dry_run=true to validate the code format without committing. The `:id` path segment is the dimension row id (from GET …/dimensions), not the sie_dim_no. Send is_active=false to create the value archived. start_date/end_date are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt). Duplicate codes within the dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE. Emits the webhook event dimension_value.created.
 
 **Use when:** A voucher or invoice references a cost centre / project code that does not exist yet and the user has confirmed it should be created.
 **Do not use for:** Renaming or archiving an existing value (PATCH …/dimensions/{id}/values/{valueId}). Tagging lines: pass the dimensions map on the journal-entry line instead.
@@ -935,6 +2003,7 @@ Response `200`:
 {
   data: {
     id: string | null,
+    handle?: string,
     dimension_id: string,
     code: string,
     name: string,
@@ -982,7 +2051,7 @@ Example response `200`:
 **Update a dimension value (rename, archive, set start/end date).**
 `scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
 
-Sparse update of a dimension value (SIE #OBJEKT): name, is_active (false = archive), start_date, end_date. `code` is immutable: renaming a code would orphan every journal line tagged with it; create a new value and archive the old one instead. Dates are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt): use end_date to close a finished project. Idempotent (mandatory Idempotency-Key) and dry-runnable.
+Sparse update of a dimension value (SIE #OBJEKT): name, is_active (false = archive), start_date, end_date. `code` is immutable: renaming a code would orphan every journal line tagged with it; create a new value and archive the old one instead. Dates are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt): use end_date to close a finished project. A rename emits the webhook event dimension_value.renamed (with previousName), archiving dimension_value.archived and reactivating dimension_value.unarchived. Idempotent (mandatory Idempotency-Key) and dry-runnable.
 
 **Use when:** You need to rename a project/cost-centre, mark a finished project with an end date, or archive (is_active=false) a value that should no longer be used on new lines.
 **Do not use for:** Changing the code (immutable: create + archive instead). Removing an unused value entirely (use DELETE). Tagging lines (pass dimensions on the journal-entry line or invoice).
@@ -1018,6 +2087,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     dimension_id: string,
     code: string,
     name: string,
@@ -1082,7 +2152,7 @@ Hard-deletes a dimension value (SIE #OBJEKT) that no journal line references. Va
 Response `200`:
 ```ts
 {
-  data: { deleted: true, id: string },
+  data: { deleted: true, id: string, handle?: string },
   meta: {
     request_id: string,
     api_version: string,
@@ -1113,19 +2183,20 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/dimensions/retag`
 
-**Change the dimension tags (kostnadsställe, projekt) on posted journal lines.**
+**Change or remove the dimension tags (kostnadsställe, projekt) on posted journal lines.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Sets dimension tags on lines of posted verifikat, the one thing about a posted line that may change: amounts, accounts and texts never do. mode merge (default) sets the pairs in `dimensions` and keeps every other dimension the line carries; replace makes the line's tags exactly `dimensions`. Each line is its own transaction through the audited retag path, which writes an immutable before/after row with the reason (GET /dimensions/retag-log) and refuses a line in a closed or locked period, on or before the bookkeeping lock date, on a draft, or with a code that is not an active registry value. Partial success is success: refused lines are listed in failed. Idempotent. Dry-runnable: the dry run shows each line's tags before and after.
+Sets or removes dimension tags on lines of posted verifikat, the one thing about a posted line that may change: amounts, accounts and texts never do. mode merge (default) sets the pairs in `dimensions` and keeps every other dimension the line carries; replace makes the line's tags exactly `dimensions`. An empty code removes that dimension: {"6": ""} takes the project off. Each line is its own transaction through the audited retag path, which writes an immutable before/after row with the reason (GET /dimensions/retag-log) and refuses a line in a closed or locked period, on or before the bookkeeping lock date, on a draft, or with a code that is not an active registry value. A call where some lines were refused answers 200 with outcome partial: failed_by_reason counts the refused lines per reason and failed lists them. Idempotent. Dry-runnable: the dry run shows each line's tags before and after, and names the lines the commit will refuse (blocked_lines, blocked_by_reason, taggable_lines).
 
 **Use when:** Posted lines lack a project or cost centre, or carry the wrong one, and you know the line ids (lines[].id of GET /journal-entries/{id}).
-**Do not use for:** Changing amounts, accounts or dates (a rättelse: POST /journal-entries/{id}/correct), tagging lines of a draft (edit the draft), or clearing every tag of a line (the dashboard only).
+**Do not use for:** Changing amounts, accounts or dates (a rättelse: POST /journal-entries/{id}/correct), or tagging lines of a draft (edit the draft).
 
 **Pitfalls:**
 - Codes are STRINGS keyed by sie_dim_no: {"6": "P001"}, and each must be an active value in the registry (GET /dimensions).
 - merge keeps the line's other tags, and those must still be active registry values too: a line carrying an archived code is refused until the code is reactivated or replace is used.
 - At most 500 line ids per call; the reason (3-500 characters) is stored per line.
-- When every line is refused the call answers 400 DIMENSION_RETAG_FAILED with details.failed; otherwise it answers 200 with the refused lines in failed.
+- A dimension the line's account requires (an account rule) is never removed: the line is refused and listed in failed.
+- A 200 is not every line tagged: read outcome. partial means lines were left untagged, counted per reason in failed_by_reason (a closed or locked period, the lock date). When every line is refused the call answers 400 DIMENSION_RETAG_FAILED with details.failed.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1136,7 +2207,7 @@ Request body:
 ```ts
 {
   line_ids: string[],
-  dimensions: Record<string, string>,
+  dimensions: Record<string, "" | string>,
   reason: string,
   mode?: "merge" | "replace"
 }
@@ -1160,10 +2231,12 @@ Response `200`:
 ```ts
 {
   data: {
+    outcome: "complete" | "partial",
     retagged: number,
     unchanged: number,
     failed_count: number,
-    failed: { line_id: string, error: string }[],
+    failed_by_reason: { reason: "period_closed" | "period_locked" | "company_lock_date" | "line_not_found" | "required_dimension" | "refused", lines: number, message: string, date_from?: string, date_to?: string }[],
+    failed: { line_id: string, error: string, reason: "period_closed" | "period_locked" | "company_lock_date" | "line_not_found" | "required_dimension" | "refused", entry_date?: string }[],
     mode: "merge" | "replace"
   },
   meta: {
@@ -1182,9 +2255,11 @@ Example response `200`:
 ```json
 {
   "data": {
+    "outcome": "complete",
     "retagged": 2,
     "unchanged": 0,
     "failed_count": 0,
+    "failed_by_reason": [],
     "failed": [],
     "mode": "merge"
   },
@@ -1360,6 +2435,7 @@ Adds a rule for one account and one dimension. required: posting the account wit
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1444,6 +2520,7 @@ Sparse update of a rule: rule_type, value_id and is_active (false pauses the rul
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1519,6 +2596,7 @@ Removes the rule: from then on the account neither requires nor fills in that di
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts
@@ -1565,7 +2643,7 @@ Returns every fiscal period for the company ordered by period_start DESC. is_clo
 **Pitfalls:**
 - previous_period_id chains the bokslut continuity (BFNAR 2013:2). A null value on a non-first period is a data-quality red flag.
 - A period can be locked but not closed (löpande bokföring of the new year while bokslut work continues on the prior year: see BFL 5 kap 2 § for the löpande bokföring deadline).
-- BFL 3 kap caps a single fiscal period at 18 months. First-year exceptions are allowed.
+- BFL 3 kap caps a single fiscal period at 18 months, an extended first year included; exceeds_18_months flags one past it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1575,7 +2653,7 @@ Response `200`:
 ```ts
 {
   data: {
-    fiscal_periods: { id: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, locked_at: string | null, previous_period_id: string | null, created_at: string, duration_days: number, exceeds_18_months: boolean }[]
+    fiscal_periods: { id: string, handle?: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, locked_at: string | null, previous_period_id: string | null, created_at: string, duration_days: number, exceeds_18_months: boolean }[]
   },
   meta: {
     request_id: string,
@@ -1618,21 +2696,23 @@ Example response `200`:
 **Create a fiscal year (räkenskapsår).**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run`
 
-Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§). It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap, it also ends the day before the next year starts; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.
+Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§); for an enskild firma it ends on 31 December and only the earliest year may start after 1 January. It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap of at most 18 months, it also ends the day before the next year starts; a longer gap is filled one year at a time from its oldest end; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.
 
 **Use when:** The company needs the next räkenskapsår to book in (e.g. January arrives), or an earlier year must exist before its SIE file or opening balances can be imported.
 **Do not use for:** Closing the prior year (run the year-end), or changing an existing year (PATCH /fiscal-periods/{id}).
 
 **Pitfalls:**
 - A start that does not continue the preceding year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS with details.expected_start (or details.expected_end): retry with that date.
+- A gap of more than 18 months between two years takes several creates, since one year over all of it answers 400 FISCAL_PERIOD_TOO_LONG: create a 12-month year starting on details.expected_start, then the next, until the last one ends on details.gap_end. The year that closes the gap becomes the previous year of the one after it.
 - Overlapping an existing year answers 409 FISCAL_PERIOD_OVERLAP.
-- An enskild firma normally runs the calendar year; a brutet räkenskapsår needs Skatteverket's permission.
+- An enskild firma uses the calendar year: any other year answers 400 FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR, with details.rule end_31_december or start_1_january.
 - There is no delete: a wrong year can be re-dated with PATCH only while nothing is posted in it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1652,7 +2732,7 @@ Response `200`:
 ```ts
 {
   data: {
-    fiscal_period: { id: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, closed_externally: boolean, locked_at: string | null, previous_period_id: string | null, created_at: string }
+    fiscal_period: { id: string, handle?: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, closed_externally: boolean, locked_at: string | null, previous_period_id: string | null, created_at: string }
   },
   meta: {
     request_id: string,
@@ -1697,21 +2777,22 @@ Example response `200`:
 **Rename or re-date an open fiscal year.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year; the dates only while no posted or reversed verifikat exist in it. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma) and may not overlap another year. Idempotent. Dry-runnable.
+Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year. The dates can move also when the year already holds verifikat, as long as nothing it holds is affected: every verifikat and draft stays inside the new dates, posted opening balances keep the start, and no lock, year-end work, filing or SIE hold covers the change. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma), may not overlap another year and keep the chain to the neighbouring years. Idempotent. Dry-runnable.
 
-**Use when:** A year was created with the wrong dates or name and nothing has been booked in it yet.
-**Do not use for:** Moving verifikat between years, changing a locked or closed year, or lengthening a year that already has bookings.
+**Use when:** A year was created with the wrong dates or name, for example a first year that starts a day after the registration date at Bolagsverket.
+**Do not use for:** Moving verifikat between years, changing a locked or closed year (beyond correcting the earliest year start within its month), or re-dating a year whose annual report or declaration is already filed.
 
 **Pitfalls:**
-- Any posted or reversed verifikat in the year answers 409 FISCAL_PERIOD_HAS_POSTED_ENTRIES when dates are sent: send only name to rename.
-- A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED.
-- Re-dating does not re-chain previous_period_id: keep the years contiguous yourself.
+- A re-date that would affect what the year holds answers 409 FISCAL_PERIOD_DATES_BLOCKED; details.blockers names every reason (for example entries_outside with the first and last date outside the new dates). Send only name to rename.
+- A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED. One exception: the earliest year may move only its start within the month it starts in (to the registration day), also when closed or locked.
+- Only the earliest year can move its start and only the latest year its end: a boundary shared with a neighbouring year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1730,6 +2811,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     period_start: string,
     period_end: string,
@@ -1776,14 +2858,86 @@ Example response `200`:
 
 ---
 
+### `DELETE /api/v1/companies/{companyId}/fiscal-periods/{id}`
+
+**Remove an empty first fiscal year.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Removes the company's earliest räkenskapsår when it holds nothing: no verifikat or draft of any status, no issued voucher number, no SIE import or other record pointing at it, not closed, locked, behind the lock date or filed. The next year becomes the first year, so its start may then move to the registration day (PATCH, 18-month cap). The removal is written to the audit log. Dry-runnable.
+
+**Use when:** An empty year lies before the company existed (seeded by an older onboarding) and keeps the real first year from starting on the registration day.
+**Do not use for:** Removing a year that holds verifikat (correct them, or reset the year first), a year after the first, or merging two years.
+
+**Pitfalls:**
+- Any reason answers 409 FISCAL_PERIOD_DELETE_BLOCKED; details.blockers names each (has_entries, not_first_year, only_year, period_locked, linked_records, ...).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    handle?: string,
+    name: string,
+    period_start: string,
+    period_end: string,
+    is_closed: boolean,
+    closed_at: string | null,
+    closed_externally: boolean,
+    locked_at: string | null,
+    previous_period_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "name": "Räkenskapsår 2027",
+    "period_start": "2027-01-01",
+    "period_end": "2027-12-31",
+    "is_closed": false,
+    "closed_at": null,
+    "closed_externally": false,
+    "locked_at": null,
+    "previous_period_id": "5c2e…",
+    "created_at": "2026-12-01T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `PATCH /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/compliance`
 
 **Answer the årsredovisning compliance questions and record the confirmations.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user's confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.
+Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, the K3 scope questions (previous_year_framework: the framework of the previous årsredovisning, none for the first one; has_other_temporary_differences), reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user's confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.
 
-**Use when:** The validation (gnubok_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.
+**Use when:** The validation (accounted_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.
 **Do not use for:** The document texts (POST .../arsredovisning/narrative) or the signer roster itself (POST .../arsredovisning/signatures).
 
 **Pitfalls:**
@@ -1797,6 +2951,7 @@ Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1813,9 +2968,13 @@ Request body:
   has_convertible_debt?: boolean | null,
   building_revenue_share_pct?: number | null,
   has_material_deferred_tax?: boolean | null,
+  previous_year_framework?: "k2" | "k3" | "none" | null,
+  has_other_temporary_differences?: boolean | null,
   reporting_currency?: "SEK" | "EUR",
   auditor_report_required?: boolean | null,
   auditor_report_included?: boolean,
+  auditor_firm_name?: string | null,
+  auditor_opinion?: "unmodified" | "modified" | "avstyrkt_rr_br" | "avstyrkt_rr" | "avstyrkt_br" | "avstyrkt_rr_varken_br" | "avstyrkt_br_varken_rr" | "varken_rr_br" | "varken_rr" | "varken_br" | null,
   dividend_prudence_confirmed?: boolean | null,
   narrative_confirmed?: boolean,
   k2_assessment_confirmed?: boolean,
@@ -1917,7 +3076,7 @@ Response `200` (`application/xhtml+xml`).
 Generates the K2 inline XBRL document (the live draft, or a frozen version with version_id) and runs the local mirror of Bolagsverket's kontrollera checks on it, plus a generation dry run and the 5 MB size limit. Issues carry the Bolagsverket code where one exists (e.g. 1107 missing signers) or ACC-*. Nothing is sent to Bolagsverket. Read-only.
 
 **Use when:** Before a digital filing, or to see why the iXBRL document is not ready.
-**Do not use for:** The ÅRL/K2 completeness checks per stage (gnubok_validate_arsredovisning), or the document itself (GET .../arsredovisning/ixbrl, v1 only).
+**Do not use for:** The ÅRL/K2 completeness checks per stage (accounted_validate_arsredovisning), or the document itself (GET .../arsredovisning/ixbrl, v1 only).
 
 **Pitfalls:**
 - K2 aktiebolag only: the iXBRL generator does not produce K3 documents.
@@ -1992,7 +3151,7 @@ Example response `200`:
 **Edit the årsredovisning texts: förvaltningsberättelse, resultatdisposition, disclosure notes and K3 note texts.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Saves the narrative overrides for a räkenskapsår's årsredovisning, as the dashboard's text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object) and the K3 kassaflödesanalys omission. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.
+Saves the narrative overrides for a räkenskapsår's årsredovisning, as the dashboard's text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object), the K3 kassaflödesanalys omission, the K3 disclosure answers (disclosure_answers by requirement id: {applies, text, choice, confirmed}; read the open ones from the validation issues and the k3_disclosures of the report), the kind of each equity verifikat the ledger cannot classify (equity_movement_overrides by journal_entry_id) and whether the K3 equity specification is its own statement (equity_statement_separate). disclosure_answers and equity_movement_overrides merge: only the keys sent change and null removes one. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.
 
 **Use when:** Writing or correcting the texts of the årsredovisning before a version is frozen for signing.
 **Do not use for:** The compliance profile answers (PATCH .../arsredovisning/compliance), the figures (they come from the books), or freezing the document (POST .../arsredovisning/versions).
@@ -2003,12 +3162,14 @@ Saves the narrative overrides for a räkenskapsår's årsredovisning, as the das
 - parent_company_org_number is an organisationsnummer or a foreign registration id; a personnummer is refused.
 - Registered at Bolagsverket: 409 ARSREDOVISNING_REGISTERED.
 - Saving clears narrative_confirmed: confirm again with PATCH .../compliance {"narrative_confirmed": true}.
+- A disclosure_answers key must be a requirement id of the K3 disclosure matrix (for example not.handelser_efter_balansdagen); an unknown id is 400 VALIDATION_ERROR.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -2037,7 +3198,10 @@ Request body:
   agm_disposition_decision?: string | null,
   note_overrides?: Record<string, string | null>,
   omit_kassaflodesanalys?: boolean,
-  kassaflodesanalys_omission_confirmed?: boolean
+  kassaflodesanalys_omission_confirmed?: boolean,
+  disclosure_answers?: Record<string, { applies?: boolean | null, text?: string | null, choice?: string | null, confirmed?: boolean } | null>,
+  equity_movement_overrides?: Record<string, "rattelse_av_fel" | "andrad_redovisningsprincip" | "uppskrivning" | "verkligt_varde" | "ovriga_direkt_mot_eget_kapital" | "utdelning" | "aktieagartillskott" | "aterbetalt_tillskott" | "nyemission" | "andra_vardeoverforingar" | "omforing" | null>,
+  equity_statement_separate?: boolean
 }
 ```
 
@@ -2112,7 +3276,7 @@ Example response `200`:
 Renders the årsredovisning for the räkenskapsår (K2 or K3 template by the framework) as the dashboard does. Without version_id it is the live draft from the books, named ...-utkast.pdf; with version_id it is that immutable version with the signatures recorded on it, named ...-papperskopia.pdf once signed. Nothing is sent to Bolagsverket.
 
 **Use when:** A printable copy for the board to sign on paper, the archive, or a review.
-**Do not use for:** The inline XBRL document for digital filing (GET .../arsredovisning/ixbrl) or the report as JSON (gnubok_preview_arsredovisning).
+**Do not use for:** The inline XBRL document for digital filing (GET .../arsredovisning/ixbrl) or the report as JSON (accounted_preview_arsredovisning).
 
 **Pitfalls:**
 - The live draft is refused while an SIE import is unfinished (409); a frozen version stays readable.
@@ -2136,7 +3300,7 @@ Response `200` (`application/pdf`).
 The current signer slots for the räkenskapsår: the unbound pending roster while one exists, otherwise the slots bound to the latest version with their status, signing date, method and evidence reference. The signature_id values are what PATCH and DELETE .../signatures/{signatureId} take; finalizing a version may create new slots bound to it. Read-only.
 
 **Use when:** Before adding a signer (avoid duplicates) or to find the slot to record a signature on after a version is finalized.
-**Do not use for:** The report content (gnubok_preview_arsredovisning) or the version list (gnubok_list_arsredovisning_versions).
+**Do not use for:** The report content (accounted_preview_arsredovisning) or the version list (accounted_list_arsredovisning_versions).
 
 **Pitfalls:**
 - Declined slots are listed too; they do not appear in the document.
@@ -2213,11 +3377,12 @@ Adds a pending signer slot (role and name) to the roster for the räkenskapsår.
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
 {
-  role: "Styrelseledamot" | "Styrelseordförande" | "VD" | "Verkställande direktör",
+  role: "Styrelseledamot" | "Styrelseordförande" | "VD" | "Verkställande direktör" | "Auktoriserad revisor" | "Godkänd revisor" | "Huvudansvarig revisor",
   signer_name: string
 }
 ```
@@ -2291,7 +3456,7 @@ Example response `200`:
 status signed records the evidence of a signature made outside the product (a paper original or an advanced e-signature): the ready_for_signature version it is for, the method, where the original is kept (evidence_reference) and the signing time. status declined marks the slot declined. Only a pending slot of this period transitions, once. ÅRL requires each signer to date their signature; the date must fall between the version's finalization and today. Idempotent. Dry-runnable.
 
 **Use when:** The board has signed the printed or e-signed document and the signatures are to be registered.
-**Do not use for:** Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing (not available here).
+**Do not use for:** Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing in Accounted (POST .../versions/{versionId}/signing-request).
 
 **Pitfalls:**
 - A version that is not ready_for_signature answers 409 ARSREDOVISNING_VERSION_NOT_SIGNABLE.
@@ -2299,6 +3464,9 @@ status signed records the evidence of a signature made outside the product (a pa
 - A signed_at before finalization or in the future answers 400 ARSREDOVISNING_SIGNATURE_DATE_INVALID.
 - evidence_reference is archive:<ref>, document:<id> or receipt:<ref>, not free text.
 - Recorded signatures cannot be undone: finalize a new version instead.
+- signing_method bankid answers 422 SIGNING_METHOD_RESERVED: it is set only when the board signs with BankID in Accounted. A BankID signature made in another service is advanced_e_signature.
+- A slot covered by an open or partly signed BankID signing request answers 409 ARSREDOVISNING_SIGNING_TRACK_MIXED: a version is signed one way.
+- A revisor's slot (the revisorspåteckning) is recorded only after every board slot of the version is signed (409 ARSREDOVISNING_PATECKNING_BEFORE_BOARD), in the board's medium: advanced_e_signature when the board signed electronically, paper_original when it signed on paper (409 ARSREDOVISNING_PATECKNING_MEDIUM_MIXED), and once the profile's auditor_opinion is answered (409 ARSREDOVISNING_PATECKNING_OPINION_MISSING). The opinion and auditor_firm_name are frozen on the slot as it is signed.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2446,7 +3614,7 @@ Builds the årsredovisning from a complete read of the books (refused while an S
 **Do not use for:** Filing with Bolagsverket (dashboard only, BankID), recording signatures (PATCH .../signatures/{signatureId}) or reading the document (GET .../arsredovisning/pdf).
 
 **Pitfalls:**
-- Statements that do not tie, or (finalize) any signing-stage error, answer 409 ARSREDOVISNING_INCOMPLETE with the validation in details: run gnubok_validate_arsredovisning with stage signing first.
+- Statements that do not tie, or (finalize) any signing-stage error, answer 409 ARSREDOVISNING_INCOMPLETE with the validation in details: run accounted_validate_arsredovisning with stage signing first.
 - finalize needs a confirmed signer roster (PATCH .../compliance {"signer_roster_confirmed": true}) and at least one signer.
 - Content changed since the hash you pass: 409 ARSREDOVISNING_CONTENT_CHANGED; dry-run again and review.
 - A new finalize supersedes the previous ready_for_signature version; signatures recorded on it do not carry over.
@@ -2457,6 +3625,7 @@ Builds the årsredovisning from a complete read of the books (refused while an S
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -2532,20 +3701,124 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/versions/{versionId}/signing-request`
+
+**Send a locked årsredovisning version to the board for BankID signing: one link per signer slot.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+For a ready_for_signature version. Renders the copy the board signs (no dates or lines to fill in: each date is in the BankID signature), archives it and creates a signing request with one signer per pending slot, mailed when an email is given. Each BankID signature fills its slot (signing_method bankid, the signing time); when the last one lands the version is signed and can be filed. The signer's BankID name must match the slot's name, or the signature is refused (Bolagsverket checks the names). Read progress with GET /signing-requests/{id}. The fastställelseintyg is signed at Bolagsverket after the årsstämma, not here. Dry-runnable.
+
+**Use when:** The årsredovisning is locked and every board member and the VD can sign with Swedish BankID.
+**Do not use for:** A board where someone lacks Swedish BankID (sign elsewhere and record each signature with PATCH .../signatures/{signatureId}), or the fastställelseintyg.
+
+**Pitfalls:**
+- Every pending slot gets a signer; list them with GET .../signatures. A slot you leave out is still included, without an email.
+- ARSREDOVISNING_SIGNING_TRACK_MIXED: a slot already has a signature recorded by hand; this version is signed that way.
+- SIGNING_REQUEST_ALREADY_OPEN: the version already waits in another request (details.signing_request_id).
+- A name in the roster that differs from the signer's BankID name is refused at signing (SIGNING_NAME_MISMATCH): fix the name and lock a new version.
+- Locking a new version cancels this request; signatures already made stay on the old version.
+- SIGNING_CAPABILITY_BLOCKED: signing is part of the paid plan and the trial; the company has neither.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `versionId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  signers: { signature_id: string, email?: string | null, user_id?: string | null }[],
+  message?: string | null,
+  expires_in_days?: number | null,
+  send_email?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "signers": [
+    {
+      "signature_id": "7c1a…",
+      "email": "anna@example.se"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signing_request_id: string,
+    status: "open",
+    title: string,
+    document_id: string,
+    document_sha256: string,
+    expires_at: string,
+    signers: { signer_id: string, position: number, name: string, email: string | null, annual_report_signature_id: string | null, lock: "none" | "member" | "personnummer", email_sent: boolean, url: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signing_request_id": "8e1d…",
+    "status": "open",
+    "title": "Årsredovisning för räkenskapsåret 2026-01-01 till 2026-12-31",
+    "document_id": "4f1c…",
+    "document_sha256": "9b2e…",
+    "expires_at": "2027-03-19T09:00:00.000Z",
+    "signers": [
+      {
+        "signer_id": "2c7b…",
+        "position": 1,
+        "name": "Anna Svensson",
+        "email": "anna@example.se",
+        "annual_report_signature_id": "7c1a…",
+        "lock": "none",
+        "email_sent": true,
+        "url": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/close`
 
 **Close a fiscal period (IRREVERSIBLE per BFL 5 kap 8 §).**
 `scope:bookkeeping:write · risk:high · idempotent`
 
-Sets is_closed=true + closed_at on the period. Pre-requisites: period must be locked (call /lock first) AND year-end closing must have been executed (call /year-end first). Sync. The DB blocks any subsequent JE inserts.
+Sets is_closed=true + closed_at on the period. /year-end already locks and closes the period, so this is a recovery path only: it finalizes a year-end that posted its closing entry and locked the period but stopped before the close. Pre-requisites: locked AND closing_entry_id set. Sync. The DB blocks any subsequent JE inserts.
 
-**Use when:** Final step in the year-end flow: lock → year-end → close. Closing freezes the period for BFL 7 kap retention.
+**Use when:** Recovery only: a /year-end that posted its closing entry and locked the period but did not reach the close. In the normal flow /year-end closes the period itself, and a later /close returns 409 PERIOD_ALREADY_CLOSED. Closing freezes the period for BFL 7 kap retention.
 **Do not use for:** Locking a period (use /lock). Running the year-end closing entry (use /year-end). UNDOING a close (not supported, irreversible).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - IRREVERSIBLE. Once is_closed=true, the period is read-only forever (BFL 5 kap 8 § + 7 kap).
-- Pre-conditions: locked + closing_entry_id present. Otherwise the call returns CONFLICT.
+- Pre-conditions: locked + closing_entry_id present. Otherwise 400 PERIOD_NOT_LOCKED or 400 YEAR_END_NOT_RUN; an already closed period returns 409 PERIOD_ALREADY_CLOSED.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2555,7 +3828,7 @@ Sets is_closed=true + closed_at on the period. Pre-requisites: period must be lo
 Response `200`:
 ```ts
 {
-  data: { id: string, is_closed: true, closed_at: string },
+  data: { id: string, handle?: string, is_closed: true, closed_at: string },
   meta: {
     request_id: string,
     api_version: string,
@@ -2599,18 +3872,21 @@ Closes and locks an imported historical räkenskapsår whose bokslut was done in
 - A year bookkept here with result accounts answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING: run the year-end instead.
 - A running year answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED.
 - Unbooked bank transactions answer 400 PERIOD_HAS_UNBOOKED_TRANSACTIONS with the count in details.reason.
+- A year that an SIE import, or its undo, still holds answers 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume or undo the import first.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     period_start: string,
     period_end: string,
@@ -2717,9 +3993,87 @@ Example response `200`:
   "data": {
     "operation_id": "0e9c…",
     "type": "fiscal_periods.currency_revaluation",
-    "status": "succeeded",
+    "status": "queued",
     "poll_url": "/api/v1/operations/0e9c…",
     "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PUT /api/v1/companies/{companyId}/fiscal-periods/{id}/deferred-tax`
+
+**Save the uppskjuten skatt inputs of a K3 year: whether the tax loss carried forward is recognised and why, and differences entered by hand.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+K3 kapitel 29. The register computes the buildings' differences itself (their tax plan against the carrying amount); this saves what it cannot know: the 29.29 judgement that a tax loss carried forward will be used (recognised only with the reason written down), and temporary differences entered by hand (an item whose carrying amount and tax value differ, e.g. a provision deductible when paid). Untaxed reserves stay gross (29.37) and are never entered. The deferred tax is posted with the year-end dispositions (uppskjuten_skatt_kap29). K3 years only. Dry-runnable.
+
+**Use when:** Before posting the year-end dispositions of a K3 year with a tax loss or a temporary difference the register does not compute.
+**Do not use for:** K2 years (no deferred tax) or obeskattade reserver.
+
+**Pitfalls:**
+- loss_recognised needs loss_reason (29.29): 400 VALIDATION_ERROR.
+- K2 years answer 422 DEFERRED_TAX_NOT_APPLICABLE; a locked or closed year 409 PERIOD_LOCKED.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  loss_recognised: boolean,
+  loss_reason?: string | null,
+  manual_items: { label: string, nature: "asset" | "liability", carrying_amount: number, tax_value: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "loss_recognised": true,
+  "loss_reason": "Avtal ger vinst 2027.",
+  "manual_items": []
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    fiscal_period_id: string,
+    loss_recognised: boolean,
+    loss_reason: string | null,
+    manual_items: { label: string, nature: string, carrying_amount: number, tax_value: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "fiscal_period_id": "0c1e…",
+    "loss_recognised": true,
+    "loss_reason": "Avtal ger vinst 2027.",
+    "manual_items": []
   },
   "meta": {
     "request_id": "req_…",
@@ -2735,14 +4089,16 @@ Example response `200`:
 **Lock a fiscal period (no new entries can be posted into it).**
 `scope:bookkeeping:write · risk:high · idempotent · reversible`
 
-Sets locked_at on the period. Refuses if uncategorised business transactions remain in the period: they must be bokfört first. The DB trigger blocks JE inserts into locked periods; locking is the application-level pre-step before /close. Sync.
+Sets locked_at on the period. Refuses if uncategorised business transactions remain in the period: they must be bokfört first. The DB trigger blocks JE inserts into locked periods. /year-end locks and closes a fiscal year itself, so this is for interim locks. Sync.
 
-**Use when:** Finishing a period and you want to stop new postings. Step 1 of a three-step year-end flow: lock → year-end → close.
+**Use when:** Freezing a finished period you are NOT year-end closing (an interim month or quarter). Do not lock a fiscal year before /year-end: year-end posts its closing entry into the open period, then locks and closes it itself, and refuses a locked one.
 **Do not use for:** Locking an already-closed period (no-op). Bypassing the uncategorised-transactions guard: categorise or mark-private first.
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
-- A period with uncategorised business transactions cannot be locked; the response surfaces the count.
+- A period with uncategorised business transactions cannot be locked: 400 PERIOD_HAS_UNBOOKED_TRANSACTIONS, the message names the count.
+- An already locked period returns 409 PERIOD_LOCK_ALREADY_LOCKED; a closed one 409 PERIOD_ALREADY_CLOSED.
+- A year that an SIE import, or its undo, still holds returns 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume it (POST /imports/sie/{id}/resume) or undo it (POST /imports/sie/{id}/undo) first, then lock.
 - Locking is reversible until /close: POST /fiscal-periods/{id}/unlock lifts it.
 
 | Parameter | In | Type | Required | Notes |
@@ -2753,7 +4109,7 @@ Sets locked_at on the period. Refuses if uncategorised business transactions rem
 Response `200`:
 ```ts
 {
-  data: { id: string, locked_at: string, is_closed: boolean },
+  data: { id: string, handle?: string, locked_at: string, is_closed: boolean },
   meta: {
     request_id: string,
     api_version: string,
@@ -2790,12 +4146,12 @@ Example response `200`:
 
 Reads the closed period's trial balance, filters to BAS class 1-2 accounts with non-zero closing balance, and posts an opening verifikation (status=posted) onto the next_period_id. Sync. The path id is the CLOSED period; body.next_period_id is the target.
 
-**Use when:** After /year-end + /close on a period, generate the IB into the next period so the new year starts with the correct balance sheet.
-**Do not use for:** Posting opening balances on a manually-edited basis (use POST /journal-entries with source_type=manual). Re-running on the same target period (will produce duplicate IB entries).
+**Use when:** Rarely: /year-end already generates the next year's IB. Use this only to carry a closed period's UB into a next year that has no IB yet (e.g. a year closed outside the year-end flow).
+**Do not use for:** Typing opening balances by hand (POST /fiscal-periods/{id}/opening-balances/manual) or correcting an IB (POST /fiscal-periods/{id}/opening-balances/correct). Re-running on the same target period (refused with 409 CONFLICT, details.reason opening_balance_already_posted).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
-- next_period_id must reference the SAME company and must NOT already have an IB entry. The engine throws if it does.
+- next_period_id must reference the SAME company and must NOT already have an IB: the period's linked IB or any posted source_type=opening_balance verifikat. Otherwise 409 CONFLICT with details.reason opening_balance_already_posted and details.existing_entry_id; nothing is posted. A reversed (stornoed) IB does not count.
 - Only class 1 (assets) and 2 (equity/liabilities) flow into the IB; class 3-8 are zeroed by the closing entry.
 
 | Parameter | In | Type | Required | Notes |
@@ -2865,12 +4221,14 @@ Books the corrected IB verifikat from the lines given (the complete IB, not a di
 - A company lock date on or after the year's start answers 409 OB_COMPANY_LOCK_DATE.
 - If the storno or relink fails the new IB is stornoed again and 500 OB_CORRECT_FAILED names both entry ids: the year keeps its old IB.
 - cascade is best effort per later year: read cascade.skipped in the response and correct those years by hand.
+- Owner or admin only: a member key gets 403 FORBIDDEN before anything is booked.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -2984,6 +4342,7 @@ Posts the IB verifikat (source_type opening_balance, series A, dated the year's 
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -3228,6 +4587,7 @@ Applies the split GET /fiscal-periods/{id}/opening-balances/split-per-project pr
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -3314,12 +4674,14 @@ Reopens and unlocks a räkenskapsår that close-external closed, and writes the 
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     period_start: string,
     period_end: string,
@@ -3385,12 +4747,14 @@ Clears locked_at so the year accepts postings again, and writes the unlock to th
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     period_start: string,
     period_end: string,
@@ -3442,15 +4806,17 @@ Example response `200`:
 **Execute year-end closing (currency revaluation + closing entry).**
 `scope:bookkeeping:write · risk:high · idempotent`
 
-Async-operation endpoint. Runs the year-end closing flow: currency revaluation (FX gains/losses to 3960/7960), then posts the closing entry that zeroes class 3-8 onto årets resultat (2099 for AB, the relevant eget-kapital account in the 2010-2019 range for enskild firma: the engine resolves which based on company.entity_type). Returns 202 with operation_id; subscribe to operation.completed or poll /v1/operations/{id}.
+Async-operation endpoint. Runs the year-end closing flow: currency revaluation (FX gains/losses to 3960/7960), then posts the closing entry that zeroes class 3-8 onto årets resultat (2099 for AB, the relevant eget-kapital account in the 2010-2019 range for enskild firma: the engine resolves which based on company.entity_type). It then locks and closes the period and posts the next year's opening balances itself. Returns 202 with operation_id: poll GET /api/v1/operations/{id}; the period.year_closed webhook fires when the closing completes.
 
-**Use when:** After /lock and a passing /compliance/check?type=year_end_readiness, you want to run the closing entry. This is step 2 of the lock → year-end → close flow.
-**Do not use for:** Re-running year-end (per-period idempotent: fails if closing_entry_id is already set). Closing the period (use /close after year-end succeeds).
+**Use when:** The period has ended and GET /compliance/check?type=year_end_readiness passes. Run it on an UNLOCKED period: it posts the closing entry, then locks and closes the period and generates the next year's IB itself, so there is no separate /lock, /close or /opening-balances step.
+**Do not use for:** Re-running year-end (per-period idempotent: fails if closing_entry_id is already set). Locking or closing the period first (/close is only a recovery path for a year-end that stopped after its closing entry).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - Period must pass year_end_readiness checks (no drafts, no unexplained voucher gaps, trial balance balanced). The engine re-validates and aborts if not.
+- A locked period fails the operation (YEAR_END_FAILED, the message names the lock): unlock it with POST /fiscal-periods/{id}/unlock and run year-end on the open period. Do not call /lock first.
 - Closing entry is itself a verifikation (posted): the period must NOT already be closed.
+- A company lock date (bookkeeping_locked_through) on or after the period's last day stops the year-end before anything is posted; year_end_readiness reports it. The automatic lock (auto_lock_period_days) puts the date there that many days after the year ends. Move it back with PATCH /settings/bookkeeping-lock first, with auto_lock_period_days: null while the closing is done: the automatic lock can move the date forward again the next night.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3485,9 +4851,915 @@ Example response `200`:
   "data": {
     "operation_id": "0e9c…",
     "type": "fiscal_periods.year_end",
-    "status": "succeeded",
+    "status": "queued",
     "poll_url": "/api/v1/operations/0e9c…",
     "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/group-links`
+
+**List the company's group structure: its parent, subsidiaries and associates with ownership and votes over time.**
+`scope:companies:read · risk:low · idempotent`
+
+applies is false for a legal form that prepares no årsredovisning (an enskild firma). The parent link that holds on the balance date prefills the koncernförhållanden note.
+
+**Use when:** You need the parent company for the årsredovisning, or which companies the company owns.
+**Do not use for:** Consolidated accounts (koncernredovisning is not prepared here).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    group_links: { group_link_id: string, relation: "parent" | "subsidiary" | "associate", counterparty_name: string, counterparty_org_number: string | null, counterparty_registered_office: string | null, party_id: string | null, ownership_percent: number | null, voting_percent: number | null, valid_from: string | null, valid_to: string | null, bas_account: string | null, linked_company_id: string | null, notes: string | null }[],
+    applies: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "group_links": [
+      {
+        "group_link_id": "3a77…",
+        "relation": "parent",
+        "counterparty_name": "Ägarbolaget AB",
+        "counterparty_org_number": "559000-0000",
+        "counterparty_registered_office": "Stockholm",
+        "party_id": null,
+        "ownership_percent": 100,
+        "voting_percent": 100,
+        "valid_from": "2024-01-01",
+        "valid_to": null,
+        "bas_account": null,
+        "linked_company_id": null,
+        "notes": null
+      }
+    ],
+    "applies": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/group-links`
+
+**Register a parent, subsidiary or associate of the company.**
+`scope:companies:write · risk:low · idempotent · dry-run`
+
+counterparty_registered_office (säte) and counterparty_org_number go into the koncernförhållanden note for a parent. linked_company_id names the same company in Accounted when it is in the caller's team. Dry-runnable.
+
+**Use when:** The company is owned by another company, or owns shares in one.
+**Do not use for:** Individual shareholders (the aktiebok) or an enskild firma (no group structure).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- GROUP_LINKS_NOT_FOR_LEGAL_FORM: only companies that prepare an årsredovisning have a group structure here.
+- GROUP_LINK_COMPANY_NOT_IN_TEAM: linked_company_id must be another company in the same team.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  relation: "parent" | "subsidiary" | "associate",
+  counterparty_name: string,
+  counterparty_org_number?: string | null,
+  counterparty_registered_office?: string | null,
+  party_id?: string | null,
+  ownership_percent?: number | null,
+  voting_percent?: number | null,
+  valid_from?: string | null,
+  valid_to?: string | null,
+  bas_account?: string | null,
+  linked_company_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "relation": "parent",
+  "counterparty_name": "Ägarbolaget AB",
+  "counterparty_org_number": "559000-0000",
+  "counterparty_registered_office": "Stockholm",
+  "ownership_percent": 100,
+  "voting_percent": 100,
+  "valid_from": "2024-01-01"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    group_link_id: string,
+    relation: "parent" | "subsidiary" | "associate",
+    counterparty_name: string,
+    counterparty_org_number: string | null,
+    counterparty_registered_office: string | null,
+    party_id: string | null,
+    ownership_percent: number | null,
+    voting_percent: number | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    bas_account: string | null,
+    linked_company_id: string | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "group_link_id": "3a77…",
+    "relation": "parent",
+    "counterparty_name": "Ägarbolaget AB",
+    "counterparty_org_number": "559000-0000",
+    "counterparty_registered_office": "Stockholm",
+    "party_id": null,
+    "ownership_percent": 100,
+    "voting_percent": 100,
+    "valid_from": "2024-01-01",
+    "valid_to": null,
+    "bas_account": null,
+    "linked_company_id": null,
+    "notes": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/group-links/{id}`
+
+**Change a group link, or end it with valid_to.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Send only the fields that change; null clears one. Dry-runnable.
+
+**Use when:** Ownership changed, the parent sold the company, a subsidiary was wound up.
+**Do not use for:** Removing history: an ended relation keeps its row with valid_to.
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- GROUP_LINK_NOT_FOUND
+- GROUP_LINKS_NOT_FOR_LEGAL_FORM
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  relation?: "parent" | "subsidiary" | "associate",
+  counterparty_name?: string,
+  counterparty_org_number?: string | null,
+  counterparty_registered_office?: string | null,
+  party_id?: string | null,
+  ownership_percent?: number | null,
+  voting_percent?: number | null,
+  valid_from?: string | null,
+  valid_to?: string | null,
+  bas_account?: string | null,
+  linked_company_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "ownership_percent": 60
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    group_link_id: string,
+    relation: "parent" | "subsidiary" | "associate",
+    counterparty_name: string,
+    counterparty_org_number: string | null,
+    counterparty_registered_office: string | null,
+    party_id: string | null,
+    ownership_percent: number | null,
+    voting_percent: number | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    bas_account: string | null,
+    linked_company_id: string | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "group_link_id": "3a77…",
+    "relation": "parent",
+    "counterparty_name": "Ägarbolaget AB",
+    "counterparty_org_number": "559000-0000",
+    "counterparty_registered_office": "Stockholm",
+    "party_id": null,
+    "ownership_percent": 60,
+    "voting_percent": 100,
+    "valid_from": "2024-01-01",
+    "valid_to": null,
+    "bas_account": null,
+    "linked_company_id": null,
+    "notes": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/k3-transition`
+
+**Read the company's transition to K3 (kap. 35): the first K3 year, the relief chosen, the note facts, and the assets the 35.18 split concerns.**
+`scope:reports:read · risk:low · idempotent · reversible`
+
+transition is null until it is started. committed is true once the transition voucher is posted (or the transition was committed with nothing to book); a storno of the voucher opens it again. assets lists the tangible assets from before the transition date with their carrying amount at the transition and their split status (plain, split, components, later_depreciation_posted). With fiscal_period_id, year answers that year's framework.
+
+**Use when:** Before the first K3 year-end after K2, or to check whether the transition is done before the årsredovisning.
+**Do not use for:** The K2/K3 choice itself (company settings) or the årsredovisning's notes.
+
+**Pitfalls:**
+- Only the mindre företag route is supported: the transition date is the first day of the first K3 year and comparatives are not restated.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `fiscal_period_id` | query | `string` | no | A fiscal year whose framework to answer as year. |
+
+Response `200`:
+```ts
+{
+  data: {
+    transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
+    committed: boolean,
+    transition_date: string | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transition": null,
+    "committed": false,
+    "transition_date": null,
+    "year": null,
+    "assets": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/k3-transition`
+
+**Start the transition to K3 on the first K3 fiscal year (an open year reported under K3).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+K3 kapitel 35, once per company (35.1). The transition date is the first day of that year (35.7 andra stycket: a mindre företag that does not restate its comparatives). Nothing is booked: the component split (assets.transition-split.set), the relief choice and note facts (k3-transition.update) and the commit (k3-transition.commit) follow. Dry-runnable.
+
+**Use when:** A company that prepared its earlier årsredovisningar under K2 closes its first K3 year.
+**Do not use for:** A new company whose first year is K3 (no earlier financial report: nothing to transition).
+
+**Pitfalls:**
+- The year must be open and reported under K3: 409 K3_TRANSITION_BLOCKED (not_k3, period_locked, already_started).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ fiscal_period_id: string }
+```
+
+Example request:
+```json
+{
+  "fiscal_period_id": "0c1e…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
+    committed: boolean,
+    transition_date: string | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transition": {
+      "k3_transition_id": "9f3b…"
+    },
+    "committed": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/k3-transition`
+
+**Set the transition's 35.27 relief and the facts its notes state: the relief rules applied (35.31) and the principles changed (35.33).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+deferred_tax_relief true: no deferred tax in the opening balance (35.27, only when the information cannot be produced without unreasonable cost); it is fixed once the transition is committed. relief_rules are the other relief rules applied (35.21-35.26, 35.28, 35.29, 35.34); changed_principles describes the accounting principles changed at the transition. The notes stay editable after the commit. Dry-runnable.
+
+**Use when:** While preparing the first K3 year, before the commit and the årsredovisning.
+**Do not use for:** Booking anything (k3-transition.commit).
+
+**Pitfalls:**
+- The relief cannot change once the transition is committed: reverse the voucher first.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  deferred_tax_relief?: boolean,
+  relief_rules?: ("35.21" | "35.22" | "35.23" | "35.24" | "35.25" | "35.26" | "35.28" | "35.29" | "35.34")[],
+  changed_principles?: string
+}
+```
+
+Example request:
+```json
+{
+  "deferred_tax_relief": false,
+  "relief_rules": [
+    "35.22"
+  ],
+  "changed_principles": "Byggnader skrivs av per komponent (K3 17.4)."
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
+    committed: boolean,
+    transition_date: string | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transition": {
+      "k3_transition_id": "9f3b…",
+      "relief_rules": [
+        "35.22"
+      ]
+    },
+    "committed": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/k3-transition`
+
+**Drop a transition to K3 that is not committed and has no component splits left.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Undoes k3-transition.start. Refused once committed (reverse the voucher first) or while assets are split at it (undo each split first). Dry-runnable.
+
+**Use when:** The transition was started on the wrong year, or the company was on K3 all along.
+**Do not use for:** Undoing a posted transition (storno the transition voucher).
+
+**Pitfalls:**
+- 409 K3_TRANSITION_BLOCKED (committed, has_splits).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Response `200`:
+```ts
+{
+  data: { k3_transition_id: string, deleted: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "k3_transition_id": "9f3b…",
+    "deleted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/k3-transition/commit`
+
+**Post the transition to K3: the opening deferred tax and the stated adjustments against equity on the first day of the first K3 year.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
+
+K3 punkt 35.11. One system voucher dated the transition date: the opening deferred tax (the buildings on their tax plan at the day before, a tax loss brought in with its 29.29 reason, differences entered by hand; net on 2240 or 1370, 29.32) unless the 35.27 relief is chosen, and each stated adjustment (a balance sheet account and amount, + debit / - credit) against balanserat resultat. Locked and closed years are never touched. Nothing to book commits without a voucher. The dry run answers the voucher lines. A storno of the voucher opens the transition again.
+
+**Use when:** After the component splits and the relief choice, before the first K3 year-end.
+**Do not use for:** Year-end deferred tax (posted with the dispositions) or corrections of earlier years (rättelse of fel, K3 kap. 10).
+
+**Pitfalls:**
+- Adjustments only on balance sheet accounts outside equity and 2240/1370: 400 INVALID_K3_TRANSITION.
+- loss_carryforward needs the reason that convincingly supports its use (29.29).
+- Once committed: 409 K3_TRANSITION_BLOCKED (committed).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  adjustments?: { account_number: string, amount: number, description: string }[],
+  loss_carryforward?: { deficit: number, reason: string } | null,
+  manual_items?: { label: string, nature: "asset" | "liability", carrying_amount: number, tax_value: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "adjustments": [],
+  "loss_carryforward": {
+    "deficit": 100000,
+    "reason": "Avtal ger vinst 2027."
+  },
+  "manual_items": []
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string | null,
+    transition_date: string,
+    opening_deferred_tax: number,
+    lines: { account_number: string, debit: number, credit: number, description: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "c41d…",
+    "transition_date": "2026-01-01",
+    "opening_deferred_tax": 20600,
+    "lines": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/securities`
+
+**List ställda säkerheter and eventualförpliktelser, with the årsredovisning note texts they give on a balance date.**
+`scope:companies:read · risk:low · idempotent`
+
+Rows are dated (valid_from, valid_to); the note texts count the rows that hold on balance_date (default today), per K2 type, with borgen always stated and what was given for group companies apart. A manual text on the årsredovisning overrides them.
+
+**Use when:** You prepare the årsredovisning notes, or need to know what the company has pledged or guaranteed.
+**Do not use for:** Loans themselves (agreements of kind loan).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `balance_date` | query | `string` | no | yyyy-MM-dd the note texts are stated per; default today. |
+
+Response `200`:
+```ts
+{
+  data: {
+    securities: { security_id: string, kind: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency", pledged: boolean, description: string, amount: number, in_favour_of_party_id: string | null, in_favour_of_name: string | null, for_group_company: boolean, agreement_id: string | null, valid_from: string | null, valid_to: string | null, document_id: string | null, notes: string | null }[],
+    balance_date: string,
+    note_texts: { securities_pledged: string | null, contingent_liabilities: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "securities": [
+      {
+        "security_id": "91c0…",
+        "kind": "foretagsinteckning",
+        "pledged": true,
+        "description": "Företagsinteckning för checkkredit",
+        "amount": 500000,
+        "in_favour_of_party_id": null,
+        "in_favour_of_name": "Handelsbanken",
+        "for_group_company": false,
+        "agreement_id": null,
+        "valid_from": "2025-03-01",
+        "valid_to": null,
+        "document_id": null,
+        "notes": null
+      }
+    ],
+    "balance_date": "2026-12-31",
+    "note_texts": {
+      "securities_pledged": "Företagsinteckningar 500 000 kr.",
+      "contingent_liabilities": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/securities`
+
+**Register a ställd säkerhet or an eventualförpliktelse.**
+`scope:companies:write · risk:low · idempotent · dry-run`
+
+amount is the mortgage amount (pantbrev, företagsinteckning), the book value of the pledged asset or the guaranteed amount, in SEK. for_group_company marks what was given for a group company (stated apart). A released one gets valid_to through PATCH; rows are never deleted. Dry-runnable.
+
+**Use when:** The bank took a företagsinteckning, a property is mortgaged, an asset was bought under äganderättsförbehåll, the company signed a borgen.
+**Do not use for:** The loan itself (POST /agreements, kind loan; link it with agreement_id).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_REFERENCE_NOT_FOUND: in_favour_of_party_id, agreement_id or document_id is not the company's (details.field).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  kind: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency",
+  description: string,
+  amount: number,
+  in_favour_of_name?: string | null,
+  in_favour_of_party_id?: string | null,
+  for_group_company?: boolean,
+  agreement_id?: string | null,
+  valid_from?: string | null,
+  valid_to?: string | null,
+  document_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "kind": "foretagsinteckning",
+  "description": "Företagsinteckning för checkkredit",
+  "amount": 500000,
+  "in_favour_of_name": "Handelsbanken",
+  "valid_from": "2025-03-01"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    security_id: string,
+    kind: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency",
+    pledged: boolean,
+    description: string,
+    amount: number,
+    in_favour_of_party_id: string | null,
+    in_favour_of_name: string | null,
+    for_group_company: boolean,
+    agreement_id: string | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    document_id: string | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "security_id": "91c0…",
+    "kind": "foretagsinteckning",
+    "pledged": true,
+    "description": "Företagsinteckning för checkkredit",
+    "amount": 500000,
+    "in_favour_of_party_id": null,
+    "in_favour_of_name": "Handelsbanken",
+    "for_group_company": false,
+    "agreement_id": null,
+    "valid_from": "2025-03-01",
+    "valid_to": null,
+    "document_id": null,
+    "notes": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/securities/{id}`
+
+**Change a ställd säkerhet or an eventualförpliktelse, or release it with valid_to.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Send only the fields that change; null clears one. Dry-runnable.
+
+**Use when:** A mortgage was raised, a borgen released, the book value of a pledged asset changed.
+**Do not use for:** Removing history: a released security keeps its row with valid_to.
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- SECURITY_NOT_FOUND
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  kind?: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency",
+  description?: string,
+  amount?: number,
+  in_favour_of_name?: string | null,
+  in_favour_of_party_id?: string | null,
+  for_group_company?: boolean,
+  agreement_id?: string | null,
+  valid_from?: string | null,
+  valid_to?: string | null,
+  document_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "valid_to": "2026-06-30"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    security_id: string,
+    kind: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency",
+    pledged: boolean,
+    description: string,
+    amount: number,
+    in_favour_of_party_id: string | null,
+    in_favour_of_name: string | null,
+    for_group_company: boolean,
+    agreement_id: string | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    document_id: string | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "security_id": "91c0…",
+    "kind": "foretagsinteckning",
+    "pledged": true,
+    "description": "Företagsinteckning för checkkredit",
+    "amount": 500000,
+    "in_favour_of_party_id": null,
+    "in_favour_of_name": "Handelsbanken",
+    "for_group_company": false,
+    "agreement_id": null,
+    "valid_from": "2025-03-01",
+    "valid_to": "2026-06-30",
+    "document_id": null,
+    "notes": null
   },
   "meta": {
     "request_id": "req_…",
@@ -3509,7 +5781,7 @@ Reads the company's skattekonto saldo and transactions (booked and upcoming) fro
 **Do not use for:** Booking skattekonto rows, or importing a skattekonto file (POST /imports/skattekonto-file).
 
 **Pitfalls:**
-- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about ten hours by design). Only a person can reconnect; do not retry until they confirm.
 - The paid Skatteverket capability is required: 403 SKATTEVERKET_CAPABILITY_BLOCKED otherwise.
 - Skatteverket only returns roughly the last 555 days; older history comes from a skattekonto file import.
 
@@ -3572,7 +5844,7 @@ Sends one arbetsgivardeklaration huvuduppgift (AGI API v1.7 section 7: agRegistr
 **Do not use for:** Filing (POST /salary-runs/{id}/generate-agi, then the BankID-signed submission) or checking a salary run booked in Accounted (the submission flow validates it).
 
 **Pitfalls:**
-- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about ten hours by design). Only a person can reconnect; do not retry until they confirm.
 - redovisningsPeriod is YYYYMM and no earlier than 201807; amounts are whole kronor.
 - A payload that breaks the v1.7 schema answers 400 VALIDATION_ERROR before anything reaches Skatteverket.
 - status OK or INFO means Skatteverket would accept the figures; it never checks them against the books.
@@ -3654,7 +5926,7 @@ Sends one individuppgift (AGI API v1.7 section 8: the payee, specifikationsnumme
 **Do not use for:** Filing, or salary runs booked in Accounted (the AGI submission flow builds and validates their individuppgifter).
 
 **Pitfalls:**
-- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about ten hours by design). Only a person can reconnect; do not retry until they confirm.
 - betalningsmottagarId is the payee's personnummer (12 digits): it is sent to Skatteverket and not stored by Accounted beyond the audit row's metadata.
 - forstaAnstalld and vaxaStod (FK062/FK063) exist only through redovisningsPeriod 202512 and are mutually exclusive. Setting either for 202601 or later answers 400 VALIDATION_ERROR: växa-stöd is now a refund applied for after filing (Lag 2025:1334), and the individuppgift carries the full avgifter.
 - A payload that breaks the v1.7 schema answers 400 VALIDATION_ERROR before anything reaches Skatteverket.
@@ -3674,14 +5946,18 @@ Request body:
   avdrPrelSkatt?: number,
   skatteplBilformanUlagAG?: number,
   drivmVidBilformanUlagAG?: number,
-  kostformanUlagAG?: number,
   skatteplOvrigaFormanerUlagAG?: number,
   bostadsformanSmahusUlagAG?: boolean,
   bostadsformanEjSmahusUlagAG?: boolean,
+  kontantErsattningUlagEA?: number,
+  skatteplBilformanUlagEA?: number,
+  drivmVidBilformanUlagEA?: number,
+  skatteplOvrigaFormanerUlagEA?: number,
+  bostadsformanSmahusUlagEA?: boolean,
+  bostadsformanEjSmahusUlagEA?: boolean,
   kontantErsattningEjUlagSA?: number,
   skatteplBilformanEjUlagSA?: number,
   drivmVidBilformanEjUlagSA?: number,
-  kostformanEjUlagSA?: number,
   skatteplOvrigaFormanerEjUlagSA?: number,
   bostadsformanSmahusEjUlagSA?: boolean,
   bostadsformanEjSmahusEjUlagSA?: boolean,
@@ -3791,6 +6067,358 @@ Example response `200`:
       "mervardesskattTillfalle": "2026-04-10"
     },
     "decided": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/tax-loss-carryforwards`
+
+**The underskottsregister: prior years' tax losses per fiscal year (IL 40 kap.), oldest first.**
+`scope:reports:read · risk:low · idempotent`
+
+Each fiscal year with its deficit brought forward (INK2S 4.14 a), the spärrar (4.14 b beloppsspärr and similar, 4.14 c koncernbidragsspärr), the result before the deduction, and the deficit carried forward to the next year. Each year is checked against the one before it; warnings say when 4.14 a differs from what the previous year carries forward, when a spärr could not be computed, or when an earlier year changed. Read-only.
+
+**Use when:** Preparing the tax provision or INK2, or checking how a company's tax losses roll forward.
+**Do not use for:** The tax return itself (GET /reports/ink2) or booking anything (the register books nothing).
+
+**Pitfalls:**
+- LOSS_CARRYFORWARD_UNAVAILABLE: the register is not switched on for this company.
+- LOSS_CARRYFORWARD_FORM_UNSUPPORTED: only for companies that file INK2 (aktiebolag, ekonomisk förening).
+- Amounts are kronor and öre; INK2 takes whole kronor.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    tax_loss_carryforwards: { tax_loss_carryforward_id: string, fiscal_period_id: string, fiscal_period: { name: string, period_start: string, period_end: string }, fiscal_year: number, brought_forward: number, source: "manual" | "ink2_history" | "tax_assessment" | "computed", result_before_deficit: number | null, group_contributions_received: number, amount_block_reduction: number, amount_block_manual: boolean, group_block_reduction: number, group_block_manual: boolean, deductible: number, taxable_result: number | null, carried_forward: number | null, ownership_change: { date: string, source: "manual" | "aktiebok", amount_block: boolean, acquisition_cost: number | null, capital_contributions: number, amount_block_limit: number | null, group_block: boolean, group_block_last_year: number | null } | null, group_block_active: boolean, note: string | null, document_id: string | null, tax_assessment_notice_id: string | null, updated_at: string | null, warnings: { code: string, message_sv: string, message_en: string, amount?: number }[] }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "tax_loss_carryforwards": [
+      {
+        "tax_loss_carryforward_id": "5d1e…",
+        "fiscal_period_id": "7c2b…",
+        "fiscal_period": {
+          "name": "Räkenskapsår 2026",
+          "period_start": "2026-01-01",
+          "period_end": "2026-12-31"
+        },
+        "fiscal_year": 2026,
+        "brought_forward": 1000000,
+        "source": "tax_assessment",
+        "result_before_deficit": 100000,
+        "group_contributions_received": 0,
+        "amount_block_reduction": 400000,
+        "amount_block_manual": false,
+        "group_block_reduction": 0,
+        "group_block_manual": false,
+        "deductible": 600000,
+        "taxable_result": -500000,
+        "carried_forward": 500000,
+        "ownership_change": {
+          "date": "2026-06-01",
+          "source": "manual",
+          "amount_block": true,
+          "acquisition_cost": 250000,
+          "capital_contributions": 50000,
+          "amount_block_limit": 600000,
+          "group_block": false,
+          "group_block_last_year": null
+        },
+        "group_block_active": false,
+        "note": null,
+        "document_id": null,
+        "tax_assessment_notice_id": "9a4f…",
+        "updated_at": "2026-10-29T08:00:00.000Z",
+        "warnings": []
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/tax-loss-carryforwards`
+
+**Save one fiscal year of the underskottsregister: the deficit brought forward, an ownership change and the year's result.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Inserts or replaces the year by fiscal_period_id. 4.14 b (beloppsspärr: what exceeds 300 % of the utgift less kapitaltillskott, IL 40 kap. 15-16 §§) and 4.14 c (koncernbidragsspärr: the old deficit capped at the year's överskott without koncernbidrag, 40:18) are computed unless stated, and the deficit carried forward follows. The year's tax adjustments then prefill 4.14 a from it (4.14 a less 4.14 b and c). Books nothing. Dry-runnable: ?dry_run=true answers what would be stored.
+
+**Use when:** Entering the deficit from the previous year's slutskattebesked or INK2, recording an ownership change, or closing a year's figures after bokslut.
+**Do not use for:** Booking tax (the year-end dispositions) or filing INK2 (upload the SRU files at skatteverket.se).
+
+**Pitfalls:**
+- LOSS_CARRYFORWARD_UNAVAILABLE: the register is not switched on for this company.
+- LOSS_CARRYFORWARD_FORM_UNSUPPORTED: only for companies that file INK2 (aktiebolag, ekonomisk förening).
+- FISCAL_PERIOD_NOT_FOUND: the fiscal_period_id is not this company's.
+- LOSS_CARRYFORWARD_CHANGE_OUTSIDE_YEAR: the ownership change must be inside the fiscal year it is saved on.
+- LOSS_CARRYFORWARD_REDUCTIONS_EXCEED: stated 4.14 b and 4.14 c together exceed 4.14 a.
+- Without acquisition_cost the beloppsspärr is not computed and nothing is cut; the answer warns (amount_block_missing_cost).
+- Ownership changes are entered by hand; the 40:17 a overriding-reason rule, ackord and konkurs go in as a stated 4.14 b.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  fiscal_period_id: string,
+  brought_forward: number,
+  source: "manual" | "ink2_history" | "tax_assessment" | "computed",
+  result_before_deficit?: number | null,
+  group_contributions_received?: number,
+  amount_block_reduction?: number | null,
+  group_block_reduction?: number | null,
+  ownership_change?: {
+    date: string,
+    amount_block: boolean,
+    acquisition_cost?: number | null,
+    capital_contributions?: number,
+    group_block: boolean,
+    group_block_last_year?: number | null
+  } | null,
+  note?: string | null,
+  document_id?: string | null,
+  tax_assessment_notice_id?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "fiscal_period_id": "7c2b…",
+  "brought_forward": 1000000,
+  "source": "tax_assessment",
+  "tax_assessment_notice_id": "9a4f…",
+  "result_before_deficit": 100000,
+  "ownership_change": {
+    "date": "2026-06-01",
+    "amount_block": true,
+    "acquisition_cost": 250000,
+    "capital_contributions": 50000,
+    "group_block": false
+  }
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    tax_loss_carryforward_id: string,
+    fiscal_period_id: string,
+    fiscal_period: { name: string, period_start: string, period_end: string },
+    fiscal_year: number,
+    brought_forward: number,
+    source: "manual" | "ink2_history" | "tax_assessment" | "computed",
+    result_before_deficit: number | null,
+    group_contributions_received: number,
+    amount_block_reduction: number,
+    amount_block_manual: boolean,
+    group_block_reduction: number,
+    group_block_manual: boolean,
+    deductible: number,
+    taxable_result: number | null,
+    carried_forward: number | null,
+    ownership_change: { date: string, source: "manual" | "aktiebok", amount_block: boolean, acquisition_cost: number | null, capital_contributions: number, amount_block_limit: number | null, group_block: boolean, group_block_last_year: number | null } | null,
+    group_block_active: boolean,
+    note: string | null,
+    document_id: string | null,
+    tax_assessment_notice_id: string | null,
+    updated_at: string | null,
+    warnings: { code: string, message_sv: string, message_en: string, amount?: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "tax_loss_carryforward_id": "5d1e…",
+    "fiscal_period_id": "7c2b…",
+    "fiscal_period": {
+      "name": "Räkenskapsår 2026",
+      "period_start": "2026-01-01",
+      "period_end": "2026-12-31"
+    },
+    "fiscal_year": 2026,
+    "brought_forward": 1000000,
+    "source": "tax_assessment",
+    "result_before_deficit": 100000,
+    "group_contributions_received": 0,
+    "amount_block_reduction": 400000,
+    "amount_block_manual": false,
+    "group_block_reduction": 0,
+    "group_block_manual": false,
+    "deductible": 600000,
+    "taxable_result": -500000,
+    "carried_forward": 500000,
+    "ownership_change": {
+      "date": "2026-06-01",
+      "source": "manual",
+      "amount_block": true,
+      "acquisition_cost": 250000,
+      "capital_contributions": 50000,
+      "amount_block_limit": 600000,
+      "group_block": false,
+      "group_block_last_year": null
+    },
+    "group_block_active": false,
+    "note": null,
+    "document_id": null,
+    "tax_assessment_notice_id": "9a4f…",
+    "updated_at": "2026-10-29T08:00:00.000Z",
+    "warnings": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/tax-loss-carryforwards/{id}`
+
+**One fiscal year of the underskottsregister, checked against the year before it.**
+`scope:reports:read · risk:low · idempotent`
+
+The same year as the list answers, by its tax_loss_carryforward_id. Read-only.
+
+**Use when:** You hold a tax_loss_carryforward_id and need its figures and warnings.
+**Do not use for:** Finding the year for a fiscal period (list the register instead).
+
+**Pitfalls:**
+- LOSS_CARRYFORWARD_UNAVAILABLE: the register is not switched on for this company.
+- LOSS_CARRYFORWARD_NOT_FOUND: the id is not this company's.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    tax_loss_carryforward_id: string,
+    fiscal_period_id: string,
+    fiscal_period: { name: string, period_start: string, period_end: string },
+    fiscal_year: number,
+    brought_forward: number,
+    source: "manual" | "ink2_history" | "tax_assessment" | "computed",
+    result_before_deficit: number | null,
+    group_contributions_received: number,
+    amount_block_reduction: number,
+    amount_block_manual: boolean,
+    group_block_reduction: number,
+    group_block_manual: boolean,
+    deductible: number,
+    taxable_result: number | null,
+    carried_forward: number | null,
+    ownership_change: { date: string, source: "manual" | "aktiebok", amount_block: boolean, acquisition_cost: number | null, capital_contributions: number, amount_block_limit: number | null, group_block: boolean, group_block_last_year: number | null } | null,
+    group_block_active: boolean,
+    note: string | null,
+    document_id: string | null,
+    tax_assessment_notice_id: string | null,
+    updated_at: string | null,
+    warnings: { code: string, message_sv: string, message_en: string, amount?: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "tax_loss_carryforward_id": "5d1e…",
+    "fiscal_period_id": "7c2b…",
+    "fiscal_period": {
+      "name": "Räkenskapsår 2026",
+      "period_start": "2026-01-01",
+      "period_end": "2026-12-31"
+    },
+    "fiscal_year": 2026,
+    "brought_forward": 1000000,
+    "source": "tax_assessment",
+    "result_before_deficit": 100000,
+    "group_contributions_received": 0,
+    "amount_block_reduction": 400000,
+    "amount_block_manual": false,
+    "group_block_reduction": 0,
+    "group_block_manual": false,
+    "deductible": 600000,
+    "taxable_result": -500000,
+    "carried_forward": 500000,
+    "ownership_change": {
+      "date": "2026-06-01",
+      "source": "manual",
+      "amount_block": true,
+      "acquisition_cost": 250000,
+      "capital_contributions": 50000,
+      "amount_block_limit": 600000,
+      "group_block": false,
+      "group_block_last_year": null
+    },
+    "group_block_active": false,
+    "note": null,
+    "document_id": null,
+    "tax_assessment_notice_id": "9a4f…",
+    "updated_at": "2026-10-29T08:00:00.000Z",
+    "warnings": []
   },
   "meta": {
     "request_id": "req_…",

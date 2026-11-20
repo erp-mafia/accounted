@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resultClosingAccounts, retainedResultAccount } from '@/lib/company/entity-type'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
@@ -135,7 +136,7 @@ async function fetchCarryEntries(
     if (!entry) {
       entry = {
         sourceType: parent?.source_type ?? null,
-        voucher: `${parent?.voucher_series ?? ''}${parent?.voucher_number ?? ''}`,
+        voucher: parent ? formatVoucher(parent) : '',
         lines: [],
       }
       byEntry.set(line.journal_entry_id, entry)

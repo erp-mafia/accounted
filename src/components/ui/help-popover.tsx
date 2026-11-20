@@ -6,9 +6,15 @@ import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 
+/**
+ * Popover body: the page's help text (i18n `help_*` keys per namespace). A
+ * function receives `close`, for help that carries an action which opens
+ * something else (a dialog) and should take the popover down with it.
+ */
+export type HelpPopoverContent = React.ReactNode | ((close: () => void) => React.ReactNode)
+
 interface HelpPopoverProps {
-  /** Popover body: the page's help text (i18n `help_*` keys per namespace). */
-  children: React.ReactNode
+  children: HelpPopoverContent
   className?: string
 }
 
@@ -82,12 +88,12 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
         aria-controls={open ? panelId : undefined}
         aria-label={tNav('help')}
         className={cn(
-          // The ::after pseudo-element widens the hit area to 45px for touch
-          // without changing the 17px visual.
+          // The ::after pseudo-element widens the hit area to 44px for touch
+          // without changing the 16px visual (Stil v3: a raised dot, 11px "?").
           'relative after:absolute after:-inset-[14px]',
-          'inline-flex h-[17px] w-[17px] items-center justify-center rounded-full border border-border',
-          'text-[11px] leading-none text-muted-foreground transition-colors duration-150',
-          'hover:border-foreground/30 hover:text-foreground',
+          'inline-flex h-4 w-4 items-center justify-center rounded-full bg-control shadow-raised',
+          'text-[11px] font-medium leading-none text-muted-foreground transition-[box-shadow,color] duration-150',
+          'hover:shadow-raised-hover hover:text-foreground',
           className,
         )}
       >
@@ -111,7 +117,7 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
             className={cn('pointer-events-auto fixed z-[60] w-[300px] p-4 outline-none text-[13px] leading-relaxed', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
             style={{ top: pos.top, left: pos.left }}
           >
-            {children}
+            {typeof children === 'function' ? children(() => setOpen(false)) : children}
           </div>,
           document.body,
         )}

@@ -31,7 +31,7 @@
 - **2240** Avsättningar för uppskjutna skatter
 - **8940** Uppskjuten skatt
 - All marked **[Ej K2]** in BAS kontoplan
-- Obeskattade reserver analytically split: 79.4% equity / 20.6% latent skatteskuld
+- Obeskattade reserver: in the legal entity they are presented gross. K3 29.37: the deferred tax liability on them ska inte särredovisas, and bokslutsdispositioner are presented gross in the resultaträkning. The 79.4% equity / 20.6% deferred tax split belongs to koncernredovisning (K3 4.12: egetkapitalandelen in Annat eget kapital) and to analytical key ratios such as justerat eget kapital, never to the juridisk person's balansräkning
 
 **K2**: Never recognized. These accounts must be hidden/disabled.
 
@@ -43,7 +43,7 @@
 
 ## Fair value measurement
 
-**K3**: Available for certain financial instruments and investment properties.
+**K3**: Financial instruments may be measured at fair value when the company chooses ÅRL 4:14a-14e (K3 kap. 12). Investment properties (förvaltningsfastigheter) are NOT measured at fair value: they follow kap. 17 (cost less depreciation); kap. 16 only requires a större företag to disclose their fair value (16.4), and a mindre företag need not apply kap. 16 at all (16.1).
 
 **K2**: Only historical cost (anskaffningsvärde). Försiktighetsprincip enforced strictly.
 
@@ -80,7 +80,7 @@
 
 **K2**: Simplified, template-based. Sufficient to state framework applied, depreciation periods, employees, pledges, contingencies.
 
-**K3**: Extensive: deferred tax analysis, critical judgments, estimation uncertainty, component depreciation details, segment reporting (if applicable).
+**K3**: More than K2, and much more for större företag: judgements and estimation uncertainty are större-only (8.4-8.5), as are comparatives in all notes (3.5) and the deferred-tax note (ÅRL 5:36). K3 has no segment reporting; ÅRL 5:47 requires a större företag to split nettoomsättning by verksamhetsgren and geografisk marknad when they differ significantly.
 
 ## Accounts to hide/disable in K2 mode
 

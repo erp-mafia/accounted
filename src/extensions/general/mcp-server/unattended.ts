@@ -8,12 +8,14 @@ import { isSelfHosted } from '@/lib/env/public-flags'
  * overridden by whatever the AI reads next (a skill, a document), so the
  * server enforces it.
  *
- * The mark goes on the run's Mcp-Session-Id when the client sends one, and
- * otherwise on the whole API key for an hour: fail closed, at the price
- * that approvals through that key wait for Accounted's own UI meanwhile. A
- * mark that cannot be read counts as set (server.ts). The
- * session header is not trusted for authorization and is not used for it: a
- * mark only ever takes rights away.
+ * The mark goes on the run's Mcp-Session-Id (six hours) and on its whole API
+ * key (an hour): fail closed, at the price that approvals through that key
+ * wait for Accounted's own UI meanwhile. The key is marked even when there is
+ * a session: the server assigns session ids at initialize, and a client that
+ * reconnects mid-run starts a new one, which a session-only mark would not
+ * follow. A mark that cannot be read counts as set (server.ts). The session
+ * header is not trusted for authorization and is not used for it: a mark
+ * only ever takes rights away.
  *
  * Marks live in Upstash, shared by every server instance. Memory is only a
  * fallback where one process serves everything (self-hosted, and tests): on
@@ -28,11 +30,12 @@ const memory = new Map<string, number>()
 
 export type UnattendedScope = `session:${string}` | `key:${string}`
 
-/** Where an unattended get_task puts its mark: the session when there is one, else the key. */
-export function unattendedScope(sessionId: string | null | undefined, keyId: string | null | undefined): { scope: UnattendedScope; ttl: number } | null {
-  if (sessionId) return { scope: `session:${sessionId}`, ttl: SESSION_TTL_SECONDS }
-  if (keyId) return { scope: `key:${keyId}`, ttl: KEY_TTL_SECONDS }
-  return null
+/** Where an unattended get_task puts its marks: the session when there is one, and the key. */
+export function unattendedMarks(sessionId: string | null | undefined, keyId: string | null | undefined): { scope: UnattendedScope; ttl: number }[] {
+  return [
+    ...(sessionId ? [{ scope: `session:${sessionId}` as const, ttl: SESSION_TTL_SECONDS }] : []),
+    ...(keyId ? [{ scope: `key:${keyId}` as const, ttl: KEY_TTL_SECONDS }] : []),
+  ]
 }
 
 /** Every mark that can hold a call back: its session's and its key's. */

@@ -4,11 +4,13 @@ import {
   calculateJamkningTax,
   calculateSidoinkomstTax,
   fetchTaxTableRates,
+  fetchAllTaxTableRatesForRun,
   fetchKommunTaxRates,
   clearTaxTableCache,
   TaxTableUnavailableError,
 } from '../tax-tables'
 import type { TaxTableRate } from '../tax-tables'
+import { skatteverketFetch } from './payroll-fixtures'
 
 const sampleRates: TaxTableRate[] = [
   { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 0, incomeTo: 2200, kind: 'amount', taxAmount: 0 },
@@ -334,6 +336,58 @@ describe('fetchTaxTableRates fallback behavior', () => {
     // One API attempt (two section queries: 30B + 30%) despite two calls:
     // the second call hit the cache
     expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('fetchAllTaxTableRatesForRun', () => {
+  const originalFetch = globalThis.fetch
+
+  beforeEach(() => {
+    clearTaxTableCache()
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    clearTaxTableCache()
+  })
+
+  it('fetches each table once for all its columns and returns every pair in table-then-column order', async () => {
+    const fetchSpy = vi.fn(skatteverketFetch)
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    const result = await fetchAllTaxTableRatesForRun(2026, [33, 30], [1, 2])
+
+    // Two section requests (30B + 30%) per table, not per table and column.
+    expect(fetchSpy).toHaveBeenCalledTimes(4)
+    expect(result.source).toBe('api')
+    const pairs = [...new Set(result.rates.map((r) => `${r.tableNumber}-${r.columnNumber}`))]
+    expect(pairs).toEqual(['33-1', '33-2', '30-1', '30-2'])
+    // Each column carries its own figures from the shared rows.
+    expect(lookupTaxAmount(33, 1, 30000, result.rates)).not.toBe(lookupTaxAmount(33, 2, 30000, result.rates))
+    clearTaxTableCache()
+    const single = await fetchTaxTableRates(2026, 33, 2)
+    expect(result.rates.filter((r) => r.tableNumber === 33 && r.columnNumber === 2)).toEqual(single.rates)
+  })
+
+  it('still parses and falls back per column: an unparsable column falls back alone', async () => {
+    globalThis.fetch = vi.fn(async (url: string | URL) => {
+      const response = await skatteverketFetch(url)
+      const body = (await response.json()) as { results: Array<Record<string, string>>; resultCount: number }
+      for (const row of body.results) row['kolumn 2'] = 'n/a'
+      return new Response(JSON.stringify(body), { status: 200 })
+    }) as unknown as typeof fetch
+
+    const result = await fetchAllTaxTableRatesForRun(2026, [33], [1, 2])
+
+    expect(result.source).toBe('mixed')
+    expect(result.rates.filter((r) => r.columnNumber === 1).length).toBeGreaterThan(0)
+    expect(result.rates.filter((r) => r.columnNumber === 2).length).toBeGreaterThan(0)
+  })
+
+  it('reports the first unavailable table in table order, whichever request failed first', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('network down'))
+
+    await expect(fetchAllTaxTableRatesForRun(2020, [34, 30], [1])).rejects.toThrow(/skattetabell 34 kolumn 1/)
   })
 })
 

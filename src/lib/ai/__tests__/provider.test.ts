@@ -126,19 +126,19 @@ describe('hasAiCredentials', () => {
 })
 
 describe('createAiClient', () => {
-  it('builds a Bedrock client when AWS keys are set', () => {
+  it('builds a Bedrock client when AWS keys are set', async () => {
     process.env.AWS_ACCESS_KEY_ID = 'AKIAEXAMPLE'
     process.env.AWS_SECRET_ACCESS_KEY = 'secret'
-    expect(createAiClient()).toBeInstanceOf(AnthropicBedrock)
+    await expect(createAiClient()).resolves.toBeInstanceOf(AnthropicBedrock)
   })
 
-  it('builds a direct Anthropic client when only an Anthropic key is set', () => {
+  it('builds a direct Anthropic client when only an Anthropic key is set', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-api03-example'
-    expect(createAiClient()).toBeInstanceOf(Anthropic)
+    await expect(createAiClient()).resolves.toBeInstanceOf(Anthropic)
   })
 
-  it('builds a Bedrock client for the AWS provider chain when nothing is set', () => {
-    expect(createAiClient()).toBeInstanceOf(AnthropicBedrock)
+  it('builds a Bedrock client for the AWS provider chain when nothing is set', async () => {
+    await expect(createAiClient()).resolves.toBeInstanceOf(AnthropicBedrock)
   })
 })
 

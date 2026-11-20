@@ -9,7 +9,6 @@
  * meantime, in which case the pending link is revoked instead.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { NextRequest } from 'next/server'
 
 const verifyOtp = vi.fn()
 const exchangeCodeForSession = vi.fn()
@@ -80,7 +79,7 @@ vi.mock('@/lib/company/landing-server', () => ({
   resolveLandingDestination: vi.fn().mockResolvedValue('/'),
 }))
 
-import { GET } from '../route'
+import { clickEmailLink } from './click-email-link'
 
 const pendingUser = {
   id: 'user-1',
@@ -90,12 +89,13 @@ const pendingUser = {
   app_metadata: { bankid_pending: true, has_password: false },
 }
 
-function request(type: string, next?: string) {
+/** Open the confirmation link and press the confirm button. */
+function click(type: string, next?: string) {
   const url = new URL('http://localhost:3000/auth/callback')
   url.searchParams.set('token_hash', 'abc')
   url.searchParams.set('type', type)
   if (next) url.searchParams.set('next', next)
-  return new NextRequest(url)
+  return clickEmailLink(url)
 }
 
 function identityWrites() {
@@ -114,13 +114,13 @@ beforeEach(() => {
   updateUserById.mockResolvedValue({ data: {}, error: null })
 })
 
-describe('GET /auth/callback: pending BankID identity', () => {
+describe('/auth/callback: pending BankID identity', () => {
   it('promotes the identity when the BankID holder clicks the confirmation mail', async () => {
     verifyOtp.mockResolvedValue({ data: { user: pendingUser, session: {} }, error: null })
 
-    const response = await GET(request('magiclink'))
+    const response = await click('magiclink')
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe('http://localhost:3000/')
 
     const writes = identityWrites()
@@ -147,7 +147,7 @@ describe('GET /auth/callback: pending BankID identity', () => {
       error: null,
     })
 
-    await GET(request('signup'))
+    await click('signup')
 
     expect(identityWrites()).toHaveLength(0)
     expect(getUserById).not.toHaveBeenCalled()
@@ -157,7 +157,7 @@ describe('GET /auth/callback: pending BankID identity', () => {
   it('does nothing when the OTP was rejected', async () => {
     verifyOtp.mockResolvedValue({ data: { user: null }, error: { message: 'expired' } })
 
-    const response = await GET(request('magiclink'))
+    const response = await click('magiclink')
 
     expect(response.headers.get('location')).toBe(
       'http://localhost:3000/login?error=auth_error&flow=signup',
@@ -169,7 +169,7 @@ describe('GET /auth/callback: pending BankID identity', () => {
   it('revokes instead of promoting when the link is a password reset (address owner adopting via forgot-password)', async () => {
     verifyOtp.mockResolvedValue({ data: { user: pendingUser, session: {} }, error: null })
 
-    const response = await GET(request('recovery', '/reset-password'))
+    const response = await click('recovery', '/reset-password')
 
     // The recovery flow itself is untouched.
     expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
@@ -203,7 +203,7 @@ describe('GET /auth/callback: pending BankID identity', () => {
       error: null,
     })
 
-    await GET(request('magiclink'))
+    await click('magiclink')
 
     const writes = identityWrites()
     expect(writes.map((c) => c.method)).toContain('delete')
@@ -220,7 +220,7 @@ describe('GET /auth/callback: pending BankID identity', () => {
       error: null,
     })
 
-    await GET(request('magiclink'))
+    await click('magiclink')
 
     expect(identityWrites().map((c) => c.method)).toContain('delete')
     expect(updateUserById).toHaveBeenCalledWith('user-1', {
@@ -232,7 +232,7 @@ describe('GET /auth/callback: pending BankID identity', () => {
     pendingLookup = { data: null, error: null }
     verifyOtp.mockResolvedValue({ data: { user: pendingUser, session: {} }, error: null })
 
-    await GET(request('magiclink'))
+    await click('magiclink')
 
     const methods = identityWrites().map((c) => c.method)
     expect(methods).not.toContain('delete')
@@ -247,9 +247,9 @@ describe('GET /auth/callback: pending BankID identity', () => {
     writeResult = { error: { message: 'boom' } }
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const response = await GET(request('magiclink'))
+    const response = await click('magiclink')
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(303)
     expect(updateUserById).not.toHaveBeenCalled()
     expect(errorSpy).toHaveBeenCalled()
     errorSpy.mockRestore()

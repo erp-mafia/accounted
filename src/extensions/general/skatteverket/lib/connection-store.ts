@@ -4,6 +4,10 @@ import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { toRedovisare12 } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
+import { chunk } from '@/lib/utils'
+import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { SKATTEKONTO_AUDIT_ENDPOINTS } from './skattekonto-client'
 
 const log = createLogger('skatteverket-connection-store')
 
@@ -51,9 +55,9 @@ export interface SkvCompanyConnection {
   last_probe_detail: Record<string, unknown> | null
   last_error: string | null
   /**
-   * The company's opt-in for THIS org number: the first deep link or
-   * Verifiera on it (reset when the org number changes, see
-   * recordProbeResult). A grant only counts when it was signed on or after
+   * The company's opt-in for THIS org number: the first check or deep link
+   * on it, both from the appoint button (reset when the org number changes,
+   * see recordProbeResult). A grant only counts when it was signed on or after
    * this day (ombudGrantCounts in ombud-client.ts).
    */
   created_at: string
@@ -125,6 +129,41 @@ export interface ProbeResultInput {
   lasombud?: { status: GrantStatus; detail?: unknown; reason?: string }
   momsOmbud?: { status: GrantStatus; detail?: unknown; reason?: string }
   error?: string | null
+  /**
+   * The company opened the deep link again: a grant Skatteverket withdrew is
+   * awaited anew from now on, so its 'withdrawn' mark goes (see storedDetail).
+   */
+  reopened?: boolean
+}
+
+type StoredDetail = { status?: GrantStatus; detail?: unknown; reason?: string } | null
+
+/**
+ * The detail stored for one behorighet. A grant that was there on this opt-in
+ * and is not any more is marked `reason: 'withdrawn'`, and the mark stays
+ * while the behorighet is not granted. The register answers a withdrawn grant
+ * and one it has not registered yet the same way (nothing listed), so the
+ * mark is what tells them apart: red in settings, against a wait
+ * (lib/skatteverket/ombud-appointment.ts). A grant the sync holds back on a
+ * contested org number is marked the same way: it no longer counts either. A
+ * grant clears the mark, and so does a new deep link (`reopened`); a reason
+ * the probe gives itself (predates_opt_in) wins.
+ */
+function storedDetail(
+  previous: { status: GrantStatus; detail: StoredDetail },
+  next: GrantStatus,
+  probe: ProbeResultInput['lasombud'],
+  reopened: boolean
+): StoredDetail {
+  const kept: StoredDetail = probe ?? previous.detail ?? null
+  if (!kept) return null
+  const wasGranted = previous.status === 'granted' || previous.detail?.reason === 'withdrawn'
+  if (wasGranted && next !== 'granted' && !reopened && !probe?.reason) {
+    return { ...kept, reason: 'withdrawn' }
+  }
+  if (kept.reason !== 'withdrawn') return kept
+  const { reason: _withdrawn, ...rest } = kept
+  return rest
 }
 
 /**
@@ -167,6 +206,8 @@ export async function recordProbeResult(
   const lasombudStatus = nextGrant(existing?.lasombud_status ?? 'unknown', input.lasombud)
   const momsOmbudStatus = nextGrant(existing?.moms_ombud_status ?? 'unknown', input.momsOmbud)
   const status = aggregateStatus(lasombudStatus, momsOmbudStatus)
+  const previousDetail = (key: SkvBehorighet): StoredDetail =>
+    (existing?.last_probe_detail?.[key] as StoredDetail | undefined) ?? null
 
   const row: Record<string, unknown> = {
     company_id: input.companyId,
@@ -176,9 +217,20 @@ export async function recordProbeResult(
     lasombud_status: lasombudStatus,
     moms_ombud_status: momsOmbudStatus,
     last_probe_at: now,
+    // A behorighet this probe did not ask about keeps its detail, as it keeps its status.
     last_probe_detail: {
-      lasombud: input.lasombud ?? null,
-      moms_ombud: input.momsOmbud ?? null,
+      lasombud: storedDetail(
+        { status: existing?.lasombud_status ?? 'unknown', detail: previousDetail('lasombud') },
+        lasombudStatus,
+        input.lasombud,
+        input.reopened === true
+      ),
+      moms_ombud: storedDetail(
+        { status: existing?.moms_ombud_status ?? 'unknown', detail: previousDetail('moms_ombud') },
+        momsOmbudStatus,
+        input.momsOmbud,
+        input.reopened === true
+      ),
     },
     last_error: input.error ?? null,
   }
@@ -205,41 +257,6 @@ export async function recordProbeResult(
     return null
   }
   return data as unknown as SkvCompanyConnection
-}
-
-/**
- * Downgrade a behorighet after a company-level OMBUD_GRANT_MISSING observed
- * during background work (companies can withdraw the grant at any time).
- */
-export async function markGrantRevoked(
-  companyId: string,
-  environment: SkvEnvironment,
-  behorighet: SkvBehorighet,
-  errorCode?: string
-): Promise<void> {
-  const existing = await getConnection(companyId, environment)
-  if (!existing) return
-
-  const now = new Date().toISOString()
-  const lasombudStatus = behorighet === 'lasombud' ? 'denied' : existing.lasombud_status
-  const momsOmbudStatus = behorighet === 'moms_ombud' ? 'denied' : existing.moms_ombud_status
-  const anyGranted = lasombudStatus === 'granted' || momsOmbudStatus === 'granted'
-
-  const { error } = await getServiceClient()
-    .from('skatteverket_company_connections')
-    .update({
-      lasombud_status: lasombudStatus,
-      moms_ombud_status: momsOmbudStatus,
-      ...(behorighet === 'lasombud'
-        ? { lasombud_checked_at: now }
-        : { moms_ombud_checked_at: now }),
-      status: anyGranted ? 'partial' : 'revoked',
-      last_error: errorCode ?? 'OMBUD_GRANT_MISSING',
-    })
-    .eq('id', existing.id)
-  if (error) {
-    log.warn('markGrantRevoked failed', { companyId, behorighet, error: error.message })
-  }
 }
 
 /** Set the whole connection revoked (explicit user disconnect). */
@@ -362,15 +379,51 @@ export async function listConnections(environment: SkvEnvironment): Promise<SkvC
 }
 
 /**
- * Org numbers (12-digit redovisare form) claimed by MORE than one live
- * (non-archived) company. Org-number reuse is allowed in the product and
- * tenant isolation is the boundary, but the ombud path binds Skatteverket's
- * system-credential access to an org number: while two tenants claim the
- * same one, neither may be marked granted, or a tenant that typed a victim's
- * public org number would inherit the victim's grant. Verify, deep link and
- * the nightly sync all consult this.
+ * Where a company stands on the org number it asks Accounted's ombud
+ * connection for (the appoint button's check and deep link, the check on
+ * return from signing, the hourly register sync):
+ *
+ *   'clear'        : it may hold the connection. Either no other live
+ *                    company claims the number, or it is the ONE claimant a
+ *                    current member proved with their own BankID.
+ *   'unproven'     : other live companies claim the number too and no member
+ *                    of this one has proven it, or the company does not
+ *                    (or no longer) claim the number at all.
+ *   'proven_twice' : this company has proven it, and so has another claimant.
  */
-export async function findContestedOrgNumbers(): Promise<Set<string>> {
+export type OmbudClaimStanding = 'clear' | 'unproven' | 'proven_twice'
+
+/**
+ * The one definition of who may hold the ombud connection on an org number
+ * (product decision 2026-11-08). Org-number reuse is allowed in the product
+ * and org numbers are public, but the ombud path binds Skatteverket's
+ * system-credential access to the number: a tenant that typed a victim's
+ * number must never inherit the victim's grant. Only a live claimant of the
+ * number can pass: a connection row a company left on a number it no longer
+ * answers for (or an archived company's row) never does, whoever claims the
+ * number now. A sole claimant passes as before. Among several, only the
+ * company with ownership proof passes (see
+ * findCompaniesWithOwnershipProof): something only a person Skatteverket
+ * lets represent the number can produce, recorded against that one company.
+ * Two proven claimants are both held back: the grant cannot follow either.
+ *
+ * `claimants` are the live companies whose current org number this is;
+ * `proven` the companies with ownership proof on it.
+ */
+export function ombudClaimStanding(
+  companyId: string,
+  claimants: readonly string[],
+  proven: ReadonlySet<string>
+): OmbudClaimStanding {
+  if (!claimants.includes(companyId)) return 'unproven'
+  if (claimants.length === 1) return 'clear'
+  const provenClaimants = claimants.filter((id) => proven.has(id))
+  if (!provenClaimants.includes(companyId)) return 'unproven'
+  return provenClaimants.length === 1 ? 'clear' : 'proven_twice'
+}
+
+/** Live (non-archived) companies per org number, in 12-digit redovisare form. */
+async function findLiveClaimants(): Promise<Map<string, string[]>> {
   const client = getServiceClient()
   type SettingsRow = { company_id: string; org_number: string | null; entity_type: string | null }
   type ArchivedRow = { id: string }
@@ -393,7 +446,7 @@ export async function findContestedOrgNumbers(): Promise<Set<string>> {
     ),
   ])
   const archivedIds = new Set(archived.map((row) => row.id))
-  const claimants = new Map<string, number>()
+  const claimants = new Map<string, string[]>()
   for (const row of settings) {
     if (!row.org_number || archivedIds.has(row.company_id)) continue
     let redovisare: string
@@ -402,14 +455,129 @@ export async function findContestedOrgNumbers(): Promise<Set<string>> {
     } catch {
       continue
     }
-    claimants.set(redovisare, (claimants.get(redovisare) ?? 0) + 1)
+    const ids = claimants.get(redovisare)
+    if (ids) ids.push(row.company_id)
+    else claimants.set(redovisare, [row.company_id])
   }
-  const contested = new Set<string>()
-  for (const [orgNumber, count] of claimants) if (count > 1) contested.add(orgNumber)
-  return contested
+  return claimants
 }
 
-/** True when more than one live company claims this 12-digit org number. */
-export async function isOrgNumberContested(orgNumber: string): Promise<boolean> {
-  return (await findContestedOrgNumbers()).has(orgNumber)
+/**
+ * The own-BankID reads that prove a person may see one behörighet's data for
+ * a number: the skattekonto reads for läsombud; for momsombud the filed VAT
+ * views (fetchDeclarationView in declaration-status labels each call by its
+ * view) and the VAT draft read (the /declaration/draft route).
+ */
+const PROOF_ENDPOINTS: Record<SkvBehorighet, readonly string[]> = {
+  lasombud: Object.values(SKATTEKONTO_AUDIT_ENDPOINTS),
+  moms_ombud: ['inlamnat', 'beslutat', 'declaration/draft'],
+}
+
+/**
+ * The claims (company on its current org number) with ownership proof, each
+ * with the Swedish day of its latest proof: a read of `behorighet`'s data
+ * (PROOF_ENDPOINTS; the skattekonto by default, which the contested-number
+ * standing uses) for exactly that number, recorded against that company,
+ * that Skatteverket answered (2xx) on the own BankID session of a person who
+ * is still a member of the company. Skatteverket shows a tax account only to
+ * someone who may represent its holder, so a tenant that typed another
+ * company's number cannot produce it. Per company, never per person: the
+ * session is stored per (person, company) and the row names the company the
+ * read was made for, so a member of two companies on one number proves only
+ * the one they connected. A read on Accounted's own certificate
+ * (auth_mode 'system') is no proof, and neither is a row from before
+ * auth_mode was recorded. Throws on a read failure: the callers fail closed.
+ * The day is what lets a grant signed before the opt-in count
+ * (grantCountsFor).
+ */
+export async function findCompaniesWithOwnershipProof(
+  claims: Array<{ companyId: string; orgNumber: string }>,
+  behorighet: SkvBehorighet = 'lasombud'
+): Promise<Map<string, string>> {
+  if (claims.length === 0) return new Map()
+  const client = getServiceClient()
+  const members = new Map<string, string[]>()
+  for (const ids of chunk([...new Set(claims.map((claim) => claim.companyId))], 200)) {
+    const rows = await fetchAllRows<{ company_id: string; user_id: string }>(({ from, to }) =>
+      client
+        .from('company_members')
+        .select('company_id, user_id')
+        .in('company_id', ids)
+        .order('company_id', { ascending: true })
+        .order('user_id', { ascending: true })
+        .range(from, to)
+    )
+    for (const row of rows) {
+      const userIds = members.get(row.company_id)
+      if (userIds) userIds.push(row.user_id)
+      else members.set(row.company_id, [row.user_id])
+    }
+  }
+  const memberClaims = claims.filter((claim) => members.has(claim.companyId))
+  const answers = await Promise.all(
+    memberClaims.map((claim) =>
+      client
+        .from('skatteverket_api_audit_log')
+        .select('created_at')
+        .eq('company_id', claim.companyId)
+        .eq('ag_registered_id', claim.orgNumber)
+        .eq('auth_mode', 'user')
+        .eq('outcome', 'ok')
+        .in('endpoint', PROOF_ENDPOINTS[behorighet])
+        // 'ok' is a 2xx for these reads today; the range keeps it so should
+        // they ever list okStatuses (a 404 "no skattekonto" proves nothing).
+        .gte('response_status', 200)
+        .lt('response_status', 300)
+        .in('user_id', members.get(claim.companyId)!)
+        .order('created_at', { ascending: false })
+        .limit(1)
+    )
+  )
+  const proven = new Map<string, string>()
+  for (const [i, { data, error }] of answers.entries()) {
+    // Before migration 20261108074117 reaches the database there is no
+    // auth_mode to read, and so no proof yet: every contested claim stays
+    // held back, and uncontested ones are not dragged into a failure.
+    if (isMissingColumnError(error)) return new Map()
+    if (error) throw new Error(`ownership proof read failed: ${error.message}`)
+    const latest = (data as Array<{ created_at: string }> | null)?.[0]
+    if (latest) proven.set(memberClaims[i]!.companyId, todayIsoStockholm(new Date(latest.created_at)))
+  }
+  return proven
+}
+
+/**
+ * ombudClaimStanding for each claim (a company and the 12-digit org number it
+ * asks the connection for), keyed by company id. Proof is only read for the
+ * claimants of contested numbers. Throws when a read fails, so no caller
+ * mistakes a failed read for a clear claim.
+ */
+export async function getOmbudClaimStandings(
+  claims: Array<{ companyId: string; orgNumber: string }>
+): Promise<Map<string, OmbudClaimStanding>> {
+  if (claims.length === 0) return new Map()
+  const claimants = await findLiveClaimants()
+  const contested = [...new Set(claims.map((claim) => claim.orgNumber))].filter(
+    (orgNumber) => (claimants.get(orgNumber)?.length ?? 0) > 1
+  )
+  const proofs = await findCompaniesWithOwnershipProof(
+    contested.flatMap((orgNumber) =>
+      (claimants.get(orgNumber) ?? []).map((companyId) => ({ companyId, orgNumber }))
+    )
+  )
+  const proven = new Set(proofs.keys())
+  return new Map(
+    claims.map((claim) => [
+      claim.companyId,
+      ombudClaimStanding(claim.companyId, claimants.get(claim.orgNumber) ?? [], proven),
+    ])
+  )
+}
+
+/** getOmbudClaimStandings for one company. */
+export async function getOmbudClaimStanding(
+  companyId: string,
+  orgNumber: string
+): Promise<OmbudClaimStanding> {
+  return (await getOmbudClaimStandings([{ companyId, orgNumber }])).get(companyId) ?? 'unproven'
 }

@@ -7,7 +7,6 @@
  */
 
 import { z } from 'zod'
-import { NextResponse } from 'next/server'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ErrorResponse } from '@/lib/api/v1/errors'
@@ -17,6 +16,7 @@ import {
   ReportPeriodQueryShape,
 } from '@/lib/api/v1/report-period'
 import { generateSIEExport, encodeSIEToCP437 } from '@/lib/reports/sie-export'
+import { fileResponse } from '@/lib/api/file-response'
 
 // Documents what the handler reads (period_id via loadPeriodFromQuery).
 const ExportQuery = z.object({
@@ -110,13 +110,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const body = useCP437 ? Buffer.from(encodeSIEToCP437(gen.result)) : gen.result
     const contentType = useCP437 ? 'application/octet-stream' : 'text/plain; charset=utf-8'
 
-    return new NextResponse(body, {
-      status: 200,
-      headers: {
-        'Content-Type': contentType,
-        'Content-Disposition': `attachment; filename="export_${safeId}.se"`,
-        'X-Request-Id': ctx.requestId,
-      },
+    return fileResponse(body, {
+      filename: `export_${safeId}.se`,
+      contentType,
+      headers: { 'X-Request-Id': ctx.requestId },
     })
   },
 )

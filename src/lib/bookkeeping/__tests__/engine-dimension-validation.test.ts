@@ -13,7 +13,7 @@
  * the line fetch entirely when no required rule exists.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { commitEntry, createDraftEntry, updateDraftEntry } from '../engine'
+import { commitAccrualInstallment, commitEntry, createDraftEntry, updateDraftEntry } from '../engine'
 import { DimensionValidationError, MandatoryDimensionMissingError } from '../errors'
 import type { CreateJournalEntryInput } from '@/types'
 
@@ -650,10 +650,18 @@ describe('accrual dissolutions: exempt from account dimension rules', () => {
         ],
       },
     })
+    // A dissolution is posted only by its schedule's door; through the
+    // commit it shares with every other posting (here its fallback, before
+    // the database has commit_accrual_installment), the rule must not bite.
+    supabase.rpc.mockImplementation(async (fn: string) =>
+      fn === 'commit_accrual_installment'
+        ? { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } }
+        : { data: null, error: null },
+    )
 
-    const entry = await commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+    const result = await commitAccrualInstallment(supabase as never, 'company-1', 'user-1', { id: 'entry-1' }, 'inst-1')
 
-    expect(entry.id).toBe('entry-1')
+    expect(result).toMatchObject({ outcome: 'posted_unclaimed', entry: expect.objectContaining({ id: 'entry-1' }) })
     expect(supabase.rpc).toHaveBeenCalledWith(
       'commit_journal_entry',
       expect.objectContaining({ p_entry_id: 'entry-1' })

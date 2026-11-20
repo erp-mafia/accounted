@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import ChatIntakeStarter from '@/components/agent/ChatIntakeStarter'
 import { getAiStatus } from '@/lib/ai'
 import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
+import { leaveWhenChatSwitchedOff } from '../chat-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,6 +18,9 @@ export default async function ChatIntakePage() {
   ])
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
+  // The interview goes with the built-in assistant (ASSISTANT_CHAT_ENABLED):
+  // switched off for the company, it is not started.
+  leaveWhenChatSwitchedOff(companyId)
   // onboarding.intake runs on the tool-loop runtime; without it (#2204) the
   // starter would fire an invoke that answers 503. The agent is built by now,
   // so the general-help console on /chat is the working next step.

@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { MileageDistanceQuerySchema } from '@/lib/api/schemas'
 import { fetchDistanceSuggestion } from '@/lib/mileage/distance'
 import { guardSandbox } from '@/lib/sandbox/guard'
-
-ensureInitialized()
 
 // Proxies the OSM lookups server-side: the user's addresses never reach
 // Nominatim/OSRM from their own browser, and the shared politeness caches

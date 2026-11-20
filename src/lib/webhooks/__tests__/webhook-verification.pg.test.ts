@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
-import { seedCompany } from '@/tests/pg/fixtures'
+import { seedCompany, setActiveCompany } from '@/tests/pg/fixtures'
 
 // Migration 20260929172450_webhook_endpoint_verification (ADA CASA 7.1.2):
 // the verification columns and the webhooks_verification_guard trigger.
@@ -70,15 +70,6 @@ async function markVerified(id: string): Promise<void> {
             verification_next_attempt_at = NULL
       WHERE id = $1`,
     [id],
-  )
-}
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
   )
 }
 

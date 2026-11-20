@@ -10,7 +10,7 @@ const expired = {
   bankName: 'SEB',
   daysUntilExpiry: 0,
   renewalUrl: 'https://app.gnubok.se/settings/banking',
-  companyName: 'Glimworks AB',
+  companyName: 'Exempelbolaget AB',
   isExpired: true,
 }
 
@@ -28,7 +28,7 @@ describe('consent expiry email templates', () => {
 
     expect(html).toContain(`Med vänliga hälsningar,<br>\n          <strong>${appName}</strong>`)
     expect(text).toContain(`Med vänliga hälsningar,\n${appName}`)
-    expect(html).not.toContain('Med vänliga hälsningar,<br>\n          <strong>Glimworks')
+    expect(html).not.toContain('Med vänliga hälsningar,<br>\n          <strong>Exempelbolaget')
   })
 
   it('uses no alarm colors in the chrome', () => {
@@ -42,7 +42,7 @@ describe('consent expiry email templates', () => {
   it('names the bank, the company, and the destination URL', () => {
     const html = generateConsentExpiryEmailHtml(expired)
     expect(html).toContain('SEB')
-    expect(html).toContain('Glimworks AB')
+    expect(html).toContain('Exempelbolaget AB')
     // The URL is shown as plain text next to the button so the recipient can
     // verify where it leads before clicking.
     const urlMentions = html.split(expired.renewalUrl).length - 1
@@ -71,13 +71,13 @@ describe('consent expiry email templates', () => {
 
   it('generates calm, specific subjects', () => {
     expect(generateConsentExpiryEmailSubject(expired)).toBe(
-      'Förnya bankkopplingen till SEB - Glimworks AB'
+      'Förnya bankkopplingen till SEB - Exempelbolaget AB'
     )
     expect(generateConsentExpiryEmailSubject(expiringSoon)).toBe(
-      'Bankkopplingen till SEB löper ut om 3 dagar - Glimworks AB'
+      'Bankkopplingen till SEB löper ut om 3 dagar - Exempelbolaget AB'
     )
     expect(generateConsentExpiryEmailSubject({ ...expiringSoon, daysUntilExpiry: 1 })).toBe(
-      'Bankkopplingen till SEB löper ut om 1 dag - Glimworks AB'
+      'Bankkopplingen till SEB löper ut om 1 dag - Exempelbolaget AB'
     )
   })
 

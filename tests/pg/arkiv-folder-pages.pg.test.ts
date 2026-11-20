@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from './setup'
+import { nestedPlans, type PlanNode } from './nested-plans'
 import { insertAuthUser, insertFiscalPeriod, insertPostedJournalEntry, seedCompany } from './fixtures'
 
 /**
@@ -11,15 +12,17 @@ import { insertAuthUser, insertFiscalPeriod, insertPostedJournalEntry, seedCompa
  * no type is a verifikat's underlag, apart from a loose one that awaits its
  * type, and a type set on a document in a closed period counts under that type
  * although the period lock keeps it off the row. A booked document is dated
- * by its verifikat, not by the upload day. A member sees their own
- * company only.
+ * by its verifikat, not by the upload day. That date is read by key, or, for
+ * a large archive, from the company's own entries in one range scan; never
+ * from a scan of every company's journal entries (seen 2026-10-26: 13 s, past
+ * the statement timeout). A member sees their own company only.
  */
-async function insertDocument(p: { userId: string; companyId: string; docType: string | null; mime?: string; createdAt: string; invoiceDate?: string; admission?: string; journalEntryId?: string }): Promise<string> {
+async function insertDocument(p: { userId: string; companyId: string; docType: string | null; mime?: string; createdAt: string; invoiceDate?: string; admission?: string; journalEntryId?: string; journalEntryLineId?: string }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.document_attachments
-       (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, doc_type, admission_state, extracted_data, created_at, journal_entry_id)
-     VALUES ($1, $2, $3, 'f.pdf', $4, 1024, $5, $6, 'file_upload', $7, $8, $9, $10, $11)`,
+       (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, doc_type, admission_state, extracted_data, created_at, journal_entry_id, journal_entry_line_id)
+     VALUES ($1, $2, $3, 'f.pdf', $4, 1024, $5, $6, 'file_upload', $7, $8, $9, $10, $11, $12)`,
     [
       id,
       p.userId,
@@ -32,9 +35,22 @@ async function insertDocument(p: { userId: string; companyId: string; docType: s
       p.invoiceDate ? JSON.stringify({ invoice: { invoiceDate: p.invoiceDate } }) : null,
       p.createdAt,
       p.journalEntryId ?? null,
+      p.journalEntryLineId ?? null,
     ],
   )
   return id
+}
+
+/**
+ * Scans of journal_entries that could read another company's rows: outside a
+ * SubPlan (a lookup by key per document) the scan must be held to the one
+ * company the function was called for.
+ */
+function journalEntryScansAcrossCompanies(node: PlanNode, inSubPlan = false): string[] {
+  const lookup = inSubPlan || node['Parent Relationship'] === 'SubPlan'
+  const ownCompanyOnly = /company_id = \$\d+/.test(`${node['Index Cond'] ?? ''} ${node['Recheck Cond'] ?? ''} ${node.Filter ?? ''}`)
+  const own = node['Relation Name'] === 'journal_entries' && !lookup && !ownCompanyOnly ? [`${node['Node Type']} on journal_entries`] : []
+  return [...own, ...(node.Plans ?? []).flatMap((child) => journalEntryScansAcrossCompanies(child, lookup))]
 }
 
 describe('arkiv_document_type_counts and arkiv_document_page', () => {
@@ -133,4 +149,75 @@ describe('arkiv_document_type_counts and arkiv_document_page', () => {
     })
     expect(rows).toEqual([])
   })
+
+  it('dates a document that names a verifikat line by that verifikat', async () => {
+    const period2023 = await insertFiscalPeriod({ userId, companyId, name: '2023', periodStart: '2023-01-01', periodEnd: '2023-12-31' })
+    const entry2023 = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId: period2023, entryDate: '2023-09-14' })
+    const { rows } = await getPool().query<{ id: string }>(`SELECT id FROM public.journal_entry_lines WHERE journal_entry_id = $1 LIMIT 1`, [entry2023])
+    ids.lineLinked = await insertDocument({ userId, companyId, docType: null, createdAt: '2026-08-01T10:00:00Z', journalEntryLineId: rows[0].id })
+
+    expect(await counts(2023)).toEqual({ booked: 1 })
+    expect(await page('booked', null, 2023)).toEqual([{ id: ids.lineLinked, doc_day: '2023-09-14' }])
+  })
+
+  it("finds the verifikat by key or inside the company, never by a join over every company's journal entries", async () => {
+    // The functions run on a generic plan; a plain join there hash-joined a
+    // scan of the whole journal_entries table (13 s at 2.27 million
+    // rows). A lookup by key is a SubPlan per document; the range scan
+    // for a large archive carries the company it was called for.
+    const calls: Array<[string, unknown[]]> = [
+      ['SELECT * FROM public.arkiv_document_type_counts($1, $2)', [companyId, 2024]],
+      [`SELECT * FROM public.arkiv_document_page($1, 'booked', NULL, NULL, 0, 25)`, [companyId]],
+    ]
+    for (const [sql, params] of calls) {
+      const own = (await nestedPlans(userId, sql, params)).filter((p) => p.query.includes('public.document_attachments'))
+      expect(own).toHaveLength(1)
+      expect(journalEntryScansAcrossCompanies(own[0].plan)).toEqual([])
+    }
+  })
+
+  it('dates a large archive from one read of the company\'s entries, with the same answer as the lookup by key', async () => {
+    // From 2 000 booked documents the verifikat dates come from one range scan
+    // of the company's entries instead of a probe per document (prod
+    // 2026-11-12: 15 633 probes took 550 ms of a 900 ms call).
+    const big = await seedCompany()
+    const p2024 = await insertFiscalPeriod({ userId: big.userId, companyId: big.companyId, name: '2024', periodStart: '2024-01-01', periodEnd: '2024-12-31' })
+    const p2025 = await insertFiscalPeriod({ userId: big.userId, companyId: big.companyId, name: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31' })
+    const entries = [
+      await insertPostedJournalEntry({ userId: big.userId, companyId: big.companyId, fiscalPeriodId: p2024, entryDate: '2024-03-15' }),
+      await insertPostedJournalEntry({ userId: big.userId, companyId: big.companyId, fiscalPeriodId: p2025, entryDate: '2025-07-01' }),
+      await insertPostedJournalEntry({ userId: big.userId, companyId: big.companyId, fiscalPeriodId: big.fiscalPeriodId, entryDate: '2026-02-10' }),
+    ]
+    await getPool().query(
+      `INSERT INTO public.document_attachments
+         (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, doc_type, admission_state, created_at, journal_entry_id)
+       SELECT gen_random_uuid(), $1::uuid, $2::uuid, 'f.pdf', 'application/pdf', 1024, 'documents/' || ($2::uuid)::text || '/' || g || '.pdf',
+              md5(g::text) || md5((g + 1)::text), 'file_upload', NULL, 'admitted',
+              '2026-08-01T00:00:00Z'::timestamptz + make_interval(secs => g), ($3::uuid[])[1 + g % 3]
+       FROM generate_series(1, 2001) g`,
+      [big.userId, big.companyId, entries],
+    )
+
+    const result = await withUserContext(big.userId, async (client) => {
+      const counts = await client.query<{ booked: boolean; n: string }>(`SELECT booked, n FROM public.arkiv_document_type_counts($1, NULL)`, [big.companyId])
+      const in2024 = await client.query<{ n: string }>(`SELECT n FROM public.arkiv_document_type_counts($1, 2024)`, [big.companyId])
+      const wrong = await client.query<{ n: string }>(
+        `SELECT count(*) AS n
+         FROM public.arkiv_document_rows($1, true) r
+         JOIN public.document_attachments d ON d.id = r.id
+         JOIN public.journal_entries e ON e.id = d.journal_entry_id
+         WHERE r.doc_day IS DISTINCT FROM to_char(e.entry_date, 'YYYY-MM-DD')`,
+        [big.companyId],
+      )
+      const firstPage = await client.query<{ doc_day: string }>(`SELECT doc_day FROM public.arkiv_document_page($1, 'booked', NULL, NULL, 0, 2)`, [big.companyId])
+      const lastPage = await client.query<{ doc_day: string }>(`SELECT doc_day FROM public.arkiv_document_page($1, 'booked', NULL, 2024, 666, 5)`, [big.companyId])
+      return { counts: counts.rows, in2024: in2024.rows, wrong: wrong.rows[0].n, firstPage: firstPage.rows, lastPage: lastPage.rows }
+    })
+    expect(result.counts).toEqual([{ booked: true, n: '2001' }])
+    expect(result.in2024).toEqual([{ n: '667' }])
+    expect(result.wrong).toBe('0')
+    expect(result.firstPage).toEqual([{ doc_day: '2026-02-10' }, { doc_day: '2026-02-10' }])
+    // 667 documents belong to 2024: the page from offset 666 holds the last one only.
+    expect(result.lastPage).toEqual([{ doc_day: '2024-03-15' }])
+  }, 60000)
 })

@@ -63,7 +63,7 @@ function buildCtx(count: number | null): ExtensionContext {
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
   }
-  return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+  return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
 
 function migrateRequest(body: Record<string, unknown> = { consentId: 'consent-1' }) {
@@ -75,21 +75,12 @@ function migrateRequest(body: Record<string, unknown> = { consentId: 'consent-1'
 
 type GuardErrorBody = { error: { code: string; message: string; message_en?: string } }
 
+/** The entity import /migrate still runs: the registers go through the background job. */
+const ASSETS = { consentId: 'consent-1', importAssets: true }
+
 describe('POST /migrate: SIE-import-required guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('returns 401 when there is no authenticated user', async () => {
-    const ctx = buildCtx(0)
-    ;(ctx.supabase as unknown as { auth: { getUser: Mock } }).auth.getUser
-      .mockResolvedValue({ data: { user: null } })
-
-    const res = await handler(migrateRequest(), ctx)
-
-    expect(res.status).toBe(401)
-    expect(getConsent).not.toHaveBeenCalled()
-    expect(executeMigration).not.toHaveBeenCalled()
   })
 
   it('returns 400 when consentId is missing', async () => {
@@ -103,7 +94,7 @@ describe('POST /migrate: SIE-import-required guard', () => {
   it('blocks a non-Fortnox provider when no completed SIE import exists', async () => {
     ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'visma' })
 
-    const res = await handler(migrateRequest(), buildCtx(0))
+    const res = await handler(migrateRequest(ASSETS), buildCtx(0))
     const { status, body } = await parseJsonResponse<GuardErrorBody>(res)
 
     expect(status).toBe(409)
@@ -117,7 +108,7 @@ describe('POST /migrate: SIE-import-required guard', () => {
   it('allows a non-Fortnox provider once a completed SIE import exists', async () => {
     ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'visma' })
 
-    const res = await handler(migrateRequest(), buildCtx(1))
+    const res = await handler(migrateRequest(ASSETS), buildCtx(1))
 
     expect(res.status).toBe(200)
     expect(executeMigration).toHaveBeenCalledTimes(1)
@@ -126,7 +117,7 @@ describe('POST /migrate: SIE-import-required guard', () => {
   it('blocks Fortnox when no completed SIE import exists (SIE step unchecked in the wizard)', async () => {
     ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
 
-    const res = await handler(migrateRequest(), buildCtx(0))
+    const res = await handler(migrateRequest(ASSETS), buildCtx(0))
     const { status, body } = await parseJsonResponse<GuardErrorBody>(res)
 
     expect(status).toBe(409)
@@ -137,7 +128,7 @@ describe('POST /migrate: SIE-import-required guard', () => {
   it('tells SIE-over-API providers to tick the wizard checkbox, not to upload a file', async () => {
     ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
 
-    const res = await handler(migrateRequest(), buildCtx(0))
+    const res = await handler(migrateRequest(ASSETS), buildCtx(0))
     const { body } = await parseJsonResponse<GuardErrorBody>(res)
 
     expect(body.error.message).toContain('Bokföringsdata (SIE)')
@@ -153,10 +144,6 @@ describe('POST /migrate: SIE-import-required guard', () => {
       migrateRequest({
         consentId: 'consent-1',
         importCompanyInfo: true,
-        importCustomers: false,
-        importSuppliers: false,
-        importSalesInvoices: false,
-        importSupplierInvoices: false,
         importAssets: false,
       }),
       buildCtx(0),
@@ -176,10 +163,6 @@ describe('POST /migrate: SIE-import-required guard', () => {
       migrateRequest({
         consentId: 'consent-1',
         importCompanyInfo: false,
-        importCustomers: false,
-        importSuppliers: false,
-        importSalesInvoices: false,
-        importSupplierInvoices: false,
         importAssets: true,
       }),
       buildCtx(0),
@@ -199,10 +182,6 @@ describe('POST /migrate: SIE-import-required guard', () => {
       migrateRequest({
         consentId: 'consent-1',
         importCompanyInfo: true,
-        importCustomers: false,
-        importSuppliers: false,
-        importSalesInvoices: false,
-        importSupplierInvoices: false,
       }),
       buildCtx(0),
     )
@@ -218,10 +197,7 @@ describe('POST /migrate: SIE-import-required guard', () => {
       migrateRequest({
         consentId: 'consent-1',
         importCompanyInfo: true,
-        importCustomers: false,
-        importSuppliers: true,
-        importSalesInvoices: false,
-        importSupplierInvoices: false,
+        importAssets: true,
       }),
       buildCtx(0),
     )
@@ -230,10 +206,10 @@ describe('POST /migrate: SIE-import-required guard', () => {
     expect(executeMigration).not.toHaveBeenCalled()
   })
 
-  it('allows Fortnox once a completed SIE import exists (entities-only re-run)', async () => {
+  it('allows Fortnox once a completed SIE import exists', async () => {
     ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
 
-    const res = await handler(migrateRequest(), buildCtx(1))
+    const res = await handler(migrateRequest(ASSETS), buildCtx(1))
 
     expect(res.status).toBe(200)
     expect(executeMigration).toHaveBeenCalledTimes(1)

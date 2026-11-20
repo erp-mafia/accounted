@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslations } from 'next-intl'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 import {
   POPOVER_SURFACE_CLASS,
   POPOVER_ENTER_CLASS,
@@ -17,15 +18,13 @@ import {
   customerPickerSecondary,
   type SearchableCustomer,
 } from '@/lib/customers/search'
-import {
-  computeDropdownPosition,
-  isSameDropdownPosition,
-  type DropdownPosition,
-} from '@/components/bookkeeping/account-combobox-position'
+import { useAnchoredDropdown } from '@/components/bookkeeping/use-anchored-dropdown'
 
 /**
  * The one customer picker every form uses (invoice editor, recurring
- * schedule, sales order, deadline). Modelled on AccountCombobox: a text input
+ * schedule, sales order, deadline), and with `kind="supplier"` the supplier
+ * picker of the supplier invoice form: a supplier row has the same id, name,
+ * org number and email the search and the row read. Modelled on AccountCombobox: a text input
  * that filters the cached customer list as you type (lib/customers/search),
  * with a portaled, viewport-clamped dropdown that renders only the matches,
  * capped at 50, so opening it costs the same with ten customers or ten
@@ -37,16 +36,12 @@ import {
  * customer's name until the user types, then the query.
  */
 
-// Shared by every portaled panel instance: only stops propagation so the
-// browser's default scrolling still runs on the panel itself.
-function stopScrollPropagation(e: Event) {
-  e.stopPropagation()
-}
-
 /** Keyboard-row sentinel for the optional "no customer" row. */
 const NONE_ROW = '__none__'
 
 interface CustomerComboboxProps<T extends SearchableCustomer> {
+  /** Which register the rows come from: decides the wording. Default 'customer'. */
+  kind?: 'customer' | 'supplier'
   value: string
   customers: readonly T[]
   onChange: (customerId: string) => void
@@ -80,6 +75,7 @@ interface CustomerComboboxProps<T extends SearchableCustomer> {
 }
 
 export default function CustomerCombobox<T extends SearchableCustomer>({
+  kind = 'customer',
   value,
   customers,
   onChange,
@@ -97,7 +93,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   'aria-required': ariaRequired,
   'aria-invalid': ariaInvalid,
 }: CustomerComboboxProps<T>) {
-  const t = useTranslations('customer_picker')
+  const t = useTranslations(kind === 'supplier' ? 'supplier_picker' : 'customer_picker')
   // What the user has typed since the list opened. While `queryActive` is
   // false the field shows the selected customer's name and the list shows
   // everyone, so focusing a field that already holds "Anna Andersson" browses
@@ -105,12 +101,17 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   const [typed, setTyped] = useState('')
   const [queryActive, setQueryActive] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
-  // The portaled dropdown panel. It is not a DOM descendant of containerRef,
-  // so outside-click detection must check it separately.
-  const portalPanelRef = useRef<HTMLDivElement | null>(null)
-  const [dropdownPos, setDropdownPos] = useState<DropdownPosition | null>(null)
+  // The portaled dropdown panel, glued to the trigger. It is not a DOM
+  // descendant of containerRef, so outside-click detection must check it
+  // separately. Flush with the trigger (preferredWidth 0): a customer row
+  // fits the field's own width, and a wider panel would hang out of a dialog.
+  const {
+    pos: dropdownPos,
+    style: portalPanelStyle,
+    panelRef: portalPanelRef,
+    attachPanel: attachPortalPanel,
+  } = useAnchoredDropdown(containerRef, isOpen, 0)
   const listId = useId()
   // Whether the user has typed or arrow-navigated since the field was focused.
   // Enter only selects the highlighted row after an actual interaction: a
@@ -137,91 +138,6 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   // Keyboard order: the optional "no customer" row first, then the matches.
   const rowCount = items.length + (showNoneRow ? 1 : 0)
 
-  // Reset the highlight when the rows change: onto the current selection when
-  // browsing (so it scrolls into view), onto the best match when searching.
-  useEffect(() => {
-    if (queryActive) {
-      setHighlightedIndex(0)
-      return
-    }
-    const selectedAt = items.findIndex((c) => c.id === value)
-    setHighlightedIndex(selectedAt >= 0 ? selectedAt + (showNoneRow ? 1 : 0) : 0)
-  }, [items, value, queryActive, showNoneRow])
-
-  useEffect(() => {
-    if (!isOpen || !portalPanelRef.current) return
-    const highlighted = portalPanelRef.current.querySelector('[data-highlighted="true"]')
-    if (highlighted) highlighted.scrollIntoView({ block: 'nearest' })
-  }, [highlightedIndex, isOpen])
-
-  // Keep the portaled dropdown glued to the trigger: measure off containerRef
-  // when it opens and re-measure while anything scrolls or the window resizes
-  // underneath it. Flush with the trigger (preferredWidth 0): a customer row
-  // fits the field's own width, and a wider panel would hang out of a dialog.
-  const updateDropdownPosition = useCallback(() => {
-    if (!containerRef.current) return
-    const rect = containerRef.current.getBoundingClientRect()
-    const next = computeDropdownPosition(
-      { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
-      { width: window.innerWidth, height: window.innerHeight },
-      { preferredWidth: 0 },
-    )
-    setDropdownPos((prev) => (isSameDropdownPosition(prev, next) ? prev : next))
-  }, [])
-
-  useLayoutEffect(() => {
-    if (!isOpen) return
-    updateDropdownPosition()
-    const handleScroll = (e: Event) => {
-      if (e.target instanceof Node && portalPanelRef.current?.contains(e.target)) return
-      updateDropdownPosition()
-    }
-    window.addEventListener('scroll', handleScroll, true)
-    window.addEventListener('resize', updateDropdownPosition)
-    return () => {
-      window.removeEventListener('scroll', handleScroll, true)
-      window.removeEventListener('resize', updateDropdownPosition)
-    }
-  }, [isOpen, updateDropdownPosition])
-
-  // react-remove-scroll (active inside every modal dialog) preventDefaults
-  // wheel/touchmove events that reach document from outside the dialog's DOM
-  // tree, and the portaled panel lives outside that tree. Stopping the events
-  // at the panel lets the browser scroll it natively.
-  const attachPortalPanel = useCallback((el: HTMLDivElement | null) => {
-    const prev = portalPanelRef.current
-    if (prev) {
-      prev.removeEventListener('wheel', stopScrollPropagation)
-      prev.removeEventListener('touchmove', stopScrollPropagation)
-    }
-    portalPanelRef.current = el
-    if (el) {
-      el.addEventListener('wheel', stopScrollPropagation)
-      el.addEventListener('touchmove', stopScrollPropagation)
-    }
-  }, [])
-
-  // Close when clicking/tapping outside both the trigger and the portaled panel.
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent | TouchEvent) {
-      const target = e.target as Node
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(target) &&
-        !(portalPanelRef.current && portalPanelRef.current.contains(target))
-      ) {
-        setIsOpen(false)
-        setQueryActive(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
-    }
-  }, [])
-
   // Closing also abandons the query, so the field shows the selection again.
   const close = useCallback(() => {
     setIsOpen(false)
@@ -245,49 +161,42 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
     return items[position]?.id ?? null
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setIsOpen(true)
-      } else if (e.key === 'Enter') {
-        // A text input inside a form submits on Enter; the Select this
-        // replaces opened its list instead. Keep that.
-        e.preventDefault()
-        setIsOpen(true)
-      }
+  const insideRefs = useMemo(() => [containerRef, portalPanelRef], [])
+  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+    count: rowCount,
+    isOpen,
+    // A text input inside a form submits on Enter; the Select this replaces
+    // opened its list instead. Only an arrow counts as choosing a row.
+    openKeys: ['ArrowDown', 'ArrowUp', 'Enter'],
+    open: (key) => {
+      if (key !== 'Enter') hasInteractedRef.current = true
+      setIsOpen(true)
+    },
+    close,
+    activate: (position) => {
+      const rowId = hasInteractedRef.current ? rowIdAt(position) : null
+      if (rowId === NONE_ROW) select('')
+      else if (rowId) select(rowId)
+      else close()
+    },
+    onNavigate: () => {
+      hasInteractedRef.current = true
+    },
+    listRef: portalPanelRef,
+    insideRefs,
+    closeOnTab: true,
+  })
+
+  // Reset the highlight when the rows change: onto the current selection when
+  // browsing (so it scrolls into view), onto the best match when searching.
+  useEffect(() => {
+    if (queryActive) {
+      setHighlightedIndex(0)
       return
     }
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setHighlightedIndex((prev) => Math.min(prev + 1, Math.max(rowCount - 1, 0)))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setHighlightedIndex((prev) => Math.max(prev - 1, 0))
-        break
-      case 'Enter': {
-        e.preventDefault()
-        const rowId = hasInteractedRef.current ? rowIdAt(highlightedIndex) : null
-        if (rowId === NONE_ROW) select('')
-        else if (rowId) select(rowId)
-        else close()
-        break
-      }
-      case 'Escape':
-        e.preventDefault()
-        close()
-        break
-      case 'Tab':
-        close()
-        break
-    }
-  }
+    const selectedAt = items.findIndex((c) => c.id === value)
+    setHighlightedIndex(selectedAt >= 0 ? selectedAt + (showNoneRow ? 1 : 0) : 0)
+  }, [items, value, queryActive, showNoneRow, setHighlightedIndex])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     hasInteractedRef.current = true
@@ -316,14 +225,6 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   const showList = isOpen && !disabled && rowCount > 0
   const showEmpty = isOpen && !disabled && rowCount === 0 && (hasNoCustomers || noMatch)
 
-  const portalPanelStyle: React.CSSProperties | undefined = dropdownPos
-    ? {
-        left: dropdownPos.left,
-        width: dropdownPos.width,
-        maxHeight: dropdownPos.maxHeight,
-        ...(dropdownPos.top !== undefined ? { top: dropdownPos.top } : { bottom: dropdownPos.bottom }),
-      }
-    : undefined
   const panelClass = cn(
     'fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto',
     POPOVER_SURFACE_CLASS,
@@ -347,9 +248,9 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
         onCreateCustomer(trimmedQuery)
       }}
     >
-      <Plus className="h-3.5 w-3.5 shrink-0" />
+      <PlusIcon className="h-3.5 w-3.5 shrink-0" />
       <span className="truncate">
-        {trimmedQuery ? t('create_customer_named', { query: trimmedQuery }) : t('create_customer')}
+        {trimmedQuery ? t('create_named', { query: trimmedQuery }) : t('create')}
       </span>
     </button>
   ) : null
@@ -405,7 +306,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
             <span className="flex items-baseline gap-2">
               <span className="min-w-0 flex-1 truncate">{customer.name}</span>
               {customer.archived_at && (
-                <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
+                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
                   {t('archived')}
                 </span>
               )}

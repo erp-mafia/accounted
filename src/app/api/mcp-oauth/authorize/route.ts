@@ -12,7 +12,9 @@ import {
   type PickerCompany,
 } from '@/lib/company/company-picker'
 import { getBranding } from '@/lib/branding/service'
+import { STANDALONE_HEADING_CSS } from '@/lib/branding/standalone-page-css'
 import {
+  builtInOnwardOrigins,
   capScopesForRole,
   lookupCompanyRole,
   resolveRedirectUri,
@@ -116,11 +118,17 @@ function verifyScopeBinding(scopeParam: string, signature: string): boolean {
   return crypto.timingSafeEqual(expectedBuf, presentedBuf)
 }
 
-function buildLoginRedirect(request: Request): Response {
+// The login and step-up redirects are built on the same base as the iss this
+// route returns (resolveDiscoveryBaseUrl), never on request.url's origin.
+// Behind a reverse proxy the standalone Next.js server sees its own bind
+// address in request.url (http://0.0.0.0:3000 by default), so an
+// origin-relative redirect sends the browser to an unreachable host and the
+// connector's OAuth popup dies on the first unauthenticated hit.
+async function buildLoginRedirect(request: Request): Promise<Response> {
   const url = new URL(request.url)
   const next = `${url.pathname}${url.search}`
   return NextResponse.redirect(
-    new URL(`/login?next=${encodeURIComponent(next)}`, url.origin)
+    new URL(`/login?next=${encodeURIComponent(next)}`, await resolveDiscoveryBaseUrl(request))
   )
 }
 
@@ -151,8 +159,13 @@ async function requireAal2(
   if (!mfaStepUpApplies(user)) return null
   const url = new URL(request.url)
   const returnTo = `${url.pathname}${url.search}`
-  const stepUp = (page: '/mfa/verify' | '/mfa/enroll') =>
-    NextResponse.redirect(new URL(`${page}?returnTo=${encodeURIComponent(returnTo)}`, url.origin))
+  const stepUp = async (page: '/mfa/verify' | '/mfa/enroll') =>
+    NextResponse.redirect(
+      new URL(
+        `${page}?returnTo=${encodeURIComponent(returnTo)}`,
+        await resolveDiscoveryBaseUrl(request),
+      ),
+    )
 
   // Only a positive "this session is AAL2" answer lets consent through. A
   // failed or empty assurance lookup is treated as AAL1 (verify page), never
@@ -181,7 +194,7 @@ async function requireAal2(
   return shouldEnforceMfa(user) ? stepUp('/mfa/enroll') : null
 }
 
-function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {
+async function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Promise<Response> {
   const url = new URL(redirectUri)
   url.searchParams.set('error', error)
   url.searchParams.set('error_description', desc)
@@ -189,7 +202,7 @@ function errorRedirect(request: Request, redirectUri: string, state: string | nu
   // RFC 9207: identify the issuer in every authorization response so clients
   // can detect mix-up attacks. Must equal the issuer that discovery
   // advertised for the host the client connected through.
-  url.searchParams.set('iss', resolveDiscoveryBaseUrl(request))
+  url.searchParams.set('iss', await resolveDiscoveryBaseUrl(request))
   return NextResponse.redirect(url.toString(), 303)
 }
 
@@ -312,6 +325,7 @@ export async function GET(request: Request) {
   }
   const showCompanyPicker = pickerCompanies.length >= 2
 
+  const appName = escapeHtml(getBranding().appName)
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
 
   // Client identity and the host the browser will be sent to after consent.
@@ -373,18 +387,18 @@ export async function GET(request: Request) {
   //     the same bound server-side.
   //   - Pre-checked, built-in client (Claude, ChatGPT, localhost): the whole
   //     ceiling EXCEPT pending_operations:approve. One-click consent came from
-  //     the founder decision of 2026-08-26 (the read-only default killed the
-  //     agent flow with an insufficient-scope dead-end mid-chat); the founder
+  //     the product decision of 2026-08-26 (the read-only default killed the
+  //     agent flow with an insufficient-scope dead-end mid-chat); the operator
   //     decision of 2026-10-03 (issue #3408, option B) took approve out of
   //     that default, so a default connection always leaves the final approval
   //     with a human. Every write is STAGED as an agent proposal that the user
-  //     approves under Att göra › Agentförslag. A user who wants the agent to
+  //     approves under Att göra › Rutin. A user who wants the agent to
   //     approve its own proposals ticks approve themselves, and only then does
   //     the page show the segregation-of-duties sentence and /token record the
   //     acknowledgement. The full scope list stays on the page (collapsed but
   //     expandable) with every row untickable, the warn box explains each
   //     level above the button, and the grant is revocable under
-  //     Inställningar › API och MCP. RFC 6749 §3.3 lets the resource owner
+  //     Agenter › Koppla en agent. RFC 6749 §3.3 lets the resource owner
   //     authorise the set presented; the consent is the click on a page that
   //     shows exactly that set.
   //   - Pre-checked, DB-registered client: only what it explicitly asked for,
@@ -459,7 +473,7 @@ export async function GET(request: Request) {
   const levelLinesHtml = [
     `<li><strong>Läs:</strong> ${agentName} kan läsa och svara på frågor om bokföringen men ändrar inget.</li>`,
     ceilingHasStaging
-      ? `<li><strong>Skriv:</strong> ${agentName} förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Agentförslag. Enklare saker, som att ladda upp underlag, görs direkt.</li>`
+      ? `<li><strong>Skriv:</strong> ${agentName} förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Rutin. Enklare saker, som att ladda upp underlag, görs direkt.</li>`
       : '',
     approveOffered
       ? `<li><strong>Godkänn:</strong> ${agentName} får godkänna sina egna förslag och då bokförs det utan din granskning.</li>`
@@ -492,29 +506,29 @@ export async function GET(request: Request) {
   <title>Anslut MCP-klient: ${appNameLower}</title>
   <style>
     :root {
-      --bg: hsl(0 0% 100%);
+      --bg: hsl(43 26% 95%);
       --surface: hsl(0 0% 100%);
-      --secondary: hsl(40 11% 89%);
-      --secondary-hover: hsl(40 11% 84%);
-      --muted: hsl(40 8% 93%);
-      --border: hsl(45 5% 85%);
-      --border-strong: hsl(45 5% 72%);
-      --fg: hsl(0 0% 9%);
-      --fg-muted: hsl(0 0% 40%);
-      --fg-faint: hsl(0 0% 55%);
-      --primary: hsl(0 0% 9%);
-      --primary-hover: hsl(0 0% 20%);
+      --secondary: hsl(38 36% 35% / 0.1);
+      --secondary-hover: hsl(38 36% 35% / 0.14);
+      --muted: hsl(38 36% 35% / 0.07);
+      --border: hsl(36 22% 9% / 0.1);
+      --border-strong: hsl(36 22% 9% / 0.22);
+      --fg: hsl(38 21% 7%);
+      --fg-muted: hsl(40 3% 44%);
+      --fg-faint: hsl(40 3% 44%);
+      --primary: hsl(36 22% 9% / 0.88);
+      --primary-hover: hsl(36 22% 9% / 0.8);
       --warning: hsl(38 55% 50%);
       --warning-bg: hsl(38 60% 96%);
       --warning-border: hsl(38 45% 82%);
       --warning-fg: hsl(28 60% 28%);
       --warm-accent: hsl(38 45% 52%);
-      --ring: hsl(0 0% 9%);
+      --ring: hsl(215 100% 44% / 0.7);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { -webkit-text-size-adjust: 100%; }
     body {
-      font-family: 'Geist', -apple-system, system-ui, 'Segoe UI', sans-serif;
+      font-family: Inter, -apple-system, system-ui, 'Segoe UI', sans-serif;
       background: var(--bg);
       color: var(--fg);
       display: flex;
@@ -529,7 +543,7 @@ export async function GET(request: Request) {
     }
     .card {
       background: var(--surface);
-      border: 1px solid var(--border);
+      box-shadow: 0 0 0 0.5px hsl(36 22% 9% / 0.07), 0 1px 2px 0 hsl(36 22% 9% / 0.04);
       border-radius: 12px;
       padding: 2.5rem;
       max-width: 960px;
@@ -546,33 +560,7 @@ export async function GET(request: Request) {
       .card { padding: 1.5rem; }
       .scope-groups { grid-template-columns: 1fr; column-gap: 0; }
     }
-    .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.375rem;
-      font-size: 0.6875rem;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--fg-faint);
-      margin-bottom: 0.875rem;
-    }
-    .eyebrow::before {
-      content: "";
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--warm-accent);
-    }
-    h1 {
-      font-family: 'Hedvig Letters Serif', Georgia, 'Times New Roman', serif;
-      font-size: 2rem;
-      font-weight: 400;
-      letter-spacing: -0.018em;
-      line-height: 1.1;
-      color: var(--fg);
-      margin-bottom: 0.625rem;
-    }
+    ${STANDALONE_HEADING_CSS}
     .lede {
       font-size: 0.875rem;
       color: var(--fg-muted);
@@ -828,7 +816,7 @@ export async function GET(request: Request) {
       font-family: inherit;
       font-size: 0.8125rem;
       font-weight: 500;
-      border-radius: 8px;
+      border-radius: 6px;
       cursor: pointer;
       border: 1px solid;
       transition: background 150ms, border-color 150ms, color 150ms;
@@ -937,7 +925,7 @@ export async function GET(request: Request) {
 </head>
 <body>
   <main class="card" role="main">
-    <div class="eyebrow">${appNameLower} · mcp</div>
+    <div class="eyebrow">${appName} · MCP</div>
     <h1>Anslut MCP-klient</h1>
     <p class="lede">${ledeHtml}</p>
 
@@ -979,7 +967,7 @@ export async function GET(request: Request) {
         <div class="warn-body">
           <ul class="warn-levels">${levelLinesHtml}</ul>
           ${sodNoteHtml}
-          <p class="warn-change">Vill du ändra senare? Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Inställningar &rsaquo; API och MCP och anslut igen.</p>
+          <p class="warn-change">Vill du ändra senare? Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Agenter &rsaquo; Koppla en agent och anslut igen.</p>
         </div>
       </div>
 
@@ -989,7 +977,7 @@ export async function GET(request: Request) {
       </div>
     </form>
 
-    <p class="footer">Du kan när som helst återkalla åtkomsten under Inställningar &rsaquo; API och MCP.</p>
+    <p class="footer">Du kan när som helst återkalla åtkomsten under Agenter &rsaquo; Koppla en agent.</p>
   </main>
 
   <script nonce="${cspNonce}">
@@ -1073,7 +1061,12 @@ export async function GET(request: Request) {
   // so the post-consent 303 would be blocked in Chromium. A scheme-source
   // (cursor:) is the only form CSP offers for such a URI.
   const redirectUrl = new URL(redirectUri)
-  const formActionSource = redirectUrl.origin === 'null' ? redirectUrl.protocol : redirectUrl.origin
+  // A built-in callback that forwards to another origin (www.cursor.com 308s
+  // to cursor.com) needs that origin named too, or the chain stops there.
+  const formActionSource = [
+    redirectUrl.origin === 'null' ? redirectUrl.protocol : redirectUrl.origin,
+    ...builtInOnwardOrigins(redirectUri),
+  ].join(' ')
   const csp = [
     "default-src 'none'",
     `script-src 'nonce-${cspNonce}'`,
@@ -1301,7 +1294,7 @@ export async function POST(request: Request) {
   if (state) callbackUrl.searchParams.set('state', state)
   // RFC 9207: issuer identification in the authorization response. Must match
   // the issuer discovery advertises for the host the client connected through.
-  callbackUrl.searchParams.set('iss', resolveDiscoveryBaseUrl(request))
+  callbackUrl.searchParams.set('iss', await resolveDiscoveryBaseUrl(request))
 
   // 303 See Other: forces browser to GET the callback URL, even though this
   // handler was reached via POST. NextResponse.redirect() defaults to 307,
@@ -1453,6 +1446,12 @@ function describeClient(
         // 8.4), so it carries loopback trust, not vendor trust: same tag as
         // localhost, never marked verified.
         return { name: 'Cursor (Anysphere)', shortName: 'Cursor', tag: 'Din egen dator', verified: false }
+      case 'squidler':
+        return { name: 'Squidler', shortName: 'Squidler', tag: 'Verifierad', verified: true }
+      case 'celemine':
+        return { name: 'Celemine', shortName: 'Celemine', tag: 'Verifierad', verified: true }
+      case 'flytt_extension':
+        return { name: 'Flytta till Accounted', shortName: 'Flytta till Accounted', tag: 'Verifierad', verified: true }
       case 'local':
         return { name: 'Lokal utveckling (localhost)', shortName: 'Klienten', tag: 'Din egen dator', verified: false }
     }

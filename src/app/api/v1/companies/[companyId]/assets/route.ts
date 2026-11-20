@@ -107,11 +107,11 @@ registerEndpoint({
   doNotUseFor:
     'Booking the purchase itself (categorize the bank transaction or register the supplier invoice). Small or short-lived items: expense them on 54xx instead of capitalising.',
   pitfalls: [
-    'k3_components is accepted only when the company applies K3: 422 K3_REQUIRED_FOR_COMPONENTS otherwise. Components must sum to acquisition_cost.',
+    'k3_components is accepted only when the company applies K3: 422 K3_REQUIRED_FOR_COMPONENTS otherwise. Components must sum to acquisition_cost to the öre; useful_life_months null is a component that is not depreciated (mark), depreciation_start_date (K3 17.18) and an opening per component are optional.',
     'opening_accumulated_depreciation must be between 0 and acquisition_cost - salvage_value. A positive amount requires opening_depreciation_date between acquisition_date and today (Europe/Stockholm). Zero clears the opening date.',
     'Opening depreciation registers an amount already in the imported ledger and posts no voucher. Enter the amount for this asset from the previous asset register and manually reconcile the register totals with the imported ledger before depreciation or disposal; no automatic reconciliation is performed.',
     'Opening fields lock after depreciation posted through Accounted\'s asset register or disposal. Manual ledger postings do not lock them.',
-    'A positive opening amount cannot be combined with non-empty k3_components. Opening balances for K3 component assets are unsupported; keep the component breakdown.',
+    'With k3_components the opening amount is the components\' total: it is split over components that state no opening of their own (by how much of each one\'s life had passed), or must equal the sum of theirs.',
     'Account overrides must sit inside the category range (e.g. 1200-1299 for equipment) and may not be flagged Ej K2 for a K2 company (422 K2_EXCLUDED_ACCOUNT).',
     'useful_life_months drives linear depreciation from acquisition_date, pro-rated in the first fiscal year.',
   ],

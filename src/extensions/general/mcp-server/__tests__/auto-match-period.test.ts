@@ -10,10 +10,14 @@ import { tools } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
 vi.mock('@/lib/invoices/invoice-matching', () => ({
-  findMatchingInvoices: vi.fn(),
+  loadInvoiceMatchPool: vi.fn(),
+  matchInvoiceCandidates: vi.fn(),
 }))
 
-import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
+import { loadInvoiceMatchPool, matchInvoiceCandidates } from '@/lib/invoices/invoice-matching'
+
+/** A scorer answer carrying only matches. */
+const found = (matches: unknown[]) => ({ matches, unconvertedFxCount: 0, unconvertedFxInvoices: [] }) as never
 
 describe('gnubok_auto_match_period: registration', () => {
   it('is registered', () => {
@@ -73,17 +77,19 @@ describe('gnubok_auto_match_period: dry run', () => {
     ]
     const supabase = makeTxMock(txs)
 
-    vi.mocked(findMatchingInvoices)
+    const pool = { invoices: [] }
+    vi.mocked(loadInvoiceMatchPool).mockResolvedValue(pool)
+    vi.mocked(matchInvoiceCandidates)
       // t1: high confidence: should propose
-      .mockResolvedValueOnce([
-        { invoice: { id: 'i1', invoice_number: 'INV-1', total: 1000, customer: { name: 'Acme' } } as never, confidence: 0.95, matchReason: 'Exakt belopp + kund' },
-      ])
+      .mockReturnValueOnce(found([
+        { invoice: { id: 'i1', invoice_number: 'INV-1', total: 1000, customer: { name: 'Acme' } }, confidence: 0.95, matchReason: 'Exakt belopp + kund' },
+      ]))
       // t2: below threshold (0.7 < 0.9)
-      .mockResolvedValueOnce([
-        { invoice: { id: 'i2', invoice_number: 'INV-2', total: 500, customer: { name: 'Foo' } } as never, confidence: 0.7, matchReason: 'Belopp matchar' },
-      ])
+      .mockReturnValueOnce(found([
+        { invoice: { id: 'i2', invoice_number: 'INV-2', total: 500, customer: { name: 'Foo' } }, confidence: 0.7, matchReason: 'Belopp matchar' },
+      ]))
       // t3: no match
-      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(found([]))
 
     const tool = tools.find((t) => t.name === 'gnubok_auto_match_period')!
     const result = (await tool.execute(
@@ -116,6 +122,12 @@ describe('gnubok_auto_match_period: dry run', () => {
     const decisions = result.proposals.map((p) => p.decision)
     expect(decisions).toContain('propose')
     expect(decisions).toContain('below_threshold')
+
+    // The open invoices are read once for the period, every row scored against them.
+    expect(loadInvoiceMatchPool).toHaveBeenCalledTimes(1)
+    expect(loadInvoiceMatchPool).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(matchInvoiceCandidates).toHaveBeenCalledTimes(3)
+    for (const call of vi.mocked(matchInvoiceCandidates).mock.calls) expect(call[1]).toBe(pool)
   })
 
   it('truncates when more transactions match than max_transactions', async () => {
@@ -127,7 +139,8 @@ describe('gnubok_auto_match_period: dry run', () => {
       { id: 't3', date: '2026-03-03', amount: 100, currency: 'SEK', description: '', merchant_name: null, reference: null, journal_entry_id: null, invoice_id: null },
     ]
     const supabase = makeTxMock(txs)
-    vi.mocked(findMatchingInvoices).mockResolvedValue([])
+    vi.mocked(loadInvoiceMatchPool).mockResolvedValue({ invoices: [] })
+    vi.mocked(matchInvoiceCandidates).mockReturnValue(found([]))
 
     const tool = tools.find((t) => t.name === 'gnubok_auto_match_period')!
     const result = (await tool.execute(

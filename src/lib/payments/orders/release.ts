@@ -1,0 +1,365 @@
+/**
+ * Letting go of an order the bank holds nothing for, after cancelling its
+ * payment at the bank when there is one. Shared by signing (a signing that
+ * cannot go on or whose BankID ended unsigned, a restart that finds a payment
+ * gone) and the status sync (a signing nobody finished, an invoice that
+ * closed while its payment waited unsigned).
+ *
+ * The rules (the payment_orders migration, rules 2 and 5):
+ *   - Only a confirmed cancel counts (PaymentCancelResult 'cancelled').
+ *   - The confirmed cancel and the release are written together, by
+ *     release_payment_order, so neither is ever kept without the other.
+ *   - An order whose invoice no longer needs paying is cancelled, not
+ *     approved again.
+ *   - Before any bank call the order is read again: one that moved on since
+ *     the caller saw it (signed meanwhile, moved to another signing) is left
+ *     alone.
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { Logger } from '@/lib/logger'
+import {
+  PaymentProviderError,
+  providerWriteOutcome,
+  type PaymentCancelResult,
+  type PaymentInitiationProvider,
+  type PaymentPartyContext,
+} from '@/lib/payments/initiation/provider'
+import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
+import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
+
+const PAYABLE: ReadonlySet<string> = new Set(PAYABLE_SUPPLIER_INVOICE_STATUSES)
+
+/** Who is acting: a person in a request, or the status sync (no user). */
+export interface ReleaseActor {
+  userId: string | null
+  log: Logger
+}
+
+export type ReleaseResult = 'approved' | 'cancelled' | 'moved' | 'create_in_progress' | 'error'
+
+/**
+ * release_payment_order: back to approved (or cancelled when the invoice no
+ * longer needs paying), recording a confirmed cancel in the same transaction.
+ * Tried twice; a release that cannot be written after a bank cancel goes to
+ * the error log with its ids, and the status sync later reads the payment
+ * cancelled at the bank.
+ */
+export async function releasePaymentOrder(
+  writer: SupabaseClient,
+  actor: ReleaseActor,
+  input: {
+    companyId: string
+    orderId: string
+    batchId: string | null
+    providerPaymentId: string | null
+    providerStatus: string | null
+    reason: string
+    errorCode?: string | null
+  },
+): Promise<ReleaseResult> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const { data, error } = await writer.rpc('release_payment_order', {
+        p_company_id: input.companyId,
+        p_order_id: input.orderId,
+        p_batch_id: input.batchId,
+        p_provider_payment_id: input.providerPaymentId,
+        p_provider_status: input.providerStatus,
+        p_reason: input.reason,
+        p_error_code: input.errorCode ?? null,
+        p_user_id: actor.userId,
+      })
+      if (!error) {
+        const result = data as { ok: boolean; status?: 'approved' | 'cancelled'; code?: string }
+        if (result.ok && result.status) return result.status
+        return result.code === 'create_in_progress' ? 'create_in_progress' : 'moved'
+      }
+    } catch {
+      // tried again below
+    }
+  }
+  actor.log.error('payment order could not be released', undefined, {
+    orderId: input.orderId,
+    batchId: input.batchId,
+    providerPaymentId: input.providerPaymentId,
+    reason: input.reason,
+  })
+  return 'error'
+}
+
+/**
+ * Orders whose invoice no longer needs paying: paid, credited, reversed, gone, or reduced below the order.
+ * Only an order that pays a supplier invoice can be one. A skattekonto or salary payment has no invoice
+ * that could close under it, so it stays payable here, in the signing and in the status sync alike
+ * (release_payment_order sends it back to approved for the same reason).
+ */
+export async function unpayableOrders(writer: SupabaseClient, orders: PaymentOrderRow[]): Promise<Set<string>> {
+  const invoiceOrders = orders.filter((o) => o.purpose === 'supplier_invoice')
+  const invoiceIds = [...new Set(invoiceOrders.map((o) => o.supplier_invoice_id).filter((id): id is string => Boolean(id)))]
+  if (invoiceIds.length === 0) return new Set()
+  const { data, error } = await writer
+    .from('supplier_invoices')
+    .select('id, company_id, status, is_credit_note, remaining_amount')
+    .in('id', invoiceIds)
+  if (error) throw error
+  const invoices = new Map(
+    ((data ?? []) as Array<{ id: string; company_id: string; status: string; is_credit_note: boolean | null; remaining_amount: number | null }>).map(
+      (invoice) => [invoice.id, invoice],
+    ),
+  )
+  return new Set(
+    invoiceOrders
+      .filter((order) => {
+        const invoice = order.supplier_invoice_id ? invoices.get(order.supplier_invoice_id) : undefined
+        return (
+          !invoice ||
+          invoice.company_id !== order.company_id ||
+          Boolean(invoice.is_credit_note) ||
+          !PAYABLE.has(invoice.status) ||
+          Number(order.amount) > Number(invoice.remaining_amount ?? 0) + 0.005
+        )
+      })
+      .map((order) => order.id),
+  )
+}
+
+async function askBankToCancel(
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  order: PaymentOrderRow,
+  log: Logger,
+): Promise<{ answer: PaymentCancelResult | null; error: unknown }> {
+  try {
+    return { answer: await provider.cancelPayment(party, order.provider_payment_id as string, order.provider_payment_product ?? 'domestic'), error: null }
+  } catch (error) {
+    log.warn('bank payment could not be cancelled', { orderId: order.id, code: error instanceof PaymentProviderError ? error.code : 'UNEXPECTED_ERROR' })
+    return { answer: null, error }
+  }
+}
+
+/**
+ * The bank holds a payment for this order in this signing: cancel it there,
+ * and only a confirmed cancel lets the order go. 'kept' leaves the order
+ * submitted with its payment id, for the status sync or a person; 'moved'
+ * means the order was no longer this payment in this signing, so nothing was
+ * asked of the bank.
+ */
+export async function cancelAndRelease(
+  writer: SupabaseClient,
+  actor: ReleaseActor & { companyId: string },
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  batchId: string,
+  order: PaymentOrderRow,
+  reason: string,
+): Promise<'released' | 'cancelled' | 'kept' | 'moved'> {
+  const paymentId = order.provider_payment_id
+  if (!paymentId) return 'moved'
+  const { data: current, error } = await writer
+    .from('payment_orders')
+    .select('id, status, outcome_unknown_at')
+    .eq('id', order.id)
+    .eq('company_id', actor.companyId)
+    .eq('batch_id', batchId)
+    .eq('provider_payment_id', paymentId)
+    .maybeSingle()
+  const now = current as { status: string; outcome_unknown_at: string | null } | null
+  if (error || !now || (now.status !== 'submitted' && now.status !== 'awaiting_signature') || now.outcome_unknown_at) return 'moved'
+
+  // A failed signing leaves its orders signable again, never mid-signing.
+  if (now.status === 'awaiting_signature') {
+    await writer
+      .from('payment_orders')
+      .update({ status: 'submitted' })
+      .eq('id', order.id)
+      .eq('company_id', actor.companyId)
+      .eq('batch_id', batchId)
+      .eq('status', 'awaiting_signature')
+  }
+
+  const { answer } = await askBankToCancel(provider, party, order, actor.log)
+  if (answer?.outcome !== 'cancelled') {
+    await logPaymentOrderEvents(writer, [
+      {
+        company_id: actor.companyId,
+        payment_order_id: order.id,
+        batch_id: batchId,
+        event_type: 'error',
+        provider_status: answer?.providerStatus ?? null,
+        actor_user_id: actor.userId,
+        detail: { code: 'BANK_CANCEL_NOT_CONFIRMED', answer: answer?.outcome ?? 'no_answer', provider_payment_id: paymentId, reason },
+      },
+    ], actor.log)
+    return 'kept'
+  }
+  const released = await releasePaymentOrder(writer, actor, {
+    companyId: actor.companyId,
+    orderId: order.id,
+    batchId,
+    providerPaymentId: paymentId,
+    providerStatus: answer.providerStatus,
+    reason,
+  })
+  if (released === 'approved') return 'released'
+  if (released === 'cancelled') return 'cancelled'
+  actor.log.error('bank cancelled a payment but its order was not released', undefined, {
+    orderId: order.id,
+    batchId,
+    providerPaymentId: paymentId,
+    result: released,
+  })
+  return 'kept'
+}
+
+/** Where stopping a signing left its orders (stopSigningOrders). */
+export interface StoppedSigning {
+  /** Orders back to approved after the bank confirmed the cancel of their payment, with that payment's id. */
+  released: Array<{ order: PaymentOrderRow; providerPaymentId: string }>
+  /** Orders whose cancel the bank did not confirm: still submitted with their payment id, for a person. */
+  kept: string[]
+}
+
+/**
+ * A signing that cannot go on, or whose BankID ended unsigned. Each of its
+ * orders ends where the bank leaves it: a payment that exists is cancelled
+ * there first (cancelAndRelease, which reads the order again before asking
+ * the bank); a claimed order that was never sent is released. An order with
+ * a create in flight, an unknown outcome, or one already handled by the
+ * caller is left alone. The signing batch ends as failed. Shared by the
+ * signing (signing.ts) and the status sync, so a signing ends the same way
+ * whichever of them sees it end.
+ */
+export async function stopSigningOrders(
+  writer: SupabaseClient,
+  actor: ReleaseActor & { companyId: string },
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  batchId: string,
+  orders: readonly PaymentOrderRow[],
+  reason: string,
+  handled: ReadonlySet<string> = new Set(),
+): Promise<StoppedSigning> {
+  const stopped: StoppedSigning = { released: [], kept: [] }
+  for (const order of orders) {
+    if (handled.has(order.id) || order.create_started_at || order.outcome_unknown_at) continue
+    if (order.provider_payment_id && (order.status === 'submitted' || order.status === 'awaiting_signature')) {
+      const result = await cancelAndRelease(writer, actor, provider, party, batchId, order, reason)
+      if (result === 'released') stopped.released.push({ order, providerPaymentId: order.provider_payment_id })
+      else if (result === 'kept') stopped.kept.push(order.id)
+    } else if (!order.provider_payment_id && order.status === 'submitted') {
+      await releasePaymentOrder(writer, actor, {
+        companyId: actor.companyId,
+        orderId: order.id,
+        batchId,
+        providerPaymentId: null,
+        providerStatus: null,
+        reason,
+      })
+    }
+  }
+  await writer
+    .from('payment_order_batches')
+    .update({ status: 'failed' })
+    .eq('id', batchId)
+    .eq('company_id', actor.companyId)
+    .in('status', ['created', 'awaiting_signature'])
+  return stopped
+}
+
+/**
+ * A signing whose BankID the bank reports failed (cancelled, abandoned,
+ * expired, or refused for good): nobody signed, and the bank pays nothing
+ * unsigned, so its payments are cancelled at the bank and its orders let go
+ * (stopSigningOrders), whichever of the signing poll and the status sync sees
+ * it first (crm#1470). Only while the signing still waits for that very
+ * attempt (a restart since has its own authorisation id), and only the caller
+ * that ends it cancels. The signing is failed before the first cancel:
+ * nothing offers a failed signing to be signed again, so no restart starts on
+ * payments being cancelled. Null when the attempt was no longer current:
+ * nothing was done.
+ */
+export async function endFailedSigning(
+  writer: SupabaseClient,
+  actor: ReleaseActor & { companyId: string },
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  signing: { batchId: string; authorisationId: string },
+  orders: readonly PaymentOrderRow[],
+  failure: { reason: string; detail: Record<string, unknown> },
+): Promise<StoppedSigning | null> {
+  const { data: ended } = await writer
+    .from('payment_order_batches')
+    .update({ status: 'failed' })
+    .eq('id', signing.batchId)
+    .eq('company_id', actor.companyId)
+    .eq('status', 'awaiting_signature')
+    .eq('provider_authorisation_id', signing.authorisationId)
+    .select('id')
+  if ((ended ?? []).length !== 1) return null
+  await logPaymentOrderEvents(writer, [
+    { company_id: actor.companyId, batch_id: signing.batchId, event_type: 'error', actor_user_id: actor.userId, detail: failure.detail },
+  ], actor.log)
+  return stopSigningOrders(writer, actor, provider, party, signing.batchId, orders, failure.reason)
+}
+
+/**
+ * An order's payment waits unsigned at the bank and its invoice no longer
+ * needs paying: cancel the payment there. A confirmed cancel cancels the
+ * order (release_payment_order finds the invoice closed). A cancel that never
+ * reached the bank is tried again later ('retry'); any other answer holds the
+ * order for a person ('held'), recorded as a cancel_requested event that the
+ * status sync does not repeat.
+ */
+export async function cancelForClosedInvoice(
+  writer: SupabaseClient,
+  actor: ReleaseActor,
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  order: PaymentOrderRow,
+): Promise<'cancelled' | 'released' | 'held' | 'retry' | 'moved'> {
+  const paymentId = order.provider_payment_id
+  if (!paymentId || order.status !== 'submitted') return 'moved'
+  const { data: current } = await writer
+    .from('payment_orders')
+    .select('id')
+    .eq('id', order.id)
+    .eq('company_id', order.company_id)
+    .eq('status', 'submitted')
+    .eq('provider_payment_id', paymentId)
+    .maybeSingle()
+  if (!current) return 'moved'
+  const { answer, error } = await askBankToCancel(provider, party, order, actor.log)
+  if (!answer && providerWriteOutcome(error) === 'not_sent') return 'retry'
+  if (answer?.outcome === 'cancelled') {
+    const released = await releasePaymentOrder(writer, actor, {
+      companyId: order.company_id,
+      orderId: order.id,
+      batchId: order.batch_id,
+      providerPaymentId: paymentId,
+      providerStatus: answer.providerStatus,
+      reason: 'INVOICE_CLOSED',
+    })
+    if (released === 'cancelled') return 'cancelled'
+    if (released === 'approved') return 'released'
+    return released === 'moved' ? 'moved' : 'held'
+  }
+  await logPaymentOrderEvents(writer, [
+    {
+      company_id: order.company_id,
+      payment_order_id: order.id,
+      batch_id: order.batch_id,
+      event_type: 'cancel_requested',
+      from_status: order.status,
+      provider_status: answer?.providerStatus ?? null,
+      actor_user_id: actor.userId,
+      detail: {
+        source: 'invoice_closed',
+        provider_payment_id: paymentId,
+        answer: answer?.outcome ?? 'no_answer',
+        provider_code: error instanceof PaymentProviderError ? error.code : null,
+      },
+    },
+  ], actor.log)
+  return 'held'
+}

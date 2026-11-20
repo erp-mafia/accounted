@@ -31,4 +31,4 @@ export const POST = withRouteContext('arkiv.fact.revert', async (request, ctx, {
     ctx.log.error('fact revert failed', { fact: id, reason: err instanceof Error ? err.message : String(err) })
     return NextResponse.json({ error: 'Faktumet kunde inte återställas. Försök igen.' }, { status: 500 })
   }
-})
+}, { requireWrite: true })

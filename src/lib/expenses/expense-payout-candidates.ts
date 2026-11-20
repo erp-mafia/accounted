@@ -25,11 +25,39 @@ export interface ExpenseClaimRowForGrouping {
 /**
  * The person behind a claim: the employee id, or for the owner the trimmed,
  * lower-cased name. Same rule as create_expense_payout_batch's claimant check
- * (lower(btrim(claimant_name))), so "Jakob" and "jakob " are one person here
+ * (lower(btrim(claimant_name))), so "Anna" and "anna " are one person here
  * exactly when the RPC would accept their claims in one payout.
  */
 export function expenseClaimantKey(row: { employee_id: string | null; claimant_name: string }): string {
   return row.employee_id ?? `owner:${row.claimant_name.trim().toLowerCase()}`
+}
+
+/** One person's outstanding total on the Utlägg page. */
+export interface OutstandingClaimant {
+  key: string
+  /** The name as first written on that person's claims. */
+  claimant_name: string
+  total_sek: number
+}
+
+/**
+ * The Utlägg page's "Att betala till" line: claims awaiting payout summed per
+ * person (expenseClaimantKey), largest total first. Keyed like the payout RPC,
+ * so "Anna" and "anna" are one person to pay, not two.
+ */
+export function outstandingByClaimant(
+  rows: ReadonlyArray<{ employee_id: string | null; claimant_name: string; amount_sek: number | string; awaits_payout: boolean }>,
+): OutstandingClaimant[] {
+  const byPerson = new Map<string, OutstandingClaimant>()
+  for (const row of rows) {
+    if (!row.awaits_payout) continue
+    const key = expenseClaimantKey(row)
+    const amount = Number(row.amount_sek) || 0
+    const existing = byPerson.get(key)
+    if (existing) existing.total_sek = roundOre(existing.total_sek + amount)
+    else byPerson.set(key, { key, claimant_name: row.claimant_name, total_sek: roundOre(amount) })
+  }
+  return [...byPerson.values()].sort((a, b) => b.total_sek - a.total_sek)
 }
 
 /**

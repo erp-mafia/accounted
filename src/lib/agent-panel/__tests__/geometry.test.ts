@@ -14,6 +14,7 @@ import {
   containFloatRect,
   defaultFloatRect,
   expandedDockWidth,
+  navWidthFromParts,
   resizeFloatRect,
   resolveAgentPanelPrefs,
   serializeAgentPanelPrefs,
@@ -82,6 +83,24 @@ describe('serializeAgentPanelPrefs', () => {
       mode: 'docked',
       dock_width: 480,
     })
+  })
+})
+
+describe('navWidthFromParts', () => {
+  it('adds the rail and the sidebar as the stylesheet writes them', () => {
+    expect(navWidthFromParts('96px', '220px')).toBe(316)
+    expect(navWidthFromParts('96px', '320px')).toBe(416)
+  })
+
+  it('reads a computed value that kept the space after the colon', () => {
+    expect(navWidthFromParts(' 96px', ' 220px ')).toBe(316)
+  })
+
+  it('is not a number when a length is missing or is not plain pixels', () => {
+    expect(navWidthFromParts('', '220px')).toBeNaN()
+    expect(navWidthFromParts('96px', '')).toBeNaN()
+    expect(navWidthFromParts('calc(96px + 220px)', '220px')).toBeNaN()
+    expect(navWidthFromParts('6rem', '220px')).toBeNaN()
   })
 })
 

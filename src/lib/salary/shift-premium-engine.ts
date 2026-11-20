@@ -12,20 +12,51 @@
  *   - Windows where end_time <= start_time are treated as wrapping past
  *     midnight (e.g. 22:00-06:00 covers 22:00-24:00 the same day and
  *     00:00-06:00 the next day). Both halves are intersected separately.
+ *   - Every minute is judged on the calendar date it falls on: the weekday,
+ *     the public-holiday gate of ob_holiday rules and the rule's validity
+ *     (valid_from, valid_to). The part of a night shift after midnight is
+ *     therefore paid under the rule valid the next day, so a rate step on
+ *     2026-04-01 applies from 00:00 that day. The line it lands on stays
+ *     keyed by the shift's work_date.
+ *
+ * Amount forms (ShiftPremiumRule.amount_form, migration 20261027213119):
+ *   - percent_of_hourly: hourly wage x premium_percent / 100. The hourly wage
+ *     is the employee's (PremiumPayBasis.hourlyRate) unless the rule names
+ *     the agreement's own hourly_divisor, which prices a monthly-paid
+ *     employee's hour as full-time månadslön / hourly_divisor (Handels 166).
+ *   - monthly_divisor: månadslön / monthly_divisor. Monthly-paid employees
+ *     only: an hourly-paid employee has no månadslön, so the rule does not
+ *     apply to them at all (a lower rule may then win their minutes; the
+ *     rules service refuses to name an hourly-paid employee on such a rule).
+ *     OB rules divide the actual (degree-adjusted) månadslön; övertid rules
+ *     divide the full-time månadslön, because the agreements that use övertid
+ *     divisors raise a part-timer's salary to full time first (Almega
+ *     Tjänsteföretag 5.3.2, Teknikavtalet tjänstemän § 8 mom 3:2).
+ *   - sek_per_hour: a fixed amount per hour, whatever the pay.
  *
  * Overlap resolution:
- *   - Multiple active rules may apply to the same minute of a shift. The
- *     engine prefers the rule with the higher `priority`; ties are broken by
- *     higher `premium_percent`. Each minute is awarded to exactly one rule,
- *     so totals never double-count.
+ *   - Multiple active rules may apply to the same minute of a shift. Each
+ *     minute is awarded to exactly one rule, so totals never double-count:
+ *     the higher `priority` wins; at equal priority the rule paying the most
+ *     per hour for this employee wins (the agreements' "only the highest
+ *     applies", Handels § 8 anm.); a remaining tie goes to the lower rule id
+ *     so the result never depends on the order the rules were read in.
+ *   - "No OB on overtime hours" (Byggavtalet § 2 p. 5, Almega 7.1, Teknik
+ *     förskjuten arbetstid p. 6) is an övertid rule with a higher priority
+ *     than the OB rules on the same window. Övertid itself is a window like
+ *     OB: nothing here compares the worked hours with a schedule.
  *
  * The engine is intentionally side-effect-free. The orchestrator
  * (run-calculation.ts) fetches the rules, runs `computePremiumLines`, and
- * persists the result as salary_line_items.
+ * persists the result as salary_line_items with the rule's provenance
+ * (source_premium_rule_id, premium_basis). The settings editor calls the same
+ * function for its live example, so the two can never disagree.
  */
 
-import type { ShiftPremiumRule, ShiftPremiumItemType } from '@/types'
+import type { ShiftPremiumAmountForm, ShiftPremiumItemType, ShiftPremiumRule } from '@/types'
 import { isSwedishHolidayISO } from '@/lib/tax/swedish-holidays'
+import { roundOre } from '@/lib/money'
+import { degreeAdjustedMonthlySalary, hourlyDivisor } from './work-schedule'
 
 // ============================================================
 // Types
@@ -42,6 +73,49 @@ export interface WorkedDayShift {
   end_time?: string | null
 }
 
+/**
+ * The pay a premium is priced from, for one employee in one run. Built by
+ * `premiumPayBasis` so the calculation and the settings example agree.
+ */
+export interface PremiumPayBasis {
+  /** The percent_of_hourly base without a rule hourly_divisor. */
+  hourlyRate: number
+  /**
+   * Monthly-paid employees only: the run's full-time månadslön and the
+   * degree-adjusted (actual) one. Absent for hourly-paid employees, which is
+   * what keeps monthly_divisor rules away from them.
+   */
+  monthlySalary?: { fullTime: number; actual: number }
+}
+
+/** What the rate was applied to, frozen on the line (premium_basis.base). */
+export type PremiumBaseKind = 'hourly_rate' | 'monthly_salary' | 'full_time_monthly_salary' | 'none'
+
+/**
+ * The rule as the calculation used it, stored on the payslip line
+ * (salary_line_items.premium_basis) next to source_premium_rule_id: enough
+ * to explain the amount after the rule has changed or ended.
+ */
+export interface PremiumBasis {
+  v: 1
+  rule_id: string
+  rule_name: string
+  item_type: ShiftPremiumItemType
+  amount_form: ShiftPremiumAmountForm
+  premium_percent: number | null
+  monthly_divisor: number | null
+  sek_per_hour: number | null
+  hourly_divisor: number | null
+  valid_from: string | null
+  valid_to: string | null
+  priority: number
+  base: { kind: PremiumBaseKind; amount: number | null }
+  /** Kronor per hour, to the öre (the amount itself is computed unrounded). */
+  rate_per_hour: number
+  work_date: string
+  hours: number
+}
+
 export interface ShiftPremiumLineItem {
   itemType: ShiftPremiumItemType
   /** Description rendered on the payslip and verifikat. */
@@ -50,10 +124,12 @@ export interface ShiftPremiumLineItem {
   workDate: string
   /** Hours actually covered by the winning rule. */
   hours: number
-  /** Premium amount = baseHourlyRate × hours × premium_percent / 100. */
+  /** Premium amount: hours x the rule's rate per hour, rounded to the öre. */
   amount: number
-  /** Rule id used (for traceability/debugging). */
+  /** Rule id used (salary_line_items.source_premium_rule_id). */
   sourceRuleId: string
+  /** The rule as used (salary_line_items.premium_basis). */
+  basis: PremiumBasis
 }
 
 // ============================================================
@@ -67,14 +143,96 @@ const MINUTES_PER_DAY = 24 * 60
 const DEFAULT_SHIFT_START_MIN = 8 * 60 // 08:00
 const DEFAULT_SHIFT_END_MIN = 17 * 60 // 17:00
 
+const OVERTIME_TYPES: ReadonlySet<ShiftPremiumItemType> = new Set(['overtime_50', 'overtime_100'])
+
+// ============================================================
+// Pay basis and price
+// ============================================================
+
+/**
+ * The pay basis of one employee:
+ *   - hourly-paid: the stored hourly_rate, no månadslön;
+ *   - monthly-paid: degree-adjusted monthly salary / hourlyDivisor(hours_per_week)
+ *     as the hourly wage (173 at the 40h default, the exact 52-week formula
+ *     for other schedules; arbetsschema-lite), plus the full-time and the
+ *     actual månadslön for the divisor forms. monthly_salary is the
+ *     full-time salary and hours_per_week the part-time schedule, so the raw
+ *     column over the part-time divisor would price a 10 % employee's hour
+ *     ten times too high.
+ */
+export function premiumPayBasis(emp: {
+  salary_type: 'monthly' | 'hourly'
+  hourly_rate: number | null
+  monthly_salary: number | null
+  employment_degree: number | null
+  hours_per_week?: number | null
+}): PremiumPayBasis {
+  if (emp.salary_type === 'hourly') return { hourlyRate: emp.hourly_rate || 0 }
+  const fullTime = emp.monthly_salary || 0
+  const actual = degreeAdjustedMonthlySalary(fullTime, emp.employment_degree)
+  return {
+    hourlyRate: actual > 0 ? roundOre(actual / hourlyDivisor(emp.hours_per_week)) : 0,
+    monthlySalary: { fullTime, actual },
+  }
+}
+
+export interface RulePrice {
+  /** Unrounded kronor per hour: the overlap tie-break. */
+  ratePerHour: number
+  base: { kind: PremiumBaseKind; amount: number | null }
+  /** Amount for a number of hours, rounded to the öre. */
+  amountFor: (hours: number) => number
+}
+
+/**
+ * The price of one hour under `rule` for this employee, or null when the
+ * rule's form does not apply to the employee's pay (monthly_divisor for an
+ * hourly-paid employee). The amount multiplies before it divides, in the
+ * order the agreements state it (månadslön x timmar / delare), and rounds
+ * once.
+ */
+export function priceRule(rule: ShiftPremiumRule, pay: PremiumPayBasis): RulePrice | null {
+  const form: ShiftPremiumAmountForm = rule.amount_form ?? 'percent_of_hourly'
+  if (form === 'sek_per_hour') {
+    const sek = Number(rule.sek_per_hour ?? 0)
+    return {
+      ratePerHour: sek,
+      base: { kind: 'none', amount: null },
+      amountFor: (hours) => roundOre(sek * hours),
+    }
+  }
+  if (form === 'monthly_divisor') {
+    const divisor = Number(rule.monthly_divisor ?? 0)
+    if (!pay.monthlySalary || divisor <= 0) return null
+    const fullTimeBasis = OVERTIME_TYPES.has(rule.item_type)
+    const salary = fullTimeBasis ? pay.monthlySalary.fullTime : pay.monthlySalary.actual
+    return {
+      ratePerHour: salary / divisor,
+      base: { kind: fullTimeBasis ? 'full_time_monthly_salary' : 'monthly_salary', amount: salary },
+      amountFor: (hours) => roundOre((salary * hours) / divisor),
+    }
+  }
+  const percent = Number(rule.premium_percent ?? 0)
+  const agreementDivisor = rule.hourly_divisor == null ? 0 : Number(rule.hourly_divisor)
+  if (agreementDivisor > 0 && pay.monthlySalary) {
+    const salary = pay.monthlySalary.fullTime
+    return {
+      ratePerHour: (salary / agreementDivisor) * (percent / 100),
+      base: { kind: 'full_time_monthly_salary', amount: salary },
+      amountFor: (hours) => roundOre(((salary * hours) / agreementDivisor) * (percent / 100)),
+    }
+  }
+  const hourly = pay.hourlyRate
+  return {
+    ratePerHour: hourly * (percent / 100),
+    base: { kind: 'hourly_rate', amount: hourly },
+    amountFor: (hours) => roundOre(hourly * hours * (percent / 100)),
+  }
+}
+
 // ============================================================
 // Helpers
 // ============================================================
-
-/** Round to 2 decimals (CLAUDE.md monetary precision rule). */
-function r(x: number): number {
-  return Math.round(x * 100) / 100
-}
 
 /** Parse 'HH:MM' or 'HH:MM:SS' (or 'HH:MM:SS.ffffff') to minutes-since-midnight. */
 function parseTimeToMinutes(time: string): number {
@@ -91,11 +249,17 @@ function parseTimeToMinutes(time: string): number {
 }
 
 /** ISO weekday (1 = Mon … 7 = Sun) from a YYYY-MM-DD string. */
-function isoWeekdayFromDate(workDate: string): number {
+export function isoWeekdayFromDate(workDate: string): number {
   // Parse as UTC to avoid the user's local timezone shifting the day.
   const [y, m, d] = workDate.split('-').map((x) => parseInt(x, 10))
   const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay() // Sun=0…Sat=6
   return day === 0 ? 7 : day
+}
+
+/** The ISO date one day after `isoDate`, in UTC. */
+export function nextIsoDate(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-').map((x) => parseInt(x, 10))
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10)
 }
 
 /** Shift a weekday by N days, staying in ISO 1..7. */
@@ -115,7 +279,12 @@ interface DaySegment {
   endMin: number
 }
 
-function resolveShiftSegments(shift: WorkedDayShift): DaySegment[] {
+interface ShiftSegment extends DaySegment {
+  /** The calendar date the minutes fall on. */
+  date: string
+}
+
+function resolveShiftSegments(shift: WorkedDayShift): ShiftSegment[] {
   const shiftWeekdayBase = isoWeekdayFromDate(shift.work_date)
   const hasStart = !!shift.start_time
   const hasEnd = !!shift.end_time
@@ -124,6 +293,7 @@ function resolveShiftSegments(shift: WorkedDayShift): DaySegment[] {
     return [
       {
         weekday: shiftWeekdayBase,
+        date: shift.work_date,
         startMin: DEFAULT_SHIFT_START_MIN,
         endMin: DEFAULT_SHIFT_END_MIN,
       },
@@ -134,13 +304,13 @@ function resolveShiftSegments(shift: WorkedDayShift): DaySegment[] {
   const endMin = parseTimeToMinutes(shift.end_time!)
 
   if (endMin > startMin) {
-    return [{ weekday: shiftWeekdayBase, startMin, endMin }]
+    return [{ weekday: shiftWeekdayBase, date: shift.work_date, startMin, endMin }]
   }
 
   // Wraps past midnight (e.g. 22:00 -> 06:00). Split at 24:00.
   return [
-    { weekday: shiftWeekdayBase, startMin, endMin: MINUTES_PER_DAY },
-    { weekday: shiftWeekday(shiftWeekdayBase, 1), startMin: 0, endMin },
+    { weekday: shiftWeekdayBase, date: shift.work_date, startMin, endMin: MINUTES_PER_DAY },
+    { weekday: shiftWeekday(shiftWeekdayBase, 1), date: nextIsoDate(shift.work_date), startMin: 0, endMin },
   ]
 }
 
@@ -177,9 +347,24 @@ function ruleAppliesToEmployee(rule: ShiftPremiumRule, employeeId: string): bool
   return rule.applies_to_employee_ids.includes(employeeId)
 }
 
-/** Total dominance score (priority outweighs premium_percent). */
-function ruleScore(rule: ShiftPremiumRule): number {
-  return rule.priority * 1_000_000 + rule.premium_percent
+/** True when the rule is valid on `isoDate` (both bounds inclusive, null = open). */
+export function ruleValidOn(rule: Pick<ShiftPremiumRule, 'valid_from' | 'valid_to'>, isoDate: string): boolean {
+  if (rule.valid_from && isoDate < rule.valid_from.slice(0, 10)) return false
+  if (rule.valid_to && isoDate > rule.valid_to.slice(0, 10)) return false
+  return true
+}
+
+interface PricedRule {
+  rule: ShiftPremiumRule
+  price: RulePrice
+  segments: DaySegment[]
+}
+
+/** Priority first, then the rate per hour, then the lower id. */
+function beats(a: PricedRule, b: PricedRule): boolean {
+  if (a.rule.priority !== b.rule.priority) return a.rule.priority > b.rule.priority
+  if (a.price.ratePerHour !== b.price.ratePerHour) return a.price.ratePerHour > b.price.ratePerHour
+  return a.rule.id < b.rule.id
 }
 
 // ============================================================
@@ -188,7 +373,13 @@ function ruleScore(rule: ShiftPremiumRule): number {
 
 export interface ComputePremiumLinesArgs {
   employeeId: string
+  /** The percent_of_hourly base (PremiumPayBasis.hourlyRate). */
   baseHourlyRate: number
+  /**
+   * Monthly-paid employees: the full-time and actual månadslön
+   * (PremiumPayBasis.monthlySalary). Omitted for hourly-paid employees.
+   */
+  monthlySalary?: { fullTime: number; actual: number } | null
   workedDays: WorkedDayShift[]
   rules: ShiftPremiumRule[]
 }
@@ -206,50 +397,55 @@ const DEFAULT_DESCRIPTIONS: Record<ShiftPremiumItemType, string> = {
  * Compute premium line items for a single employee over a set of worked days.
  *
  * Algorithm:
- *   1. Resolve each shift into per-weekday segments (one or two if wraps).
- *   2. For each segment, gather every rule-segment whose weekday matches.
- *   3. Split the segment at every rule boundary, then award each sub-interval
- *      to the single highest-scoring rule that fully covers it.
- *   4. Aggregate (work_date × rule_id) → minutes; convert to hours + amount.
+ *   1. Price every applicable rule once for this employee.
+ *   2. Resolve each shift into per-date segments (one or two if it wraps).
+ *   3. For each segment, gather every rule-segment whose weekday matches and
+ *      whose rule is valid (and, for ob_holiday, a holiday) on that date.
+ *   4. Split the segment at every rule boundary, then award each sub-interval
+ *      to the single winning rule that fully covers it.
+ *   5. Aggregate (work_date × rule_id) → minutes; convert to hours + amount.
  */
 export function computePremiumLines(args: ComputePremiumLinesArgs): ShiftPremiumLineItem[] {
-  const { employeeId, baseHourlyRate, workedDays, rules } = args
-  if (baseHourlyRate <= 0 || workedDays.length === 0 || rules.length === 0) {
+  const { employeeId, workedDays, rules } = args
+  if (workedDays.length === 0 || rules.length === 0) {
     return []
   }
+  const pay: PremiumPayBasis = {
+    hourlyRate: args.baseHourlyRate,
+    ...(args.monthlySalary ? { monthlySalary: args.monthlySalary } : {}),
+  }
 
-  const applicable = rules.filter((rule) => rule.is_active && ruleAppliesToEmployee(rule, employeeId))
-  if (applicable.length === 0) return []
+  const priced: PricedRule[] = []
+  for (const rule of rules) {
+    if (!rule.is_active || !ruleAppliesToEmployee(rule, employeeId)) continue
+    const price = priceRule(rule, pay)
+    if (!price) continue
+    priced.push({ rule, price, segments: resolveRuleSegments(rule) })
+  }
+  if (priced.length === 0) return []
 
   // Aggregate (workDate × ruleId) → minutes.
-  const aggregates = new Map<
-    string,
-    { rule: ShiftPremiumRule; workDate: string; minutes: number }
-  >()
+  const aggregates = new Map<string, { candidate: PricedRule; workDate: string; minutes: number }>()
 
   for (const shift of workedDays) {
     if (shift.hours <= 0) continue
-    const shiftSegments = resolveShiftSegments(shift)
-    // Holiday status drives ob_holiday gating. A rule with item_type === 'ob_holiday'
-    // only fires when the worked day is a Swedish public holiday: day_of_week alone
-    // is not enough (a regular Sunday is not a helgdag, Midsommarafton on a Tuesday is).
-    const isHoliday = isSwedishHolidayISO(shift.work_date)
 
-    for (const seg of shiftSegments) {
-      // Collect rule-segments intersecting this weekday.
-      const candidates: Array<{
-        rule: ShiftPremiumRule
-        startMin: number
-        endMin: number
-      }> = []
-      for (const rule of applicable) {
+    for (const seg of resolveShiftSegments(shift)) {
+      // ob_holiday rules fire only on a Swedish public holiday: day_of_week
+      // alone is not enough (a regular Sunday is not a helgdag, Midsommarafton
+      // on a Friday is). Judged on the date the minutes fall on.
+      const isHoliday = isSwedishHolidayISO(seg.date)
+      const candidates: Array<{ candidate: PricedRule; startMin: number; endMin: number }> = []
+      for (const candidate of priced) {
+        const { rule } = candidate
         if (rule.item_type === 'ob_holiday' && !isHoliday) continue
-        for (const ruleSeg of resolveRuleSegments(rule)) {
+        if (!ruleValidOn(rule, seg.date)) continue
+        for (const ruleSeg of candidate.segments) {
           if (ruleSeg.weekday !== seg.weekday) continue
           const startMin = Math.max(seg.startMin, ruleSeg.startMin)
           const endMin = Math.min(seg.endMin, ruleSeg.endMin)
           if (endMin <= startMin) continue
-          candidates.push({ rule, startMin, endMin })
+          candidates.push({ candidate, startMin, endMin })
         }
       }
       if (candidates.length === 0) continue
@@ -268,23 +464,23 @@ export function computePremiumLines(args: ComputePremiumLinesArgs): ShiftPremium
         if (subEnd <= subStart) continue
         if (subStart < seg.startMin || subEnd > seg.endMin) continue
 
-        // Award this sub-interval to the highest-scoring candidate covering it.
-        let winner: ShiftPremiumRule | null = null
+        // Award this sub-interval to the winning candidate covering it.
+        let winner: PricedRule | null = null
         for (const cand of candidates) {
           if (cand.startMin > subStart || cand.endMin < subEnd) continue
-          if (!winner || ruleScore(cand.rule) > ruleScore(winner)) {
-            winner = cand.rule
+          if (!winner || beats(cand.candidate, winner)) {
+            winner = cand.candidate
           }
         }
         if (!winner) continue
 
         const minutes = subEnd - subStart
-        const key = `${shift.work_date}::${winner.id}`
+        const key = `${shift.work_date}::${winner.rule.id}`
         const existing = aggregates.get(key)
         if (existing) {
           existing.minutes += minutes
         } else {
-          aggregates.set(key, { rule: winner, workDate: shift.work_date, minutes })
+          aggregates.set(key, { candidate: winner, workDate: shift.work_date, minutes })
         }
       }
     }
@@ -292,27 +488,47 @@ export function computePremiumLines(args: ComputePremiumLinesArgs): ShiftPremium
 
   const lineItems: ShiftPremiumLineItem[] = []
   for (const agg of aggregates.values()) {
-    const hours = r(agg.minutes / 60)
+    const hours = roundOre(agg.minutes / 60)
     if (hours <= 0) continue
-    const amount = r(baseHourlyRate * hours * (agg.rule.premium_percent / 100))
+    const { rule, price } = agg.candidate
+    const amount = price.amountFor(hours)
     if (amount <= 0) continue
-    const fallback = DEFAULT_DESCRIPTIONS[agg.rule.item_type]
-    const desc = agg.rule.name
-      ? `${agg.rule.name} (${agg.workDate}, ${hours} h)`
+    const fallback = DEFAULT_DESCRIPTIONS[rule.item_type]
+    const desc = rule.name
+      ? `${rule.name} (${agg.workDate}, ${hours} h)`
       : `${fallback} (${agg.workDate}, ${hours} h)`
     lineItems.push({
-      itemType: agg.rule.item_type,
+      itemType: rule.item_type,
       description: desc,
       workDate: agg.workDate,
       hours,
       amount,
-      sourceRuleId: agg.rule.id,
+      sourceRuleId: rule.id,
+      basis: {
+        v: 1,
+        rule_id: rule.id,
+        rule_name: rule.name,
+        item_type: rule.item_type,
+        amount_form: rule.amount_form ?? 'percent_of_hourly',
+        premium_percent: rule.premium_percent == null ? null : Number(rule.premium_percent),
+        monthly_divisor: rule.monthly_divisor == null ? null : Number(rule.monthly_divisor),
+        sek_per_hour: rule.sek_per_hour == null ? null : Number(rule.sek_per_hour),
+        hourly_divisor: rule.hourly_divisor == null ? null : Number(rule.hourly_divisor),
+        valid_from: rule.valid_from ?? null,
+        valid_to: rule.valid_to ?? null,
+        priority: rule.priority,
+        base: price.base,
+        rate_per_hour: roundOre(price.ratePerHour),
+        work_date: agg.workDate,
+        hours,
+      },
     })
   }
 
   lineItems.sort((a, b) => {
     if (a.workDate !== b.workDate) return a.workDate < b.workDate ? -1 : 1
-    return a.itemType < b.itemType ? -1 : 1
+    if (a.itemType !== b.itemType) return a.itemType < b.itemType ? -1 : 1
+    return a.sourceRuleId < b.sourceRuleId ? -1 : a.sourceRuleId > b.sourceRuleId ? 1 : 0
   })
 
   return lineItems

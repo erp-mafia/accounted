@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { SupportLink } from '@/components/ui/support-link'
+import { StatusGlyph } from '@/components/ui/status-glyph'
 
 export default function DashboardError({
   error,
@@ -15,15 +16,22 @@ export default function DashboardError({
     console.error('[dashboard] Unhandled error:', error)
   }, [error])
 
+  // Stil v3 states: the error sits in the page, centered where the content
+  // would be, with the red glyph, one sentence and "Försök igen".
   return (
-    <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
-      <h2 className="text-xl">Något gick fel</h2>
-      <p className="text-muted-foreground text-sm max-w-md text-center">
+    <section role="alert" className="mx-auto flex max-w-[560px] flex-col items-center gap-1 pb-2 pt-10 text-center animate-rise">
+      <StatusGlyph tone="error" size={16} className="mb-2" />
+      <h2 className="text-[15px] font-medium leading-[22px] text-strong">Något gick fel</h2>
+      <p className="text-[13px] text-muted-foreground">
         Ett oväntat fel uppstod. Försök igen eller{' '}
-        <SupportLink variant="inline" subject="Oväntat fel">kontakta support</SupportLink>{' '}
+        <SupportLink variant="inline" subject="Oväntat fel" assistant={false}>kontakta support</SupportLink>{' '}
         om problemet kvarstår.
       </p>
-      <Button onClick={reset}>Försök igen</Button>
-    </div>
+      <div className="mt-3">
+        <Button variant="outline" size="toolbar" onClick={reset}>
+          Försök igen
+        </Button>
+      </div>
+    </section>
   )
 }

@@ -11,7 +11,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 export const GET = withRouteContext('journal_entry.no_doc_required.list', async (_request, ctx) => {
   const { supabase, companyId } = ctx
 
-  // Stable unique order for .range() paging — bulk exemption after a large
+  // Stable unique order for .range() paging - bulk exemption after a large
   // migration can push this table past the 1000-row page size.
   const rows = await fetchAllRows<{ journal_entry_id: string; reason: string | null }>(
     ({ from, to }) =>

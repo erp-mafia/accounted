@@ -3,6 +3,9 @@ import type { InvoiceExtractionResult } from '@/types'
 import { roundOre } from '@/lib/money'
 import {
   applyCostAccountSuggestion,
+  bankRowSekAmount,
+  bookDirectDocumentCurrency,
+  bookDirectFxRefusal,
   buildBookDirectPrefillLines,
   manualBookDirectLines,
   reconcileBookDirectLines,
@@ -170,11 +173,36 @@ describe('buildBookDirectPrefillLines', () => {
       { role: 'cost', account: '', debit: '2109.5', credit: '' },
       { role: 'settlement', account: '1930', debit: '', credit: '2109.5' },
     ])
-    // No transaction yet: the document face amount is the figure, still with no VAT row.
-    expect(pairs(buildBookDirectPrefillLines(extracted, null, '1930'))).toEqual([
-      { role: 'cost', account: '', debit: '100', credit: '' },
-      { role: 'settlement', account: '1930', debit: '', credit: '100' },
+  })
+
+  // crm#1146: this used to prefill the face amount, so a receipt for 100 USD
+  // showed 100 in both columns and posted as 100 kr. A foreign total is not
+  // kronor, and before a bank row is chosen nothing in the dialog knows what
+  // was paid in kronor.
+  it('leaves a foreign document unresolved until a bank row supplies the kronor amount', () => {
+    for (const currency of ['USD', 'usd', 'EUR', ' eur ']) {
+      const lines = buildBookDirectPrefillLines(receipt({ total: 100, vat: 20, currency }), null, '1930')
+      expect(pairs(lines)).toEqual([
+        { role: 'cost', account: '', debit: '', credit: '' },
+        { role: 'settlement', account: '', debit: '', credit: '' },
+      ])
+      expect(sums(lines).balanced).toBe(false)
+    }
+  })
+
+  it('fills the unresolved legs of a foreign document once a bank row is picked, and empties them again when it is cleared', () => {
+    const extracted = receipt({ total: 100, vat: 0, currency: 'EUR' })
+    const opened = chooseCost(buildBookDirectPrefillLines(extracted, null, '1930'), '6540')
+
+    const picked = reconcileBookDirectLines(opened, buildBookDirectPrefillLines(extracted, -1150, '1930'))
+    expect(pairs(picked)).toEqual([
+      { role: 'cost', account: '6540', debit: '1150', credit: '' },
+      { role: 'settlement', account: '1930', debit: '', credit: '1150' },
     ])
+
+    const cleared = reconcileBookDirectLines(picked, buildBookDirectPrefillLines(extracted, null, '1930'))
+    expect(cleared.map((line) => line.debit_amount + line.credit_amount).join('')).toBe('')
+    expect(cleared.find((line) => line.role === 'cost')?.account_number).toBe('6540')
   })
 
   it('leaves missing, zero and non-finite totals unresolved instead of emitting NaN or a negative cost', () => {
@@ -243,6 +271,116 @@ describe('buildBookDirectPrefillLines', () => {
       { role: 'vat', account: '2641', debit: '250', credit: '' },
       { role: 'settlement', account: '1930', debit: '', credit: '1250' },
     ])
+  })
+})
+
+// crm#1146: the rule the dialog and the book-direct route both read. A
+// foreign-currency underlag has no kronor amount of its own. Kronor typed by
+// hand are a real booking, with or without a bank row; a line that carries
+// the document's foreign total as kronor is the bug.
+describe('booking a foreign-currency underlag', () => {
+  const EUR_100 = receipt({ total: 100, vat: 0, currency: 'EUR' })
+  const SEK_ROW = { amount: -1150, amount_sek: null, currency: 'SEK', exchange_rate: null }
+  const line = (account_number: string, debit_amount: number, credit_amount: number) => ({
+    account_number,
+    debit_amount,
+    credit_amount,
+  })
+  // The document total in the kronor columns, in the shapes it can take.
+  const OWNER_AND_BANK = [line('2893', 100, 0), line('1930', 0, 100)]
+  const COST_AND_BANK = [line('6540', 100, 0), line('1930', 0, 100)]
+  const SETTLEMENT_LINE_ONLY = [line('6540', 80, 0), line('2641', 20, 0), line('1930', 0, 100)]
+  // Kronor typed by hand: a receipt somebody paid privately, with reverse
+  // charge, and a purchase credited to the bank account.
+  const PRIVATE_OUTLAY = [
+    line('6540', 1150, 0),
+    line('2645', 287.5, 0),
+    line('2614', 0, 287.5),
+    line('2893', 0, 1150),
+  ]
+  const TYPED_AGAINST_BANK = [line('6540', 1150, 0), line('1930', 0, 1150)]
+
+  it('reads the document currency the same way everywhere: missing or blank is SEK, case and padding ignored', () => {
+    expect(bookDirectDocumentCurrency(null)).toBe('SEK')
+    expect(bookDirectDocumentCurrency(undefined)).toBe('SEK')
+    expect(bookDirectDocumentCurrency({})).toBe('SEK')
+    expect(bookDirectDocumentCurrency({ invoice: null })).toBe('SEK')
+    expect(bookDirectDocumentCurrency({ invoice: { currency: null } })).toBe('SEK')
+    expect(bookDirectDocumentCurrency({ invoice: { currency: '' } })).toBe('SEK')
+    expect(bookDirectDocumentCurrency({ invoice: { currency: ' sek ' } })).toBe('SEK')
+    expect(bookDirectDocumentCurrency({ invoice: { currency: 'eur' } })).toBe('EUR')
+    expect(bookDirectDocumentCurrency(receipt({ currency: 'USD' }))).toBe('USD')
+  })
+
+  it.each([
+    ['owner account against the bank, no cost line', OWNER_AND_BANK],
+    ['cost against the bank', COST_AND_BANK],
+    ['on the settlement line only, the debit side split', SETTLEMENT_LINE_ONLY],
+  ])('refuses the document total booked as kronor: %s', (_label, lines) => {
+    expect(bookDirectFxRefusal(EUR_100, null, lines)).toBe('face_amount')
+    // A bank row with another kronor amount does not turn the figure into kronor.
+    expect(bookDirectFxRefusal(EUR_100, SEK_ROW, lines)).toBe('face_amount')
+  })
+
+  it('lets kronor typed by hand through, with or without a bank row', () => {
+    expect(bookDirectFxRefusal(EUR_100, null, PRIVATE_OUTLAY)).toBeNull()
+    expect(bookDirectFxRefusal(EUR_100, null, TYPED_AGAINST_BANK)).toBeNull()
+    expect(bookDirectFxRefusal(EUR_100, SEK_ROW, TYPED_AGAINST_BANK)).toBeNull()
+    // Nothing ties the lines to the bank row: a bank line that differs from
+    // it is a wider question than this rule answers.
+    expect(bookDirectFxRefusal(EUR_100, SEK_ROW, [line('6540', 1140, 0), line('1930', 0, 1140)])).toBeNull()
+    expect(bookDirectFxRefusal(EUR_100, SEK_ROW, PRIVATE_OUTLAY)).toBeNull()
+  })
+
+  it('lets the figure through when it is the picked bank row kronor amount', () => {
+    // The bank drew 100,00 kr: the currency was read wrongly off the receipt,
+    // or the rate was exactly one. Either way the figure is kronor.
+    expect(bookDirectFxRefusal(EUR_100, { amount: -100, currency: 'SEK' }, COST_AND_BANK)).toBeNull()
+    expect(bookDirectFxRefusal(EUR_100, { amount: -9.5, amount_sek: -100, currency: 'USD' }, COST_AND_BANK)).toBeNull()
+  })
+
+  it('compares to the öre, on either side, whatever the sign of the document total', () => {
+    const lines = (amount: number) => [line('6540', amount, 0), line('2893', 0, amount)]
+    expect(bookDirectFxRefusal(receipt({ total: 100.004, currency: 'EUR' }), null, lines(100))).toBe('face_amount')
+    expect(bookDirectFxRefusal(EUR_100, null, lines(100.01))).toBeNull()
+    expect(bookDirectFxRefusal(EUR_100, null, lines(99.99))).toBeNull()
+    // A credit note's total may be read as negative; the lines never are.
+    expect(bookDirectFxRefusal(receipt({ total: -100, currency: 'EUR' }), null, lines(100))).toBe('face_amount')
+    expect(bookDirectFxRefusal(EUR_100, null, [line('2893', 0, 100), line('6540', 60, 0), line('6541', 40, 0)])).toBe('face_amount')
+  })
+
+  it('does not compare when the document has no usable total', () => {
+    for (const total of [null, 0, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(bookDirectFxRefusal(receipt({ total, currency: 'EUR' }), null, COST_AND_BANK)).toBeNull()
+    }
+    expect(bookDirectFxRefusal({ invoice: { currency: 'EUR' } }, null, COST_AND_BANK)).toBeNull()
+  })
+
+  it('never applies to a SEK document: its own total is kronor', () => {
+    for (const currency of ['SEK', 'sek', ' Sek ']) {
+      expect(bookDirectFxRefusal(receipt({ total: 100, currency }), null, COST_AND_BANK)).toBeNull()
+    }
+    expect(bookDirectFxRefusal({ totals: { total: 100 } }, null, COST_AND_BANK)).toBeNull()
+    expect(bookDirectFxRefusal(null, null, COST_AND_BANK)).toBeNull()
+  })
+
+  it('refuses a picked bank row that has no kronor amount, whatever the lines say', () => {
+    const noSek = { amount: -100, amount_sek: null, currency: 'EUR', exchange_rate: null }
+    expect(bookDirectFxRefusal(EUR_100, noSek, TYPED_AGAINST_BANK)).toBe('bank_row_without_sek')
+    expect(bookDirectFxRefusal(EUR_100, noSek, COST_AND_BANK)).toBe('bank_row_without_sek')
+    expect(bookDirectFxRefusal(EUR_100, { ...noSek, exchange_rate: 0 }, TYPED_AGAINST_BANK)).toBe('bank_row_without_sek')
+    // With a stored kronor amount or a rate the row answers for itself.
+    expect(bookDirectFxRefusal(EUR_100, { ...noSek, amount_sek: -1150 }, TYPED_AGAINST_BANK)).toBeNull()
+    expect(bookDirectFxRefusal(EUR_100, { ...noSek, exchange_rate: 11.5 }, TYPED_AGAINST_BANK)).toBeNull()
+    // A SEK document is outside the rule, as before.
+    expect(bookDirectFxRefusal(receipt({ total: 100, currency: 'SEK' }), noSek, TYPED_AGAINST_BANK)).toBeNull()
+  })
+
+  it('never answers the face amount for a foreign bank row', () => {
+    expect(bankRowSekAmount(SEK_ROW)).toBe(-1150)
+    expect(bankRowSekAmount({ amount: -100, amount_sek: -1150.004, currency: 'EUR' })).toBe(-1150)
+    expect(bankRowSekAmount({ amount: -100, currency: 'USD', exchange_rate: 10.5 })).toBe(-1050)
+    expect(bankRowSekAmount({ amount: -100, currency: 'EUR' })).toBeNull()
   })
 })
 
@@ -664,6 +802,22 @@ describe('manualBookDirectLines and toBookDirectPayloadLine', () => {
     expect('generated_account' in payload).toBe(false)
     expect('account_edited' in payload).toBe(false)
     expect(toBookDirectPayloadLine({ ...line, dimensions: {} }).dimensions).toBeUndefined()
+  })
+
+  it('keeps the dimensions a template set on a line, so they are posted with it', () => {
+    const lines = manualBookDirectLines([
+      { account_number: '5410', debit_amount: '1000', credit_amount: '', dimensions: { '6': 'P001' } },
+      { account_number: '2641', debit_amount: '250', credit_amount: '', dimensions: {} },
+      { account_number: '1930', debit_amount: '', credit_amount: '1250' },
+    ])
+    expect(lines).toEqual([
+      { account_number: '5410', debit_amount: '1000', credit_amount: '', dimensions: { '6': 'P001' } },
+      { account_number: '2641', debit_amount: '250', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1250' },
+    ])
+    // An empty bag would open the line's picker row: a template line without tags gets none.
+    expect(lines[1]).not.toHaveProperty('dimensions')
+    expect(toBookDirectPayloadLine(lines[0]).dimensions).toEqual({ '6': 'P001' })
   })
 
   it('tags neither 2641 nor a 19-account when a template is applied', () => {

@@ -35,7 +35,7 @@
     {
       "number": 2,
       "title": "Uppskjutna skatter",
-      "body": "Posten avser uppskjuten skatteskuld redovisad på konto 2240.\n\nIngående saldo (2240): 50 000 kr\nÅrets förändring (8940): 20 600 kr\nUtgående saldo (2240): 70 600 kr"
+      "body": "Posten avser uppskjuten skatteskuld redovisad på konto 2240.\n\nUppskjuten skatteskuld\nIngående saldo (2240): 50 000 kr\nÅrets förändring: 20 600 kr\nUtgående saldo (2240): 70 600 kr\n\nÅrets uppskjutna skatt i resultaträkningen (8940): 20 600 kr"
     },
     {
       "number": 3,
@@ -56,18 +56,14 @@
       "number": 6,
       "title": "Ställda säkerheter",
       "body": "Inga."
-    },
-    {
-      "number": 7,
-      "title": "Väsentliga händelser efter balansdagen",
-      "body": "Inga väsentliga händelser har inträffat efter räkenskapsårets utgång som påverkar bedömningen av företagets ställning och resultat.",
-      "key": "vasentliga_handelser_efter_balansdagen"
     }
   ],
   "warnings": [
     "Årets resultat enligt resultaträkningen (-20600 kr) stämmer inte med konto 2099 (0 kr). Kontrollera att bokslutet är genomfört (resultatdisposition bokad).",
     "Balansräkningen balanserar inte: Summa tillgångar 0 kr ≠ Summa eget kapital och skulder 70600 kr (kontrollera-kod 3005).",
-    "Aktiekapitalnoten saknas eftersom uppgifter om aktiekapital inte finns i Inställningar → Företag. K3 / ÅRL kräver att noten innehåller registrerat belopp innan inlämning till Bolagsverket.",
+    "Jämförelseårets resultat enligt resultaträkningen (-20600 kr) stämmer inte med konto 2099 (0 kr), och skillnaden kan inte förklaras av ett år som aldrig avslutades. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+    "Jämförelseårets balansräkning balanserar inte: Summa tillgångar 0 kr ≠ Summa eget kapital och skulder 70600 kr. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+    "Aktiekapitalnoten utelämnas eftersom uppgifter om aktiekapital saknas i Inställningar → Företag. För ett mindre företag är noten frivillig; ett större företag ska ange antal aktier och kvotvärde (ÅRL 5 kap. 34 §).",
     "Bolaget redovisar enligt K3 (BFNAR 2012:1). Soliditeten är beräknad med 79,4 % av obeskattade reserver inräknat i eget kapital. PDF:en innehåller kassaflödesanalys, förändring av eget kapital och utökade noter: granska innehållet mot er specifika redovisning innan inlämning.",
     "Datum för årsstämma saknas. Fastställelseintyget i PDF:en lämnas tomt på datumraden tills det fylls i nedan."
   ]

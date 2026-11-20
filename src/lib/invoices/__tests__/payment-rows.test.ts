@@ -196,3 +196,42 @@ describe('printsPayableRow', () => {
     expect(printsPayableRow([{ key: 'routing_number' }, { key: 'ocr' }, { key: 'message' }])).toBe(false)
   })
 })
+
+describe('Autogiro: the payer number instead of a way to pay', () => {
+  const company: Partial<InvoicePaymentRowsCompany> = {
+    bankgiro: '5050-1055',
+    bank_name: 'Nordea',
+    clearing_number: '3300',
+    account_number: '1234567',
+    swish: '1234567890',
+  }
+
+  it('prints only the payer number: no giro, account, Swish, link or OCR to pay by hand', () => {
+    const list = rows(company, { autogiro_payer_number: ' 556677 ', payment_link_url: 'https://pay.example.test/x' })
+    expect(list).toEqual([{ key: 'autogiro', label: 'Betalarnummer:', value: '556677', emphasis: true }])
+  })
+
+  it('labels it in English on an English invoice', () => {
+    expect(rows(company, { autogiro_payer_number: '556677' }, 'en')).toEqual([
+      { key: 'autogiro', label: 'Payer number:', value: '556677', emphasis: true },
+    ])
+  })
+
+  it('counts as payable (the debit pays it), so the send check does not ask for a payee', () => {
+    expect(printsPayableRow(rows({}, { autogiro_payer_number: '556677' }))).toBe(true)
+  })
+
+  it('leaves an invoice without a payer number (null, blank or absent) exactly as before', () => {
+    const before = rows(company)
+    expect(rows(company, { autogiro_payer_number: null })).toEqual(before)
+    expect(rows(company, { autogiro_payer_number: '  ' })).toEqual(before)
+    expect(keys(before)).toEqual(['bankgiro', 'bank_account', 'swish', 'ocr'])
+  })
+
+  it('reads the payer number trimmed, null when there is none', async () => {
+    const { invoiceAutogiroPayerNumber } = await import('@/lib/invoices/payment-rows')
+    expect(invoiceAutogiroPayerNumber({ autogiro_payer_number: ' 42 ' })).toBe('42')
+    expect(invoiceAutogiroPayerNumber({ autogiro_payer_number: '' })).toBeNull()
+    expect(invoiceAutogiroPayerNumber({})).toBeNull()
+  })
+})

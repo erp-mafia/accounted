@@ -4,7 +4,9 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import type { ArkivQuestion, QuestionFinding } from '@/lib/arkiv/questions'
 import type { Reading } from '@/lib/documents/extract/fields'
@@ -15,13 +17,17 @@ import { useFieldLabel } from './useFieldLabel'
 /**
  * One question Arkiv has for a person (phase 9d, "ask at the door"): the
  * question in a sentence with the answer we would give, why we ask, one tap,
- * and then what happens, stated in the card. The decision sheet stays one
- * link away for an answer that is not on a chip. Used by Granska and by the
- * Underlag rail, so a question reads the same wherever it is met.
+ * and then what happens, said in a toast while the answered card fades out
+ * of the list. The decision sheet stays one link away for an answer that is
+ * not on a chip. Used by Granska and by the Underlag rail, so a question
+ * reads the same wherever it is met.
  */
-export const QUIET_ACTION_CLASS = 'text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50'
+export const QUIET_ACTION_CLASS = 'text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground disabled:opacity-50'
 
 type DismissNote = 'not_exists' | 'not_applicable'
+
+/** The answered card's fade (duration-150), after which it leaves the list. */
+const FADE_MS = 150
 
 async function send(method: 'POST' | 'PUT', url: string, body: unknown): Promise<void> {
   const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -66,14 +72,20 @@ export function QuestionCard({
   question: ArkivQuestion
   /** The answer is not on a chip: open the decision sheet for this question. */
   onMore?: (question: ArkivQuestion) => void
-  /** Answered with one tap and saved; the card keeps showing what happens next. */
+  /** Answered with one tap and saved; called once the card has faded out. */
   onAnswered?: (question: ArkivQuestion) => void
   compact?: boolean
 }) {
   const t = useTranslations('arkiv')
   const fieldLabel = useFieldLabel()
+  const { toast } = useToast()
+  // useCanWrite's rule; outside a provider (the sandbox) the server decides.
+  const companyContext = useCompanyOptional()
+  const canWrite = !companyContext || (companyContext.role !== null && companyContext.role !== 'viewer')
   const [busy, setBusy] = useState(false)
-  const [then, setThen] = useState<string | null>(null)
+  // Answered: the card fades (leaving), then leaves the list (gone).
+  const [leaving, setLeaving] = useState(false)
+  const [gone, setGone] = useState(false)
   const [failed, setFailed] = useState(false)
 
   const typeLabel = (type: string | null) => (type && (DOC_TYPES as readonly string[]).includes(type) ? t(`types.${type}` as never) : t('type_unknown'))
@@ -84,14 +96,20 @@ export function QuestionCard({
     setFailed(false)
     try {
       await work()
-      setThen(consequence)
-      onAnswered?.(question)
+      toast({ title: consequence })
+      setLeaving(true)
+      window.setTimeout(() => {
+        setGone(true)
+        onAnswered?.(question)
+      }, FADE_MS)
     } catch {
       setFailed(true)
     } finally {
       setBusy(false)
     }
   }
+
+  if (gone) return null
 
   let sentence = ''
   let why: string | null = null
@@ -108,10 +126,10 @@ export function QuestionCard({
     why = d.relevance_reason ?? (d.addressed_to ? t('addressed_to', { name: d.addressed_to }) : d.summary)
     chips = (
       <>
-        <Button size="sm" disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/admission`, { decision: 'admit' }), t('then_admitted'))}>
+        <Button disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/admission`, { decision: 'admit' }), t('then_admitted'))}>
           {t('question_held_yes')}
         </Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/admission`, { decision: 'discard' }), t('discarded'))}>
+        <Button variant="outline" disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/admission`, { decision: 'discard' }), t('discarded'))}>
           {t('question_held_no')}
         </Button>
       </>
@@ -125,11 +143,11 @@ export function QuestionCard({
       sentence = t('question_type', { title: shortFileName(d.title, 48), type: label })
       chips = (
         <>
-          <Button size="sm" disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/classification`, { doc_type: proposed }), t('then_typed', { type: label }))}>
+          <Button disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/classification`, { doc_type: proposed }), t('then_typed', { type: label }))}>
             {t('question_type_yes', { type: label })}
           </Button>
           {onMore ? (
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => onMore(question)}>
+            <Button variant="outline" disabled={busy} onClick={() => onMore(question)}>
               {t('question_type_no')}
             </Button>
           ) : null}
@@ -139,7 +157,7 @@ export function QuestionCard({
     } else {
       sentence = t('question_type_open', { title: shortFileName(d.title, 48) })
       chips = onMore ? (
-        <Button size="sm" disabled={busy} onClick={() => onMore(question)}>
+        <Button disabled={busy} onClick={() => onMore(question)}>
           {t('question_type_pick')}
         </Button>
       ) : null
@@ -157,12 +175,12 @@ export function QuestionCard({
       <>
         {question.readings.length === 1 && first ? (
           // One reading to confirm: the sentence already says the value, the chip says yes.
-          <Button size="sm" disabled={busy} title={first.quote ?? asText(first.value)} onClick={() => save(first)}>
+          <Button disabled={busy} title={first.quote ?? asText(first.value)} onClick={() => save(first)}>
             {t('question_yes')}
           </Button>
         ) : (
           question.readings.map((r, i) => (
-            <Button key={i} size="sm" variant={i === 0 ? 'default' : 'outline'} disabled={busy} title={r.quote ?? asText(r.value)} onClick={() => save(r)}>
+            <Button key={i} variant={i === 0 ? 'default' : 'outline'} disabled={busy} title={r.quote ?? asText(r.value)} onClick={() => save(r)}>
               {readingLabel(r)}
             </Button>
           ))
@@ -176,24 +194,35 @@ export function QuestionCard({
     )
     more = null
   } else {
-    return <FindingQuestion finding={question.finding} compact={compact} busy={busy} then={then} failed={failed} onClose={(resolution, note) => act(() => closeFinding(question.finding, resolution, note), resolution === 'applied' ? t('finding_applied') : t('then_noted'))} />
+    return <FindingQuestion finding={question.finding} compact={compact} busy={busy || !canWrite} leaving={leaving} failed={failed} onClose={(resolution, note) => act(() => closeFinding(question.finding, resolution, note), resolution === 'applied' ? t('finding_applied') : t('then_noted'))} />
   }
 
   return (
-    <div className={cn('border-b border-border px-1', compact ? 'py-2.5' : 'py-3')}>
+    <div className={cardClass(compact, leaving)} inert={leaving || undefined}>
       <div className="text-[13px]">{sentence}</div>
-      {why ? <div className="mt-0.5 text-[12.5px] text-muted-foreground">{why}</div> : null}
-      {then ? (
-        <div className="mt-2 text-[12.5px]">{then}</div>
-      ) : (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {chips}
-          {more}
-        </div>
-      )}
-      {failed ? <div className="mt-1 text-[12.5px] text-destructive">{t('action_failed')}</div> : null}
+      {why ? <div className="mt-0.5 text-xs text-muted-foreground">{why}</div> : null}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {canWrite ? (
+          <>
+            {chips}
+            {more}
+          </>
+        ) : (
+          // A read-only member reads the question; every answer is locked.
+          <fieldset disabled title={t('viewer_disabled_tooltip')} className="contents">
+            {chips}
+            {more}
+          </fieldset>
+        )}
+      </div>
+      {failed ? <div className="mt-1 text-xs text-destructive">{t('action_failed')}</div> : null}
     </div>
   )
+}
+
+/** A question card; an answered one fades out before it leaves the list. */
+function cardClass(compact: boolean, leaving: boolean): string {
+  return cn('border-b-hairline px-1 transition-opacity duration-150 ease-out', compact ? 'py-2.5' : 'py-3', leaving && 'opacity-0')
 }
 
 async function closeFinding(f: QuestionFinding, resolution: 'applied' | 'dismissed', note?: DismissNote): Promise<void> {
@@ -207,14 +236,14 @@ function FindingQuestion({
   finding,
   compact,
   busy,
-  then,
+  leaving,
   failed,
   onClose,
 }: {
   finding: QuestionFinding
   compact: boolean
   busy: boolean
-  then: string | null
+  leaving: boolean
   failed: boolean
   onClose: (resolution: 'applied' | 'dismissed', note?: DismissNote) => void
 }) {
@@ -263,7 +292,7 @@ function FindingQuestion({
     }
   }
   return (
-    <div className={cn('border-b border-border px-1', compact ? 'py-2.5' : 'py-3')}>
+    <div className={cardClass(compact, leaving)} inert={leaving || undefined}>
       <div className="text-[13px]">
         {text}
         {href ? (
@@ -278,37 +307,33 @@ function FindingQuestion({
           )
         ) : null}
       </div>
-      {then ? (
-        <div className="mt-2 text-[12.5px]">{then}</div>
-      ) : (
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          {finding.kind === 'document_expected' ? (
-            <>
-              <Button size="sm" asChild>
-                <Link href="/arkiv">{t('finding_upload')}</Link>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        {finding.kind === 'document_expected' ? (
+          <>
+            <Button asChild>
+              <Link href="/arkiv">{t('finding_upload')}</Link>
+            </Button>
+            <button type="button" disabled={busy} className={QUIET_ACTION_CLASS} onClick={() => onClose('dismissed', 'not_exists')}>
+              {t('finding_not_exists')}
+            </button>
+            <button type="button" disabled={busy} className={QUIET_ACTION_CLASS} onClick={() => onClose('dismissed', 'not_applicable')}>
+              {t('finding_not_applicable')}
+            </button>
+          </>
+        ) : (
+          <>
+            {finding.kind === 'settings_mismatch' ? (
+              <Button disabled={busy} onClick={() => onClose('applied')}>
+                {t('finding_apply')}
               </Button>
-              <button type="button" disabled={busy} className={QUIET_ACTION_CLASS} onClick={() => onClose('dismissed', 'not_exists')}>
-                {t('finding_not_exists')}
-              </button>
-              <button type="button" disabled={busy} className={QUIET_ACTION_CLASS} onClick={() => onClose('dismissed', 'not_applicable')}>
-                {t('finding_not_applicable')}
-              </button>
-            </>
-          ) : (
-            <>
-              {finding.kind === 'settings_mismatch' ? (
-                <Button size="sm" disabled={busy} onClick={() => onClose('applied')}>
-                  {t('finding_apply')}
-                </Button>
-              ) : null}
-              <button type="button" disabled={busy} className={QUIET_ACTION_CLASS} onClick={() => onClose('dismissed')}>
-                {t('finding_dismiss')}
-              </button>
-            </>
-          )}
-        </div>
-      )}
-      {failed ? <div className="mt-1 text-[12.5px] text-destructive">{t('action_failed')}</div> : null}
+            ) : null}
+            <button type="button" disabled={busy} className={QUIET_ACTION_CLASS} onClick={() => onClose('dismissed')}>
+              {t('finding_dismiss')}
+            </button>
+          </>
+        )}
+      </div>
+      {failed ? <div className="mt-1 text-xs text-destructive">{t('action_failed')}</div> : null}
     </div>
   )
 }

@@ -15,16 +15,30 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
-import { staticTemplateToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import {
+  balancingAmountInput,
+  checkTemplateLines,
+  shownTemplateLines,
+  templateLinesSeed,
+  withLineAccount,
+  withLineAmount,
+  type TemplateLinesEdits,
+} from '@/lib/bookkeeping/template-line-edit'
+import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { roundOre } from '@/lib/money'
-import { ArrowLeft, Check } from 'lucide-react'
+import { parseAmountInput } from '@/lib/money'
+import { ArrowLeftIcon, ArrowUturnLeftIcon, CheckIcon } from '@/components/icons'
 import type { BookingTemplateLibrary } from '@/types'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 
 interface Props {
   open: boolean
@@ -33,10 +47,7 @@ interface Props {
   onCreated: () => void
 }
 
-/** Sum a side of the computed lines in öre-safe steps. */
-function sumSide(lines: FormLine[], side: 'debit_amount' | 'credit_amount'): number {
-  return lines.reduce((acc, l) => roundOre(acc + (parseFloat(l[side]) || 0)), 0)
-}
+const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
 
 /**
  * "Bokför från mall" (UI-migration plan PR 4, scene 9): a centered modal
@@ -44,77 +55,129 @@ function sumSide(lines: FormLine[], side: 'debit_amount' | 'credit_amount'): num
  * library templates, by family), then date + editable amount that recomputes
  * the kontering live, a "Balanserar" row, and direct booking (user action, so
  * no Granskning detour).
+ *
+ * The kontering is the mall's starting point, not a lock (crm#1351): its
+ * lines sit in the same editor as a verifikat's, so a share that differs
+ * from booking to booking (a fee taken off a payout) is adjusted before
+ * booking, and booking waits until debit and credit match. A new total or
+ * another mall computes the lines again; the mall itself is never changed
+ * (lib/bookkeeping/template-line-edit.ts).
  */
 export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Props) {
   const t = useTranslations('bookkeeping')
+  const tLines = useTranslations('journal_form')
   const { toast } = useToast()
 
   const { company } = useCompany()
   const { periods } = useFiscalPeriods()
+  const { accounts, isLoading: accountsLoading } = useAccounts()
   const [selected, setSelected] = useState<
     { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate } | null
   >(null)
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [entryDate, setEntryDate] = useState(() => todayIsoStockholm())
   const [amountInput, setAmountInput] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  // The person's changes to the computed lines, for the mall and total they were made on.
+  const [edits, setEdits] = useState<TemplateLinesEdits<FormLine> | null>(null)
+  // Which button's request is in flight: only that one spins, both stay disabled.
+  const [submitting, setSubmitting] = useState<'book' | 'draft' | null>(null)
+  // The warnings a refused booking came back with (VOUCHER_NEEDS_CONFIRMATION),
+  // shown for the person to confirm or go back and correct the lines.
+  const [voucherWarnings, setVoucherWarnings] = useState<VoucherWarning[] | null>(null)
 
   // Reset per open so yesterday's half-typed amount never leaks into today.
   useEffect(() => {
     if (open) return
     setSelected(null)
     setAmountInput('')
-    setEntryDate(new Date().toISOString().split('T')[0])
+    setEdits(null)
+    setEntryDate(todayIsoStockholm())
   }, [open])
 
   const amount = useMemo(() => {
-    const parsed = parseFloat(amountInput.replace(/\s/g, '').replace(',', '.'))
-    return Number.isFinite(parsed) && parsed > 0 ? roundOre(parsed) : 0
+    const parsed = parseAmountInput(amountInput)
+    return parsed !== null && parsed > 0 ? parsed : 0
   }, [amountInput])
 
-  // The live kontering: recomputed from the template's line pattern on
-  // every amount change (momssplit etc. handled by applyTemplate).
-  const lines = useMemo<FormLine[]>(() => {
+  // The live kontering, recomputed on every amount change: an own library
+  // template from its line pattern (applyTemplate), a catalog template by
+  // the server the way a bank row of that total is booked with it (moms,
+  // omvänd skattskyldighet settled with the company's momskoder).
+  const staticPreview = useProposalPreview(
+    selected?.kind === 'static' && amount > 0 ? { amount, template_id: selected.template.id } : null,
+  )
+  const computedLines = useMemo<FormLine[]>(() => {
     if (!selected || amount <= 0) return []
     return selected.kind === 'library'
       ? applyTemplate(selected.raw.lines, amount)
-      : staticTemplateToFormLines(selected.template, amount, company?.entity_type)
-  }, [selected, amount, company?.entity_type])
+      : proposalLinesToFormLines(staticPreview.lines)
+  }, [selected, amount, staticPreview.lines])
+  // Never book lines computed for an amount the field no longer shows.
+  const linesPending = selected?.kind === 'static' && staticPreview.loading
   const selectedName = selected ? (selected.kind === 'library' ? selected.raw.name : selected.template.name_sv) : null
-  const totalDebit = sumSide(lines, 'debit_amount')
-  const totalCredit = sumSide(lines, 'credit_amount')
-  const balanced = lines.length >= 2 && totalDebit === totalCredit && totalDebit > 0
+  const seed = templateLinesSeed(
+    selected ? (selected.kind === 'library' ? selected.raw.id : selected.template.id) : '',
+    amount,
+  )
+  const lines = shownTemplateLines(computedLines, edits, seed)
+  const edited = edits !== null && edits.seed === seed
+  const check = useMemo(() => checkTemplateLines(lines), [lines])
+  const balanced = !linesPending && check.bookable
+
+  const accountNames = useMemo(
+    () => new Map(accounts.map((a) => [a.account_number, a.account_name])),
+    [accounts],
+  )
+  // Every change starts from the lines on screen and belongs to this mall and total.
+  const editLines = (change: (current: FormLine[]) => FormLine[]) => {
+    if (linesPending) return
+    setEdits({ seed, lines: change(lines) })
+  }
 
   const periodForDate = periods.find(
     (p) => p.period_start <= entryDate && entryDate <= p.period_end,
   )
 
-  const handleBook = async () => {
+  // `asDraft` posts with ?as_draft=true, which the route already understands
+  // (createDraftEntry vs createJournalEntry). A draft gets no voucher number
+  // and stays editable, matching the "Spara som utkast" affordance the manual
+  // JournalEntryForm has always had. Booking from a template previously
+  // committed straight away, with no way to review first.
+  // `acknowledged`: the warning codes the person confirmed in the warnings
+  // dialog. The server checks again and refuses anything new.
+  const handleBook = async (asDraft = false, acknowledged?: string[]) => {
     if (!selected || !balanced) return
     if (!periodForDate) {
       toast({ title: t('tpl_no_period'), variant: 'destructive' })
       return
     }
-    setSubmitting(true)
+    setSubmitting(asDraft ? 'draft' : 'book')
     try {
-      const res = await fetch('/api/bookkeeping/journal-entries', {
+      const res = await fetch(
+        `/api/bookkeeping/journal-entries${asDraft ? '?as_draft=true' : ''}`,
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fiscal_period_id: periodForDate.id,
           entry_date: entryDate,
           description: selectedName,
-          lines: lines.map((l) => ({
-            account_number: l.account_number,
-            debit_amount: parseFloat(l.debit_amount) || 0,
-            credit_amount: parseFloat(l.credit_amount) || 0,
-            line_description: l.line_description || undefined,
-          })),
+          lines: check.postLines,
+          ...(acknowledged ? { acknowledged_warnings: acknowledged } : {}),
         }),
-      })
+        },
+      )
       const result = await res.json()
       if (!res.ok) {
+        // A voucher that deviates is not a failure: show what deviates and
+        // let the person book it anyway, as the manual form does. As a toast
+        // it said "read the warnings and confirm" with neither on screen.
+        const warnings = result?.error?.details?.warnings
+        if (!asDraft && result?.error?.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(warnings)) {
+          setVoucherWarnings(warnings as VoucherWarning[])
+          return
+        }
         toast({
-          title: t('toast_post_failed'),
+          title: asDraft ? t('tpl_toast_draft_failed') : t('toast_post_failed'),
           description: getErrorMessage(result, { context: 'journal_entry' }),
           variant: 'destructive',
         })
@@ -127,26 +190,39 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
         }).catch(() => {})
       }
       toast({
-        title: t('toast_posted_title'),
-        description: t('toast_posted_description', {
-          voucher: formatVoucher(result.data ?? {}),
-        }),
+        title: asDraft ? t('tpl_toast_draft_saved_title') : t('toast_posted_title'),
+        description: asDraft
+          ? t('tpl_toast_draft_saved_description')
+          : t('toast_posted_description', {
+              voucher: formatVoucher(result.data ?? {}),
+            }),
       })
       onOpenChange(false)
       onCreated()
     } catch {
       toast({ title: t('toast_post_failed_generic'), variant: 'destructive' })
     } finally {
-      setSubmitting(false)
+      setSubmitting(null)
     }
   }
 
   return (
+    <>
+    <VoucherWarningsDialog
+      warnings={voucherWarnings}
+      processing={submitting !== null}
+      onCancel={() => setVoucherWarnings(null)}
+      onConfirm={() => {
+        const confirmed = voucherWarnings
+        setVoucherWarnings(null)
+        if (confirmed) void handleBook(false, confirmed.map((warning) => warning.code))
+      }}
+    />
     <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
-      <DialogContent className="sm:min-w-[460px] sm:max-w-lg">
+      <DialogContent className={cn('sm:min-w-[460px]', selected ? 'sm:max-w-2xl' : 'sm:max-w-lg')}>
         <DialogHeader>
           {/* data-ph-mask: the template name is user data */}
-          <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
+          <DialogTitle data-ph-mask="" className="text-lg">
             {selectedName ?? t('tpl_dialog_title')}
           </DialogTitle>
         </DialogHeader>
@@ -169,7 +245,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
               onClick={() => setSelected(null)}
               className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
-              <ArrowLeft className="h-3.5 w-3.5" />
+              <ArrowLeftIcon className="h-3.5 w-3.5" />
               {t('tpl_back')}
             </button>
 
@@ -197,54 +273,101 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
               </div>
             </div>
 
-            {/* Live kontering preview */}
-            <div className="rounded-lg border border-border">
-              {lines.length === 0 ? (
-                <p className="px-3 py-4 text-center text-[13px] text-muted-foreground">
-                  {t('tpl_enter_amount')}
-                </p>
-              ) : (
-                <>
-                  {lines.map((l, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-3 border-b border-border px-3 py-2 text-[13px] last:border-b-0"
-                    >
-                      <span className="w-12 font-mono text-muted-foreground">
-                        {l.account_number}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{l.line_description}</span>
-                      <span className="w-24 text-right tabular-nums">
-                        {l.debit_amount ? formatCurrency(parseFloat(l.debit_amount)) : ''}
-                      </span>
-                      <span className="w-24 text-right tabular-nums text-muted-foreground">
-                        {l.credit_amount ? formatCurrency(parseFloat(l.credit_amount)) : ''}
-                      </span>
-                    </div>
-                  ))}
-                  <div
-                    className={cn(
-                      'flex items-center justify-between px-3 py-2 text-[12.5px]',
-                      balanced ? 'text-success' : 'text-destructive',
-                    )}
-                  >
-                    <span className="inline-flex items-center gap-1.5">
-                      {balanced && <Check className="h-3.5 w-3.5" />}
-                      {balanced ? t('tpl_balances') : t('tpl_not_balancing')}
-                    </span>
-                    <span className="tabular-nums">
-                      {formatCurrency(totalDebit)} / {formatCurrency(totalCredit)}
-                    </span>
-                  </div>
-                </>
-              )}
-            </div>
+            {/* Live kontering: the mall's lines, editable before booking */}
+            {(selected.kind === 'static' && staticPreview.error) || lines.length === 0 ? (
+              <div className="rounded-lg bg-control shadow-raised">
+                {selected.kind === 'static' && staticPreview.error ? (
+                  <p role="alert" className="px-3 py-4 text-center text-[13px] text-destructive">
+                    {staticPreview.error}
+                  </p>
+                ) : (
+                  <p className="px-3 py-4 text-center text-[13px] text-muted-foreground">
+                    {t('tpl_enter_amount')}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">{t('tpl_lines_hint')}</p>
+                <KonteringLinesEditor
+                  lines={lines}
+                  accounts={accounts}
+                  accountName={(accountNumber) => accountNames.get(accountNumber)}
+                  accountsDisabled={accountsLoading || linesPending}
+                  onAccountChange={(index, accountNumber) =>
+                    editLines((current) =>
+                      withLineAccount(current, index, accountNumber, accountNames.get(accountNumber) ?? ''),
+                    )
+                  }
+                  onAmountChange={(index, field, value) =>
+                    editLines((current) => withLineAmount(current, index, field, value))
+                  }
+                  amountInputProps={(index, field) => ({
+                    onDoubleClick: () => {
+                      const fill = balancingAmountInput(lines, index, field)
+                      if (fill !== null) editLines((current) => withLineAmount(current, index, field, fill))
+                    },
+                    title: t('tpl_fill_balance_tooltip'),
+                  })}
+                  onAdd={() => editLines((current) => [...current, { ...BLANK_LINE }])}
+                  onRemove={(index) => editLines((current) => current.filter((_, i) => i !== index))}
+                  labels={{
+                    account: tLines('col_account'),
+                    debit: tLines('col_debit'),
+                    credit: tLines('col_credit'),
+                    addRow: tLines('add_line'),
+                    removeRow: tLines('remove_line'),
+                  }}
+                  toolbar={
+                    edited ? (
+                      <Button type="button" variant="ghost" onClick={() => setEdits(null)}>
+                        <ArrowUturnLeftIcon className="h-3.5 w-3.5" aria-hidden />
+                        {t('tpl_reset_lines')}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+                <div
+                  className={cn(
+                    'flex items-center justify-between border-t-hairline px-1 pt-2 text-xs',
+                    balanced ? 'text-success' : 'text-destructive',
+                  )}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    {balanced && <CheckIcon className="h-3.5 w-3.5" />}
+                    {balanced
+                      ? t('tpl_balances')
+                      : check.incomplete > 0
+                        ? t('tpl_line_incomplete')
+                        : check.difference !== 0
+                          ? t('tpl_not_balancing_diff', { amount: formatCurrency(Math.abs(check.difference)) })
+                          : t('tpl_not_balancing')}
+                  </span>
+                  <span className="tabular-nums">
+                    {formatCurrency(check.totalDebit)} / {formatCurrency(check.totalCredit)}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
+              <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting !== null}>
                 {t('tpl_cancel')}
               </Button>
-              <Button onClick={() => void handleBook()} disabled={!balanced} loading={submitting}>
+              <Button
+                variant="outline"
+                onClick={() => void handleBook(true)}
+                disabled={!balanced || submitting !== null}
+                loading={submitting === 'draft'}
+                title={t('tpl_save_draft_tooltip')}
+              >
+                {t('tpl_save_draft')}
+              </Button>
+              <Button
+                onClick={() => void handleBook()}
+                disabled={!balanced || submitting !== null}
+                loading={submitting === 'book'}
+              >
                 {t('tpl_book')}
               </Button>
             </div>
@@ -252,5 +375,6 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
         )}
       </DialogContent>
     </Dialog>
+    </>
   )
 }

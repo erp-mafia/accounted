@@ -1,5 +1,5 @@
 /**
- * Tests for GET /api/bookkeeping/no-doc-required — the exemption-set list.
+ * Tests for GET /api/bookkeeping/no-doc-required - the exemption-set list.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'

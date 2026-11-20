@@ -27,7 +27,7 @@ import crypto from 'crypto'
  *
  * The point of this function is reproducibility: the same logical
  * transaction must always produce the same dedup_key. The material format
- * is a stored contract (every existing hash row in prod was written with
+ * is a stored contract (every existing hash row in production was written with
  * it): never change it.
  */
 export function computeDedupKey(tx: {

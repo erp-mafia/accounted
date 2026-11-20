@@ -5,7 +5,19 @@ import { isEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
 import { useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { Receipt, Lock, Loader2, Upload, Sparkles, X, Plus, ChevronRight, ChevronLeft, NotebookPen, FileText } from 'lucide-react'
+import {
+  ArrowUpTrayIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  DocumentTextIcon,
+  LockClosedIcon,
+  PencilSquareIcon,
+  PlusIcon,
+  ReceiptRefundIcon,
+  SparklesIcon,
+  SpinnerIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -26,8 +38,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { AttnLine } from '@/components/ui/attn-line'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -35,20 +49,37 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
-import { useAccounts, useBookingTemplates, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useBookingTemplates, useCompanySettings, useEmployees } from '@/lib/reference-data/hooks'
 import type { BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { BOOKING_TEMPLATES, findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
-import { computeProposalLines } from '@/lib/bookkeeping/proposal-lines'
-import { useCompanyOptional } from '@/contexts/CompanyContext'
-import { roundOre, sumOre } from '@/lib/money'
+import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
+import { isInboxItemUnbooked } from '@/lib/documents/inbox-item-state'
+import { isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { formatAmountInput } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, formatAmount, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { postDocumentForm, uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { expenseClaimantKey, outstandingByClaimant as groupOutstandingByClaimant } from '@/lib/expenses/expense-payout-candidates'
+import { lastOwnerClaimantName } from '@/lib/expenses/payer'
+import {
+  PLAIN_DOCUMENT_UPLOAD_URL,
+  documentIdFromPlainUpload,
+  plainDocumentUploadForm,
+  underlagUploadRoute,
+} from '@/lib/documents/underlag-upload-route'
+import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
+import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { CURRENCIES, type BookingTemplateLibrary } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface ExpenseClaim {
   id: string
@@ -63,15 +94,14 @@ interface ExpenseClaim {
   expense_account: string
   liability_account: string
   status: 'registered' | 'paid'
+  created_at: string
+  /** Registered and on no payslip: the server's answer (lib/salary/expense-claim-payout-state.ts). */
+  awaits_payout: boolean
+  /** The salary run that repays the claim, while it is registered and on a payslip. */
+  salary_run: { salary_run_id: string; payment_date: string } | null
   journal_entry_id: string | null
   document: { id: string; file_name: string | null } | null
   batch: { id: string; payout_date: string } | null
-}
-
-interface EmployeeOption {
-  id: string
-  first_name: string
-  last_name: string
 }
 
 interface InboxOption {
@@ -101,12 +131,6 @@ const OWNER_VALUE = 'owner'
 const NO_RECEIPT_VALUE = 'none'
 type SellerCountry = 'se' | 'abroad' | 'eu' | 'noneu'
 
-/** Today in the viewer's own timezone: toISOString() converts to UTC first,
- *  which picks yesterday's date for anyone east of Greenwich before 02:00. */
-function todayLocal(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
 interface BookingRow {
   key: number
   account: string
@@ -117,17 +141,18 @@ let bookingRowKey = 0
 const nextRowKey = () => ++bookingRowKey
 
 const EXCLUDED_TEMPLATE_CATEGORIES = ['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']
+/** 2645 in the SE pack. PINNED_JURISDICTION: CompanyContext's company is loaded without its jurisdiction. */
+const FOREIGN_REVERSE_CHARGE_INPUT_VAT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat_reverse_charge_foreign')
 /** Expense-shaped library template: every business line is a debit and no
  *  2614/2645 legs: the country selector owns the reverse-charge variant. */
 const isExpenseLibraryTemplate = (tpl: BookingTemplateWithUsage) => {
   const business = tpl.lines.filter((l) => l.type === 'business')
   if (business.length === 0) return false
   if (!business.every((l) => l.side === 'debit')) return false
-  if (tpl.lines.some((l) => l.account === '2614' || l.account === '2645')) return false
+  if (tpl.lines.some((l) => l.account === '2614' || l.account === FOREIGN_REVERSE_CHARGE_INPUT_VAT)) return false
   return true
 }
 
-const UPLOAD_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.heic'
 /** Deferred inbox extraction usually lands within ~20 s; stop polling after this. */
 const EXTRACTION_POLL_LIMIT_MS = 90_000
 const EXTRACTION_POLL_INTERVAL_MS = 3_000
@@ -139,7 +164,8 @@ type UploadState =
   | {
       phase: 'done'
       fileName: string
-      inboxItemId: string
+      /** Null for a receipt stored without the document inbox (no AI capability). */
+      inboxItemId: string | null
       documentId: string | null
       extracted: ExtractedReceipt | null
     }
@@ -147,6 +173,10 @@ type UploadState =
 
 export default function ExpenseClaimsPage() {
   const t = useTranslations('expense_claims')
+  const tCommon = useTranslations('common')
+  // The document inbox (AI reading) is refused for a company without the AI
+  // capability; the receipt is then stored through the plain documents upload.
+  const receiptRoute = underlagUploadRoute({ hasAiCapability: useCapability(CAPABILITY.ai) })
   const tTpl = useTranslations('settings_booking_templates')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -155,7 +185,8 @@ export default function ExpenseClaimsPage() {
   const appliedDeepLink = useRef(false)
 
   const [claims, setClaims] = useState<ExpenseClaim[]>([])
-  const [employees, setEmployees] = useState<EmployeeOption[]>([])
+  // The roster from the session cache (lib/reference-data).
+  const { employees } = useEmployees()
   const { accounts } = useAccounts()
   const [inboxOptions, setInboxOptions] = useState<InboxOption[]>([])
   const [inboxLoaded, setInboxLoaded] = useState(false)
@@ -173,7 +204,7 @@ export default function ExpenseClaimsPage() {
 
   // Create form
   const [description, setDescription] = useState('')
-  const [expenseDate, setExpenseDate] = useState(todayLocal)
+  const [expenseDate, setExpenseDate] = useState(todayIsoStockholm)
   const [amount, setAmount] = useState('')
   const [vatAmount, setVatAmount] = useState('')
   const [currency, setCurrency] = useState('SEK')
@@ -208,7 +239,7 @@ export default function ExpenseClaimsPage() {
   const pollAbort = useRef<{ cancelled: boolean }>({ cancelled: false })
 
   // Payout form
-  const [payoutDate, setPayoutDate] = useState(todayLocal)
+  const [payoutDate, setPayoutDate] = useState(todayIsoStockholm)
   const [cashAccount, setCashAccount] = useState('')
 
   const load = useCallback(async () => {
@@ -220,11 +251,15 @@ export default function ExpenseClaimsPage() {
         const rows: ExpenseClaim[] = data || []
         setClaims(rows)
         setLoadError(false)
+        // "Jag, privat" opens with the name the owner's claims were last
+        // registered under, as in the Underlag pane: an empty field books
+        // as "Ägare", one more person to pay.
+        setOwnerName((current) => current || lastOwnerClaimantName(rows) || '')
         // Prune ids that no longer exist or are no longer payable, so a
         // payout request never names a claim deleted or paid in another tab.
         setSelected((prev) => {
           const next = new Set(
-            [...prev].filter((id) => rows.some((r) => r.id === id && r.status === 'registered')),
+            [...prev].filter((id) => rows.some((r) => r.id === id && r.awaits_payout)),
           )
           return next.size === prev.size ? prev : next
         })
@@ -239,6 +274,11 @@ export default function ExpenseClaimsPage() {
   }, [])
 
   const loadInbox = useCallback(async () => {
+    // No inbox to pick from without the AI capability: the request is refused.
+    if (receiptRoute !== 'inbox') {
+      setInboxLoaded(true)
+      return
+    }
     try {
       const res = await fetch('/api/extensions/ext/invoice-inbox/items?limit=100')
       if (!res.ok) return
@@ -252,9 +292,7 @@ export default function ExpenseClaimsPage() {
       }>
       setInboxOptions(
         items
-          .filter(
-            (i) => i.document_id && !i.created_journal_entry_id && !i.created_supplier_invoice_id,
-          )
+          .filter((i) => i.document_id && isInboxItemUnbooked(i))
           .map((i) => ({
             id: i.id,
             document_id: i.document_id,
@@ -270,7 +308,7 @@ export default function ExpenseClaimsPage() {
     } finally {
       setInboxLoaded(true)
     }
-  }, [])
+  }, [receiptRoute])
 
   const loadPayouts = useCallback(() => {
     fetch('/api/expense-claims/payouts')
@@ -283,10 +321,6 @@ export default function ExpenseClaimsPage() {
     load()
     loadInbox()
     loadPayouts()
-    fetch('/api/salary/employees')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => setEmployees(json?.data ?? []))
-      .catch(() => setEmployees([]))
   }, [load, loadInbox, loadPayouts])
 
   const cashAccounts = useMemo(
@@ -309,17 +343,10 @@ export default function ExpenseClaimsPage() {
     [claims, statusFilter],
   )
 
-  const outstandingByClaimant = useMemo(() => {
-    const sums = new Map<string, number>()
-    for (const c of claims) {
-      if (c.status !== 'registered') continue
-      sums.set(c.claimant_name, (sums.get(c.claimant_name) ?? 0) + c.amount_sek)
-    }
-    return [...sums.entries()].sort((a, b) => b[1] - a[1])
-  }, [claims])
+  const outstandingByClaimant = useMemo(() => groupOutstandingByClaimant(claims), [claims])
 
   const selectableIds = useMemo(
-    () => visibleClaims.filter((c) => c.status === 'registered').map((c) => c.id),
+    () => visibleClaims.filter((c) => c.awaits_payout).map((c) => c.id),
     [visibleClaims],
   )
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
@@ -331,7 +358,7 @@ export default function ExpenseClaimsPage() {
   const selectedTotal = selectedClaims.reduce((sum, c) => sum + c.amount_sek, 0)
   const selectionValid =
     selectedClaims.length > 0 &&
-    new Set(selectedClaims.map((c) => c.employee_id ?? OWNER_VALUE)).size === 1 &&
+    new Set(selectedClaims.map(expenseClaimantKey)).size === 1 &&
     new Set(selectedClaims.map((c) => c.liability_account)).size === 1
 
   // Entity type drives the owner liability account (AB creditor vs enskild
@@ -348,43 +375,58 @@ export default function ExpenseClaimsPage() {
   // on 2641. Foreign sellers default to gross-as-cost: hotel, restaurant,
   // taxi and the like are taxed where performed (ML 6 kap.), the foreign VAT
   // is not deductible and no omvänd skattskyldighet applies. Reverse charge
-  // (goods, services under huvudregeln like SaaS) is an explicit opt-in and
-  // rides computeProposalLines, the client mirror of the engine's builder.
+  // (goods, services under huvudregeln like SaaS) is an explicit opt-in: the
+  // server books the cost against the claim's liability the way a bank row
+  // is booked (fiktiv moms, and the basis pair unless the cost account
+  // reports ruta 20-24 itself).
+  const reverseChargeBooked = sellerCountry !== 'se' && sellerCountry !== 'abroad' && reverseCharge
+  const reverseChargePreview = useProposalPreview(
+    reverseChargeBooked && parsedAmount > 0 && ACCOUNT_NUMBER_RE.test(expenseAccount)
+      ? {
+          amount: parsedAmount,
+          pair: {
+            debit_account: expenseAccount,
+            credit_account: liabilityAccount,
+            vat_treatment: 'reverse_charge',
+            reverse_charge_supplier_type: sellerCountry === 'eu' ? 'eu_business' : 'non_eu_business',
+          },
+        }
+      : null,
+  )
   const generatedRows = useMemo<BookingRow[]>(() => {
     if (sellerCountry === 'se') {
       return [
-        { key: -1, account: expenseAccount, debit: netAmount.toFixed(2), credit: '' },
+        { key: -1, account: expenseAccount, debit: formatAmountInput(netAmount, '.'), credit: '' },
         ...(parsedVat > 0
-          ? [{ key: -2, account: '2641', debit: parsedVat.toFixed(2), credit: '' }]
+          ? [{ key: -2, account: '2641', debit: formatAmountInput(parsedVat, '.'), credit: '' }]
           : []),
       ]
     }
-    if (!reverseCharge || sellerCountry === 'abroad') {
+    if (!reverseChargeBooked) {
       return [
-        { key: -1, account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
+        { key: -1, account: expenseAccount, debit: formatAmountInput(parsedAmount, '.'), credit: '' },
       ]
     }
-    return computeProposalLines({
-      amount: -parsedAmount,
-      templateDebitAccount: expenseAccount,
-      templateCreditAccount: liabilityAccount,
-      templateVatTreatment: 'reverse_charge',
-      templateSupplierType: sellerCountry === 'eu' ? 'eu_business' : 'non_eu_business',
-    })
+    // The claim's liability is the editor's own credit row, so the money leg
+    // stays out; the cost line leads, the moms and basis legs follow it.
+    const isGenerated = (account: string) => isGeneratedVatAccount(account) || isReverseChargeBasisLeg(account)
+    return reverseChargePreview.lines
       .filter((line) => !line.settlement)
+      .sort((a, b) => Number(isGenerated(a.account)) - Number(isGenerated(b.account)))
       .map((line, i) => ({
         key: -(i + 1),
         account: line.account,
-        debit: line.side === 'debet' ? line.amount.toFixed(2) : '',
-        credit: line.side === 'kredit' ? line.amount.toFixed(2) : '',
+        debit: line.side === 'debet' ? formatAmountInput(line.amount, '.') : '',
+        credit: line.side === 'kredit' ? formatAmountInput(line.amount, '.') : '',
       }))
-  }, [sellerCountry, reverseCharge, expenseAccount, liabilityAccount, netAmount, parsedAmount, parsedVat])
+  }, [sellerCountry, reverseChargeBooked, reverseChargePreview.lines, expenseAccount, netAmount, parsedAmount, parsedVat])
 
   const editorRows = bookingRows ?? generatedRows
-  const rowSum = (side: 'debit' | 'credit') => sumOre(editorRows.map((r) => parseFloat(r[side]) || 0))
-  const totalDebit = rowSum('debit')
-  const totalCredit = roundOre(rowSum('credit') + parsedAmount)
-  const bookingBalanced = Math.abs(totalDebit - totalCredit) <= 0.005
+  const { totalDebit, totalCredit, difference: bookingDifference } = lineBalance([
+    ...editorRows.map((r) => ({ debit_amount: r.debit, credit_amount: r.credit })),
+    { credit_amount: parsedAmount },
+  ])
+  const bookingBalanced = bookingDifference === 0
   const bookingRowsValid = editorRows.every((r) => {
     const d = parseFloat(r.debit) || 0
     const c = parseFloat(r.credit) || 0
@@ -592,7 +634,7 @@ export default function ExpenseClaimsPage() {
             credit_amount: r.credit,
             line_description: '',
           })),
-          { account_number: liabilityAccount, debit_amount: '', credit_amount: parsedAmount.toFixed(2), line_description: '' },
+          { account_number: liabilityAccount, debit_amount: '', credit_amount: formatAmountInput(parsedAmount, '.'), line_description: '' },
         ],
         Object.fromEntries(accounts.map((a) => [a.account_number, a.account_name])),
       ),
@@ -609,6 +651,9 @@ export default function ExpenseClaimsPage() {
     }
     return null
   }, [upload, inboxChoice, inboxOptions])
+  /** No receipt from either path: the claim registers, but lacks its underlag. */
+  const receiptMissing =
+    (upload.phase === 'idle' || upload.phase === 'error') && inboxChoice === NO_RECEIPT_VALUE
 
   const claimantDisplay =
     claimant === OWNER_VALUE
@@ -638,7 +683,7 @@ export default function ExpenseClaimsPage() {
     setInboxChoice(NO_RECEIPT_VALUE)
     setUpload({ phase: 'idle' })
     setShowReceipt(true)
-    setExpenseDate(todayLocal())
+    setExpenseDate(todayIsoStockholm())
     setSellerCountry('se')
     setReverseCharge(false)
     setBookingMode('choose')
@@ -681,7 +726,7 @@ export default function ExpenseClaimsPage() {
       setVatAmount((prev) => (vat == null ? prev : force || !prev ? String(vat) : prev))
       if (date) {
         setExpenseDate((prev) =>
-          force || prev === todayLocal() ? date : prev,
+          force || prev === todayIsoStockholm() ? date : prev,
         )
       }
       if (curr && (CURRENCIES as readonly string[]).includes(curr)) {
@@ -697,7 +742,8 @@ export default function ExpenseClaimsPage() {
   // the create dialog with that receipt picked and its extraction applied.
   useEffect(() => {
     if (appliedDeepLink.current) return
-    if (searchParams.get('new') !== '1') return
+    // The link opens nothing for a read-only member.
+    if (!canWrite || searchParams.get('new') !== '1') return
     const wanted = searchParams.get('inbox_item')
     if (wanted && !inboxLoaded) return // wait for the inbox answer (may be empty)
     appliedDeepLink.current = true
@@ -710,19 +756,55 @@ export default function ExpenseClaimsPage() {
       }
     }
     router.replace('/expenses')
-  }, [searchParams, inboxOptions, inboxLoaded, applyExtraction, router])
+  }, [searchParams, inboxOptions, inboxLoaded, applyExtraction, router, canWrite])
 
   const startUpload = useCallback(
     async (file: File) => {
       pollAbort.current = { cancelled: false }
       setUpload({ phase: 'uploading', fileName: file.name })
       try {
-        const form = new FormData()
-        form.append('file', file)
-        const res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
-          method: 'POST',
-          body: form,
-        })
+        if (receiptRoute === 'documents') {
+          // Stored as a plain document: nothing reads it, the person fills
+          // the fields. postDocumentForm handles a file over the body cap.
+          const plainRes = await postDocumentForm(
+            PLAIN_DOCUMENT_UPLOAD_URL,
+            plainDocumentUploadForm(),
+            file,
+          )
+          const plainJson = await plainRes.json().catch(() => null)
+          const plainId = plainRes.ok ? documentIdFromPlainUpload(plainJson) : null
+          if (pollAbort.current.cancelled) return
+          if (!plainId) {
+            setUpload({
+              phase: 'error',
+              message: plainRes.ok
+                ? t('upload_failed')
+                : getErrorMessage(plainJson ?? {}, { statusCode: plainRes.status }),
+            })
+            return
+          }
+          setUpload({
+            phase: 'done',
+            fileName: file.name,
+            inboxItemId: null,
+            documentId: plainId,
+            extracted: null,
+          })
+          return
+        }
+        // Over the hosted body cap the receipt goes straight to Storage
+        // (same response shape as the multipart route).
+        let res: Response
+        if (exceedsHostedUploadLimit(file.size)) {
+          res = await uploadViaSignedUrl(file)
+        } else {
+          const form = new FormData()
+          form.append('file', file)
+          res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
+            method: 'POST',
+            body: form,
+          })
+        }
         if (!res.ok) {
           const err = await res.json().catch(() => null)
           setUpload({
@@ -811,7 +893,7 @@ export default function ExpenseClaimsPage() {
         setUpload({ phase: 'error', message: t('upload_failed') })
       }
     },
-    [applyExtraction, t],
+    [applyExtraction, receiptRoute, t],
   )
 
   function onFileChosen(files: FileList | null) {
@@ -849,7 +931,7 @@ export default function ExpenseClaimsPage() {
       ]
       if (dimensionsEnabled && Object.keys(claimDims).length > 0) body.dimensions = claimDims
       if (uploaded) {
-        body.inbox_item_id = uploaded.inboxItemId
+        if (uploaded.inboxItemId) body.inbox_item_id = uploaded.inboxItemId
         if (uploaded.documentId) body.document_id = uploaded.documentId
       } else if (inbox) {
         body.inbox_item_id = inbox.id
@@ -951,10 +1033,13 @@ export default function ExpenseClaimsPage() {
         description={t('description')}
         action={
           canWrite ? (
-            <Button size="sm" onClick={() => setCreating(true)}>{t('new_claim')}</Button>
+            <Button size="toolbar" onClick={() => setCreating(true)}>
+              <PlusIcon className="h-4 w-4" />
+              {t('new_claim')}
+            </Button>
           ) : (
-            <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-              <Lock className="mr-2 h-4 w-4" />
+            <Button size="toolbar" disabled title={t('viewer_disabled_tooltip')}>
+              <LockClosedIcon className="h-4 w-4" />
               {t('new_claim')}
             </Button>
           )
@@ -963,9 +1048,9 @@ export default function ExpenseClaimsPage() {
 
       {outstandingByClaimant.length > 0 && (
         <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-          {outstandingByClaimant.map(([name, sum]) => (
+          {outstandingByClaimant.map(({ key, claimant_name: name, total_sek: sum }) => (
             <button
-              key={name}
+              key={key}
               type="button"
               disabled={!canWrite}
               title={canWrite ? t('outstanding_select_hint') : undefined}
@@ -973,7 +1058,7 @@ export default function ExpenseClaimsPage() {
                 setSelected(
                   new Set(
                     claims
-                      .filter((c) => c.status === 'registered' && c.claimant_name === name)
+                      .filter((c) => c.awaits_payout && expenseClaimantKey(c) === key)
                       .map((c) => c.id),
                   ),
                 )
@@ -1004,7 +1089,7 @@ export default function ExpenseClaimsPage() {
           ]}
         />
         {canWrite && selected.size > 0 && (
-          <Button size="sm"
+          <Button size="toolbar"
             variant="outline"
             disabled={!selectionValid}
             title={selectionValid ? undefined : t('payout_selection_invalid')}
@@ -1015,29 +1100,39 @@ export default function ExpenseClaimsPage() {
         )}
       </div>
 
+      {/* A failed reload keeps the claims on screen, with one line above them. */}
+      {loadError && !loading && claims.length > 0 && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {loading ? (
-        <div className="space-y-3">
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-4 w-2/3" />
-        </div>
-      ) : loadError ? (
-        <div className="space-y-3 rounded-lg border border-border px-4 py-6 text-center text-sm text-muted-foreground">
-          <p>{t('load_failed')}</p>
-          <Button type="button" variant="outline" size="sm" onClick={() => load()}>
-            {t('load_retry')}
-          </Button>
-        </div>
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="hidden h-3.5 w-32 md:block" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+            </div>
+          ))}
+        </LateReveal>
+      ) : loadError && claims.length === 0 ? (
+        <LoadError title={t('load_failed')} onRetry={() => void load()} />
+      ) : visibleClaims.length === 0 && claims.length > 0 ? (
+        <p className="py-3 text-[13px] text-muted-foreground">{t('no_claims_in_filter')}</p>
       ) : visibleClaims.length === 0 ? (
         <EmptyState
-          icon={Receipt}
+          icon={ReceiptRefundIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('new_claim') : undefined}
           onAction={canWrite ? () => setCreating(true) : undefined}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -1074,7 +1169,7 @@ export default function ExpenseClaimsPage() {
                   className={`${TD_CLASS} w-8`}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {c.status === 'registered' && canWrite ? (
+                  {c.awaits_payout && canWrite ? (
                     <Checkbox
                       checked={selected.has(c.id)}
                       onCheckedChange={() => toggleSelected(c.id)}
@@ -1095,26 +1190,26 @@ export default function ExpenseClaimsPage() {
                   ) : (
                     c.description
                   )}
-                  <span className="ml-2 text-muted-foreground">{c.expense_account}</span>
                 </td>
                 <td className={`${TD_CLASS} hidden md:table-cell`}>{c.claimant_name}</td>
+                {/* A receipt is the normal state and says nothing; only a
+                    missing one is marked. */}
                 <td className={`${TD_CLASS} hidden lg:table-cell`}>
-                  {c.document ? (
-                    <span className="text-muted-foreground">
-                      {c.document.file_name ?? t('receipt_attached')}
-                    </span>
-                  ) : (
-                    <span className="text-attn">{t('receipt_missing')}</span>
-                  )}
+                  {!c.document && <span className="text-attn">{t('receipt_missing')}</span>}
                 </td>
                 <td className={TD_CLASS}>
-                  {/* Chips mark exceptions (convention 5): a paid claim is
-                      done and reads as muted text; an outstanding one waits
-                      for its payout. */}
-                  {c.status === 'registered' ? (
-                    <Badge variant="outline" className="font-normal">
-                      {t(`status_${c.status}`)}
-                    </Badge>
+                  {/* Chips mark exceptions (convention 5): registered and
+                      paid are both normal states, so both read as muted text.
+                      A claim on a salary run is repaid with that salary: the
+                      status names the payment day and opens the run. */}
+                  {c.salary_run ? (
+                    <Link
+                      href={`/salary/runs/${c.salary_run.salary_run_id}`}
+                      className={`${QUIET_LINK_CLASS} whitespace-nowrap tabular-nums`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {t('status_on_salary_run', { date: formatDate(c.salary_run.payment_date) })}
+                    </Link>
                   ) : (
                     <span className="text-xs text-muted-foreground">{t(`status_${c.status}`)}</span>
                   )}
@@ -1127,10 +1222,10 @@ export default function ExpenseClaimsPage() {
                 {/* One-line rows (convention 4): the original-currency amount
                     sits inline after the SEK amount instead of a second line. */}
                 <td className={`${TD_CLASS} whitespace-nowrap text-right tabular-nums`}>
-                  {formatCurrency(c.amount_sek)}
+                  {formatRowAmount(c.amount_sek)}
                   {c.currency !== 'SEK' && c.amount_in_currency != null && (
                     <span className="ml-1.5 text-xs text-muted-foreground">
-                      {formatCurrency(c.amount_in_currency, c.currency)}
+                      {formatRowAmount(c.amount_in_currency, c.currency)}
                     </span>
                   )}
                 </td>
@@ -1157,7 +1252,7 @@ export default function ExpenseClaimsPage() {
       {payoutBatches.length > 0 && (
         <div className="space-y-2 pt-4">
           <h2 className="text-sm font-medium text-muted-foreground">{t('payouts_heading')}</h2>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -1175,7 +1270,7 @@ export default function ExpenseClaimsPage() {
                   <td className={TD_CLASS}>{b.claimant_name}</td>
                   <td className={`${TD_CLASS} hidden tabular-nums sm:table-cell`}>{b.cash_account}</td>
                   <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
-                    {formatCurrency(b.total_sek)}
+                    {formatRowAmount(b.total_sek)}
                   </td>
                   <td className={`${TD_CLASS} text-right`}>
                     {b.journal_entry_id && (
@@ -1205,21 +1300,27 @@ export default function ExpenseClaimsPage() {
           }
         >
           <DialogHeader className="shrink-0">
-            <DialogTitle>
-              {t('new_claim')}
-              <span className="ml-3 text-sm font-normal text-muted-foreground">
-                {step === 1 ? t('step_details') : t('step_booking')}
-              </span>
-            </DialogTitle>
-            <DialogDescription>
-              {step === 1 ? t('new_claim_help') : t('step_booking_help')}
-            </DialogDescription>
+            {/* Convention 7: how the claim is booked lives behind the "?". */}
+            <div className="flex items-center gap-2">
+              <DialogTitle>
+                {t('new_claim')}
+                <span className="ml-3 text-sm font-normal text-muted-foreground">
+                  {step === 1 ? t('step_details') : t('step_booking')}
+                </span>
+              </DialogTitle>
+              <HelpPopover className="shrink-0">{t('new_claim_help')}</HelpPopover>
+            </div>
+            {step === 1 ? (
+              <DialogDescription className="sr-only">{t('new_claim_help')}</DialogDescription>
+            ) : (
+              <DialogDescription>{t('step_booking_help')}</DialogDescription>
+            )}
           </DialogHeader>
 
           {receiptDoc && (
             <div className="flex shrink-0 justify-end">
-              <Button type="button" variant="ghost" size="sm" onClick={() => setShowReceipt((v) => !v)}>
-                <FileText className="mr-1.5 h-3.5 w-3.5" />
+              <Button type="button" variant="ghost" onClick={() => setShowReceipt((v) => !v)}>
+                <DocumentTextIcon className="h-3.5 w-3.5" />
                 {showReceipt ? t('hide_receipt') : t('show_receipt')}
               </Button>
             </div>
@@ -1247,11 +1348,31 @@ export default function ExpenseClaimsPage() {
               {/* Receipt drop zone with AI extraction */}
               <div className="space-y-2">
                 <Label>{t('form_receipt_upload')}</Label>
-                {upload.phase === 'idle' || upload.phase === 'error' ? (
-                  <>
+                {upload.phase === 'idle' && inboxChoice !== NO_RECEIPT_VALUE ? (
+                  // A receipt picked from the inbox: one line, like an upload.
+                  <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
+                    <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {inboxOptions.find((i) => i.id === inboxChoice)?.label ?? inboxChoice}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{t('form_receipt')}</span>
                     <button
                       type="button"
-                      onClick={() => fileInputRef.current?.click()}
+                      aria-label={t('form_receipt_none')}
+                      onClick={() => setInboxChoice(NO_RECEIPT_VALUE)}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <XMarkIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : upload.phase === 'idle' || upload.phase === 'error' ? (
+                  <>
+                    {/* The zone opens the file chooser on a click anywhere
+                        but the inbox link, which is its own button inside. */}
+                    <div
+                      onClick={(e) => {
+                        if (e.target === e.currentTarget) fileInputRef.current?.click()
+                      }}
                       onDragOver={(e) => {
                         e.preventDefault()
                         setDragOver(true)
@@ -1262,21 +1383,38 @@ export default function ExpenseClaimsPage() {
                         setDragOver(false)
                         onFileChosen(e.dataTransfer.files)
                       }}
-                      className={`flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground transition-colors duration-150 hover:border-foreground/40 hover:text-foreground ${
+                      className={`flex w-full cursor-pointer flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground transition-colors duration-150 hover:border-foreground/40 ${
                         dragOver ? 'border-foreground/60 text-foreground' : 'border-border'
                       }`}
                     >
-                      <Upload className="h-4 w-4" />
-                      {t('dropzone_hint')}
-                      <span className="inline-flex items-center gap-1 text-xs">
-                        <Sparkles className="h-3 w-3" />
-                        {t('dropzone_ai_hint')}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="inline-flex items-center gap-2 transition-colors duration-150 hover:text-foreground"
+                      >
+                        <ArrowUpTrayIcon className="h-4 w-4" />
+                        {t('dropzone_hint')}
+                        {receiptRoute === 'inbox' && (
+                          <span className="inline-flex items-center gap-1 text-xs">
+                            <SparklesIcon className="h-3 w-3" />
+                            {t('dropzone_ai_hint')}
+                          </span>
+                        )}
+                      </button>
+                      {inboxOptions.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowInboxPicker(true)}
+                          className="underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+                        >
+                          {t('dropzone_pick_from_inbox')}
+                        </button>
+                      )}
+                    </div>
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept={UPLOAD_ACCEPT}
+                      accept={INBOX_UPLOAD_ACCEPT}
                       className="hidden"
                       onChange={(e) => onFileChosen(e.target.files)}
                     />
@@ -1285,18 +1423,24 @@ export default function ExpenseClaimsPage() {
                     )}
                   </>
                 ) : (
-                  <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-                    {upload.phase === 'done' ? (
-                      <Sparkles className="h-4 w-4 shrink-0" />
+                  <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
+                    {upload.phase === 'done' && receiptRoute !== 'inbox' ? (
+                      <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    ) : upload.phase === 'done' ? (
+                      <SparklesIcon className="h-4 w-4 shrink-0" />
                     ) : (
-                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                      <SpinnerIcon className="h-4 w-4 shrink-0 animate-spin" />
                     )}
                     <span className="min-w-0 flex-1 truncate">{upload.fileName}</span>
                     <span className="text-xs text-muted-foreground">
                       {upload.phase === 'uploading' && t('upload_uploading')}
                       {upload.phase === 'extracting' && t('upload_extracting')}
                       {upload.phase === 'done' &&
-                        (upload.extracted ? t('upload_extracted') : t('upload_no_extraction'))}
+                        (upload.extracted
+                          ? t('upload_extracted')
+                          : receiptRoute === 'inbox'
+                            ? t('upload_no_extraction')
+                            : t('upload_uploaded'))}
                     </span>
                     <button
                       type="button"
@@ -1307,45 +1451,11 @@ export default function ExpenseClaimsPage() {
                       }}
                       className="text-muted-foreground hover:text-foreground"
                     >
-                      <X className="h-4 w-4" />
+                      <XMarkIcon className="h-4 w-4" />
                     </button>
                   </div>
                 )}
               </div>
-
-              {upload.phase === 'idle' && inboxOptions.length > 0 && (
-                <div className="space-y-2">
-                  <Label>{t('form_receipt')}</Label>
-                  <div className="flex items-center gap-2">
-                    {inboxChoice !== NO_RECEIPT_VALUE ? (
-                      <Badge variant="secondary" className="gap-1.5 py-1 pl-2 pr-1 font-normal">
-                        <span className="max-w-[260px] truncate">
-                          {inboxOptions.find((i) => i.id === inboxChoice)?.label ?? inboxChoice}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={t('form_receipt_none')}
-                          onClick={() => setInboxChoice(NO_RECEIPT_VALUE)}
-                        >
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </Badge>
-                    ) : (
-                      <span className="text-sm text-muted-foreground">{t('form_receipt_none')}</span>
-                    )}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowInboxPicker(true)}
-                    >
-                      {t('form_pick_from_inbox')}
-                    </Button>
-                  </div>
-                </div>
-              )}
 
               <div className="space-y-2">
                 <Label htmlFor="ec_description">{t('form_description')}</Label>
@@ -1439,12 +1549,21 @@ export default function ExpenseClaimsPage() {
               {currency !== 'SEK' && (
                 <p className="text-xs text-muted-foreground">{t('form_fx_hint')}</p>
               )}
-              {upload.phase === 'idle' && inboxChoice === NO_RECEIPT_VALUE && (
-                <p className="text-xs text-attn">{t('form_receipt_warning')}</p>
-              )}
             </div>
           ) : (
             <div className="space-y-4">
+              {/* Reached by Nästa without a receipt: say it once, here. The
+                  claim may still be registered; the BFL reason is behind
+                  the "?". */}
+              {receiptMissing && (
+                <AttnLine
+                  trailing={
+                    <HelpPopover className="ml-2 align-[-3px]">{t('form_receipt_warning')}</HelpPopover>
+                  }
+                >
+                  {t('form_receipt_missing')}
+                </AttnLine>
+              )}
               {/* Step 2: VAT mode + templates + an editable verifikat grid.
                   The liability row is locked: the payout flow reimburses
                   exactly the claim gross from that account. */}
@@ -1457,29 +1576,29 @@ export default function ExpenseClaimsPage() {
                   />
                   <button
                     type="button"
-                    className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-secondary/35 bg-control shadow-raised"
                     onClick={chooseManual}
                   >
-                    <NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <PencilSquareIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                     <span className="flex-1">
                       <span className="block text-sm font-medium">{t('book_manually')}</span>
                       <span className="block text-xs text-muted-foreground">{t('book_manually_help')}</span>
                     </span>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   </button>
                   <div className="max-h-[340px] space-y-3 overflow-y-auto">
                     {!templateSearch.trim() && (templateSections.recommended.length > 0 || aiPending) && (
                       <div className="space-y-1">
-                        <p className="flex items-center gap-2 px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        <div className="flex items-center gap-2 px-3 pt-1 text-xs font-medium text-muted-foreground">
                           {t('templates_recommended')}
                           {templateSections.recommendedSource === 'ai' && !aiPending && (
                             <span className="flex items-center gap-1">
-                              <Sparkles className="h-3 w-3" aria-hidden="true" />
+                              <SparklesIcon className="h-3 w-3" aria-hidden="true" />
                               {t('templates_ai_badge')}
                             </span>
                           )}
-                          {aiPending && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
-                        </p>
+                          {aiPending && <SpinnerIcon className="h-3 w-3 animate-spin" aria-hidden="true" />}
+                        </div>
                         {aiPending && templateSections.recommended.length === 0 ? (
                           <p className="px-3 py-2.5 text-sm text-muted-foreground">{t('templates_ai_loading')}</p>
                         ) : (
@@ -1496,7 +1615,7 @@ export default function ExpenseClaimsPage() {
                                   <span className="block text-xs leading-snug text-muted-foreground">{tpl.description}</span>
                                 )}
                               </span>
-                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                              <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                             </button>
                           ))
                         )}
@@ -1509,7 +1628,7 @@ export default function ExpenseClaimsPage() {
                       list.length === 0 ? null : (
                         <div key={labelKey} className="space-y-1">
                           {(templateSections.recommended.length > 0 || templateSections.recent.length > 0 || aiPending) && (
-                            <p className="px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            <p className="px-3 pt-1 text-xs font-medium text-muted-foreground">
                               {t(labelKey)}
                             </p>
                           )}
@@ -1526,7 +1645,7 @@ export default function ExpenseClaimsPage() {
                                   <span className="block text-xs leading-snug text-muted-foreground">{tpl.description}</span>
                                 )}
                               </span>
-                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                              <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                             </button>
                           ))}
                         </div>
@@ -1547,7 +1666,7 @@ export default function ExpenseClaimsPage() {
                     className="flex w-full items-center gap-2 rounded-lg bg-secondary/40 px-3 py-2.5 text-left"
                     onClick={() => setBookingMode('choose')}
                   >
-                    <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <ChevronLeftIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                     <span className="flex-1">
                       <span className="block text-sm font-medium">
                         {appliedTemplate ? appliedTemplate.name : t('book_manually')}
@@ -1649,7 +1768,6 @@ export default function ExpenseClaimsPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
                       onClick={() => setShowSaveTemplate(true)}
                       disabled={templateSeedLines.length < 2}
                     >
@@ -1658,7 +1776,6 @@ export default function ExpenseClaimsPage() {
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
                       onClick={() => setShowRowEditor((v) => !v)}
                     >
                       {showRowEditor ? t('hide_row_editor') : t('edit_rows')}
@@ -1710,11 +1827,11 @@ export default function ExpenseClaimsPage() {
                           <Button
                             type="button"
                             variant="ghost"
-                            size="icon-sm"
+                            size="icon"
                             aria-label={t('remove_row')}
                             onClick={() => removeRow(row.key)}
                           >
-                            <X className="h-3.5 w-3.5" />
+                            <XMarkIcon className="h-3.5 w-3.5" />
                           </Button>
                         </td>
                       </tr>
@@ -1736,7 +1853,7 @@ export default function ExpenseClaimsPage() {
                   )}
                   <tr>
                     <td className={TD_CLASS}>
-                      <Lock
+                      <LockClosedIcon
                         className="mr-1.5 inline h-3.5 w-3.5 align-[-2px] text-muted-foreground"
                         aria-hidden="true"
                       />
@@ -1745,31 +1862,29 @@ export default function ExpenseClaimsPage() {
                     </td>
                     <td className={`${TD_CLASS} text-right`} />
                     <td className={`${TD_CLASS} text-right tabular-nums`}>
-                      {parsedAmount.toFixed(2)} {currency}
+                      {formatAmount(parsedAmount)} {currency}
                     </td>
                     <td className={TD_CLASS} />
                   </tr>
                   <tr>
                     <td className={`${TD_CLASS} font-medium`}>
                       {showRowEditor && (
-                        <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={addRow}>
-                          <Plus className="mr-1 h-3.5 w-3.5" />
+                        <Button type="button" variant="ghost" className="-ml-2" onClick={addRow}>
+                          <PlusIcon className="h-3.5 w-3.5" />
                           {t('add_row')}
                         </Button>
                       )}
                     </td>
                     <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
-                      {totalDebit.toFixed(2)}
+                      {formatAmount(totalDebit)}
                     </td>
                     <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
-                      {totalCredit.toFixed(2)}
+                      {formatAmount(totalCredit)}
                     </td>
                     <td className={TD_CLASS}>
-                      {bookingBalanced && bookingRowsValid ? (
-                        <Badge variant="outline" className="font-normal text-positive">
-                          {t('balanced')}
-                        </Badge>
-                      ) : (
+                      {/* A balanced verifikat is the normal state: only the
+                          exception gets a chip (convention 5). */}
+                      {!(bookingBalanced && bookingRowsValid) && (
                         <Badge variant="outline" className="font-normal text-attn">
                           {t('unbalanced')}
                         </Badge>
@@ -1850,7 +1965,7 @@ export default function ExpenseClaimsPage() {
 
           {showSaveTemplate && (
             <Dialog open onOpenChange={(open) => !open && setShowSaveTemplate(false)}>
-              <DialogContent className="sm:max-w-lg">
+              <DialogContent size="form">
                 <DialogHeader>
                   <DialogTitle>{t('save_as_template')}</DialogTitle>
                 </DialogHeader>
@@ -1886,7 +2001,7 @@ export default function ExpenseClaimsPage() {
 
       {/* Delete confirmation */}
       <Dialog open={!!deleting} onOpenChange={(open) => !open && !submitting && setDeleting(null)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('delete_title')}</DialogTitle>
             <DialogDescription>
@@ -1915,7 +2030,7 @@ export default function ExpenseClaimsPage() {
 
       {/* Payout dialog */}
       <Dialog open={paying} onOpenChange={(open) => !open && !submitting && setPaying(false)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('payout_title')}</DialogTitle>
             <DialogDescription>

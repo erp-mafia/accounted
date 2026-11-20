@@ -2,13 +2,15 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/info-tooltip'
 import { cn } from '@/lib/utils'
 import {
   DestructiveConfirmDialog,
@@ -16,8 +18,14 @@ import {
 } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatDate } from '@/lib/utils'
-import { Plus, Repeat, Lock, AlertTriangle } from 'lucide-react'
+import {
+  ArrowPathRoundedSquareIcon,
+  ExclamationTriangleIcon,
+  LockClosedIcon,
+  PlusIcon,
+} from '@/components/icons'
 import NewRecurringScheduleDialog from '@/components/invoices/NewRecurringScheduleDialog'
 import type { RecurringInvoiceSchedule, Customer } from '@/types'
 
@@ -28,6 +36,9 @@ type ScheduleRow = RecurringInvoiceSchedule & {
 export default function RecurringInvoicesPage() {
   const [schedules, setSchedules] = useState<ScheduleRow[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no rows on screen the list says so in place
+  // of them; rows already on screen stay, with one line above them.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [runningId, setRunningId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -37,11 +48,14 @@ export default function RecurringInvoicesPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const t = useTranslations('invoice_recurring')
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
 
   // The "Nytt schema" modal is driven by the URL (?new=1) so every entry
   // point (the header button and the empty state) opens the same dialog, and
   // the browser back button closes it. Same pattern as /invoices.
-  const showNewSchedule = searchParams.has('new')
+  const showNewSchedule = canWrite && searchParams.has('new')
   const closeNewSchedule = () => router.replace('/invoices/recurring', { scroll: false })
   const openNewSchedule = () => router.push('/invoices/recurring?new=1', { scroll: false })
 
@@ -60,12 +74,9 @@ export default function RecurringInvoicesPage() {
       if (!res.ok) throw new Error('failed')
       const json = await res.json()
       setSchedules(json.data ?? [])
+      setLoadFailed(false)
     } catch {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
+      setLoadFailed(true)
     }
     setIsLoading(false)
   }
@@ -137,7 +148,17 @@ export default function RecurringInvoicesPage() {
         })
         fetchSchedules()
       } else {
-        toast({ title: t('run_now_failed_title'), variant: 'destructive' })
+        // The server's sentence when it gave one: a run already in progress
+        // (another tab, the hourly cron) created nothing, and says so; a run
+        // that may have left an invoice asks the person to check first.
+        const json = await res.json().catch(() => null)
+        toast({
+          title: t('run_now_failed_title'),
+          description: json?.error ? getErrorMessage(json, { locale }) : undefined,
+          variant: 'destructive',
+        })
+        // The schedule's own warning says what to do next (accounted#213).
+        fetchSchedules()
       }
     } finally {
       setRunningId(null)
@@ -172,38 +193,54 @@ export default function RecurringInvoicesPage() {
   return (
     <div className="space-y-8">
       <PageHeader
+        parent={{ label: tNav('v3_invoices'), href: '/invoices' }}
         title={t('title')}
         action={
           canWrite ? (
-            <Button size="sm" onClick={openNewSchedule}>
-              <Plus className="mr-2 h-4 w-4" />
+            <Button size="toolbar" onClick={openNewSchedule}>
+              <PlusIcon className="h-4 w-4" />
               {t('new_schedule')}
             </Button>
           ) : (
-            <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-              <Lock className="mr-2 h-4 w-4" />
+            <Button size="toolbar" disabled title={t('viewer_disabled_tooltip')}>
+              <LockClosedIcon className="h-4 w-4" />
               {t('new_schedule')}
             </Button>
           )
         }
       />
 
+      {loadFailed && schedules.length > 0 && !isLoading && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchSchedules() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-2">
+        <LateReveal>
           {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="h-3.5 w-32" />
+              <Skeleton className="h-3.5 w-12" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="ml-auto h-3.5 w-10" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed && schedules.length === 0 ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void fetchSchedules()} />
       ) : schedules.length === 0 ? (
         <EmptyState
-          icon={Repeat}
+          icon={ArrowPathRoundedSquareIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('new_schedule') : undefined}
           onAction={canWrite ? openNewSchedule : undefined}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -244,11 +281,26 @@ export default function RecurringInvoicesPage() {
                       ) : (
                         s.name
                       )}
+                      {/* The warning is what the person acts on (a schedule its
+                          last run left for a person waits for them), so it is
+                          read on hover and on keyboard focus, not only by a
+                          screen reader. A tap reaches the row and opens the
+                          editor, which shows it in full. */}
                       {s.last_run_warning && (
-                        <AlertTriangle
-                          className="h-4 w-4 text-attn"
-                          aria-label={s.last_run_warning}
-                        />
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span
+                              tabIndex={0}
+                              aria-label={s.last_run_warning}
+                              className="inline-flex shrink-0 cursor-help rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            >
+                              <ExclamationTriangleIcon className="h-4 w-4 text-attn" />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" align="start" className="max-w-sm" data-ph-mask="">
+                            {s.last_run_warning}
+                          </TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                   </td>

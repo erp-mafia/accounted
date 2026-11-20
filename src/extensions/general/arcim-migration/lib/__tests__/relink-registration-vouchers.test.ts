@@ -50,8 +50,9 @@ function providerSales(invoiceNumber: string, ref?: { series: string | null; num
   return { id: invoiceNumber, invoiceNumber, issueDate, sourceVoucher: ref }
 }
 
+/** A Fortnox supplier invoice as the mapper read it before crm#1157: the löpnummer as id and number alike. */
 function providerSupplier(invoiceNumber: string, issueDate: string, ref?: { series: string | null; number: number }) {
-  return { id: `sup-${invoiceNumber}`, invoiceNumber, issueDate, sourceVoucher: ref }
+  return { id: invoiceNumber, invoiceNumber, issueDate, sourceVoucher: ref }
 }
 
 function hydrated(invoices: unknown[], unhydratedIds: string[] = []) {
@@ -202,6 +203,31 @@ describe('relinkRegistrationVouchers', () => {
 
     expect(mLink.mock.calls[0][0].invoices).toEqual([])
     expect(result).toMatchObject({ providerInvoices: 3, matched: 0, unmatched: 3 })
+  })
+
+  it('joins a Fortnox supplier invoice on its löpnummer, never on the supplier number (crm#1157)', async () => {
+    mSales.mockResolvedValue(hydrated([]))
+    mSupplier.mockResolvedValue(hydrated([
+      { id: '367', invoiceNumber: '21879926', issueDate: '2026-09-25', sourceVoucher: { series: 'D', number: 367 } },
+      { id: '368', invoiceNumber: '21879927', issueDate: '2026-09-26', sourceVoucher: { series: 'D', number: 368 } },
+      { id: '369', invoiceNumber: '21879928', issueDate: '2026-09-27', sourceVoucher: { series: 'D', number: 369 } },
+    ]))
+    queueDb(
+      [],
+      [
+        // Imported with the löpnummer kept beside the supplier's number.
+        { id: 'si-kept', supplier_invoice_number: '21879926', fortnox_number: '367', invoice_date: '2026-09-25', total_sek: 608 },
+        // Imported before fortnox_number: the löpnummer is its supplier number.
+        { id: 'si-earlier', supplier_invoice_number: '368', fortnox_number: null, invoice_date: '2026-09-26', total_sek: 214 },
+        // Another Fortnox invoice whose supplier number is 369's supplier number: not 369.
+        { id: 'si-other', supplier_invoice_number: '21879928', fortnox_number: '12', invoice_date: '2026-09-27', total_sek: 99 },
+      ],
+    )
+
+    const result = await relinkRegistrationVouchers({ supabase, companyId: 'company-1', consentId: 'consent-1' })
+
+    expect(mLink.mock.calls[0][0].invoices.map((i: { invoiceId: string }) => i.invoiceId)).toEqual(['si-kept', 'si-earlier'])
+    expect(result).toMatchObject({ providerInvoices: 3, matched: 2, unmatched: 1 })
   })
 
   it('reads only non-draft rows whose link is still NULL and passes dryRun through', async () => {

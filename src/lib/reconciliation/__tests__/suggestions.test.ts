@@ -77,6 +77,12 @@ function matchingLegs() {
   return [{ debit_amount: 0, credit_amount: 1000, currency: null, amount_in_currency: null }]
 }
 
+
+/** A person confirmed the matcher's suggestion: its method and score are the evidence. */
+const CONFIRMED = {
+  linkBasis: { basis: 'user_confirmed', evidence: { rule_id: 'auto_date_range', score: 0.85 } },
+}
+
 describe('confirmJournalEntrySuggestions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -86,7 +92,7 @@ describe('confirmJournalEntrySuggestions', () => {
   it('confirms a valid suggestion via manualLink against the row\'s own settlement account', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: suggestionRow() }) // fetch tx
-    enqueue({ data: [] }) // consumers of JE_1: none
+    enqueue({ data: [] }, { data: [] }) // holders of JE_1 (bank_line slices, pointers): none
     enqueue({ data: { ledger_account: '1932' } }) // cash account resolve
     enqueue({ data: matchingLegs() }) // amount revalidation legs
 
@@ -96,7 +102,7 @@ describe('confirmJournalEntrySuggestions', () => {
 
     expect(result.confirmed).toEqual([TX_1])
     expect(result.skipped).toEqual([])
-    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1932')
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1932', CONFIRMED)
     expect(logMatchEventMock).toHaveBeenCalledWith(
       supabase,
       'user-1',
@@ -109,7 +115,8 @@ describe('confirmJournalEntrySuggestions', () => {
   it('skips a transaction whose suggested verifikat is already consumed', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: suggestionRow() })
-    enqueue({ data: [{ id: 'other-tx' }] }) // someone already settles JE_1
+    enqueue({ data: [] }) // no bank_line slice
+    enqueue({ data: [{ id: 'other-tx', journal_entry_id: JE_1, amount: -1000, currency: 'SEK', cash_account_id: CA_ID }] }) // someone already settles JE_1
 
     const result = await confirmJournalEntrySuggestions(supabase as never, 'company-1', 'user-1', [
       TX_1,
@@ -120,11 +127,56 @@ describe('confirmJournalEntrySuggestions', () => {
     expect(manualLinkMock).not.toHaveBeenCalled()
   })
 
+  it('skips a verifikat a bulk-booked row holds through a bank_line slice, which the pointer alone missed (GitHub #3507)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: suggestionRow() })
+    enqueue({
+      data: [{
+        transaction_id: 'tx-bulk', journal_entry_id: JE_1, allocated_amount: -1000,
+        transactions: { amount: -1000, currency: 'SEK', cash_account_id: CA_ID },
+      }],
+    })
+    enqueue({ data: [] }) // no pointer
+
+    const result = await confirmJournalEntrySuggestions(supabase as never, 'company-1', 'user-1', [TX_1])
+
+    expect(result.skipped).toEqual([{ transactionId: TX_1, reason: 'voucher_consumed' }])
+    expect(manualLinkMock).not.toHaveBeenCalled()
+  })
+
+  it('does not count the other leg of a transfer: a row on another cash account', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: suggestionRow() })
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'tx-other-leg', journal_entry_id: JE_1, amount: 1000, currency: 'SEK', cash_account_id: 'ca-2' }] })
+    enqueue({ data: { ledger_account: '1930' } })
+    enqueue({ data: matchingLegs() })
+
+    const result = await confirmJournalEntrySuggestions(supabase as never, 'company-1', 'user-1', [TX_1])
+
+    expect(result.confirmed).toEqual([TX_1])
+  })
+
+  it('reports a room refusal of manualLink (another row won the verifikat meanwhile) as voucher_consumed', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: suggestionRow() })
+    enqueue({ data: [] }, { data: [] })
+    enqueue({ data: { ledger_account: '1930' } })
+    enqueue({ data: matchingLegs() })
+    manualLinkMock.mockResolvedValue({ success: false, error: 'Verifikat A-1 bokför -1000 på 1930 ...', code: 'VOUCHER_BANK_LEG_CONSUMED' })
+
+    const result = await confirmJournalEntrySuggestions(supabase as never, 'company-1', 'user-1', [TX_1])
+
+    expect(result.skipped).toEqual([
+      { transactionId: TX_1, reason: 'voucher_consumed', message: 'Verifikat A-1 bokför -1000 på 1930 ...' },
+    ])
+  })
+
   it('never fails the batch: second row suggesting the same verifikat is skipped after the first consumes it', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     // Row 1: full happy path.
     enqueue({ data: suggestionRow() })
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // holders of JE_1: none
     enqueue({ data: { ledger_account: '1930' } })
     enqueue({ data: matchingLegs() })
     // Row 2 (fetched AFTER row 1 linked): the sibling-clear trigger has wiped
@@ -144,7 +196,7 @@ describe('confirmJournalEntrySuggestions', () => {
   it('reports manualLink refusals as link_failed with the service message', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: suggestionRow() })
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // holders of JE_1: none
     enqueue({ data: { ledger_account: '1930' } })
     enqueue({ data: matchingLegs() })
     manualLinkMock.mockResolvedValue({ success: false, error: 'Verifikationen är inte bokförd ännu.' })
@@ -179,7 +231,7 @@ describe('confirmJournalEntrySuggestions', () => {
   it('resolves NULL-cash_account_id rows via the PRIMARY cash account, falling back to 1930', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: suggestionRow({ cash_account_id: null }) })
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // holders of JE_1: none
     // Primary lookup: the company's primary account is 1920, so the unassigned
     // row must validate against 1920 (the sweep created the suggestion under
     // the primary's scope), never a hard-coded 1930.
@@ -188,19 +240,19 @@ describe('confirmJournalEntrySuggestions', () => {
 
     await confirmJournalEntrySuggestions(supabase as never, 'company-1', 'user-1', [TX_1])
 
-    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1920')
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1920', CONFIRMED)
   })
 
   it('falls back to 1930 when no primary cash account exists', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: suggestionRow({ cash_account_id: null }) })
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // holders of JE_1: none
     enqueue({ data: null }) // no primary row
     enqueue({ data: matchingLegs() })
 
     await confirmJournalEntrySuggestions(supabase as never, 'company-1', 'user-1', [TX_1])
 
-    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1930')
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1930', CONFIRMED)
   })
 
   it('skips with amount_mismatch when the voucher bank leg no longer agrees with the transaction', async () => {
@@ -210,7 +262,7 @@ describe('confirmJournalEntrySuggestions', () => {
     // correspondence (BFL 5 kap 7 §).
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: suggestionRow() })
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // holders of JE_1: none
     enqueue({ data: { ledger_account: '1930' } })
     enqueue({ data: [{ debit_amount: 0, credit_amount: 500, currency: null, amount_in_currency: null }] })
 
@@ -227,7 +279,7 @@ describe('confirmJournalEntrySuggestions', () => {
   it('skips with amount_mismatch when the direction flipped', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: suggestionRow({ amount: 1000 }) }) // money IN
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // holders of JE_1: none
     enqueue({ data: { ledger_account: '1930' } })
     enqueue({ data: matchingLegs() }) // credit leg = money OUT
 

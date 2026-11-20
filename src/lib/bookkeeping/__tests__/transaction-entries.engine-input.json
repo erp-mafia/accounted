@@ -1,0 +1,379 @@
+[
+  {
+    "name": "SEK purchase with ingående moms",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "company-1",
+        "user-1",
+        {
+          "fiscal_period_id": "period-1",
+          "entry_date": "2026-03-14",
+          "description": "Programvarulicens",
+          "source_type": "bank_transaction",
+          "source_id": "tx-purchase",
+          "bank_booking_context": [
+            {
+              "transaction_id": "tx-purchase",
+              "cash_account_id": null,
+              "settlement_account": "1930",
+              "date": "2026-03-14",
+              "amount": -1250,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2641",
+              "debit_amount": 250,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25%"
+            },
+            {
+              "account_number": "5420",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Programvarulicens"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1250,
+              "line_description": "Programvarulicens"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>"
+      ]
+    ]
+  },
+  {
+    "name": "SEK sale with utgående moms",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "company-1",
+        "user-1",
+        {
+          "fiscal_period_id": "period-1",
+          "entry_date": "2026-03-20",
+          "description": "Konsultuppdrag",
+          "source_type": "bank_transaction",
+          "source_id": "tx-sale",
+          "bank_booking_context": [
+            {
+              "transaction_id": "tx-sale",
+              "cash_account_id": null,
+              "settlement_account": "1930",
+              "date": "2026-03-20",
+              "amount": 10000,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 10000,
+              "credit_amount": 0,
+              "line_description": "Konsultuppdrag"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Konsultuppdrag"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Utgående moms 25%"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>"
+      ]
+    ]
+  },
+  {
+    "name": "private withdrawal",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "company-1",
+        "user-1",
+        {
+          "fiscal_period_id": "period-1",
+          "entry_date": "2026-04-02",
+          "description": "Privat",
+          "source_type": "bank_transaction",
+          "source_id": "tx-private",
+          "bank_booking_context": [
+            {
+              "transaction_id": "tx-private",
+              "cash_account_id": null,
+              "settlement_account": "1930",
+              "date": "2026-04-02",
+              "amount": -500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2893",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Privat: Privat"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 500,
+              "line_description": "Privat"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>"
+      ]
+    ]
+  },
+  {
+    "name": "multi-line pattern with a dimensions bag",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "company-1",
+        "user-1",
+        {
+          "fiscal_period_id": "period-1",
+          "entry_date": "2026-04-05",
+          "description": "Mönster",
+          "source_type": "bank_transaction",
+          "source_id": "tx-pattern",
+          "bank_booking_context": [
+            {
+              "transaction_id": "tx-pattern",
+              "cash_account_id": null,
+              "settlement_account": "1930",
+              "date": "2026-04-05",
+              "amount": -1000,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 800,
+              "credit_amount": 0,
+              "line_description": "Förbrukning",
+              "dimensions": {
+                "6": "P001"
+              }
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25%"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Mönster"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>"
+      ]
+    ]
+  },
+  {
+    "name": "foreign currency purchase",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "company-1",
+        "user-1",
+        {
+          "fiscal_period_id": "period-1",
+          "entry_date": "2026-05-12",
+          "description": "Hotel Berlin",
+          "source_type": "bank_transaction",
+          "source_id": "tx-eur",
+          "bank_booking_context": [
+            {
+              "transaction_id": "tx-eur",
+              "cash_account_id": null,
+              "settlement_account": "1930",
+              "date": "2026-05-12",
+              "amount": -100,
+              "currency": "EUR"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5890",
+              "debit_amount": 1150.25,
+              "credit_amount": 0,
+              "line_description": "Hotel Berlin"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1150.25,
+              "line_description": "Hotel Berlin",
+              "currency": "EUR",
+              "amount_in_currency": 100,
+              "exchange_rate": 11.5025
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>"
+      ]
+    ]
+  },
+  {
+    "name": "audit note and rubric version",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "company-1",
+        "user-1",
+        {
+          "fiscal_period_id": "period-1",
+          "entry_date": "2026-06-03",
+          "description": "Restaurang Lunch · Deltagare: kund A och B. Syfte: projektmöte",
+          "source_type": "bank_transaction",
+          "source_id": "tx-note",
+          "bank_booking_context": [
+            {
+              "transaction_id": "tx-note",
+              "cash_account_id": null,
+              "settlement_account": "1930",
+              "date": "2026-06-03",
+              "amount": -640,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6071",
+              "debit_amount": 640,
+              "credit_amount": 0,
+              "line_description": "Restaurang Lunch"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 640,
+              "line_description": "Restaurang Lunch"
+            }
+          ]
+        },
+        "<undefined>",
+        "bank-proposals.1+abc123def456"
+      ]
+    ]
+  },
+  {
+    "name": "pre-FY clamp onto the first day of the first fiscal year",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "company-1",
+        "user-1",
+        {
+          "fiscal_period_id": "period-first",
+          "entry_date": "2026-01-01",
+          "description": "Bankavgift · Affärshändelse 2025-12-20, bokförd på räkenskapsårets första dag",
+          "source_type": "bank_transaction",
+          "source_id": "tx-prefy",
+          "bank_booking_context": [
+            {
+              "transaction_id": "tx-prefy",
+              "cash_account_id": null,
+              "settlement_account": "1930",
+              "date": "2025-12-20",
+              "amount": -45,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6570",
+              "debit_amount": 45,
+              "credit_amount": 0,
+              "line_description": "Bankavgift"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 45,
+              "line_description": "Bankavgift"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>"
+      ]
+    ]
+  },
+  {
+    "name": "bank account with its own verifikationsserie",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "company-1",
+        "user-1",
+        {
+          "fiscal_period_id": "period-1",
+          "entry_date": "2026-07-01",
+          "description": "Kort",
+          "source_type": "bank_transaction",
+          "source_id": "tx-series",
+          "bank_booking_context": [
+            {
+              "transaction_id": "tx-series",
+              "cash_account_id": "cash-1",
+              "settlement_account": "1931",
+              "date": "2026-07-01",
+              "amount": -300,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Kort"
+            },
+            {
+              "account_number": "1931",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Kort"
+            }
+          ],
+          "voucher_series": "B"
+        },
+        "<undefined>",
+        "<undefined>"
+      ]
+    ]
+  }
+]

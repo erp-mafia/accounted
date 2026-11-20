@@ -38,12 +38,18 @@ describe('token encryption', () => {
 })
 
 describe('OAuth state', () => {
-  it('round-trips userId and companyId', () => {
-    const state = createOAuthState('user-1', 'company-1')
+  it('round-trips userId, companyId and the starting origin', () => {
+    const state = createOAuthState('user-1', 'company-1', 'https://byra.example.se')
     expect(verifyOAuthState(state)).toEqual({
       userId: 'user-1',
       companyId: 'company-1',
+      origin: 'https://byra.example.se',
     })
+  })
+
+  it('reads a state issued without an origin as having none', () => {
+    const state = createOAuthState('user-1', 'company-1')
+    expect(verifyOAuthState(state)?.origin).toBeNull()
   })
 
   it('returns null for garbage state', () => {

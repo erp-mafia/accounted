@@ -2,6 +2,8 @@
 
 This guide walks you through deploying Accounted on your own infrastructure using Docker.
 
+To try Accounted on your own machine, or to develop it, you need neither this guide nor a Supabase account: `npm run local:up` starts everything locally (see [Development Setup](../README.md#development-setup)).
+
 ## Prerequisites
 
 - Docker and Docker Compose v2+
@@ -19,8 +21,8 @@ This guide walks you through deploying Accounted on your own infrastructure usin
 
 In the Supabase dashboard under **Authentication > URL Configuration**:
 
-1. Set **Site URL** to your deployment URL (e.g., `https://gnubok.example.com`).
-2. Add `https://gnubok.example.com/auth/callback` to the **Redirect URLs** allowlist.
+1. Set **Site URL** to your deployment URL (e.g., `https://accounted.example.com`).
+2. Add `https://accounted.example.com/auth/callback` to the **Redirect URLs** allowlist.
 
 Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits. Keep **Secure email change** enabled (Authentication > Settings, on by default): a login-email change also removes social logins tied to the old address, so the old mailbox must confirm the change before it can lose its access.
 
@@ -61,12 +63,12 @@ The migrations automatically enable these extensions:
 
 | Extension | Migration | Purpose |
 |-----------|-----------|---------|
-| `uuid-ossp` | 001 | UUID generation |
-| `vector` (pgvector) | 033 | Created by an early migration; no current code path stores embeddings, the extension only needs to exist for the migration to apply |
-| `btree_gist` | 042 | Fiscal period overlap prevention |
-| `pg_cron` | 048 | In-database scheduled jobs |
+| `uuid-ossp` | `20240101000001_core_schema` | UUID generation |
+| `vector` (pgvector) | `20240101000033_ai_chat_schema` | Created by an early migration; no current code path stores embeddings, the extension only needs to exist for the migration to apply |
+| `btree_gist` | `20260224165254_prevent_overlapping_fiscal_periods` | Fiscal period overlap prevention |
+| `pg_cron` | `20260303145744_supplier_invoice_overdue_cron` | In-database scheduled jobs |
 
-These are all available on Supabase hosted. `pg_cron` requires a paid plan: if you are on the free tier, migration 048 will fail. You can safely skip it; the cron sidecar container handles the equivalent job via HTTP instead.
+These are all available on Supabase hosted. `pg_cron` is needed by two migrations: `20260303145744_supplier_invoice_overdue_cron` (marks overdue supplier invoices, 06:00 UTC) and `20260722150000_harden_invoice_delivery_history` (redacts invoice-delivery personal data after the retention period, 03:15 UTC). No cron sidecar route replaces either job, so enable `pg_cron` before applying the migrations.
 
 ## 4. Configure Environment
 
@@ -78,7 +80,7 @@ cd accounted
 ./docker/setup.sh
 ```
 
-The script checks prerequisites, prompts for your Supabase credentials, auto-generates `CRON_SECRET`, and writes everything to `.env`.
+The script checks prerequisites, prompts for your Supabase credentials, auto-generates `CRON_SECRET` and `PERSONNUMMER_ENCRYPTION_KEY`, and writes everything to `.env`. Run again, it never replaces an existing `PERSONNUMMER_ENCRYPTION_KEY`, also when you let it overwrite `.env`; when you keep `.env` it only adds the key if the file has none.
 
 **Option B: Manual:**
 
@@ -97,7 +99,10 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 NEXT_PUBLIC_APP_URL=https://your-domain.com
 CRON_SECRET=<generate with: openssl rand -hex 32>
+PERSONNUMMER_ENCRYPTION_KEY=<generate with: openssl rand -hex 32>
 ```
+
+`PERSONNUMMER_ENCRYPTION_KEY` encrypts every stored personnummer (employees, customers, ROT/RUT invoices). Without it the app refuses to store one. Generate it once and never change it: personnummer encrypted with an earlier key cannot be read again. Back up `.env` together with the database.
 
 `NEXT_PUBLIC_APP_URL` must match your public-facing URL. It is used in invoice reminder emails, calendar feed links, and PSD2 callbacks. If left as a placeholder, links will be broken.
 
@@ -183,16 +188,64 @@ PORT=8080 docker compose up -d
 1. Open your deployment URL in a browser.
 2. Click "Skapa konto" (Create account) and register with email + password.
 3. Check your email and click the confirmation link.
-4. Complete the 5-step onboarding wizard:
-   - **Step 1**: Choose entity type (enskild firma or aktiebolag)
-   - **Step 2**: Company name and org number
-   - **Step 3**: Fiscal year, VAT registration, accounting method
-   - **Step 4**: Preliminary tax amount (optional, skip if unsure)
-   - **Step 5**: Bank details for invoices (optional)
+4. Follow the onboarding: create the company (legal form, name and org number, fiscal year, VAT registration, accounting method), then import earlier books, connect a bank, or skip both and start empty.
 
 There is no admin account: any email address can sign up (unless you turn public signup off, see the `AUTH_SIGNUPS_DISABLED` note under [Email](#email-invoice-sending-invitations-and-reminders)). You can also use the magic link option on the login page if preferred.
 
 To bring in more users, invite them from **Settings > Company > Members** (company-scoped) or **Settings > Team** (consultant teams). Invitations work without a mail provider: the accept link is returned to the inviter right after the invite is created (shown under the pending list with a copy button), so it can be shared over any channel. Configuring Resend only adds automatic delivery. The link is shown once and cannot be re-sent for company invites: revoke the invitation and invite again to get a fresh link.
+
+## Provisioning Customers From Your Own Backend
+
+If one instance serves several unrelated customers, your backend can set up each customer and manage its key over the v1 API, with nobody signing in per customer. Each customer gets a company and a **service account**: a non-human principal whose keys reach only that company.
+
+**Once:** sign in as the operator, open **Settings > API & MCP** and create a live key (not a test key) that reaches all companies, with the scopes `companies:write`, `service_accounts:manage` and every scope your customers' keys will need (a service-account key can only hold scopes that the key minting it holds). This operator key also reaches every company you create later, so keep it in your backend's secret store.
+
+**Per customer** (`$OPERATOR_KEY` is the operator key, `$BASE` your instance URL). Bookkeeping duty starts when a company exists, so do not create companies to try the flow out.
+
+```bash
+# 1. Create the company; the operator user becomes its owner. Keep one
+#    Idempotency-Key per customer: a retry with it returns the same company
+#    instead of creating a second one.
+curl -sS -X POST "$BASE/api/v1/companies" \
+  -H "Authorization: Bearer $OPERATOR_KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $CUSTOMER_REF" \
+  -d '{"name":"Kund AB","entity_type":"aktiebolag","org_number":"5566778899",
+       "vat_registered":true,"moms_period":"quarterly","f_skatt":true}'
+# data.id is COMPANY_ID
+
+# 2. Create the customer's service account. Its sponsor, the person who answers
+#    for it, defaults to the operator user.
+curl -sS -X POST "$BASE/api/v1/companies/$COMPANY_ID/service-accounts" \
+  -H "Authorization: Bearer $OPERATOR_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"Kund AB integration"}'
+# data.id is ACCOUNT_ID
+
+# 3. Mint the account's key. data.key is the secret, returned once: store it now.
+#    Not idempotent: a retry mints a second key, so after a failure list the
+#    account's keys (GET .../service-accounts/$ACCOUNT_ID) and revoke extras.
+curl -sS -X POST "$BASE/api/v1/companies/$COMPANY_ID/service-accounts/$ACCOUNT_ID/keys" \
+  -H "Authorization: Bearer $OPERATOR_KEY" -H "Content-Type: application/json" \
+  -d '{"scopes":["bookkeeping:write","invoices:read","invoices:write"]}'
+# data.key is the customer's key, data.id is KEY_ID
+```
+
+**Rotate:** mint a new key (step 3), switch the customer's integration to it, then revoke the old one. An account can hold five live keys, so both work during the switch:
+
+```bash
+curl -sS -X POST "$BASE/api/v1/companies/$COMPANY_ID/service-accounts/$ACCOUNT_ID/keys/$KEY_ID/revoke" \
+  -H "Authorization: Bearer $OPERATOR_KEY"
+```
+
+**Offboard:** `POST /api/v1/companies/{companyId}/service-accounts/{id}/revoke` revokes the account and every key it has. The company and its books stay: accounting records are kept for seven years and are never deleted.
+
+Good to know:
+
+- Everything a service-account key writes is recorded under the account's name, acting for its sponsor. If the sponsor stops being an owner or admin of the company, or the company is archived, the account's keys answer `403 SERVICE_ACCOUNT_SUSPENDED`. By default the operator user sponsors every account, so removing that user's role suspends every customer; pass `sponsor_user_id` in step 2 to make another owner or admin the sponsor.
+- A service-account key can never create service accounts or mint keys, so a leaked customer key cannot widen its own access.
+- Limits: 25 live service accounts per company, five live keys per account.
+- `GET /api/v1/api-key` shows what the calling key may do: its scopes, its companies and, for a service-account key, the account.
+- A service account is not a login. If a customer also needs to sign in, invite them as a member (see above).
+- Every request and response shape is in the OpenAPI document at `$BASE/api/v1/openapi.json`.
 
 ## Scheduled Jobs
 
@@ -207,7 +260,7 @@ Extension endpoints are listed unconditionally: one whose extension is not enabl
 
 All cron endpoints are authenticated with `Authorization: Bearer <CRON_SECRET>`. The cron container calls the app over the internal Docker network (`http://app:3000`), so these endpoints are not exposed publicly.
 
-Additionally, migration 048 schedules a `pg_cron` job inside the database that marks overdue supplier invoices daily at 06:00 UTC.
+Additionally, two `pg_cron` jobs run inside the database: `20260303145744_supplier_invoice_overdue_cron` marks overdue supplier invoices daily at 06:00 UTC, and `20260722150000_harden_invoice_delivery_history` redacts expired invoice-delivery personal data daily at 03:15 UTC.
 
 ## Optional Features
 
@@ -247,6 +300,7 @@ Three things about such endpoints are declared rather than probed, because the a
 
 - `AI_VISION=false` says the configured model cannot read images. Images and PDFs are then skipped honestly (the inbox row lands with the empty skeleton and the "AI-tolkning kördes inte" hint) instead of failing with a 400 on every upload; HTML mail invoices still extract as text on any model.
 - `AI_PDF_MODE` defaults to `rasterize` here: most such endpoints have no PDF input, so the first `AI_PDF_MAX_PAGES` pages (default 4) are rendered to images with poppler's `pdftoppm`, which the self-host image installs (`apk add poppler-utils`, the only system package beyond the base image; page images are written to `/tmp`, a tmpfs in `docker-compose.yml`). If the binary is missing, PDFs are skipped with `pdf_rasterizer_missing` rather than failing; `AI_PDF_RASTERIZER_BIN` points at a non-standard install. A provider that accepts the OpenAI `file` content part can use `AI_PDF_MODE=native`.
+- `AI_CALL_TIMEOUT_SECONDS` (default 120) is how long one structured answer or one document reading may take before it is ended and counted as the provider not answering. A local model on modest hardware can need more for a dense page: raise it if readings end with "Request timed out". The scheduled jobs still end their model calls shortly before their own time is up, whatever this is set to.
 - `AI_STRICT_JSON=true` asks for `response_format: json_schema` on providers that enforce it. The default (JSON answered in prose, then parsed and validated) works on every model and is what hosted runs.
 
 #### What runs on any model
@@ -272,6 +326,7 @@ AI_EXTRACTION_MODEL=...                  # document extraction model
 AI_HEAVY_MODEL=...                       # assistant model, heavy intents
 AI_ASSISTANT_MODEL=...                   # assistant model, standard intents
 AI_EXTRACTION_MAX_TOKENS=8192            # output cap for document extraction
+AI_CALL_TIMEOUT_SECONDS=120              # time limit of one structured answer or document reading, retries included
 AI_PROVIDER=bedrock|anthropic|openai-compatible   # force the backend (see below)
 ```
 
@@ -308,7 +363,7 @@ npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 
 ### Email (Invoice Sending, Invitations and Reminders)
 
-Outbound mail (invoices, reminders, payslips) goes through one of two providers. Auth/account mail is sent by Supabase Auth and is not affected.
+Outbound mail (invoices, payslips) goes through one of two providers. Auth/account mail is sent by Supabase Auth and is not affected.
 
 **Option 1: Resend** (what hosted runs):
 
@@ -337,9 +392,9 @@ SMTP_FROM_EMAIL=faktura@your-domain.se
 
 Without either, invoices can still be generated as PDFs but cannot be emailed.
 
-**Invitations do not require Resend.** When no mail provider is configured, the invite is still created and the accept link is returned to the inviter in the app (a copy button under the pending invitations list, plus a warn-level log record whose msg is `email service not configured: invite email skipped`; the Docker image logs JSON, so grep for the message text, not a `WARN` prefix; the token is never logged). Share the link manually; it is valid until the invitation expires. A mail provider (Resend, or your own relay with `EMAIL_PROVIDER=smtp`, both above) is only needed if you want the invitation mailed automatically. There is no re-send for company invitations: revoke and invite again for a new link.
+**Invitations do not require Resend.** When no mail provider is configured, the invite is still created and the accept link is returned to the inviter in the app (a copy button under the pending invitations list, plus a warn-level log record whose msg is `email service not configured: invite email skipped`; the Docker image logs JSON, so grep for the message text, not a `WARN` prefix; the token is never logged). Share the link manually; it is valid for 24 hours. A mail provider (Resend, or your own relay with `EMAIL_PROVIDER=smtp`, both above) is only needed if you want the invitation mailed automatically. A lost or expired link is renewed with the re-send button on the pending invitation: it issues a new link with a new expiry, and the old link stops working.
 
-Note the two separate mail paths: this variable drives the app's own mail (invoices, invitations, reminders); account mail from GoTrue (signup confirmation, password reset, and the account-provisioning invite when `AUTH_SIGNUPS_DISABLED=true`) goes through the Supabase **Authentication > SMTP Settings** described in [Configure Authentication](#2-configure-supabase-auth) and [Troubleshooting](#troubleshooting).
+Note the two separate mail paths: this variable drives the app's own mail (invoices, invitations); account mail from GoTrue (signup confirmation, password reset, and the account-provisioning invite when `AUTH_SIGNUPS_DISABLED=true`) goes through the Supabase **Authentication > SMTP Settings** described in [Configure Authentication](#2-configure-supabase-auth) and [Troubleshooting](#troubleshooting).
 
 ```bash
 AUTH_SIGNUPS_DISABLED=true
@@ -349,7 +404,7 @@ Set this when you have turned public signup off in GoTrue (`disable_signup`). Th
 
 ### Connector subscription (self-hosted instances)
 
-Everything a self-hosted instance runs itself is free (AGPL). Five capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and is issued manually by Accounted on request (self-serve later): write to support@accounted.se and we set it up with you.
+Everything a self-hosted instance runs itself is free (AGPL). Six capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC), migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway) and reminders, debt collection and invoice delivery (a provider reached only through the connector service, see below). A **connector key** unlocks them for every company on the instance; it is priced per active company and issued by Accounted on request: write to support@accounted.se and we set it up with you.
 
 ```bash
 GNUBOK_CONNECTOR_KEY=gnubok_ck_...            # issued by Accounted, shown once
@@ -362,11 +417,15 @@ The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docke
 curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
 ```
 
-The **bank** and **Skatteverket** connector proxies are live on the connector service (`connect.accounted.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases. The instance-side client wiring is merged for both upstreams: in connector mode (key set, no own credentials for that upstream) bank sync and Skatteverket carry traffic through the hosted proxy. Keys are issued manually on request (support@accounted.se), with scopes only for upstreams that carry traffic today: bank sync and Skatteverket. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
+The **bank** and **Skatteverket** connector proxies are live on the connector service (`connect.accounted.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration are not carried by the connector. The instance-side client wiring is merged for both upstreams: in connector mode (key set, no own credentials for that upstream) bank sync and Skatteverket carry traffic through the hosted proxy. Keys are issued manually on request (support@accounted.se), with scopes only for upstreams that carry traffic today: bank sync and Skatteverket. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
 
-**Peppol** through the connector works the same way once your key carries the `peppol` scope: leave every `QVALIA_*` variable and `PEPPOL_TRANSPORT_PROVIDER` unset, and the instance sends and receives e-invoices through Arcim's contracted access point (`connect.accounted.se/api/connect/peppol/*`). The hosted side enforces one receiving registration per company (`peppol_connections_per_company` on the key), a shared cap on registrations at the access point, and ownership: an instance can only poll status, fetch evidence and receive documents for registrations and submissions made through its own key. Delivery status arrives by polling (`/api/peppol/outbound/status/cron`), not by webhook. Which participant identifiers (organisation numbers, GLNs) a key may register and send as is recorded on the key when Arcim issues it; the licensee's own organisation number is always allowed, anything else is refused with `CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED`. Setting `QVALIA_API_KEY` or `QVALIA_PARTNER_REG_NO` switches Peppol out of connector mode onto your own access-point account. Brokered Peppol registers your companies under Arcim's access point, so the `peppol` scope is issued only where Arcim's provider terms allow it.
+**Peppol** through the connector works the same way once your key carries the `peppol` scope: leave every `QVALIA_*` variable and `PEPPOL_TRANSPORT_PROVIDER` unset, and the instance sends and receives e-invoices through Arcim's contracted access point (`connect.accounted.se/api/connect/peppol/*`). The hosted side enforces one receiving registration per company (`peppol_connections_per_company` on the key), a shared cap on registrations at the access point, and ownership: an instance can only poll status, fetch evidence and receive documents for registrations and submissions made through its own key. Delivery status arrives by polling (`/api/peppol/outbound/status/cron`), not by webhook. Which participant identifiers (organisation numbers, GLNs) a key may register and send as is recorded on the key when Arcim issues it; the licensee's own organisation number is always allowed, anything else is refused with `CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED`. Setting `QVALIA_API_KEY` or `QVALIA_PARTNER_REG_NO` switches Peppol out of connector mode onto your own access-point account. Brokered Peppol registers your companies under Arcim's access point, so the `peppol` scope is issued on request.
 
-With this release the self-host image also ships the `enable-banking` and `skatteverket` extensions in its preset: without a key (or own credentials) they show the connector upsell instead of being absent, and `GET /api/connector/status` shows the operator how each upstream would be routed.
+**Bank payments** (Betala via banken: paying supplier invoices from the company's bank account with BankID) run only through the connector, for hosted and self-hosted alike: the payment initiation provider's credentials and client certificate live in Connect and nowhere else, so there is no own-credentials form. Your key needs the `payments` scope; every company the key entitles to bank sync sees the feature. `OPENPAYMENTS_COMPANY_IDS` narrows it to a pilot (comma-separated company ids: only those) or opens it to everyone (`*`). Each paying company also completes the provider's company verification once (a BankID-signed form reached from Inställningar, Betalningar) before its first payment. A self-hosted key's `payments` scope comes with a monthly payment cap and the list of companies it may pay as, both set by Accounted when the key is issued and enforced by the connector service (a payment over the cap or for another company is refused before it reaches the bank); the instance's own monthly allowance applies on top. Bankgiro lookups (the payee name and OCR check) are not offered through a self-hosted key.
+
+**Reminders, debt collection and invoice delivery** run through a provider a company activates itself, and the provider integration lives only in the connector service: there is no own-credentials form. Two optional key scopes carry it, `collections` (reminders, collection cases, the provider's payouts) and `delivery` (sending an invoice by post, digital mailbox or e-invoice). They are not issued to self-hosted keys yet; until they are, the feature stays hidden on a self-host. Installation flags (`COLLECTIONS_ENABLED`, `COLLECTIONS_PILOT_COMPANIES`, see `.env.example`) only ever stop new work: duties toward a case already handed over keep running.
+
+With this release the self-host image also ships the `enable-banking` and `skatteverket` extensions in its preset: without a key (or own credentials) they show a connector-key note instead of being absent, and `GET /api/connector/status` shows the operator how each upstream would be routed.
 
 #### Own credentials (no connector key)
 
@@ -406,16 +465,6 @@ Set all five base URLs: every default points at Skatteverket's test environment,
 
 **Connector mode, for comparison.** With a key you set `GNUBOK_CONNECTOR_KEY` and, if you are not on the default hosted origin, `GNUBOK_CONNECT_URL` (https only; plain http is accepted for loopback only, and an invalid URL disables the connector with a warning in the log). Skatteverket in connector mode still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY`: the BankID tokens are stored in your database, so the encryption key stays operator-side. Leave every other Enable Banking and Skatteverket variable unset.
 
-### Push Notifications
-
-```bash
-NEXT_PUBLIC_VAPID_PUBLIC_KEY=...
-VAPID_PRIVATE_KEY=...
-VAPID_SUBJECT=mailto:you@example.com
-```
-
-Generate VAPID keys with `npx web-push generate-vapid-keys`. Push notifications require HTTPS.
-
 ### Error Tracking
 
 There is no Sentry integration. `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` are not read by the app: setting them changes nothing. Error-level events go to the container logs (structured JSON on stdout/stderr); `src/lib/observability/sink.ts` is a provider-agnostic seam that stays a no-op until an adapter is registered with `registerObservabilitySink()`, so a self-hosted build carries no third-party error-tracking dependency. If you want alerting, ship the container logs to your log system and alert there. See [docs/security/logging-and-observability.md](security/logging-and-observability.md).
@@ -446,6 +495,18 @@ example, raising the `/app/.next` tmpfs size as a workaround for #3164), move an
 edits you still need into `docker-compose.override.yml`, discard the rest with
 `git checkout -- docker-compose.yml`, and run the three commands again. The
 current file no longer needs a tmpfs size for `/app/.next`.
+
+An `.env` written before setup.sh generated `PERSONNUMMER_ENCRYPTION_KEY` has
+none, and saving a personnummer then fails with "krypteringsnyckeln för
+personnummer (PERSONNUMMER_ENCRYPTION_KEY) saknas". Run
+`./docker/setup.sh` and answer `N` to the overwrite question: it adds a
+generated key to the existing `.env` and changes nothing else. Then run
+`docker compose up -d`.
+
+The image ships the booking-template catalogue (`packs/*.yaml`) that the
+nightly booking-template sync and the MCP booking-packs resource read. An image
+from before it did not, and that sync refused with "no packs found"; pulling a
+current image is all it needs.
 
 If a new release includes database migrations, apply them before restarting:
 
@@ -542,6 +603,7 @@ flowchart LR
    SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE_KEY from supabase .env>
    NEXT_PUBLIC_APP_URL=https://app.example.com
    CRON_SECRET=<openssl rand -hex 32>
+   PERSONNUMMER_ENCRYPTION_KEY=<openssl rand -hex 32, once; never change it>
    NEXT_PUBLIC_SELF_HOSTED=true
    ```
 
@@ -671,7 +733,7 @@ portable base file alone.
 
 ### Notes
 
-- **`pg_cron`** is included in the `supabase/postgres` image, so the `pg_cron` migration succeeds (unlike on the Supabase free tier, see the standard self-hosting flow above).
+- **`pg_cron`** is included in the `supabase/postgres` image, so the `pg_cron` migrations succeed.
 - **MFA**: as on the standard path, `NEXT_PUBLIC_SELF_HOSTED=true` disables enforcement; users may still enable TOTP voluntarily.
 
 ## Troubleshooting
@@ -689,7 +751,10 @@ Check the Supabase dashboard under **Authentication > Users** to verify the sign
 Ensure `https://your-domain.com/auth/callback` is in the Supabase **Redirect URLs** allowlist and that **Site URL** matches your `NEXT_PUBLIC_APP_URL`.
 
 **`pg_cron` migration fails:**
-`pg_cron` requires a paid Supabase plan. On the free tier, you can safely comment out migration 048 or let it fail: the overdue supplier invoice check is non-critical and can be triggered manually.
+`pg_cron` must be enabled before the migrations run. Skipping `20260303145744_supplier_invoice_overdue_cron` also breaks `20260722150000_harden_invoice_delivery_history`, which schedules the daily redaction of invoice-delivery personal data, so do not comment either one out.
+
+**SIE import answers that it is switched off or paused:**
+SIE import needs no configuration on a self-hosted install: the app runs the import and the cron sidecar's every-minute job (`/api/import/sie/worker/cron`) picks up one that was interrupted. It is refused only when `.env` holds `SIE_IMPORT_JOBS=false`; remove the line (or set it to `true`) and restart the app. An image from before this default existed refuses with "Nya SIE-importer är tillfälligt pausade" until `SIE_IMPORT_JOBS=true` is set, as does an install running with `NEXT_PUBLIC_SELF_HOSTED=false`.
 
 **Container restarts in a loop:**
 Check logs with `docker compose logs app`. The app requires all five core env vars (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`, `CRON_SECRET`) and will crash on startup if any are missing.

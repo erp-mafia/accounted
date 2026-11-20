@@ -10,7 +10,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Loader2, Plus } from 'lucide-react'
+import { PlusIcon, SpinnerIcon } from '@/components/icons'
 
 export interface ActivateAccountsDialogProps {
   open: boolean
@@ -95,7 +95,7 @@ export function ActivateAccountsDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>Aktivera konton</DialogTitle>
           <DialogDescription>
@@ -108,13 +108,13 @@ export function ActivateAccountsDialog({
         <div className="space-y-2 text-sm">
           {loading && (
             <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
               Hämtar kontouppgifter...
             </div>
           )}
 
           {!loading && knownRows.length > 0 && (
-            <ul className="divide-y divide-border rounded-lg border">
+            <ul className="divide-y divide-border">
               {knownRows.map((r) => (
                 <li key={r.account_number} className="flex items-baseline gap-3 px-3 py-2">
                   <span className="font-mono text-foreground w-14 shrink-0">{r.account_number}</span>
@@ -130,7 +130,7 @@ export function ActivateAccountsDialog({
           )}
 
           {!loading && unknownRows.length > 0 && (
-            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-attn">
+            <div className="rounded-lg px-3 py-2 text-xs text-attn bg-control shadow-raised">
               <p className="font-medium">Finns inte i BAS-katalogen:</p>
               <p className="mt-1 font-mono">{unknownRows.map((r) => r.account_number).join(', ')}</p>
               <p className="mt-1 text-attn/80">
@@ -143,10 +143,9 @@ export function ActivateAccountsDialog({
                       key={r.account_number}
                       type="button"
                       variant="outline"
-                      size="sm"
                       onClick={() => onCreateUnknown(r.account_number)}
                     >
-                      <Plus className="mr-1 h-3 w-3" />
+                      <PlusIcon className="h-3 w-3" />
                       Skapa <span data-ph-mask="">{r.account_number}</span>
                     </Button>
                   ))}
@@ -165,7 +164,7 @@ export function ActivateAccountsDialog({
               'Aktiverar...'
             ) : (
               <>
-                <Plus className="mr-2 h-4 w-4" />
+                <PlusIcon className="h-4 w-4" />
                 {confirmLabel ?? 'Aktivera och bokför'}
               </>
             )}

@@ -1,14 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   calculateSalary,
-  calculateKarensavdrag,
-  calculateSjuklon,
   calculateAvgifterRate,
-  calculateVacationAccrual,
   prorateBaseSalaryForPeriod,
 } from '../calculation-engine'
-import { calculateVacationPay } from '../absence-calculator'
-import { recurringLineFlags } from '../recurring-lines'
+import { payslipLineFlags } from '../line-item-roles'
+import { deriveAbsenceLineItems, type AbsenceDay, type DeriveInput } from '../derive-absence-line-items'
+import { dailyDivisor } from '../work-schedule'
 import { roundOre } from '@/lib/money'
 import type { PayrollConfig } from '../payroll-config'
 import type { TaxTableRate } from '../tax-tables'
@@ -104,7 +102,7 @@ function makeBasicInput(overrides = {}) {
 }
 
 describe('calculateSalary', () => {
-  it('deducts a derived absence row once even though it carries is_gross_deduction (Frey, 2026-09-18)', () => {
+  it('deducts a derived absence row once even though it carries is_gross_deduction', () => {
     // 31 500 kr monthly, one VAB day at daily rate 1 500: gross must be 30 000,
     // not 28 500. The derived rows carry is_gross_deduction for the booking
     // split, and Step 4 must not consume them a second time.
@@ -757,18 +755,6 @@ describe('kollektivavtal semesterlön rate (vacationPayRate, #2477)', () => {
     expect(withRate.vacationAccrual).toBe(without.vacationAccrual)
     expect(withRate.vacationCompensation).toBe(0)
   })
-
-  it('calculateVacationAccrual honours the rate too', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'procentregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationPayRate: 0.135,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBe(roundOre(40000 * 0.135))
-  })
 })
 
 describe('hardening: vacation rule contract', () => {
@@ -942,7 +928,7 @@ describe('hardening: sammalöneregeln', () => {
     expect(r.vacationAccrual).toBeCloseTo(322.5, 1)
   })
 
-  it('accrues a day at exactly what absence-calculator later pays out for it', () => {
+  it('accrues a day at exactly the tillägg a taken day is valued at', () => {
     const monthlySalary = 36000
     const semestertillaggRate = 0.0043
     const run = calculateSalary(
@@ -953,18 +939,139 @@ describe('hardening: sammalöneregeln', () => {
       config2026, emptyTaxRates
     )
     const accrualPerDay = run.vacationAccrual / (25 / 12)
-    const payoutPerDay = calculateVacationPay({
-      monthlySalary,
-      vacationDaysTaken: 1,
-      vacationRule: 'sammaloneregeln',
-      semestertillaggRate,
-      vacationDaysPerYear: 25,
-    }).tillagg
+    const payoutPerDay = roundOre(monthlySalary * semestertillaggRate)
 
-    // 2920 is credited here and relieved there. When the two bases disagreed
+    // 2920 is credited here and relieved at monthly × tillägg per taken day
+    // (dayValueSek in semesterberedning.ts). When the two bases disagreed
     // the liability drifted negative on every taken day, which is the defect
     // this pins: provision and payout must value a day identically.
     expect(accrualPerDay).toBeCloseTo(payoutPerDay, 2)
+  })
+
+  it('does not take the schedule divisor: a 4-day week accrues the same tillägg', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'sammaloneregeln', monthlySalary: 30000,
+        dailyDivisor: dailyDivisor(4),
+        lineItems: [baseLineItem(30000)],
+      }),
+      config2026, emptyTaxRates
+    )
+    // Semestertillägg is a share of the MONTHLY salary per vacation day, so a
+    // 4-day week earns the same tillägg as a 5-day week on the same monthly
+    // salary: 30000 x 0.43% x 25/12.
+    expect(r.vacationAccrual).toBeCloseTo(268.75, 2)
+  })
+})
+
+describe('sammalöneregeln: rörliga lönedelar (Semesterlagen 16 a § tredje stycket, #60 B)', () => {
+  const base = {
+    vacationRule: 'sammaloneregeln' as const,
+    monthlySalary: 30000,
+    semestertillaggRate: 0.0043,
+  }
+  const ob = lineItem({ itemType: 'ob_weekend', amount: 5000, isVacationBasis: true })
+
+  it('accrues 12 % of the variable pay on top of the tillägg', () => {
+    const without = calculateSalary(
+      makeBasicInput({ ...base, lineItems: [baseLineItem(30000)] }),
+      config2026, emptyTaxRates
+    )
+    const withOb = calculateSalary(
+      makeBasicInput({ ...base, lineItems: [baseLineItem(30000), ob] }),
+      config2026, emptyTaxRates
+    )
+    // The issue's probe: 5 000 kr OB left the accrual at 268,75 kr; it rises by 600 kr.
+    expect(without.vacationAccrual).toBe(268.75)
+    expect(withOb.vacationAccrual).toBe(868.75)
+    expect(withOb.vacationAccrualAvgifter).toBe(roundOre(868.75 * 0.3142))
+    expect(withOb.grossSalary).toBe(35000)
+    const step = withOb.steps.find((s) => s.label.startsWith('Semesteravsättning rörliga lönedelar'))
+    expect(step).toMatchObject({ input: { variable_pay: 5000, rate: 0.12 }, output: 600 })
+  })
+
+  it('counts every semesterlönegrundande wage addition: övertid, bonus, provision, övrigt', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        ...base,
+        lineItems: [
+          baseLineItem(30000),
+          lineItem({ itemType: 'overtime_50', amount: 1000, isVacationBasis: true }),
+          lineItem({ itemType: 'bonus', amount: 2000, isVacationBasis: true }),
+          lineItem({ itemType: 'commission', amount: 3000, isVacationBasis: true }),
+          lineItem({ itemType: 'other', amount: 4000, isVacationBasis: true }),
+        ],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(roundOre(268.75 + 10000 * 0.12))
+  })
+
+  it('leaves out absence, semesterersättning and lines outside the semester base', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        ...base,
+        lineItems: [
+          baseLineItem(30000),
+          // Absence adjusts the fixed salary: not variable pay, even when flagged.
+          lineItem({ itemType: 'sick_day2_14', amount: -800, isVacationBasis: true, isGrossDeduction: true }),
+          // Semesterlön is not semesterlönegrundande.
+          lineItem({ itemType: 'semesterersattning', amount: 900, isVacationBasis: true }),
+          // Taxable traktamente is not semester base (its flag says so).
+          lineItem({ itemType: 'traktamente_taxable', amount: 700, isVacationBasis: false }),
+          // A bonus the operator flagged outside the semester base stays outside.
+          lineItem({ itemType: 'bonus', amount: 600, isVacationBasis: false }),
+        ],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(268.75)
+    expect(r.steps.some((s) => s.label.startsWith('Semesteravsättning rörliga lönedelar'))).toBe(false)
+  })
+
+  it('uses the semesterlön percentage: 14,4 % at 30 days, a higher kollektivavtal rate', () => {
+    const thirty = calculateSalary(
+      makeBasicInput({ ...base, vacationDaysPerYear: 30, lineItems: [baseLineItem(30000), ob] }),
+      config2026, emptyTaxRates
+    )
+    // tillägg 30000 x 0,43 % x 30/12 = 322,50, plus 5000 x 14,4 %.
+    expect(thirty.vacationAccrual).toBe(roundOre(322.5 + 5000 * 0.144))
+    const cba = calculateSalary(
+      makeBasicInput({ ...base, vacationPayRate: 0.135, lineItems: [baseLineItem(30000), ob] }),
+      config2026, emptyTaxRates
+    )
+    expect(cba.vacationAccrual).toBe(roundOre(268.75 + 5000 * 0.135))
+  })
+
+  it('a negative correction of variable pay lowers the accrual', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        ...base,
+        lineItems: [baseLineItem(30000), ob, lineItem({ itemType: 'correction', amount: -1000, isVacationBasis: true })],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(roundOre(268.75 + 4000 * 0.12))
+  })
+
+  it('a run without variable pay is unchanged: same accrual, same breakdown', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, lineItems: [baseLineItem(30000)] }),
+      config2026, emptyTaxRates
+    )
+    const labels = r.steps.map((s) => s.label)
+    expect(labels.filter((l) => l.startsWith('Semesteravsättning'))).toEqual([
+      'Semesteravsättning (sammalöneregeln, tillägg 0,43 %)',
+    ])
+  })
+
+  it('procentregeln keeps the variable pay in its own 12 % base, counted once', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln', lineItems: [baseLineItem(30000), ob] }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(roundOre(35000 * 0.12))
+    expect(r.steps.some((s) => s.label.startsWith('Semesteravsättning rörliga lönedelar'))).toBe(false)
   })
 })
 
@@ -1118,110 +1225,6 @@ describe('hardening: tax table lookup (not just flat fallback)', () => {
     )
     expect(semer.grossSalary).toBe(28000)
     expect(semer.taxWithheld).toBe(5500) // still bracket 2
-  })
-})
-
-describe('calculateVacationAccrual (standalone export)', () => {
-  it('procentregeln: 12% of vacationBasis under 30 days', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'procentregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBe(4800)
-  })
-
-  it('procentregeln: 14.4% at 30+ days', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'procentregeln',
-      vacationDaysPerYear: 30,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBeCloseTo(5760, 1)
-  })
-
-  it('sammaloneregeln: uses vacationBasis, not monthlySalary (degree-adjusted)', () => {
-    // 50% worker: caller passes vacationBasis = 20000 (degree-adjusted),
-    // not the raw 40000 monthlySalary. Result must be half the full-time amount.
-    const partTime = calculateVacationAccrual({
-      monthlySalary: 40000, // ignored
-      vacationRule: 'sammaloneregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 20000,
-    })
-    const fullTime = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'sammaloneregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(partTime.accrual).toBeCloseTo(fullTime.accrual / 2, 1)
-    // Independent check: 20000 × 0.43% × 25/12 ≈ 179.17
-    expect(partTime.accrual).toBeCloseTo(179.17, 1)
-  })
-
-  it('semesterersattning: 0 accrual with the correct step label', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'semesterersattning',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBe(0)
-    expect(r.steps[0].label).toContain('semesterersättning betald direkt')
-  })
-
-  it('none: 0 accrual, no "betald direkt" wording', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'none',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBe(0)
-    expect(r.steps[0].label).toBe('Semesteravsättning (avstängd)')
-    expect(r.steps[0].label).not.toContain('semesterersättning')
-  })
-})
-
-describe('calculateKarensavdrag', () => {
-  it('calculates 20% of weekly sjuklön', () => {
-    // Formula: 20% × (40000 × 12/52 × 0.80)
-    const expected = Math.round(0.20 * (40000 * 12 / 52 * 0.80) * 100) / 100
-    expect(calculateKarensavdrag(40000, config2026)).toBe(expected)
-  })
-})
-
-describe('calculateSjuklon', () => {
-  it('calculates karensavdrag + sjuklön for sick days', () => {
-    const result = calculateSjuklon(40000, 5, config2026)
-
-    expect(result.karensavdrag).toBeGreaterThan(0)
-    expect(result.sjuklon).toBeGreaterThan(0)
-    expect(result.steps.length).toBeGreaterThan(0)
-  })
-
-  it('handles 1-day sick leave (karens only)', () => {
-    const result = calculateSjuklon(40000, 1, config2026)
-
-    expect(result.karensavdrag).toBeGreaterThan(0)
-    expect(result.sjuklon).toBe(0) // No sjuklön for day 1
-  })
-
-  it('caps at 13 sjuklön days (day 2-14)', () => {
-    const result14 = calculateSjuklon(40000, 14, config2026)
-    const result20 = calculateSjuklon(40000, 20, config2026)
-
-    // sjuklön should be the same for 14 and 20 days (capped at day 14)
-    expect(result14.sjuklon).toBe(result20.sjuklon)
   })
 })
 
@@ -1726,10 +1729,10 @@ describe('öresavrundning (roundNetToWholeKrona)', () => {
 
 describe('recurring line flags through the engine', () => {
   // Pins the payroll math for derived recurring rows: the flags produced by
-  // recurringLineFlags must actually move gross, the tax base and the AGA
+  // payslipLineFlags must actually move gross, the tax base and the AGA
   // base when run through calculateSalary (regression guard for #2044).
   it('a recurring gross deduction reduces gross, tax base and AGA base, not the semester base', () => {
-    const flags = recurringLineFlags('gross_deduction_other')
+    const flags = payslipLineFlags('gross_deduction_other')
     const base = calculateSalary(makeBasicInput(), config2026, emptyTaxRates)
     const withDeduction = calculateSalary(
       makeBasicInput({
@@ -1759,7 +1762,7 @@ describe('recurring line flags through the engine', () => {
   })
 
   it('a recurring net deduction reduces only the paid-out net', () => {
-    const flags = recurringLineFlags('net_deduction_union')
+    const flags = payslipLineFlags('net_deduction_union')
     const base = calculateSalary(makeBasicInput(), config2026, emptyTaxRates)
     const withDeduction = calculateSalary(
       makeBasicInput({
@@ -1854,14 +1857,16 @@ describe('kostnadsersättning: tax-free reimbursements', () => {
     expect(r.netRounding).toBe(0.6)
   })
 
-  it('ignores a negative reimbursement line', () => {
+  // The line commands refuse a negative one (payslip-line-sign.test.ts); the
+  // voucher posts the row with its sign, so the pay must read it the same way.
+  it('reads a negative reimbursement line with its sign, as the voucher does', () => {
     const r = calculateSalary(
       makeBasicInput({ lineItems: [baseLineItem(40000), reimbursement('expense_reimbursement', -100)] }),
       config2026,
       emptyTaxRates,
     )
-    expect(r.taxFreeReimbursements).toBe(0)
-    expect(r.netSalary).toBe(28000)
+    expect(r.taxFreeReimbursements).toBe(-100)
+    expect(r.netSalary).toBe(27900)
   })
 
   it('invariant: netSalary + tax + netDeductions - reimbursements = grossSalary', () => {
@@ -1878,6 +1883,28 @@ describe('kostnadsersättning: tax-free reimbursements', () => {
     )
     expect(r.netSalary + r.taxWithheld + r.netDeductions - r.taxFreeReimbursements).toBeCloseTo(r.grossSalary, 2)
   })
+})
+
+describe('kostnadsersättning above the schablon: taxed as salary', () => {
+  it.each(['traktamente_taxable', 'mileage_taxable'])(
+    '%s adds to gross, tax and avgifter but not to the vacation basis',
+    (itemType) => {
+      const base = calculateSalary(makeBasicInput({ lineItems: [baseLineItem(40000)] }), config2026, emptyTaxRates)
+      const r = calculateSalary(
+        makeBasicInput({ lineItems: [baseLineItem(40000), lineItem({ itemType, amount: 500 })] }),
+        config2026,
+        emptyTaxRates,
+      )
+      expect(r.grossSalary).toBe(40500)
+      expect(r.taxableIncome).toBe(base.taxableIncome + 500)
+      expect(r.taxWithheld).toBeGreaterThan(base.taxWithheld)
+      expect(r.avgifterBasis).toBe(base.avgifterBasis + 500)
+      expect(r.avgifterAmount).toBeGreaterThan(base.avgifterAmount)
+      expect(r.vacationAccrual).toBe(base.vacationAccrual)
+      expect(r.taxFreeReimbursements).toBe(0)
+      expect(r.netSalary + r.taxWithheld).toBeCloseTo(r.grossSalary, 2)
+    },
+  )
 })
 
 // ============================================================
@@ -2065,6 +2092,348 @@ describe('calculation policy: partial_month = annual_calendar_days', () => {
       label: 'Grundlön (proportionerad anställningsperiod)',
       input: { calendar_days: 22, overlap_start: '2037-08-10', overlap_end: '2037-08-31' },
       output: 30378.04,
+    })
+  })
+})
+
+describe('förhöjt skatteavdrag (SFL 11 kap. 22 §)', () => {
+  // Table 33 column 1 around the reported payslip's gross; the bottom bracket is
+  // zero tax so a benefit-only payslip has no statutory tax.
+  const rates: TaxTableRate[] = [
+    { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 0, incomeTo: 5000, kind: 'amount', taxAmount: 0 },
+    { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 5001, incomeTo: 26000, kind: 'amount', taxAmount: 4000 },
+    { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 26001, incomeTo: 26200, kind: 'amount', taxAmount: 5217 },
+    { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 26201, incomeTo: 9999999, kind: 'amount', taxAmount: 8000 },
+  ]
+  const doTheNorth = (overrides = {}) =>
+    makeBasicInput({ taxTableNumber: 33, taxColumn: 1, monthlySalary: 26161.27, ...overrides })
+  const extraStep = (steps: Array<{ label: string }>) => steps.find((s) => s.label === 'Extra skatteavdrag (begärt)')
+
+  it("withholds 45 % in total on the reported payslip's figures: 11 772 kr, 6 555 kr of it extra", () => {
+    const r = calculateSalary(doTheNorth({ extraTaxPercentage: 45 }), config2026, rates)
+    expect(r.grossSalary).toBe(26161.27)
+    expect(r.taxWithheld).toBe(11772)
+    expect(r.extraTaxWithheld).toBe(6555)
+    expect(r.netSalary).toBe(14389.27)
+    expect(extraStep(r.steps)).toMatchObject({ output: 6555 })
+    // The statutory row still shows the table tax; the extra is its own row.
+    expect(r.steps.find((s) => s.label.startsWith('Skatteavdrag (tabell'))?.output).toBe(5217)
+  })
+
+  it('adds the kronor form on top of the table tax', () => {
+    const r = calculateSalary(doTheNorth({ extraTaxAmount: 500 }), config2026, rates)
+    expect(r.taxWithheld).toBe(5717)
+    expect(r.extraTaxWithheld).toBe(500)
+    expect(r.netSalary).toBe(20444.27)
+  })
+
+  it('withholds the table tax only when the percentage is below it', () => {
+    const r = calculateSalary(doTheNorth({ extraTaxPercentage: 15 }), config2026, rates)
+    expect(r.taxWithheld).toBe(5217)
+    expect(r.extraTaxWithheld).toBe(0)
+    expect(extraStep(r.steps)).toMatchObject({ output: 0 })
+  })
+
+  it('leaves the breakdown untouched when nothing is requested', () => {
+    const r = calculateSalary(doTheNorth(), config2026, rates)
+    expect(r.taxWithheld).toBe(5217)
+    expect(r.extraTaxWithheld).toBe(0)
+    expect(extraStep(r.steps)).toBeUndefined()
+  })
+
+  describe('with engångsskatt', () => {
+    const bonus = {
+      itemType: 'bonus' as const,
+      amount: 2500,
+      oneOffTaxPercent: 20,
+      isTaxable: true,
+      isAvgiftBasis: true,
+      isVacationBasis: false,
+      isGrossDeduction: false,
+      isNetDeduction: false,
+    }
+
+    it('adds the kronor form once', () => {
+      const r = calculateSalary(doTheNorth({ extraTaxAmount: 500, lineItems: [bonus] }), config2026, rates)
+      // 5 217 table + 500 engångsskatt + 500 extra
+      expect(r.taxWithheld).toBe(6217)
+      expect(r.extraTaxWithheld).toBe(500)
+    })
+
+    it('applies the percentage to the whole income, the one-off part included', () => {
+      const r = calculateSalary(doTheNorth({ extraTaxPercentage: 45, lineItems: [bonus] }), config2026, rates)
+      // 45 % of 28 661,27 = 12 897; statutory 5 217 + 500 = 5 717
+      expect(r.taxWithheld).toBe(12897)
+      expect(r.extraTaxWithheld).toBe(7180)
+    })
+  })
+
+  describe('with jämkning', () => {
+    const jamkning = { jamkningPercentage: 20, jamkningValidFrom: '2026-01-01', jamkningValidTo: '2026-12-31' }
+
+    it('adds the kronor form on top of the jämkning tax', () => {
+      const r = calculateSalary(doTheNorth({ ...jamkning, extraTaxAmount: 400 }), config2026, rates)
+      // 20 % of 26 161,27 = 5 232
+      expect(r.taxWithheld).toBe(5632)
+      expect(r.extraTaxWithheld).toBe(400)
+    })
+
+    it('tops the jämkning tax up to the requested percentage', () => {
+      const r = calculateSalary(doTheNorth({ ...jamkning, extraTaxPercentage: 45 }), config2026, rates)
+      expect(r.taxWithheld).toBe(11772)
+      expect(r.extraTaxWithheld).toBe(6540)
+    })
+  })
+
+  it.each([
+    ['F-skatt', { fSkattStatus: 'f_skatt' }, 0],
+    ['sidoinkomst', { isSidoinkomst: true }, 7848],
+    ['an unverified status', { fSkattStatus: 'not_verified' }, 7848],
+    ['no tax table', { taxTableNumber: null }, 7848],
+  ])('does not apply with %s, and the row says so', (_name, overrides, statutory) => {
+    const r = calculateSalary(doTheNorth({ ...overrides, extraTaxAmount: 500 }), config2026, rates)
+    expect(r.taxWithheld).toBe(statutory)
+    expect(r.extraTaxWithheld).toBe(0)
+    expect(extraStep(r.steps)).toMatchObject({ output: 0 })
+  })
+
+  it('caps the extra at the cash left after the table tax and the net deductions', () => {
+    const advance = {
+      itemType: 'net_deduction_advance' as const,
+      amount: -18000,
+      isTaxable: false,
+      isAvgiftBasis: false,
+      isVacationBasis: false,
+      isGrossDeduction: false,
+      isNetDeduction: true,
+    }
+    const r = calculateSalary(doTheNorth({ extraTaxAmount: 5000, lineItems: [advance] }), config2026, rates)
+    // 26 161 - 18 000 - 5 217 = 2 944 kr of cash left
+    expect(r.extraTaxWithheld).toBe(2944)
+    expect(r.taxWithheld).toBe(8161)
+    expect(r.netSalary).toBe(0.27)
+  })
+
+  it('withholds nothing extra without cash pay', () => {
+    const meals = {
+      itemType: 'benefit_meals' as const,
+      amount: 3000,
+      isTaxable: true,
+      isAvgiftBasis: true,
+      isVacationBasis: false,
+      isGrossDeduction: false,
+      isNetDeduction: false,
+    }
+    const r = calculateSalary(
+      makeBasicInput({ taxTableNumber: 33, taxColumn: 1, monthlySalary: 0, extraTaxPercentage: 45, lineItems: [meals] }),
+      config2026,
+      rates,
+    )
+    expect(r.grossSalary).toBe(0)
+    expect(r.taxWithheld).toBe(0)
+    expect(r.extraTaxWithheld).toBe(0)
+  })
+})
+
+// ============================================================
+// Semesterlönegrundande frånvaro in the procentregeln base (#60 part C)
+//
+// Semesterlagen 16 b § andra och tredje stycket: the pay for a day of
+// semesterlönegrundande absence (17-17 b §§) is left out of the base, which
+// instead gets the income the employee would have had working. Absence that
+// does not qualify is pay never earned and lowers the base. The real absence
+// derivation feeds the engine here, as run-calculation does.
+// ============================================================
+
+describe('procentregeln base with absence (Semesterlagen 16 b §, #60 C)', () => {
+  const deriveFor = (over: Partial<DeriveInput>) =>
+    deriveAbsenceLineItems({
+      monthlySalary: 30000,
+      payrollConfig: config2026,
+      periodDays: [],
+      lookbackSickDates: [],
+      vabDaysYtd: 0,
+      parentalDaysPregnancyYtd: 0,
+      ...over,
+    })
+  const toEngineLines = (lines: ReturnType<typeof deriveFor>['lineItems']) =>
+    lines.map((li) => ({
+      itemType: li.item_type,
+      amount: li.amount,
+      isTaxable: li.is_taxable,
+      isAvgiftBasis: li.is_avgift_basis,
+      isVacationBasis: li.is_vacation_basis,
+      isGrossDeduction: li.is_gross_deduction,
+      isNetDeduction: false,
+    }))
+  const day = (absence_date: string, absence_type: AbsenceDay['absence_type'], hours = 8): AbsenceDay => ({
+    absence_date,
+    absence_type,
+    hours,
+  })
+
+  describe('monthly pay (30 000 kr)', () => {
+    /** Runs one month with the given absence; the accrual and its base. */
+    const month = (
+      periodDays: AbsenceDay[],
+      over: Partial<DeriveInput> = {},
+      vacationRule: 'procentregeln' | 'semesterersattning' = 'procentregeln',
+    ) => {
+      const derived = deriveFor({ periodDays, ...over })
+      const result = calculateSalary(
+        makeBasicInput({
+          monthlySalary: 30000,
+          vacationRule,
+          lineItems: [baseLineItem(30000), ...toEngineLines(derived.lineItems)],
+          qualifyingAbsenceHours: derived.qualifyingAbsenceHours || undefined,
+        }),
+        config2026, emptyTaxRates,
+      )
+      return { result, derived }
+    }
+
+    it('keeps the full salary in the base for VAB within the cap (the issue probe: was 3 428,57)', () => {
+      const { result } = month([day('2026-04-10', 'vab')], { vabDaysYtd: 10 })
+      expect(result.grossSalary).toBe(28571.43)
+      expect(result.vacationAccrual).toBe(3600)
+      expect(result.steps.find((s) => s.label.startsWith('Semesteravsättning'))!.input).toMatchObject({ vacation_basis: 30000 })
+    })
+
+    it('lowers the base for VAB past the cap (the issue probe: was 3 600)', () => {
+      const { result } = month([day('2026-04-10', 'vab')], { vabDaysYtd: 120 })
+      expect(result.vacationAccrual).toBe(roundOre(28571.43 * 0.12))
+    })
+
+    it('lowers the base for unpaid leave (the issue probe: was 3 600)', () => {
+      const { result } = month([day('2026-04-10', 'unpaid_leave')])
+      expect(result.grossSalary).toBe(28571.43)
+      expect(result.vacationAccrual).toBe(roundOre(28571.43 * 0.12))
+    })
+
+    it('keeps the full salary in the base for sick days, karens and day 15+ included', () => {
+      const sick = Array.from({ length: 16 }, (_, i) => day(`2026-04-${String(6 + i).padStart(2, '0')}`, 'sick'))
+      const { result } = month(sick)
+      expect(result.grossSalary).toBeLessThan(30000)
+      expect(result.vacationAccrual).toBe(3600)
+    })
+
+    it('keeps parental leave within the cap and lowers the base for the dates past it', () => {
+      const within = month([day('2026-04-10', 'parental')], { parentalDaysPregnancyYtd: 0 })
+      const past = month([day('2026-04-10', 'parental')], { parentalDaysPregnancyYtd: 120 })
+      expect(within.result.vacationAccrual).toBe(3600)
+      expect(past.result.vacationAccrual).toBe(roundOre(28571.43 * 0.12))
+    })
+
+    it('gives semesterersättning the same base', () => {
+      const vab = month([day('2026-04-10', 'vab')], {}, 'semesterersattning')
+      const unpaid = month([day('2026-04-10', 'unpaid_leave')], {}, 'semesterersattning')
+      expect(vab.result.vacationCompensation).toBe(3600)
+      expect(unpaid.result.vacationCompensation).toBe(roundOre(28571.43 * 0.12))
+      expect(vab.result.vacationAccrual).toBe(0)
+    })
+
+    it('adds no breakdown step: the monthly salary already is the income the employee would have had', () => {
+      const { result } = month([day('2026-04-10', 'vab')])
+      expect(result.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+      // A caller passing hours for monthly pay changes nothing either.
+      const withHours = calculateSalary(
+        makeBasicInput({ monthlySalary: 30000, lineItems: [baseLineItem(30000)], qualifyingAbsenceHours: 40 }),
+        config2026, emptyTaxRates,
+      )
+      expect(withHours.vacationAccrual).toBe(3600)
+      expect(withHours.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+    })
+  })
+
+  describe('hourly pay (200 kr/h, 120 worked hours = 24 000 kr)', () => {
+    const month = (
+      periodDays: AbsenceDay[],
+      over: Partial<DeriveInput> = {},
+      vacationRule: 'procentregeln' | 'semesterersattning' | 'sammaloneregeln' | 'none' = 'procentregeln',
+    ) => {
+      const derived = deriveFor({
+        monthlySalary: 0,
+        salaryType: 'hourly',
+        hourlyRate: 200,
+        hoursPerDay: 8,
+        hoursPerWeek: 40,
+        workdaysPerWeek: 5,
+        periodDays,
+        ...over,
+      })
+      const result = calculateSalary(
+        makeBasicInput({
+          salaryType: 'hourly' as const,
+          monthlySalary: 0,
+          hourlyRate: 200,
+          hoursWorked: 120,
+          vacationRule,
+          lineItems: [baseLineItem(24000, 'hourly_salary'), ...toEngineLines(derived.lineItems)],
+          qualifyingAbsenceHours: derived.qualifyingAbsenceHours || undefined,
+        }),
+        config2026, emptyTaxRates,
+      )
+      return { result, derived }
+    }
+    const sick3 = [day('2026-04-06', 'sick'), day('2026-04-07', 'sick'), day('2026-04-08', 'sick')]
+
+    it('puts the hours the employee would have worked at full timlön in the base, not the 80 % sjuklön', () => {
+      const { result } = month(sick3)
+      // Paid: 24 000 + 3 840 sjuklön - 1 280 karens. Base: 24 000 + 24 h x 200.
+      expect(result.grossSalary).toBe(26560)
+      expect(result.vacationAccrual).toBe(roundOre(28800 * 0.12))
+      const step = result.steps.find((s) => s.label === 'Semesterlönegrundande frånvaro (Semesterlagen 16 b §)')
+      expect(step).toMatchObject({ input: { hourly_rate: 200, hours: 24 }, output: 4800 })
+      // Before #60 C the base held the 3 840 sjuklön: 27 840 x 12 %.
+      expect(result.vacationAccrual).not.toBe(roundOre(27840 * 0.12))
+    })
+
+    it('adds the VAB hours within the cap and nothing past it', () => {
+      expect(month([day('2026-04-10', 'vab', 6)]).result.vacationAccrual).toBe(roundOre(25200 * 0.12))
+      expect(month([day('2026-04-10', 'vab', 6)], { vabDaysYtd: 120 }).result.vacationAccrual).toBe(2880)
+    })
+
+    it('adds the parental hours within the cap', () => {
+      expect(month([day('2026-04-10', 'parental')]).result.vacationAccrual).toBe(roundOre(25600 * 0.12))
+    })
+
+    it('adds nothing for unpaid leave', () => {
+      const { result } = month([day('2026-04-10', 'unpaid_leave')])
+      expect(result.vacationAccrual).toBe(2880)
+      expect(result.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+    })
+
+    it('gives semesterersättning the same base, with the step before it', () => {
+      const { result } = month(sick3, {}, 'semesterersattning')
+      expect(result.vacationCompensation).toBe(roundOre(28800 * 0.12))
+      const labels = result.steps.map((s) => s.label)
+      expect(labels.indexOf('Semesterlönegrundande frånvaro (Semesterlagen 16 b §)')).toBe(
+        labels.findIndex((l) => l.startsWith('Semesterersättning (')) - 1,
+      )
+    })
+
+    it('leaves sammalöneregeln and no vacation rule untouched', () => {
+      const none = month(sick3, {}, 'none').result
+      expect(none.vacationAccrual).toBe(0)
+      expect(none.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+      const samma = month(sick3, {}, 'sammaloneregeln').result
+      expect(samma.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+    })
+
+    it('reads exactly as before without absence', () => {
+      const without = month([]).result
+      const omitted = calculateSalary(
+        makeBasicInput({
+          salaryType: 'hourly' as const,
+          monthlySalary: 0,
+          hourlyRate: 200,
+          hoursWorked: 120,
+          lineItems: [baseLineItem(24000, 'hourly_salary')],
+        }),
+        config2026, emptyTaxRates,
+      )
+      expect(without).toEqual(omitted)
+      expect(without.vacationAccrual).toBe(2880)
     })
   })
 })

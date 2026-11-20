@@ -1,8 +1,9 @@
 /**
  * Supplier payment batch (betalfil) operations: preview which supplier
- * invoices can be paid, create a batch (an ISO 20022 pain.001 payment file
- * the customer uploads to their bank), list and read batches, download the
- * file, cancel a batch. Rules live in lib/payments/batch-service.ts and
+ * invoices can be paid, create a batch (a payment file the customer uploads
+ * to their bank: ISO 20022 pain.001, or Bankgirot's LB file where the bank
+ * takes no pain.001), list and read batches, download the file, cancel a
+ * batch. Rules live in lib/payments/batch-service.ts and
  * lib/payments/batch-operations.ts; the dashboard routes under
  * /api/supplier-invoices/payment-batches call the same services.
  *
@@ -32,14 +33,33 @@ import type { SupplierPaymentBatch } from '@/types'
 import { defineOperation } from './types'
 
 const FORMAT = z
-  .enum(['pain001'])
-  .default('pain001')
-  .describe('File format. pain001 (ISO 20022 pain.001.001.03, accepted by every Swedish bank) is the only one.')
+  .enum(['pain001', 'bg_lb'])
+  .optional()
+  .describe(
+    'Deprecated and ignored: the company\'s bank decides the file form. pain001 (ISO 20022 pain.001.001.03) everywhere except Svea Bank, which takes only bg_lb (Bankgirot\'s LB file). The preview and create answers name it in format.',
+  )
+
+const FILE_FORMAT = z
+  .enum(['pain001', 'bg_lb'])
+  .describe('pain001: ISO 20022 pain.001.001.03 XML. bg_lb: Bankgirot\'s LB file (80-character records, ISO 8859-1), for Svea Bank, which takes no pain.001.')
+
+/** The content type of a batch's file, without the charset (charset says that). */
+function fileContentType(format: SupplierPaymentBatch['format']): 'application/xml' | 'text/plain' {
+  return format === 'bg_lb' ? 'text/plain' : 'application/xml'
+}
 
 const BATCH_ID = z
   .string()
   .uuid()
   .describe('The payment batch id (supplier_payment_batch_id from the list or create answer).')
+
+/** The company account the file pays from, as refusals name it (lib/payments/paying-account.ts). */
+const PAYING_ACCOUNT = z.object({
+  cash_account_id: z.string().uuid().nullable().describe('cash_accounts.id; null for a company without cash accounts.'),
+  name: z.string().nullable(),
+  ledger_account: z.string().describe('The BAS account the salary verifikat credits the net pay on, e.g. 1930.'),
+  iban_last4: z.string().nullable().describe('The last four characters of the IBAN the file would pay from; null when it has none.'),
+})
 
 const WARNING = z
   .enum(['unattested', 'already_batched', 'ocr_invalid', 'payee_city_missing'])
@@ -59,7 +79,7 @@ const Reference = z.object({
 
 const BatchSummary = z.object({
   supplier_payment_batch_id: z.string().uuid(),
-  format: z.literal('pain001'),
+  format: FILE_FORMAT,
   status: z.enum(['created', 'cancelled']),
   currency: z.string(),
   total_amount: z.number(),
@@ -68,7 +88,7 @@ const BatchSummary = z.object({
     .number()
     .int()
     .describe('Member invoices with nothing left to pay, from the live invoices (paid via mark-paid or bank matching).'),
-  msg_id: z.string().describe('pain.001 MsgId, fixed at creation; the bank de-duplicates on it.'),
+  msg_id: z.string().describe('pain.001 MsgId, fixed at creation; the bank de-duplicates on it. An LB file carries no MsgId.'),
   file_generated_at: z.string().nullable().describe('Last download of the file, or null if never downloaded.'),
   download_count: z.number().int(),
   created_at: z.string(),
@@ -85,7 +105,7 @@ function toSummary(
 ): BatchSummaryOut {
   return {
     supplier_payment_batch_id: batch.id,
-    format: 'pain001',
+    format: batch.format,
     status: batch.status as 'created' | 'cancelled',
     currency: batch.currency,
     total_amount: batch.total_amount,
@@ -152,13 +172,13 @@ export const supplierPaymentBatchesPreview = defineOperation({
   docs: {
     summary: 'Check which supplier invoices can go into a payment file (betalfil), with amounts, payees and warnings.',
     description:
-      'Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, or today when it has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; and whether the company\'s own bank details (IBAN, BIC, org number: the pain.001 debtor) are complete. Reads only; creates nothing.',
+      'Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, the banking day before it when it falls on a weekend or holiday, or today when that has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; the file form the company\'s bank takes (format: pain001, or bg_lb for Svea Bank); and whether the company\'s own bank details are complete. The file pays from the company\'s primary bank account, the account salaries are booked on, with that account\'s IBAN and BIC; org number, and the bankgiro an LB file is sent from, come from company settings. Reads only; creates nothing.',
     useWhen: 'Before creating a payment batch, to see what would be paid and what blocks it.',
     doNotUseFor:
       'Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).',
     pitfalls: [
-      'Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier\'s bankgiro, plusgiro or clearing + account number), not_found.',
-      'debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic or org_number).',
+      'Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier\'s bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), payee_unconfirmed / payee_rejected (the invoice states bank details the supplier card lacks and a person has not approved them, or rejected them: a person decides in Accounted under Att göra; gnubok_confirm_supplier_payee stages the approval), attest_required (the attest policy of the company requires attest for the invoice and it has not been given: an attester approves it first), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank), lb_bank_account_payee (the company\'s bank takes only an LB file, which here pays to bankgiro and plusgiro only: a supplier paid to a bank account is left out; pay it in the internet bank).',
+      'debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names what to fill in (iban or bic: the paying account, named in debtor_account, has no IBAN or its bank cannot be determined; fill it in on that account under Inställningar → Fakturor, Bankkonton för kundfakturor, or make another account primary under Inställningar → Bokföring. org_number, swedbank_ids: a Swedbank company\'s swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without, nordea_signer_id and nordea_agreement_id: a Nordea company\'s Signer ID and CCM agreement id, which Nordea assigns and refuses a file without (nordea_signer_id is named while the Signer ID is missing, nordea_agreement_id when only the agreement id is), or bankgiro: the company\'s bankgiro, which an LB file is sent from).',
       'already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.',
       'Only SEK invoices; at most 100 per call.',
     ],
@@ -180,10 +200,12 @@ export const supplierPaymentBatchesPreview = defineOperation({
             },
           ],
           excluded: [],
+          format: 'pain001',
           total_amount: 737.5,
           currency: 'SEK',
           debtor_ok: true,
           debtor_missing: null,
+          debtor_account: null,
         },
         meta: META,
       },
@@ -202,7 +224,8 @@ export const supplierPaymentBatchesPreview = defineOperation({
       z.object({
         supplier_invoice_id: z.string().uuid(),
         supplier_name: z.string(),
-        supplier_invoice_number: z.string(),
+        // NULL when the invoice has no supplier number; it then pays by its OCR.
+        supplier_invoice_number: z.string().nullable(),
         amount: z.number(),
         payment_date: z.string(),
         payee: Payee,
@@ -221,22 +244,32 @@ export const supplierPaymentBatchesPreview = defineOperation({
           'foreign_currency',
           'payee_missing',
           'payee_invalid',
+          'reference_missing',
+          'attest_required',
+          'auto_debit',
+          'payee_unconfirmed',
+          'payee_rejected',
           'not_found',
+          'in_bank_payment',
+          'swedbank_iso2_giro_payee',
+          'lb_bank_account_payee',
         ]),
       }),
     ),
+    format: FILE_FORMAT.describe('The file form the company\'s bank takes, which create will write.'),
     total_amount: z.number(),
     currency: z.literal('SEK'),
     debtor_ok: z.boolean(),
-    debtor_missing: z.enum(['iban', 'bic', 'org_number']).nullable(),
+    debtor_missing: z.enum(['iban', 'bic', 'org_number', 'swedbank_ids', 'nordea_signer_id', 'nordea_agreement_id', 'bankgiro']).nullable(),
+    debtor_account: PAYING_ACCOUNT.nullable().describe('With debtor_missing iban or bic: the paying account that lacks it. Null otherwise.'),
   }),
   http: { method: 'POST', path: '/api/v1/companies/:companyId/supplier-payment-batches/preview' },
   mcp: {
     name: 'gnubok_preview_supplier_payment_batch',
     title: 'Preview Supplier Payment Batch',
     description:
-      'Check which supplier invoices can go into a betalfil (pain.001): per invoice the amount, payment date, payee, reference and warnings, or why it is excluded, and whether the company bank details are complete. Read-only; call before gnubok_create_supplier_payment_batch.',
-    keywords: ['betalfil', 'betala leverantörer', 'betalningsfil', 'pain.001', 'leverantörsbetalning', 'utbetalning', 'förhandsgranska betalfil'],
+      'Check which supplier invoices can go into a betalfil (pain.001; LB for Svea Bank): per invoice the amount, date, payee, reference and warnings, or why it is excluded, and whether the company bank details are complete. Read-only; call before gnubok_create_supplier_payment_batch.',
+    keywords: ['betalfil', 'betala leverantörer', 'betalningsfil', 'pain.001', 'LB-fil', 'leverantörsbetalning', 'utbetalning', 'förhandsgranska betalfil'],
   },
   run: async (ctx, input) => {
     const preview = await previewSupplierPaymentBatch(ctx.supabase, ctx.companyId, { ids: input.supplier_invoice_ids })
@@ -255,10 +288,12 @@ export const supplierPaymentBatchesPreview = defineOperation({
           active_supplier_payment_batch_id: line.active_batch_id,
         })),
         excluded: preview.excluded.map((line) => ({ supplier_invoice_id: line.id, reason: line.reason })),
+        format: preview.format,
         total_amount: preview.total,
         currency: 'SEK' as const,
         debtor_ok: preview.debtor_ok,
         debtor_missing: preview.debtor_missing ?? null,
+        debtor_account: preview.debtor_account ?? null,
       },
     }
   },
@@ -275,9 +310,9 @@ export const supplierPaymentBatchesCreate = defineOperation({
   risk: 'high',
   reversible: false,
   docs: {
-    summary: 'Create a supplier payment file (betalfil, pain.001) for one or more supplier invoices.',
+    summary: 'Create a supplier payment file (betalfil: pain.001, or an LB file for Svea Bank) for one or more supplier invoices.',
     description:
-      'Creates a payment batch: an immutable snapshot of one credit transfer per invoice (amount, payment date, the supplier\'s bankgiro / plusgiro / bank account, OCR or invoice-number reference) and the company\'s own bank details as debtor, with a pain.001 MsgId fixed at creation. Every invoice is re-read and re-checked inside one transaction, so an invoice settled or already batched meanwhile is refused. Books nothing and marks nothing paid. Download the XML with GET /supplier-payment-batches/{id}/file and upload it in the bank, where the payments are signed; afterwards settle each invoice with mark-paid or bank matching. Idempotent. Dry-runnable.',
+      'Creates a payment batch: an immutable snapshot of one credit transfer per invoice (amount, payment date, the supplier\'s bankgiro / plusgiro / bank account, OCR or invoice-number reference) and the company\'s own bank details as debtor, with a pain.001 MsgId fixed at creation. The file takes the form the company\'s bank accepts (format: pain001, or bg_lb, Bankgirot\'s LB file, for Svea Bank, which takes no pain.001). Every invoice is re-read and re-checked inside one transaction, so an invoice settled or already batched meanwhile is refused. Books nothing and marks nothing paid. Download the file with GET /supplier-payment-batches/{id}/file and upload it in the bank, where the payments are signed; afterwards settle each invoice with mark-paid or bank matching. Idempotent. Dry-runnable.',
     useWhen:
       'The user wants to pay approved supplier invoices through their bank\'s file upload (typically the weekly or monthly payment run).',
     doNotUseFor:
@@ -285,8 +320,9 @@ export const supplierPaymentBatchesCreate = defineOperation({
     pitfalls: [
       'Money leaves the company\'s account once the file is uploaded and signed in the bank: preview first (POST /supplier-payment-batches/preview) and check amounts and payees.',
       'An invoice already in an active batch answers 409 SI_BATCH_DUPLICATE_INVOICE with details.invoices; resend with confirm_already_batched true only when paying it twice is intended, otherwise cancel the old batch.',
-      'Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic or org_number (company settings).',
+      'Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic, org_number, swedbank_ids, nordea_signer_id, nordea_agreement_id or bankgiro. iban and bic concern the paying account, the company\'s primary bank account (the one salaries are booked on), named in details.account: fill in its IBAN or BIC under Inställningar → Fakturor, Bankkonton för kundfakturor. The rest are company settings: swedbank_ids means a Swedbank company lacks swedbank_signer_id or swedbank_corporate_pay_id, nordea_signer_id that a Nordea company lacks its Signer ID, nordea_agreement_id that it has the Signer ID but lacks its CCM agreement id, bankgiro that a Svea Bank company lacks the bankgiro its LB file is sent from.',
       'An ineligible invoice fails the whole request with 400 SI_BATCH_INELIGIBLE_INVOICE and a reason per invoice; amount above the remaining amount answers 400 SI_BATCH_AMOUNT_EXCEEDS_REMAINING.',
+      'A Swedbank company (swedbank_signer_id set, or swedbank_ids missing) can only pay bank accounts in a file: a bankgiro or plusgiro payee is ineligible with reason swedbank_iso2_giro_payee. A Svea Bank company\'s LB file pays bankgiro and plusgiro only: a bank-account payee is ineligible with reason lb_bank_account_payee. Leave those invoices out (the preview already does) and create the batch with the rest.',
       'A payment_date in the past is moved to today (banks reject passed execution dates). Only SEK invoices; at most 100 per batch.',
       'Between two requests (dry run, then create) a supplier\'s bank details can change: pass expected_payees from the dry run\'s items (payee.fingerprint, amount) and create answers 409 SI_BATCH_PAYEE_CHANGED instead of paying a changed account. A staged MCP create is pinned this way automatically.',
     ],
@@ -321,7 +357,7 @@ export const supplierPaymentBatchesCreate = defineOperation({
             .describe('Amount to pay in SEK; defaults to the invoice\'s remaining amount. Never above it.'),
           payment_date: isoDateSchema
             .optional()
-            .describe('Execution date YYYY-MM-DD; defaults to the due date, or today when that has passed.'),
+            .describe('Execution date YYYY-MM-DD; defaults to the due date, the banking day before it when it falls on a weekend or holiday, or today when that has passed.'),
         }),
       )
       .min(1)
@@ -348,7 +384,7 @@ export const supplierPaymentBatchesCreate = defineOperation({
   output: z.object({
     supplier_payment_batch_id: z.string().uuid(),
     msg_id: z.string(),
-    format: z.literal('pain001'),
+    format: FILE_FORMAT,
     status: z.literal('created'),
     currency: z.string(),
     total_amount: z.number(),
@@ -370,8 +406,8 @@ export const supplierPaymentBatchesCreate = defineOperation({
     name: 'gnubok_create_supplier_payment_batch',
     title: 'Create Supplier Payment Batch',
     description:
-      'Stage a betalfil (pain.001) for supplier invoices: one payment per invoice to the supplier\'s bankgiro/plusgiro/account. Books nothing; money moves only when the file is uploaded and signed in the bank. Run gnubok_preview_supplier_payment_batch first.',
-    keywords: ['betalfil', 'skapa betalfil', 'betala leverantörsfakturor', 'betalningsfil', 'pain.001', 'leverantörsbetalning', 'betalningsuppdrag'],
+      'Stage a betalfil (pain.001, or an LB file for Svea Bank) for supplier invoices: one payment per invoice to the supplier\'s bankgiro/plusgiro/account. Books nothing; money moves only when the file is uploaded and signed in the bank. Run gnubok_preview_supplier_payment_batch first.',
+    keywords: ['betalfil', 'skapa betalfil', 'betala leverantörsfakturor', 'betalningsfil', 'pain.001', 'LB-fil', 'leverantörsbetalning', 'betalningsuppdrag'],
     stage: {
       pendingType: 'create_supplier_payment_batch',
       title: (input) => {
@@ -398,7 +434,7 @@ export const supplierPaymentBatchesCreate = defineOperation({
       data: {
         supplier_payment_batch_id: batch.id,
         msg_id: batch.msg_id,
-        format: 'pain001' as const,
+        format: batch.format,
         status: 'created' as const,
         currency: batch.currency,
         total_amount: batch.total_amount,
@@ -504,9 +540,9 @@ export const supplierPaymentBatchesGet = defineOperation({
   docs: {
     summary: 'Read one supplier payment batch (betalfil) with its lines and live settlement.',
     description:
-      'Returns the batch, the company bank details it debits (as snapshotted at creation), and one line per invoice: amount, payment date, payee, reference, and the invoice\'s live status and remaining amount. file names the download filename and the v1 path that serves the XML (available only while the batch is not cancelled).',
+      'Returns the batch, the company bank details it debits (as snapshotted at creation), and one line per invoice: amount, payment date, payee, reference, and the invoice\'s live status and remaining amount. file names the download filename, its content type and the v1 path that serves the file (available only while the batch is not cancelled).',
     useWhen: 'Checking what a betalfil pays, or which of its invoices are settled.',
-    doNotUseFor: 'Getting the XML itself: GET /supplier-payment-batches/{id}/file.',
+    doNotUseFor: 'Getting the file itself: GET /supplier-payment-batches/{id}/file.',
     pitfalls: ['The payee and amount per line are the snapshot the file pays, even if the supplier\'s details changed since.'],
     example: {
       response: {
@@ -550,7 +586,7 @@ export const supplierPaymentBatchesGet = defineOperation({
     items: z.array(BatchItemOut),
     file: z.object({
       filename: z.string(),
-      content_type: z.literal('application/xml'),
+      content_type: z.enum(['application/xml', 'text/plain']),
       available: z.boolean().describe('false for a cancelled batch: its file is no longer served.'),
       download: z.string().describe('The v1 path that returns the file (GET, suppliers:write). Not served over MCP.'),
     }),
@@ -565,7 +601,7 @@ export const supplierPaymentBatchesGet = defineOperation({
     name: 'gnubok_get_supplier_payment_batch',
     title: 'Get Supplier Payment Batch',
     description:
-      'Read one betalfil: its lines (amount, date, payee, reference), each invoice\'s live status, and the file name. The XML itself is not returned here: the user downloads it in Accounted or over the v1 file endpoint.',
+      'Read one betalfil: its lines (amount, date, payee, reference), each invoice\'s live status, and the file name. The file itself is not returned here: the user downloads it in Accounted or over the v1 file endpoint.',
     keywords: ['betalfil', 'visa betalfil', 'betalfilens rader', 'leverantörsbetalning'],
   },
   run: async (ctx, { supplier_payment_batch_id }) => {
@@ -604,7 +640,7 @@ export const supplierPaymentBatchesGet = defineOperation({
         items: outItems,
         file: {
           filename: supplierPaymentBatchFilename(batch),
-          content_type: 'application/xml' as const,
+          content_type: fileContentType(batch.format),
           available: batch.status !== 'cancelled',
           download: FILE_PATH,
         },
@@ -628,13 +664,13 @@ export const supplierPaymentBatchesFile = defineOperation({
   risk: 'low',
   reversible: false,
   docs: {
-    summary: 'Download the pain.001 payment file of a supplier payment batch.',
+    summary: 'Download the payment file (pain.001, or the LB file for Svea Bank) of a supplier payment batch.',
     description:
-      'Returns the batch\'s XML payment file inline as `content` (a UTF-8 string), with filename, content_type and sha256, in the same shape as the salary payment file. The file regenerates from the stored batch, so every download is byte-identical (same MsgId) and the bank\'s duplicate detection works. Each call records the download on the batch (file_generated_at, download_count). Upload the file in the bank\'s file channel, where the payments are signed; nothing is sent to the bank by this call and nothing is booked.',
+      'Returns the batch\'s payment file inline as `content` (a string), with filename, content_type, charset and sha256, in the same shape as the salary payment file: pain.001 XML written as UTF-8, or Bankgirot\'s LB file (format bg_lb, text/plain) written as ISO 8859-1. The file regenerates from the stored batch, so every download is byte-identical (same MsgId) and the bank\'s duplicate detection works. Each call records the download on the batch (file_generated_at, download_count). Upload the file in the bank\'s file channel, where the payments are signed; nothing is sent to the bank by this call and nothing is booked.',
     useWhen: 'The batch is created and the user (or their payment operator) needs the file to upload in the bank.',
     doNotUseFor: 'Creating the batch (POST /supplier-payment-batches) or marking invoices paid (mark-paid after the bank executed).',
     pitfalls: [
-      'Write `content` to `filename` as UTF-8, exactly as returned; do not re-indent or re-encode the XML.',
+      'Write `content` to `filename` in `charset` (UTF-8 for pain001, ISO 8859-1 for bg_lb with its CRLF line endings), exactly as returned; do not re-indent or re-encode the file.',
       'A cancelled batch answers 409 SI_BATCH_CANCELLED: its file is never served again.',
       'Uploading the same file twice is caught by most banks through the MsgId, but not all: check download_count and the bank before re-uploading.',
       'Needs suppliers:write although it is a GET: the file is a payment instruction and the download is recorded.',
@@ -646,6 +682,7 @@ export const supplierPaymentBatchesFile = defineOperation({
           format: 'pain001',
           filename: 'betalfil_20260925_5b0c1a2f.xml',
           content_type: 'application/xml',
+          charset: 'utf-8',
           content: '<?xml version="1.0" encoding="UTF-8"?><Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03">…',
           sha256: '3f9a…',
           msg_id: 'ACCOUNTED-5566778899-B5B0C1A2F',
@@ -661,11 +698,12 @@ export const supplierPaymentBatchesFile = defineOperation({
   input: z.object({ supplier_payment_batch_id: BATCH_ID }),
   output: z.object({
     supplier_payment_batch_id: z.string().uuid(),
-    format: z.literal('pain001'),
+    format: FILE_FORMAT,
     filename: z.string(),
-    content_type: z.literal('application/xml'),
+    content_type: z.enum(['application/xml', 'text/plain']),
+    charset: z.enum(['utf-8', 'iso-8859-1']).describe('How content becomes the bytes the bank takes.'),
     content: z.string(),
-    sha256: z.string().describe('Lowercase hex SHA-256 over the UTF-8 file bytes.'),
+    sha256: z.string().describe('Lowercase hex SHA-256 over the file bytes as encoded for the bank (UTF-8 for pain001, ISO 8859-1 for bg_lb).'),
     msg_id: z.string(),
     item_count: z.number().int(),
     total_amount: z.number(),
@@ -686,9 +724,10 @@ export const supplierPaymentBatchesFile = defineOperation({
       ok: true,
       data: {
         supplier_payment_batch_id: file.batch.id,
-        format: 'pain001' as const,
+        format: file.batch.format,
         filename: file.filename,
-        content_type: 'application/xml' as const,
+        content_type: fileContentType(file.batch.format),
+        charset: file.charset,
         content: file.content,
         sha256: file.sha256,
         msg_id: file.batch.msg_id,

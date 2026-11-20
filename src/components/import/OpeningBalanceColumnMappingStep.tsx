@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
@@ -65,7 +65,6 @@ export default function OpeningBalanceColumnMappingStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Kolumnmappning</CardTitle>
         <CardDescription>
           Vi kunde inte automatiskt identifiera alla kolumner. Ange vilka kolumner
           som innehåller kontonummer och belopp.
@@ -195,9 +194,9 @@ export default function OpeningBalanceColumnMappingStep({
         {previewRows.length > 0 && (
           <div className="space-y-2">
             <Label className="text-muted-foreground">Förhandsgranskning (5 första raderna)</Label>
-            <div className="overflow-x-auto rounded-lg border">
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b">
                     {headers.map((h, i) => (
                       /* data-ph-mask: CSV headers are user data */

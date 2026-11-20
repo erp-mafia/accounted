@@ -46,9 +46,10 @@ vi.mock('@/lib/reports/vat-settlement', async (orig) => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { proposalFingerprint } from '@/lib/reports/vat-settlement-booking'
+import { proposalFingerprint, vatSettlementSourceId } from '@/lib/reports/vat-settlement-booking'
 import { GET as getProposal } from '../../reports/vat-declaration/settlement-proposal/route'
 import { POST as bookSettlement } from '../settlement/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -90,7 +91,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['journal_entries', 'journal_entry_lines'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const FY_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -116,6 +117,7 @@ function proposal(overrides: Record<string, unknown> = {}) {
     filed_net: 18749,
     rounding_amount: 0.6,
     is_empty: false,
+    partly_settled: false,
     existing_entries: [],
     ...overrides,
   }
@@ -364,8 +366,45 @@ describe('POST /vat/settlement', () => {
       entry_date: '2026-03-31',
       description: 'Momsredovisning Kvartal 1 2026',
       source_type: 'vat_settlement',
+      source_id: vatSettlementSourceId(COMPANY_ID, { start: '2026-01-01', end: '2026-03-31' }),
       lines: LINES,
     })
+  })
+
+  it('keys the verifikat on the period: the same source_id for every booking of it, another for another period or company', () => {
+    const q1 = vatSettlementSourceId(COMPANY_ID, { start: '2026-01-01', end: '2026-03-31' })
+    expect(q1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(vatSettlementSourceId(COMPANY_ID, { start: '2026-01-01', end: '2026-03-31' })).toBe(q1)
+    expect(vatSettlementSourceId(COMPANY_ID, { start: '2026-03-01', end: '2026-03-31' })).not.toBe(q1)
+    expect(vatSettlementSourceId(FY_ID, { start: '2026-01-01', end: '2026-03-31' })).not.toBe(q1)
+  })
+
+  it('409 VAT_SETTLEMENT_ALREADY_BOOKED, naming the winner, when a concurrent booking of the period takes the key first (accounted#58)', async () => {
+    // Both bookings passed the "already posted" read; the second one's draft
+    // insert hits journal_entries_vat_settlement_live_unique.
+    const { BookkeepingDatabaseError } = await import('@/lib/bookkeeping/errors')
+    createJournalEntryMock.mockRejectedValue(
+      new BookkeepingDatabaseError(
+        'create_draft_entry',
+        'duplicate key value violates unique constraint "journal_entries_vat_settlement_live_unique"',
+        '23505',
+      ),
+    )
+    const WINNER = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: NO_LOCK,
+      fiscal_periods: OPEN_YEAR,
+      journal_entries: { data: { id: WINNER, voucher_series: 'M', voucher_number: 12, entry_date: '2026-03-31' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await book(Q1)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('VAT_SETTLEMENT_ALREADY_BOOKED')
+    expect(body.error.details).toMatchObject({ journal_entry_id: WINNER, voucher_series: 'M', voucher_number: 12 })
+    const keyFilter = client.calls.find((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'source_id')
+    expect(keyFilter?.args[1]).toBe(vatSettlementSourceId(COMPANY_ID, { start: '2026-01-01', end: '2026-03-31' }))
   })
 
   it('warns, but books, when only a draft settlement exists', async () => {

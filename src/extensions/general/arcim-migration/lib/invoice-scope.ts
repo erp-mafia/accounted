@@ -9,16 +9,29 @@
  * register, the detail fetches behind it are what push /migrate past the
  * function's 300 s ceiling (#2469).
  *
- * Unpaid invoices are kept from any year: they are open receivables and
- * payables that the user has to follow up on, whichever year booked them.
- * So is a paid invoice settled on or after the scope's first day: it is
- * part of the 1510/2440 opening balance and its payment verifikat sits in
- * the imported ledger, and the kundreskontra as of the opening date has to
- * agree with that balance (BFNAR 2013:2 kap. 9). Only an invoice that was
- * both issued and settled before the imported years is declined.
+ * Unpaid invoices issued up to the scope's last day are kept from any year:
+ * they are open receivables and payables that the user has to follow up on,
+ * whichever imported year booked them. So is a paid invoice issued before
+ * the scope and settled on or after its first day: it is part of the
+ * 1510/2440 opening balance and its payment verifikat sits in the imported
+ * ledger, and the kundreskontra as of the opening date has to agree with
+ * that balance (BFNAR 2013:2 kap. 9). An invoice that was both issued and
+ * settled before the imported years is declined.
+ *
+ * An invoice issued after the scope's last day is declined, paid or not.
+ * Its year was not imported, so no verifikat books it and no opening
+ * balance carries it: it would land as an unbooked invoice the ledger knows
+ * nothing about, and it would hold its number against the user who left
+ * that year out to start it over in Accounted (crm#1660).
+ *
+ * The years are the ones imported when the invoice is judged, not when its
+ * job was created: a year imported while the job runs, or after it stopped
+ * for review, counts for every invoice judged after it (invoiceScopeNow), and
+ * a retry judges again the invoices declined before it (crm#2002).
  */
 
 import type { SalesInvoiceDto, SupplierInvoiceDto } from '@/lib/providers/dto'
+import type { MigrationJobScope } from '@/lib/providers/migration-contract'
 
 /** Inclusive ISO date bounds (YYYY-MM-DD) of the migrated fiscal years. */
 export interface FiscalYearScope {
@@ -31,20 +44,22 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}/
 /**
  * True when the invoice should be imported under `scope`.
  *
- * No scope means no filter. An invoice whose issue date cannot be read as an
- * ISO date is kept: dropping it silently would hide a mapper defect behind a
- * plausible skip count. A payment date the provider did not supply says
- * nothing, so the issue date alone decides.
+ * No scope means no filter, and so does a job scope without fiscal-year
+ * bounds (one that only asks for Fortnox's paid supplier invoices). An invoice
+ * whose issue date cannot be read as an ISO date is kept: dropping it silently
+ * would hide a mapper defect behind a plausible skip count. A payment date the
+ * provider did not supply says nothing, so the issue date alone decides.
  */
 export function invoiceWithinScope(
   dto: Pick<SalesInvoiceDto | SupplierInvoiceDto, 'issueDate' | 'paymentStatus'>,
-  scope: FiscalYearScope | null | undefined,
+  scope: Partial<FiscalYearScope> | null | undefined,
 ): boolean {
-  if (!scope) return true
-  if (!dto.paymentStatus?.paid) return true
+  if (!scope?.start || !scope.end) return true
   const issued = isoDay(dto.issueDate)
   if (!issued) return true
-  if (issued >= scope.start && issued <= scope.end) return true
+  if (issued > scope.end) return false
+  if (!dto.paymentStatus?.paid) return true
+  if (issued >= scope.start) return true
   const settled = isoDay(dto.paymentStatus.lastPaymentDate)
   return settled !== null && settled >= scope.start
 }
@@ -79,4 +94,19 @@ export function fiscalYearScopeFromImports(
     if (end === null || row.fiscal_year_end > end) end = row.fiscal_year_end
   }
   return start && end ? { start, end } : null
+}
+
+/**
+ * The scope a job's invoices are judged by now: the bounds of the fiscal
+ * years the company has imported at this moment (`imported`, from
+ * fiscalYearScopeFromImports), with the job's own request for Fortnox's paid
+ * supplier invoices kept. The bounds stored on the job are the ones read when
+ * it was created; they stand in only when no import has bounds to read now.
+ */
+export function invoiceScopeNow(
+  stored: MigrationJobScope | null | undefined,
+  imported: FiscalYearScope | null,
+): MigrationJobScope | null {
+  if (!imported) return stored ?? null
+  return { ...stored, start: imported.start, end: imported.end }
 }

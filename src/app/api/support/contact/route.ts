@@ -11,11 +11,8 @@ import {
 } from '@/lib/support/attachments'
 import { validateDocumentMagicBytes } from '@/lib/core/documents/document-service'
 import { requireCompanyId } from '@/lib/company/context'
-import { ensureInitialized } from '@/lib/init'
 import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -143,7 +140,7 @@ export async function POST(request: Request) {
   }
   const { attachments } = parsed
 
-  const emailService = getEmailService()
+  const emailService = await getEmailService()
   if (!emailService.isConfigured()) {
     return NextResponse.json(
       { error: 'E-posttjänsten är inte konfigurerad just nu. Försök igen senare.' },
@@ -186,5 +183,7 @@ export async function POST(request: Request) {
     )
   }
 
-  return NextResponse.json({ data: { sent: true } })
+  // The address the answer goes to (the mail's Reply-To), so the dialog can
+  // say where to look for it instead of only "thanks" (accounted#55).
+  return NextResponse.json({ data: { sent: true, reply_to: user.email ?? null } })
 }

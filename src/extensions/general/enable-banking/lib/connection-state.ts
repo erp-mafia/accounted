@@ -13,6 +13,10 @@
  * lib/__tests__/connection-state.test.ts.
  */
 
+import { partitionAccounts } from './claimed-accounts'
+import { cronLookbackDays } from './cron-lookback'
+import type { StoredAccount } from '../types'
+
 /** Days before consent expiry at which renewal becomes the primary action.
  *  Must match isConsentExpiringSoon in api-client.ts. */
 export const EXPIRY_WARNING_DAYS = 7
@@ -31,8 +35,30 @@ export const PENDING_ABANDON_MS = PENDING_ABANDON_MINUTES * 60 * 1000
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+/**
+ * What an Enable Banking row offers once the feed has ended
+ * (lib/bank-feed/switch-campaign.ts enableBankingSunset): 'switch' when Open
+ * Payments reaches the bank (the existing switch is the way on), 'import'
+ * when it does not (Wise, PayPal, Bank Norwegian, Nordea First Card, Juni:
+ * bank statements come in as files). The panel reads it from the campaign
+ * state the server computed; null or absent means the feed is still running.
+ */
+export type SunsetPath = 'switch' | 'import'
+
+/**
+ * Why the company's syncs are paused: it holds no bank_sync capability, so
+ * the sync cron skips every connection and "Synka" and a renewed consent are
+ * refused (requireCapability). Hosted, that is a subscription the company
+ * lacks (a trial that ended); self-hosted, the connector key. The same rule
+ * the transactions page's chip reads (lib/transactions/bank-sync-chip-state.ts
+ * 'paused'), so the two pages say the same thing.
+ */
+export type SyncPauseReason = 'subscription' | 'connector_key'
+
 /** Presentation state, from most to least urgent (see STATE_PRECEDENCE). */
 export type ConnectionUiState =
+  | 'sunset'
+  | 'paused'
   | 'pending_selection'
   | 'pending'
   | 'abandoned'
@@ -58,12 +84,24 @@ export interface ConnectionStateInput {
    *  account selection (BANK_INGEST_ROUTE_UNRESOLVED); the next successful
    *  sync clears it. Optional for callers that never render it. */
   error_message?: string | null
+  /** The Enable Banking feed has ended for this row, and what the row offers
+   *  instead (SunsetPath). Outranks every other state: a consent that is
+   *  expiring, a sync that is stale or a stored error no longer matter when
+   *  the provider is gone. An in-flight 'pending' attempt keeps its own UI. */
+  sunset?: SunsetPath | null
+  /** The company's syncs are paused (SyncPauseReason). Outranks every state
+   *  but sunset: an expiring consent, a stale sync or a stored error cannot be
+   *  acted on until the capability is back, and "Synka" would only be
+   *  refused. An in-flight 'pending' attempt keeps its own UI. */
+  paused?: SyncPauseReason | null
 }
 
 export function getConnectionUiState(
   connection: ConnectionStateInput,
   now: number = Date.now(),
 ): ConnectionUiState {
+  if (connection.sunset && connection.status !== 'pending') return 'sunset'
+  if (connection.paused && connection.status !== 'pending') return 'paused'
   switch (connection.status) {
     case 'pending_selection':
       return 'pending_selection'
@@ -95,19 +133,76 @@ export function getConnectionUiState(
   }
 }
 
+/**
+ * Whether a connection row offers "Välj konton" beside its "x av y konton
+ * synkas" line: the same picker as the "..." menu entry, shown where the row
+ * says one of this company's accounts does not sync (crm#1097: a person told
+ * to change that could not find the menu entry).
+ *
+ * Only for an account the picker can switch on. A card account that mirrors
+ * the main account is never one (partitionAccounts sets it aside), and an
+ * account another company books is a deliberate tick inside the picker's
+ * disclosure, never an action on this row. Only where the save can succeed:
+ * it accepts an 'active' connection (a waiting one shows no details), so an
+ * expired or failed one is offered nothing it cannot save. A row whose
+ * primary action already is "Välj konton" (needs_configuration) gets no
+ * second one. A row where everything syncs stays as quiet as before: the
+ * menu entry is still there.
+ */
+export function offersAccountChoice(
+  connection: ConnectionStateInput,
+  accounts: readonly Pick<StoredAccount, 'claimed_by_company_id' | 'enabled' | 'name' | 'iban' | 'bban'>[],
+  now: number = Date.now(),
+): boolean {
+  if (connection.status !== 'active') return false
+  const state = getConnectionUiState(connection, now)
+  // A row whose feed has ended offers the switch or the file import, never a
+  // choice of accounts nothing will fetch.
+  if (state === 'needs_configuration' || state === 'sunset') return false
+  return partitionAccounts(accounts).own.some((account) => account.enabled === false)
+}
+
+/**
+ * The date (YYYY-MM-DD) from which the next scheduled sync fetches an account
+ * that a selection save switches on, so the picker can say it before the
+ * save (crm#1097). The initial backfill runs once per connection, for the
+ * accounts chosen then: an account switched on later gets the cron's own
+ * window (cronLookbackDays), about a week on a healthy connection, the gap
+ * since the last sync on a stale one, from the picked start date while the
+ * first import is still owed. Null when no scheduled sync comes next: a stopped sync
+ * (needs_configuration) syncs right after the save instead, and a connection
+ * that is not active cannot save a changed selection. A company without
+ * bank_sync gets null from the caller: the cron skips it and Synka is refused.
+ */
+export function nextScheduledSyncFrom(
+  connection: ConnectionStateInput & {
+    initial_sync_completed_at?: string | null
+    initial_sync_requested_from?: string | null
+  },
+  now: number = Date.now(),
+): string | null {
+  if (connection.status !== 'active') return null
+  const state = getConnectionUiState(connection, now)
+  if (state === 'needs_configuration' || state === 'sunset') return null
+  const days = cronLookbackDays(connection, now)
+  return new Date(now - days * DAY_MS).toISOString().split('T')[0]
+}
+
 /** Sort order for the single "Dina bankkopplingar" group: the row that needs
  *  the user first sits first. */
 const STATE_PRECEDENCE: Record<ConnectionUiState, number> = {
-  pending_selection: 0,
-  pending: 1,
-  abandoned: 2,
-  error: 3,
-  needs_configuration: 4,
-  expired: 5,
-  expiring: 6,
-  stale: 7,
-  never_synced: 8,
-  active: 9,
+  sunset: 0,
+  paused: 1,
+  pending_selection: 2,
+  pending: 3,
+  abandoned: 4,
+  error: 5,
+  needs_configuration: 6,
+  expired: 7,
+  expiring: 8,
+  stale: 9,
+  never_synced: 10,
+  active: 11,
 }
 
 export function sortConnectionsByPrecedence<
@@ -126,6 +221,8 @@ export function sortConnectionsByPrecedence<
 /** States that earn the page's one .attn sentence (design convention 6:
  *  attention is ONE ochre sentence per page). Worst first. */
 export type PageAttentionState =
+  | 'sunset'
+  | 'paused'
   | 'error'
   | 'needs_configuration'
   | 'abandoned'
@@ -135,6 +232,8 @@ export type PageAttentionState =
   | 'never_synced'
 
 const ATTENTION_PRECEDENCE: PageAttentionState[] = [
+  'sunset',
+  'paused',
   'error',
   'needs_configuration',
   'abandoned',
@@ -170,6 +269,18 @@ export function buildPageAttentionSentence(
 ): string {
   const bank = attention.connection.bank_name
   switch (attention.state) {
+    case 'sunset':
+      // The old provider is gone. Where the new one reaches the bank the row
+      // offers the switch; where it does not, the file import is the way.
+      return attention.connection.sunset === 'import'
+        ? `${bank}: den gamla bankkopplingen har upphört, och banken nås inte än genom den nya leverantören. Importera kontoutdrag som fil (SIE eller CSV) tills vidare.`
+        : `${bank}: den gamla bankkopplingen har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.`
+    case 'paused':
+      // The cron skips the company and "Synka" is refused, so the only way on
+      // is the capability: never "kör Synka", which reads as a broken bank.
+      return attention.connection.paused === 'connector_key'
+        ? `${bank}: synkningen är pausad eftersom connector-nyckeln saknas. Lägg in nyckeln för att hämta transaktioner igen.`
+        : `${bank}: synkningen är pausad eftersom abonnemanget saknas. Uppgradera för att hämta transaktioner igen.`
     case 'error':
       return `${bank}: anslutningen har ett fel. Försök igen eller förnya samtycket.`
     case 'needs_configuration':

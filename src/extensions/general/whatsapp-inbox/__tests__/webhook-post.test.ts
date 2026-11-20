@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import crypto from 'crypto'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, testRoutes } from '@/tests/helpers'
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
@@ -49,7 +49,7 @@ const sendReactionMock = vi.mocked(sendReaction)
 const kickMock = vi.mocked(kickInboundProcessing)
 
 function findRoute(method: string, path: string) {
-  return whatsappInboxExtension.apiRoutes!.find((r) => r.method === method && r.path === path)!
+  return testRoutes(whatsappInboxExtension).find((r) => r.method === method && r.path === path)!
 }
 const route = findRoute('POST', '/webhook')
 

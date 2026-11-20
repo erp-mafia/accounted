@@ -8,10 +8,9 @@
  * Background: a self-hosted instance runs everything itself except the
  * services only Accounted can operate (bank sync via our PSD2/AISP
  * credentials, the Skatteverket API client, TIC org lookup, the migration
- * gateway). A connector key (`gnubok_ck_...`) is the subscription token for
- * those; this is the Nabu Casa model: everything local is free AGPL, the key
- * buys access to the hosted connectors, and enforcement is key auth at the
- * hosted proxy, never a licence check inside the instance.
+ * gateway). Those go through the hosted connector, authenticated by a
+ * connector key (`gnubok_ck_...`). Enforcement is key auth at the hosted
+ * proxy, never a licence check inside the instance.
  */
 
 export {

@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react'
 import Link from 'next/link'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeftIcon } from '@/components/icons'
 import AgentChat, { attachStagedOperations, normalizeStoredMessages } from './AgentChat'
 import AskConsole, { type AskConsoleMessage } from './AskConsole'
 import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
@@ -57,7 +57,7 @@ export default function ChatConversationView({
 
   return (
     <>
-      <header className="flex items-center gap-3 border-b border-border px-5 py-4 shrink-0">
+      <header className="flex items-center gap-3 border-b-hairline px-5 py-4 shrink-0">
         {/* Mobile-only back-to-list arrow. On desktop the sidebar is always
             visible so a back button would be redundant. */}
         <Link
@@ -65,7 +65,7 @@ export default function ChatConversationView({
           className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors -ml-1"
           aria-label="Tillbaka till konversationer"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
         </Link>
         <AgentAvatar
           avatarId={identity.avatarId}
@@ -73,7 +73,7 @@ export default function ChatConversationView({
           alt={identity.displayName ?? 'Assistent'}
         />
         <div className="min-w-0">
-          <h1 className="font-display text-lg leading-tight tracking-tight truncate">{title}</h1>
+          <h1 className="text-lg leading-tight truncate">{title}</h1>
           {/* Was printing context_ref raw, so the subtitle read
               "invoice:5f3a-9c21-...": a database identifier, shown to an
               accountant, under the title of their own conversation. */}

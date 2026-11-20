@@ -16,7 +16,12 @@
  *     credit note number, its date and its document when there is one;
  *   - the reversing verifikat (Dr 2440, Cr cost and 2641) is posted through
  *     the engine on the credit note's date whenever the original reached the
- *     ledger, and the document becomes its underlag (BFL 5 kap 6 §);
+ *     ledger, and the document becomes its underlag (BFL 5 kap 6 §); a
+ *     deferring company's original that has no verifikat yet is booked first
+ *     by the Bokför step, on its own date (accounted#58); an
+ *     original whose rows do not add up to its payable (or that has no rows
+ *     at all) is refused instead (SI_CREDIT_ROWS_MISMATCH), on a dry run too
+ *     and before an ankomstnummer is drawn or anything is written;
  *   - the original moves to 'credited' with nothing left to pay;
  *   - periodisering schedules on the original stop, and their posted
  *     dissolutions are stornoed (best-effort: a warning, never a failure).
@@ -33,14 +38,21 @@
  * amount in its currency (anything else is refused, never full-credited),
  * and the item is marked converted to the credit note.
  */
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { z } from 'zod'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { CoreEvent } from '@/lib/events/types'
-import type { AccountingMethod, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { eventBus } from '@/lib/events'
-import { getSwedishLocalDate, reverseEntry } from '@/lib/bookkeeping/engine'
-import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
+import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
+import {
+  assertSupplierCreditNoteRowsMatchPayable,
+  createSupplierCreditNoteEntry,
+  SupplierCreditNoteRowsMismatchError,
+} from '@/lib/bookkeeping/supplier-invoice-entries'
+import { supplierCreditBooksOriginalFirst, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
@@ -53,6 +65,15 @@ import {
   supplierCreditNoteNumber,
 } from './credit-note'
 import { compareCreditToInvoice, creditAmount, creditNoteFromReading } from './credit-target'
+import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
+import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { bookSupplierInvoice } from './book-service'
+import { creditNoteSelfBillingSnapshot, type SelfBillingSnapshot } from './self-billing/snapshot'
+import { archiveSelfBillingDocument, SELF_BILL_DOCUMENT_ARCHIVE_FAILED_WARNING } from './self-billing/archive'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -86,6 +107,8 @@ export interface CreditSupplierInvoiceResult {
   credit_note: SupplierInvoice
   original_id: string
   journal_entry_id: string | null
+  /** The original's registration verifikat, when this credit booked it first (accounted#58). */
+  original_journal_entry_id: string | null
   document_id: string | null
   inbox_item_id: string | null
 }
@@ -98,9 +121,10 @@ const ORIGINAL_COLUMNS = `
   id, supplier_id, supplier_invoice_number, invoice_date, status,
   currency, exchange_rate,
   subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek,
-  vat_treatment, reverse_charge, remaining_amount,
+  vat_treatment, reverse_charge, reverse_charge_kind, remaining_amount,
   registration_journal_entry_id, payment_journal_entry_id, paid_at, paid_amount,
   is_credit_note, credited_invoice_id, arrival_number, default_dimensions,
+  is_self_billed, self_billing_agreement_ref, self_billing_snapshot,
   supplier:suppliers(id, name, supplier_type),
   items:supplier_invoice_items(*)
 `
@@ -125,6 +149,61 @@ const pickSupplier = (s: Original['supplier']): SupplierRef | null => (Array.isA
 
 function failed(error: unknown): Failure {
   return { ok: false, code: 'UNKNOWN_ERROR', error }
+}
+
+/** The refusal of rows that do not add up to the invoice, with both figures. */
+function rowsMismatch(err: SupplierCreditNoteRowsMismatchError): Failure {
+  return {
+    ok: false,
+    code: 'SI_CREDIT_ROWS_MISMATCH',
+    details: { rows_payable_sek: err.rowsPayableSek, invoice_payable_sek: err.invoicePayableSek },
+  }
+}
+
+type BookFailure = Extract<OperationOutcome<unknown>, { ok: false }>
+
+/**
+ * The credit refusal for an original the Bokför step would not book
+ * (accounted#58), as the customer side answers it (originalBookingRefusal,
+ * lib/invoices/issue-credit-note.ts): a lock on the original's date gets its
+ * own code, every other refusal carries the Bokför step's own code in
+ * details.original_booking_code.
+ */
+function originalBookingRefusal(originalId: string, failure: BookFailure): Failure {
+  if (failure.code === 'PERIOD_LOCKED') {
+    return {
+      ok: false,
+      code: 'SI_CREDIT_ORIGINAL_PERIOD_LOCKED',
+      details: { original_id: originalId, ...(failure.details ?? {}) },
+    }
+  }
+  const errorCode = (failure.error as { code?: unknown } | null | undefined)?.code
+  const code = 'SI_CREDIT_ORIGINAL_BOOK_FAILED'
+  return {
+    ok: false,
+    code,
+    details: {
+      original_id: originalId,
+      original_booking_code: typeof errorCode === 'string' ? errorCode : failure.code,
+      ...(failure.details ?? {}),
+    },
+    // A typed bookkeeping error names the concrete cause (a missing account,
+    // an archived dimension); the registered message names the next step.
+    ...(failure.error ? { messageSv: `${getErrorEntry(code)?.message_sv ?? code} ${getErrorMessage(failure.error, { context: 'supplier_invoice' })}` } : {}),
+  }
+}
+
+/**
+ * What the original owes in SEK, which its credit note must take off 244x:
+ * total_sek, else the total of a SEK invoice, else the total at the
+ * invoice's rate. Null when none is known (nothing to compare with).
+ */
+function originalPayableSek(original: Original): number | null {
+  if (typeof original.total_sek === 'number' && Number.isFinite(original.total_sek)) return original.total_sek
+  if (typeof original.total !== 'number' || !Number.isFinite(original.total)) return null
+  if (original.currency === 'SEK') return original.total
+  const rate = original.exchange_rate
+  return rate != null && rate > 0 ? sekOfForeign(original.total, rate) : null
 }
 
 function creditItemsFor(creditNoteId: string, items: SupplierInvoiceItem[]) {
@@ -182,6 +261,30 @@ async function rollbackCreditNote(
   }
 }
 
+/**
+ * Take back the credit verifikat this credit just posted, on the credit date,
+ * when the credit note cannot point at it or a concurrent credit won the
+ * race. Through the posting port: while POSTING_EVENTS is on, the storno
+ * records ledger.storno of the credit note (system_derived: no one chose it).
+ */
+async function reverseOwnCreditEntry(
+  ctx: OperationContext,
+  journalEntryId: string,
+  creditDate: string,
+  creditNoteId: string,
+): Promise<void> {
+  const { supabase, companyId, userId } = ctx
+  await postingPort.reverseJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    entryId: journalEntryId,
+    reversalDate: creditDate,
+    event: () => supplierInvoiceStornoBusinessEvent(creditNoteId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+    role: 'reversal',
+  })
+}
+
 export async function creditSupplierInvoice(
   ctx: OperationContext,
   supplierInvoiceId: string,
@@ -208,8 +311,40 @@ export async function creditSupplierInvoice(
     }
   }
   if (original.status === 'credited') return { ok: false, code: 'SI_CREDIT_ALREADY_CREDITED' }
+
+  // A signed bank payment still executes: crediting beside it closes an invoice
+  // the bank is about to pay. The way out is cancelling that payment first
+  // (crm#1243), on a dry run too.
+  const signedBankPayment = await findSignedBankPayment(supabase, companyId, supplierInvoiceId)
+  if (signedBankPayment) {
+    return { ok: false, code: 'SI_BANK_PAYMENT_UNDER_WAY', details: signedBankPaymentDetails(signedBankPayment) }
+  }
+
   const supplier = pickSupplier(original.supplier)
   const originalItems = original.items ?? []
+
+  // A self-billing invoice is credited by our own credit note: its number
+  // comes from the same series and Accounted makes the document, so a
+  // supplier's number, document or inbox item has no place here (crm#1367).
+  let selfBilling: { agreementRef: string; snapshot: SelfBillingSnapshot } | null = null
+  if (original.is_self_billed) {
+    if (input.supplier_credit_note_number || input.document_id || input.inbox_item_id) {
+      return { ok: false, code: 'SI_SELF_BILL_UNSUPPORTED', details: { reason: 'credit_input' } }
+    }
+    const snapshot = original.supplier_invoice_number
+      ? creditNoteSelfBillingSnapshot(original.self_billing_snapshot, {
+          number: original.supplier_invoice_number,
+          invoice_date: original.invoice_date,
+        })
+      : null
+    if (!snapshot || !original.self_billing_agreement_ref) {
+      log.error('credit: the self-billing invoice has no readable snapshot', new Error('self_billing_snapshot'), {
+        supplierInvoiceId,
+      })
+      return { ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'self_billing_snapshot' } }
+    }
+    selfBilling = { agreementRef: original.self_billing_agreement_ref, snapshot }
+  }
 
   // The credit note in the inbox, when the credit comes from one.
   let item: InboxItemRow | null = null
@@ -263,7 +398,7 @@ export async function creditSupplierInvoice(
 
   // Date: given, else the credit note's own, else today (Stockholm).
   const documentDate = reading?.creditNoteDate ?? null
-  const creditDate = input.credit_date ?? documentDate ?? getSwedishLocalDate()
+  const creditDate = input.credit_date ?? documentDate ?? todayIsoStockholm()
   const dateSource: 'input' | 'document' | 'today' = input.credit_date ? 'input' : documentDate ? 'document' : 'today'
   if (!ISO_DATE_RE.test(creditDate)) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'credit_date', message: 'Expected YYYY-MM-DD.' } }
@@ -280,10 +415,13 @@ export async function creditSupplierInvoice(
       },
     }
   }
-  const creditNumber = supplierCreditNoteNumber(
-    original.supplier_invoice_number,
-    input.supplier_credit_note_number ?? reading?.creditNoteNumber ?? null,
-  )
+  // A self-billing credit note's number is drawn from the series on insert.
+  const creditNumber = selfBilling
+    ? null
+    : supplierCreditNoteNumber(
+        original.supplier_invoice_number,
+        input.supplier_credit_note_number ?? reading?.creditNoteNumber ?? null,
+      )
 
   // The document: given, else the inbox item's. It becomes the credit
   // verifikat's underlag, so one already on another verifikat is refused.
@@ -322,17 +460,63 @@ export async function creditSupplierInvoice(
     }
   }
 
-  const { data: settings } = await supabase
+  // Fail closed (accounted#58): read as faktureringsmetoden, an unpaid
+  // kontantmetod original would get a reversal of a cost never booked.
+  const settingsRead = await supabase
     .from('company_settings')
-    .select('accounting_method')
+    .select('accounting_method, defer_invoice_booking')
     .eq('company_id', companyId)
     .maybeSingle()
-  const accountingMethod = ((settings as { accounting_method?: string } | null)?.accounting_method ??
-    'accrual') as AccountingMethod
+  const method = checkAccountingMethod(settingsRead)
+  if (!method.ok) return { ok: false, code: method.code, details: method.details }
+  const { accountingMethod } = method
   // Kontantmetoden skips only while the original is still UNPAID: nothing
   // reached the ledger. A paid original was booked by its payment verifikat
   // (expense + 2641), and leaving that un-reversed overstates both.
   const postsEntry = supplierCreditNoteNeedsJournalEntry(accountingMethod, original)
+  // accounted#58: a deferring company's original that was never booked is
+  // booked first, on its own date, by the Bokför step.
+  let booksOriginalFirst = supplierCreditBooksOriginalFirst(
+    settingsRead.data as { accounting_method?: string | null; defer_invoice_booking?: boolean | null },
+    original,
+  )
+  const supplierType = supplier?.supplier_type || 'swedish_business'
+  const payableSek = originalPayableSek(original)
+
+  // The verifikat reverses the original's rows, so rows that do not add up to
+  // what the invoice owes are refused. Asked here, of the rule the builder
+  // itself posts by, BEFORE the dry-run answer and the arrival-number
+  // sequence: a dry run and a staged credit refuse what the commit would, and
+  // a refused Kreditera never burns an ankomstnummer or writes a credit note
+  // row to delete again (same ordering as create.ts).
+  if (postsEntry) {
+    try {
+      await assertSupplierCreditNoteRowsMatchPayable(
+        supabase, companyId, original, originalItems, supplierType, payableSek,
+      )
+    } catch (err) {
+      if (err instanceof SupplierCreditNoteRowsMismatchError) return rowsMismatch(err)
+      // The lines could not be built at all (a foreign invoice without a
+      // rate, momskoder that could not be read), so the verifikat could not
+      // be either: the credit stops here, as on any failed read above.
+      return failed(err)
+    }
+  }
+
+  // The Bokför step's dry run is every check that booking the original runs
+  // (its date's lock, a fiscal year, the accounts its rows need) and writes
+  // nothing: a refusal there refuses the credit before anything is written.
+  let originalEntryPreview: unknown = null
+  if (booksOriginalFirst) {
+    const planned = await bookSupplierInvoice(ctx, original.id, { dryRun: true })
+    if (!planned.ok) {
+      // Booked since it was read: the credit reverses that verifikat.
+      if (planned.code !== 'SI_BOOK_ALREADY_BOOKED') return originalBookingRefusal(original.id, planned)
+      booksOriginalFirst = false
+    } else if (planned.dryRun) {
+      originalEntryPreview = planned.preview.journal_entry ?? null
+    }
+  }
 
   if (options.dryRun) {
     return {
@@ -353,26 +537,57 @@ export async function creditSupplierInvoice(
           is_credit_note: true,
           credited_invoice_id: original.id,
           document_id: documentId,
+          is_self_billed: selfBilling !== null,
           items: creditItemsFor('(new)', originalItems).map(({ supplier_invoice_id: _drop, ...rest }) => rest),
         },
         original_id: original.id,
         original_supplier_invoice_number: original.supplier_invoice_number,
+        // Names the original when it has no supplier number.
+        original_arrival_number: original.arrival_number ?? null,
         supplier_name: supplier?.name ?? null,
         credit_date: creditDate,
         date_source: dateSource,
         inbox_item_id: item?.id ?? null,
         original_will_become: 'credited',
         would_create_reversal_journal_entry: postsEntry,
+        // accounted#58: the original's own verifikat posts first, on its date.
+        ...(booksOriginalFirst ? { would_book_original_first: true, original_journal_entry: originalEntryPreview } : {}),
       },
     }
   }
+
+  // accounted#58: the registration first, through the Bokför step, once every
+  // check above has passed. If a later step fails, the registration stays: a
+  // registered invoice belongs in the books either way, the failure names it
+  // (partialPostedIds), and a retry credits it like any booked original.
+  let originalJournalEntryId: string | null = null
+  const warnings: OperationWarning[] = []
+  if (booksOriginalFirst) {
+    const booked = await bookSupplierInvoice(ctx, original.id)
+    if (!booked.ok) {
+      // A concurrent Bokför got there first: the credit reverses that verifikat.
+      if (booked.code !== 'SI_BOOK_ALREADY_BOOKED') return originalBookingRefusal(original.id, booked)
+    } else if (!booked.dryRun) {
+      originalJournalEntryId = booked.data.journal_entry_id
+      warnings.push(...(booked.warnings ?? []))
+      log.info('credit: booked the deferred original first', { supplierInvoiceId, originalJournalEntryId })
+    }
+  }
+  const afterOriginal = (failure: Failure): Failure =>
+    originalJournalEntryId
+      ? {
+          ...failure,
+          details: { ...(failure.details ?? {}), original_journal_entry_id: originalJournalEntryId },
+          partialPostedIds: { ...(failure.partialPostedIds ?? {}), original_journal_entry_id: originalJournalEntryId },
+        }
+      : failure
 
   const { data: arrivalNumber, error: arrivalError } = await supabase.rpc('get_next_arrival_number', {
     p_company_id: companyId,
   })
   if (arrivalError || arrivalNumber == null) {
     log.error('credit: arrival number allocation failed', (arrivalError as unknown as Error) ?? new Error('null'))
-    return { ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'arrival_number' } }
+    return afterOriginal({ ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'arrival_number' } })
   }
 
   const { data: inserted, error: insertError } = await supabase
@@ -385,17 +600,18 @@ export async function creditSupplierInvoice(
         date: creditDate,
         supplierCreditNoteNumber: creditNumber,
         documentId,
+        selfBilling,
       }),
     )
     .select()
     .single()
   if (insertError || !inserted) {
     log.error('credit: credit note insert failed', insertError as unknown as Error, { supplierInvoiceId })
-    return {
+    return afterOriginal({
       ok: false,
       code: 'SI_CREDIT_FAILED',
       details: { step: 'credit_note_insert', pg_code: (insertError as { code?: string } | null)?.code },
-    }
+    })
   }
   const creditNote = inserted as SupplierInvoice
 
@@ -405,11 +621,11 @@ export async function creditSupplierInvoice(
       .insert(creditItemsFor(creditNote.id, originalItems))
     if (itemsError) {
       await rollbackCreditNote(ctx, creditNote.id, 'items_insert', false)
-      return {
+      return afterOriginal({
         ok: false,
         code: 'SI_CREDIT_FAILED',
         details: { step: 'credit_items_insert', pg_code: (itemsError as { code?: string }).code },
-      }
+      })
     }
   }
 
@@ -418,28 +634,46 @@ export async function creditSupplierInvoice(
     try {
       // The ORIGINAL items: deferred lines carry their periodisering fields
       // there, so the credit reverses against the same 17xx interim account.
+      // The original's payable: the builder holds the rows to it once more,
+      // as the backstop of the check above.
       const entry = await createSupplierCreditNoteEntry(
         supabase,
         companyId,
         userId,
         creditNote,
         originalItems,
-        supplier?.supplier_type || 'swedish_business',
+        supplierType,
         supplier?.name ?? undefined,
+        payableSek,
+        // The posting port's event, while POSTING_EVENTS is on: the person
+        // (or the approved operation) credited it, from this inbox item when
+        // there is one.
+        () => ({ linkBasis: linkBasisColumns('user_created'), inboxItemId: item?.id ?? null }),
       )
       if (!entry) {
         // No fiscal year covers the date: a credit without its verifikat
         // would leave reskontra and ledger apart, so nothing is kept.
         await rollbackCreditNote(ctx, creditNote.id, 'no_fiscal_period', false)
-        return { ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'credit_journal_entry', reason: 'no_fiscal_period', credit_date: creditDate } }
+        return afterOriginal({
+          ok: false,
+          code: 'SI_CREDIT_FAILED',
+          details: { step: 'credit_journal_entry', reason: 'no_fiscal_period', credit_date: creditDate },
+        })
       }
       journalEntryId = entry.id
     } catch (err) {
+      if (err instanceof SupplierCreditNoteRowsMismatchError) {
+        // The backstop: the check above passed, or could not be made, and
+        // the builder refuses. Before the engine was called: nothing was
+        // posted, so the credit note row goes.
+        await rollbackCreditNote(ctx, creditNote.id, 'rows_mismatch', false)
+        return afterOriginal(rowsMismatch(err))
+      }
       // The engine threw: assume the entry may have committed.
       await rollbackCreditNote(ctx, creditNote.id, 'credit_journal_entry', true)
-      if (isBookkeepingError(err)) return { ok: false, code: 'SI_CREDIT_FAILED', error: err }
+      if (isBookkeepingError(err)) return afterOriginal({ ok: false, code: 'SI_CREDIT_FAILED', error: err })
       log.error('credit: journal entry failed', err as Error, { supplierInvoiceId, creditNoteId: creditNote.id })
-      return { ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'credit_journal_entry' } }
+      return afterOriginal({ ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'credit_journal_entry' } })
     }
 
     const { error: linkError } = await supabase
@@ -455,14 +689,14 @@ export async function creditSupplierInvoice(
         journalEntryId,
       })
       try {
-        await reverseEntry(supabase, companyId, userId, journalEntryId, creditDate)
+        await reverseOwnCreditEntry(ctx, journalEntryId, creditDate, creditNote.id)
       } catch (revErr) {
         log.error('credit: storno after link failure failed, manual reconciliation required', revErr as Error, {
           journalEntryId,
         })
       }
       await rollbackCreditNote(ctx, creditNote.id, 'je_link_failed', true)
-      return { ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'credit_journal_entry_link' } }
+      return afterOriginal({ ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'credit_journal_entry_link' } })
     }
     creditNote.registration_journal_entry_id = journalEntryId
   }
@@ -483,11 +717,11 @@ export async function creditSupplierInvoice(
       supplierInvoiceId,
       creditNoteId: creditNote.id,
     })
-    return {
+    return afterOriginal({
       ok: false,
       code: 'SI_CREDIT_FAILED',
       details: { step: 'original_status_flip', credit_note_id: creditNote.id, journal_entry_id: journalEntryId },
-    }
+    })
   }
   if (!flipped) {
     log.warn('credit: race, the original was credited meanwhile; rolling back', {
@@ -496,23 +730,25 @@ export async function creditSupplierInvoice(
     })
     if (journalEntryId) {
       try {
-        await reverseEntry(supabase, companyId, userId, journalEntryId, creditDate)
+        await reverseOwnCreditEntry(ctx, journalEntryId, creditDate, creditNote.id)
       } catch (revErr) {
         log.error('credit: storno of the losing credit failed', revErr as Error, { journalEntryId })
       }
     }
     await rollbackCreditNote(ctx, creditNote.id, 'credit_race', journalEntryId !== null)
-    return { ok: false, code: 'SI_CREDIT_ALREADY_CREDITED', details: { reason: 'race' } }
+    return afterOriginal({ ok: false, code: 'SI_CREDIT_ALREADY_CREDITED', details: { reason: 'race' } })
   }
-
-  const warnings: OperationWarning[] = []
 
   // The document is the credit verifikat's underlag. The credit note row
   // already points at it; a failed link is a warning, never a failure.
   if (documentId && journalEntryId) {
     const { error: docLinkError } = await supabase
       .from('document_attachments')
-      .update({ journal_entry_id: journalEntryId })
+      .update({
+        journal_entry_id: journalEntryId,
+        // The credit verifikat was booked from this document.
+        ...linkBasisColumns('user_created'),
+      })
       .eq('id', documentId)
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
@@ -529,6 +765,34 @@ export async function creditSupplierInvoice(
         message_en:
           'The invoice was credited, but the credit note document could not be attached to the verifikat. Attach it under Bookkeeping.',
       })
+    }
+  }
+
+  // A self-billing credit note's document: made from the stored row (its
+  // number came from the insert) and archived as the credit verifikat's
+  // underlag, or anchored at payment when no verifikat was posted.
+  if (selfBilling) {
+    const archivedId = await archiveSelfBillingDocument(ctx, {
+      supplierInvoiceId: creditNote.id,
+      invoice: {
+        supplier_invoice_number: creditNote.supplier_invoice_number,
+        invoice_date: creditNote.invoice_date,
+        due_date: creditNote.due_date,
+        delivery_date: creditNote.delivery_date ?? null,
+        currency: creditNote.currency,
+        subtotal: creditNote.subtotal,
+        vat_amount: creditNote.vat_amount,
+        total: creditNote.total,
+        is_credit_note: true,
+      },
+      items: creditItemsFor(creditNote.id, originalItems),
+      snapshot: selfBilling.snapshot,
+      journalEntryId,
+    })
+    if (archivedId) {
+      creditNote.document_id = archivedId
+    } else {
+      warnings.push({ ...SELF_BILL_DOCUMENT_ARCHIVE_FAILED_WARNING })
     }
   }
 
@@ -572,6 +836,7 @@ export async function creditSupplierInvoice(
     if (itemError) {
       log.warn('credit: marking the inbox item handled failed', { inboxItemId: item.id, error: itemError.message })
     }
+    await rejectSupersededInboxConversions(supabase, companyId, item.id, creditNote.id)
   }
 
   try {
@@ -590,6 +855,7 @@ export async function creditSupplierInvoice(
       credit_note: creditNote,
       original_id: original.id,
       journal_entry_id: journalEntryId,
+      original_journal_entry_id: originalJournalEntryId,
       document_id: documentId,
       inbox_item_id: item?.id ?? null,
     },

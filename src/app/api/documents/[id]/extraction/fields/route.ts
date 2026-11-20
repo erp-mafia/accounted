@@ -9,9 +9,6 @@ import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * POST /api/documents/[id]/extraction/fields  { fields: { name: value } }
@@ -19,7 +16,8 @@ ensureInitialized()
  * extraction (pass 'human') on top of it, the settled fields out of review.
  * Values are stored as typed and normalized on the server. The model never
  * overwrites a person's record. An agreement is derived again from the
- * settled record.
+ * settled record. A viewer is refused (requireWrite): the record is written
+ * through the service client, which RLS does not narrow.
  */
 const bodySchema = z.object({
   fields: z
@@ -56,4 +54,4 @@ export const POST = withRouteContext('document.extraction.fields', async (reques
       ctx.log.error('document fields save failed', { doc: id, reason: out.reason })
       return NextResponse.json({ error: 'Fälten kunde inte sparas. Försök igen.' }, { status: 500 })
   }
-})
+}, { requireWrite: true })

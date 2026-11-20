@@ -179,6 +179,70 @@ describe('splitVacationTaken', () => {
     expect(split.paid).toBe(0)
     expect(split.unpaid).toBe(2)
   })
+
+  describe('a short week (Semesterlagen 12 a §): days off count as paid days at the run factor', () => {
+    it('uses up all 25 paid days with 20 days off at four days a week', () => {
+      const split = splitVacationTaken(
+        [
+          { vacation_days_taken: 15, vacation_paid_days_per_day_off: 1.25, line_items: [vacation(15)] },
+          { vacation_days_taken: 5, vacation_paid_days_per_day_off: 1.25, line_items: [vacation(5)] },
+        ],
+        {},
+        '2025',
+      )
+      expect(split).toEqual({ paid: 25, unpaid: 0, advance: 0, savedByYear: {} })
+    })
+
+    it('converts every pool, saved days included, at the factor of the run that booked them', () => {
+      const split = splitVacationTaken(
+        [
+          {
+            vacation_days_taken: 8,
+            vacation_paid_days_per_day_off: 1.25,
+            line_items: [vacation(4), vacation(2, 'saved', '2024'), vacation(1, 'unpaid'), vacation(1, 'advance')],
+          },
+        ],
+        { '2024': 5 },
+        '2025',
+      )
+      expect(split).toEqual({ paid: 5, unpaid: 1.25, advance: 1.25, savedByYear: { '2024': 2.5 } })
+    })
+
+    it('keeps each run at its own factor when the schedule changed between runs', () => {
+      // Ten days off on a five-day week, then twelve on a four-day week.
+      const split = splitVacationTaken(
+        [
+          { vacation_days_taken: 10, vacation_paid_days_per_day_off: 1, line_items: [vacation(10)] },
+          { vacation_days_taken: 12, vacation_paid_days_per_day_off: 1.25, line_items: [vacation(12)] },
+        ],
+        {},
+        '2025',
+      )
+      expect(split.paid).toBe(25)
+    })
+
+    it('counts a row without a factor (booked before the column existed) one for one', () => {
+      const split = splitVacationTaken(
+        [
+          { vacation_days_taken: 3, vacation_paid_days_per_day_off: null, line_items: [vacation(3)] },
+          { vacation_days_taken: 2, line_items: [vacation(2)] },
+        ],
+        {},
+        '2025',
+      )
+      expect(split.paid).toBe(5)
+    })
+
+    it('sums single days off at an uneven factor back to the year (3.5 days a week: 18 days off)', () => {
+      const runs = Array.from({ length: 18 }, () => ({
+        vacation_days_taken: 1,
+        vacation_paid_days_per_day_off: 25 / 18,
+        line_items: [vacation(1)],
+      }))
+      const split = splitVacationTaken(runs, {}, '2025')
+      expect(Math.abs(split.paid - 25)).toBeLessThan(0.001)
+    })
+  })
 })
 
 describe('remainingSavedDays / sumDays', () => {

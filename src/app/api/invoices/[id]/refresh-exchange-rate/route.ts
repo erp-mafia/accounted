@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -7,9 +8,6 @@ import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-servic
 import { guardSandbox } from '@/lib/sandbox/guard'
 import type { Currency, Invoice } from '@/types'
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/refresh-exchange-rate
@@ -171,7 +169,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ data: invoice })
     }
 
-    const toSek = (amount: number) => roundOre(amount * rate.rate)
+    const toSek = (amount: number) => sekOfForeign(amount, rate.rate)
 
     const { data: updated, error: updateError } = await supabase
       .from('invoices')

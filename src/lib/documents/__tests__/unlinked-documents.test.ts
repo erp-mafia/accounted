@@ -14,7 +14,7 @@ type Enqueue = (r: { data?: unknown; error?: unknown; count?: number | null }) =
 
 /** One empty result per referencing table, so nothing claims any candidate. */
 function enqueueNoReferences(enqueue: Enqueue) {
-  for (let i = 0; i < 8; i += 1) enqueue({ data: [] })
+  for (let i = 0; i < 10; i += 1) enqueue({ data: [] })
 }
 
 const doc = (id: string, overrides: Record<string, unknown> = {}) => ({
@@ -29,7 +29,7 @@ const doc = (id: string, overrides: Record<string, unknown> = {}) => ({
 
 describe('UNDERLAG_MIME_TYPES', () => {
   it('excludes application/json, which on this surface is only the PSD2 archive', () => {
-    // Measured on production 2026-08-27: of the document rows referenced by
+    // Measured 2026-08-27: of the document rows referenced by
     // nothing, application/json was 11 309 of 11 309 archived PSD2 bank-API
     // responses, and 0 of 4 495 pdf/png/jpeg/heic rows were. Those archives are
     // unlinked BY DESIGN. Admitting them here would hand an agent 11 309 items
@@ -50,7 +50,7 @@ describe('fetchUnlinkedDocuments', () => {
   it('costs exactly one query when the company has no candidates', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [] })
-    // Deliberately NOT enqueueing the eight reference lookups: if the early
+    // Deliberately NOT enqueueing the ten reference lookups: if the early
     // return regressed, the mock would starve and this test would fail.
 
     const result = await fetchUnlinkedDocuments(supabase as never, 'company-1')
@@ -70,13 +70,13 @@ describe('fetchUnlinkedDocuments', () => {
     expect(result.capped).toBe(false)
   })
 
-  it('drops a candidate claimed by any one of the eight referencing tables', async () => {
+  it('drops a candidate claimed by any one of the ten referencing tables', async () => {
     // Walk the tables one at a time: a document claimed only by the Nth table
     // must still be excluded, which is what catches a missing entry in the list.
-    for (let table = 0; table < 8; table += 1) {
+    for (let table = 0; table < 10; table += 1) {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({ data: [doc('d-claimed'), doc('d-free')] })
-      for (let i = 0; i < 8; i += 1) {
+      for (let i = 0; i < 10; i += 1) {
         // Every referencing query selects its own column name, and the
         // implementation reads whichever key the row carries.
         enqueue({ data: i === table ? [{ document_id: 'd-claimed', document_attachment_id: 'd-claimed', xml_document_id: 'd-claimed', dokument_id: 'd-claimed', file_document_id: 'd-claimed' }] : [] })
@@ -101,8 +101,8 @@ describe('fetchUnlinkedDocuments', () => {
     expect(result.count).toBe(3)
   })
 
-  it('keeps the scan cap small enough that the eight .in() lookups stay valid URLs', () => {
-    // Each candidate id is echoed back through eight .in(column, ids) queries,
+  it('keeps the scan cap small enough that the ten .in() lookups stay valid URLs', () => {
+    // Each candidate id is echoed back through ten .in(column, ids) queries,
     // and a UUID costs ~38 bytes in a PostgREST query string. Past a few
     // hundred the URL exceeds what the gateway accepts, the lookups fail, and
     // the "claims nothing" fallback turns every candidate into a false

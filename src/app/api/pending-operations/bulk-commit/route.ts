@@ -1,13 +1,19 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { PendingOperationsBulkSchema } from '@/lib/api/schemas'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { oldestStagedFirst } from '@/lib/pending-operations/commit-order'
+import { recordAppApproval } from '@/lib/pending-operations/record-app-approval'
+import { sharedAcknowledgmentGroup } from '@/lib/pending-operations/shared-acknowledgment'
+import { createAttestDecisionBatch } from '@/lib/supplier-invoices/attest-decision-notify'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
 
-ensureInitialized()
+// Commits run one after another, and an approved match_batch_allocate of
+// MAX_BANK_ROW_SPLIT invoices alone comes close to the platform's 60 s
+// default (lib/reconciliation/limits.ts).
+export const maxDuration = 300
 
 interface BulkCommitItemResult {
   id: string
@@ -22,6 +28,7 @@ const STATUS_LABELS_SV: Record<string, string> = {
   committed: 'godkänd',
   rejected: 'avvisad',
   failed_partial: 'delvis genomförd',
+  unknown: 'utfall oklart',
 }
 
 export const POST = withRouteContext(
@@ -30,6 +37,10 @@ export const POST = withRouteContext(
     const validated = await validateBody(request, PendingOperationsBulkSchema)
     if (!validated.success) return validated.response
     const { ids } = validated.data
+    // Groups of routine high-risk operations the person approved under one
+    // acknowledgment (crm#1489). The group is re-derived from each stored
+    // operation below, so naming a group never reaches beyond it.
+    const acknowledged = new Set(validated.data.acknowledged_groups ?? [])
 
     const { data: ops, error: fetchError } = await supabase
       .from('pending_operations')
@@ -47,55 +58,74 @@ export const POST = withRouteContext(
 
     const opsById = new Map((ops ?? []).map((op) => [op.id, op as PendingOperation]))
     const results: BulkCommitItemResult[] = []
+    // Staged attests approved together reach their registrant as one mail, after the loop.
+    const attestDecisions = createAttestDecisionBatch()
 
-    for (const id of ids) {
-      const op = opsById.get(id)
-      if (!op) {
-        results.push({ id, status: 'failed', error: 'Åtgärden kunde inte hittas.' })
-        continue
-      }
-      if (op.status !== 'pending') {
-        results.push({
-          id,
-          status: 'skipped',
-          error: `Redan hanterad (${STATUS_LABELS_SV[op.status] ?? op.status})`,
-        })
-        continue
-      }
-      if (op.risk_level === 'high') {
-        results.push({
-          id,
-          status: 'skipped',
-          error: 'Hög risk: kräver individuellt godkännande',
-        })
-        continue
-      }
+    // The answers already stored are told even when an approval throws: the
+    // flush is in a finally, one mail per company and attester.
+    try {
+      // Oldest staged first, not the order the list happened to show (crm#1815).
+      for (const id of oldestStagedFirst(ids, opsById)) {
+        const op = opsById.get(id)
+        if (!op) {
+          results.push({ id, status: 'failed', error: 'Åtgärden kunde inte hittas.' })
+          continue
+        }
+        if (op.status !== 'pending') {
+          results.push({
+            id,
+            status: 'skipped',
+            error: `Redan hanterad (${STATUS_LABELS_SV[op.status] ?? op.status})`,
+          })
+          continue
+        }
+        const sharedGroup = sharedAcknowledgmentGroup(op)
+        if (op.risk_level === 'high' && !(sharedGroup && acknowledged.has(sharedGroup))) {
+          results.push({
+            id,
+            status: 'skipped',
+            error: 'Hög risk: kräver individuellt godkännande',
+          })
+          continue
+        }
 
-      const result = await commitPendingOperation(supabase, user.id, companyId, op, {
-        userEmail: user.email,
-        commitMethod: 'bulk_accept',
-        actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
-      })
-      if (result.status === 'committed') {
-        results.push({ id, status: 'committed' })
-      } else {
-        // The executor's error strings mix Swedish user messages with raw
-        // Supabase/Zod English: map to Swedish before they land in the
-        // user-visible per-item results (issue #337). Raw stays in logs.
-        log.warn('bulk commit item failed', {
-          operationId: id,
-          rawError: result.error,
-          status: result.http_status,
+        const result = await commitPendingOperation(supabase, user.id, companyId, op, {
+          userEmail: user.email,
+          commitMethod: 'bulk_accept',
+          actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
+          attestDecisions,
         })
-        const mapped = getErrorMessage(result.error ?? null, {
-          statusCode: result.http_status ?? 500,
+        await recordAppApproval({
+          companyId,
+          userId: user.id,
+          operation: op,
+          commitMethod: 'bulk_accept',
+          outcome: result.status,
+          ...(sharedGroup ? { sharedAcknowledgment: sharedGroup } : {}),
         })
-        if (result.status === 'rejected' && result.auto_rejected) {
-          results.push({ id, status: 'rejected', error: mapped })
+        if (result.status === 'committed') {
+          results.push({ id, status: 'committed' })
         } else {
-          results.push({ id, status: 'failed', error: mapped })
+          // The executor's error strings mix Swedish user messages with raw
+          // Supabase/Zod English: map to Swedish before they land in the
+          // user-visible per-item results (issue #337). Raw stays in logs.
+          log.warn('bulk commit item failed', {
+            operationId: id,
+            rawError: result.error,
+            status: result.http_status,
+          })
+          const mapped = getErrorMessage(result.error ?? null, {
+            statusCode: result.http_status ?? 500,
+          })
+          if (result.status === 'rejected' && result.auto_rejected) {
+            results.push({ id, status: 'rejected', error: mapped })
+          } else {
+            results.push({ id, status: 'failed', error: mapped })
+          }
         }
       }
+    } finally {
+      await attestDecisions.flush()
     }
 
     const summary = {

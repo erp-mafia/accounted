@@ -177,3 +177,51 @@ describe('GET /api/reports/dimension-pnl/xlsx', () => {
     expect(rows[2]).toEqual(['3 Rörelsens inkomster/intäkter', '3001', 'Försäljning', 400, 100, 500])
   })
 })
+
+describe('the budget view (accounted#134)', () => {
+  const BUDGET_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const WITH_BUDGET: DimensionPnlReport = {
+    ...Q3_REPORT,
+    groups: [
+      {
+        ...Q3_REPORT.groups[0],
+        rows: [{ ...Q3_REPORT.groups[0].rows[0], budget_values: [300, 50], budget_total: 350 }],
+        budget_subtotals: [300, 50],
+        budget_subtotal_total: 350,
+      },
+    ],
+    budget: { budget_id: BUDGET_ID, name: 'Budget 2026', is_default: true, applied: true, from_month: '2026-07', to_month: '2026-09' },
+    budget_net_per_column: [300, 50],
+    budget_net_total: 350,
+  }
+
+  it('400 for a budget_id that is not an id; the budget reaches the generator', async () => {
+    enqueue({ data: PERIOD })
+    const bad = await GET(createMockRequest('/api/reports/dimension-pnl', { searchParams: { period_id: 'period-1', budget_id: 'x' } }), noParams)
+    expect(bad.status).toBe(400)
+
+    enqueue({ data: PERIOD })
+    mockGenerate.mockResolvedValue(WITH_BUDGET)
+    const ok = await GET(createMockRequest('/api/reports/dimension-pnl', { searchParams: { period_id: 'period-1', budget_id: BUDGET_ID } }), noParams)
+    expect(ok.status).toBe(200)
+    expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'period-1', '6', expect.objectContaining({ budgetId: BUDGET_ID }))
+  })
+
+  it('exports Utfall, Budget and Avvikelse as three sheets', async () => {
+    enqueue({ data: { company_name: 'Test AB' } }) // company_settings
+    enqueue({ data: PERIOD }) // fiscal_periods
+    mockGenerate.mockResolvedValue(WITH_BUDGET)
+    const res = await GET_XLSX(
+      createMockRequest('/api/reports/dimension-pnl/xlsx', { searchParams: { period_id: 'period-1', budget_id: BUDGET_ID } }),
+      noParams,
+    )
+    expect(res.status).toBe(200)
+    const workbook = XLSX.read(new Uint8Array(await res.arrayBuffer()), { type: 'array' })
+    expect(workbook.SheetNames).toEqual(['Utfall', 'Budget', 'Avvikelse'])
+    const rowOf = (name: string) =>
+      XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name], { header: 1, blankrows: false }).find((r) => r[1] === '3001')
+    expect(rowOf('Utfall')).toEqual(['3 Rörelsens inkomster/intäkter', '3001', 'Försäljning', 400, 100, 500])
+    expect(rowOf('Budget')).toEqual(['3 Rörelsens inkomster/intäkter', '3001', 'Försäljning', 300, 50, 350])
+    expect(rowOf('Avvikelse')).toEqual(['3 Rörelsens inkomster/intäkter', '3001', 'Försäljning', 100, 50, 150])
+  })
+})

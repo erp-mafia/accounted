@@ -27,6 +27,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
+import { INBOX_ITEM_DOCUMENT_HOLD } from '@/lib/documents/inbox-item-state'
 
 // ---------------------------------------------------------------------------
 // Schema model
@@ -275,13 +276,32 @@ function parseClosedCheck(
   return { column: m[1], values }
 }
 
-function recordUnique(table: TableModel, columns: string[], constraintName?: string | null): void {
+/**
+ * The name Postgres gives a UNIQUE or PRIMARY KEY constraint declared without
+ * one (ChooseConstraintName + makeObjectName): `<table>_<col>_<col>_key` or
+ * `<table>_pkey`, cut to 63 bytes by shortening the longer part first. A later
+ * `DROP CONSTRAINT IF EXISTS <that name>` drops it, so the replay must know it.
+ */
+export function defaultConstraintName(table: string, columns: string[], label: 'key' | 'pkey'): string {
+  const name2 = label === 'pkey' ? '' : columns.join('_')
+  const avail = 63 - (label.length + 1) - (name2 ? 1 : 0)
+  let n1 = table.length
+  let n2 = name2.length
+  while (n1 + n2 > avail) {
+    if (n1 > n2) n1--
+    else n2--
+  }
+  const head = table.slice(0, n1)
+  return name2 ? `${head}_${name2.slice(0, n2)}_${label}` : `${head}_${label}`
+}
+
+function recordUnique(table: TableModel, columns: string[], constraintName: string): void {
   if (columns.length === 0) return
   const key = [...columns].sort().join(',')
   table.uniqueSets.add(key)
   // Remember the name so `ALTER TABLE ... DROP CONSTRAINT <name>` can retract
-  // the set again. Unnamed (column-level) uniques have nothing to key on.
-  if (constraintName) table.uniqueConstraintKeys.set(constraintName, key)
+  // the set again.
+  table.uniqueConstraintKeys.set(constraintName, key)
 }
 
 function parseColumnList(body: string): string[] {
@@ -320,7 +340,11 @@ function applyTableItem(
     }
     if (/^UNIQUE\s*\(/i.test(rest) || /^PRIMARY\s+KEY\s*\(/i.test(rest)) {
       const group = balancedParens(rest, 0)
-      if (group) recordUnique(table, parseColumnList(group.body), name)
+      if (group) {
+        const columns = parseColumnList(group.body)
+        const label = /^PRIMARY/i.test(rest) ? 'pkey' : 'key'
+        recordUnique(table, columns, name ?? defaultConstraintName(table.name, columns, label))
+      }
       return
     }
     if (/^FOREIGN\s+KEY\s*\(/i.test(rest)) {
@@ -370,8 +394,10 @@ function applyTableItem(
 
   // Column-level UNIQUE / PRIMARY KEY, but not the word inside a CHECK body.
   const withoutChecks = checkAt === -1 ? rest : rest.slice(0, checkAt)
-  if (/\bUNIQUE\b/i.test(withoutChecks) || /\bPRIMARY\s+KEY\b/i.test(withoutChecks)) {
-    recordUnique(table, [column])
+  if (/\bPRIMARY\s+KEY\b/i.test(withoutChecks)) {
+    recordUnique(table, [column], defaultConstraintName(table.name, [column], 'pkey'))
+  } else if (/\bUNIQUE\b/i.test(withoutChecks)) {
+    recordUnique(table, [column], defaultConstraintName(table.name, [column], 'key'))
   }
 }
 
@@ -687,11 +713,11 @@ function applyAlterAction(
   if (dropConstraint) {
     const name = dropConstraint[1]
     table.checks.delete(name)
-    // Retract the unique set a NAMED UNIQUE/PK constraint carried, so an
+    // Retract the unique set the dropped UNIQUE/PK constraint carried, so an
     // `onConflict` naming the dropped constraint's columns fails here instead
     // of 42P10-ing at runtime. The set survives when another constraint or a
-    // unique index still provides the same column key. A column-level bare
-    // `UNIQUE` (parsed by applyTableItem) has no name and is untouched.
+    // unique index still provides the same column key. An unnamed UNIQUE/PK is
+    // keyed under the name Postgres generated for it (defaultConstraintName).
     const key = table.uniqueConstraintKeys.get(name)
     if (key !== undefined) {
       table.uniqueConstraintKeys.delete(name)
@@ -933,10 +959,63 @@ interface ChainCall {
   node: ts.CallExpression
 }
 
+/**
+ * Helpers whose return value is a fixed set of columns, keyed by the called
+ * function's name: a payload that spreads such a call (`...linkBasisColumns(...)`)
+ * is as checkable as one that names the columns, so the columns are asserted
+ * against the table instead of counting as an unresolvable spread.
+ */
+const SPREAD_COLUMN_HELPERS: Record<string, readonly string[]> = {
+  // src/lib/links: the link basis a writer stamps on the link it creates.
+  linkBasisColumns: ['link_basis', 'link_evidence'],
+  linkBasisColumnsFor: ['link_basis', 'link_evidence'],
+  scopeFreeLinkBasisColumns: ['link_basis', 'link_evidence'],
+  // src/lib/pending-operations/agent-reason.ts: the agent's reason on a staged write.
+  agentReasonColumn: ['agent_reason'],
+  // src/lib/observability/trace-column.ts: the request's trace id on a row it writes.
+  traceIdColumn: ['trace_id'],
+  // src/lib/suggestion-log/inbox.ts: the inbox item a deletion's decision keeps.
+  removedItemColumn: ['removed_item'],
+  // lib/salary/line-item-roles.ts: the flags of a payslip row, from its type.
+  payslipLineFlags: ['is_taxable', 'is_avgift_basis', 'is_vacation_basis', 'is_gross_deduction', 'is_net_deduction'],
+}
+
+function spreadHelperColumns(expr: ts.Expression): readonly string[] | null {
+  if (!ts.isCallExpression(expr) || !ts.isIdentifier(expr.expression)) return null
+  return SPREAD_COLUMN_HELPERS[expr.expression.text] ?? null
+}
+
+/**
+ * Select fragments a select string interpolates, by the name of their constant.
+ * One embed many selects share stays one definition and every column around it
+ * stays checked.
+ */
+const SELECT_FRAGMENTS: Record<string, string> = { INBOX_ITEM_DOCUMENT_HOLD }
+
+/** A `const NAME = '...'` at the top of the file the expression is in, else null. */
+function fileConstantText(name: string, from: ts.Node): string | null {
+  for (const statement of from.getSourceFile().statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.name.text === name) return literalText(declaration.initializer)
+    }
+  }
+  return null
+}
+
 function literalText(node: ts.Expression | undefined): string | null {
   if (!node) return null
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
-  return null
+  if (ts.isIdentifier(node)) return fileConstantText(node.text, node)
+  if (!ts.isTemplateExpression(node)) return null
+  let text = node.head.text
+  for (const span of node.templateSpans) {
+    if (!ts.isIdentifier(span.expression)) return null
+    const value = SELECT_FRAGMENTS[span.expression.text] ?? fileConstantText(span.expression.text, node)
+    if (value === null || value === undefined) return null
+    text += value + span.literal.text
+  }
+  return text
 }
 
 function receiverText(expr: ts.Expression): string {
@@ -1565,6 +1644,11 @@ function processChain(
         }
         for (const prop of payload.properties) {
           if (ts.isSpreadAssignment(prop)) {
+            const helperColumns = spreadHelperColumns(prop.expression)
+            if (helperColumns && table) {
+              for (const column of helperColumns) push(table, column, kind, node, `${method} ...${column}`)
+              continue
+            }
             result.unresolved.push({
               reason: 'spread-payload',
               detail: `${method} ${prop.getText().slice(0, 40)}`,

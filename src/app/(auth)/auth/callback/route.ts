@@ -1,10 +1,29 @@
 import { createServerClient } from '@supabase/ssr'
 import { type NextRequest, NextResponse } from 'next/server'
+import {
+  CONFIRM_LINK_COOKIE,
+  CONFIRM_LINK_COOKIE_PATH,
+  CONFIRM_LINK_MAX_AGE_SECONDS,
+} from '@/lib/auth/confirm-link'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
+import { INVITE_TTL_SECONDS } from '@/lib/auth/invite-ttl'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { resolveLandingDestination } from '@/lib/company/landing-server'
-import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
+import {
+  acceptPendingTeamInviteByToken,
+  redeemCompanyInvitation,
+} from '@/lib/company/pending-invites'
+import {
+  expiredCookieOptions,
+  httpOnlyCookieOptions,
+  requestProtocolFromHeaders,
+  shouldUseSecureCookies,
+  supabaseAuthCookieOptions,
+} from '@/lib/supabase/cookie-options'
+import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { userSessionFetch } from '@/lib/supabase/auth-call-budget'
 
 /**
  * The one `next` destination this callback honours for a fresh session: the
@@ -168,10 +187,80 @@ async function resolveStockEmailChangeStatus(
   return user.new_email ? 'partial' : 'done'
 }
 
+/** verifyOtp's answer for a confirm click whose held token is gone. */
+const NO_HELD_TOKEN = {
+  data: { user: null, session: null },
+  error: { message: 'No held token for this link' },
+} as const
+
+/**
+ * Emailed links, OAuth providers and GoTrue's own redirects land here. An
+ * emailed link carrying a one-time token is only held and handed to
+ * /auth/confirm (lib/auth/confirm-link.ts): nothing on GET spends it, so a
+ * mail scanner's fetch, or a link checker's HEAD (Next.js serves HEAD with
+ * this handler), leaves the link working for the user. Verifying here let
+ * the first automated fetch burn the link before the user's own click.
+ */
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url)
+  const { searchParams } = new URL(request.url)
+  const tokenHash = searchParams.get('token_hash')
+  if (tokenHash) {
+    // Same origin rule as completeCallback: never request.url, which behind a
+    // reverse proxy is the bind address. The held token stays in a cookie on
+    // the host the browser addressed and is never put in this URL, so the
+    // canonical fallback cannot carry it anywhere.
+    const origin = await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' })
+    const confirmUrl = new URL('/auth/confirm', origin)
+    const query = new URLSearchParams(searchParams)
+    query.delete('token_hash')
+    confirmUrl.search = query.toString()
+    const response = NextResponse.redirect(confirmUrl)
+    response.cookies.set(CONFIRM_LINK_COOKIE, tokenHash, {
+      path: CONFIRM_LINK_COOKIE_PATH,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: CONFIRM_LINK_MAX_AGE_SECONDS,
+    })
+    return response
+  }
+  return completeCallback(request, null)
+}
+
+/**
+ * The confirm click from /auth/confirm: verifies the token GET held. Answered
+ * with 303 so the browser follows with a GET; completeCallback's redirects
+ * are 307 (NextResponse.redirect's default), which would replay this POST
+ * against the destination page. The held token is cleared whatever the
+ * outcome, so a second click never retries a spent one.
+ */
+export async function POST(request: NextRequest) {
+  const tokenHash = request.cookies.get(CONFIRM_LINK_COOKIE)?.value || null
+  const landed = await completeCallback(request, { tokenHash })
+  const response = new NextResponse(null, { status: 303, headers: landed.headers })
+  response.cookies.delete({ name: CONFIRM_LINK_COOKIE, path: CONFIRM_LINK_COOKIE_PATH })
+  return response
+}
+
+/**
+ * `click` is set only for the confirm POST and carries the held token: null
+ * when the cookie is gone (another browser, more than an hour later, or the
+ * back button after the token was spent), which is a dead link.
+ */
+async function completeCallback(
+  request: NextRequest,
+  click: { tokenHash: string | null } | null,
+) {
+  const { searchParams } = new URL(request.url)
+  // Redirect targets come from the host the browser addressed (forwarded
+  // host, checked against the canonical app URL and registered brand
+  // domains), never from request.url: in a standalone Next.js server behind
+  // a reverse proxy, request.url carries the bind address (for example
+  // http://0.0.0.0:3000), so every post-login redirect left the site.
+  // 'canonical' because this hop only picks a browser destination; a 500
+  // here would strand the user mid-login.
+  const origin = await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' })
   const code = searchParams.get('code')
-  const token_hash = searchParams.get('token_hash')
   const type = searchParams.get('type')
   const next = searchParams.get('next') ?? '/'
   const resumeOAuth = oauthResumePath(next)
@@ -179,11 +268,19 @@ export async function GET(request: NextRequest) {
   // Collect cookies that Supabase sets during auth so we can
   // explicitly forward them on the redirect response.
   const pendingCookies: { name: string; value: string; options: Record<string, unknown> }[] = []
+  const requestProtocol =
+    requestProtocolFromHeaders(request.headers) ?? new URL(request.url).protocol
+  // The code exchange and OTP verify carry the end user's IP when IP address
+  // forwarding is configured (lib/supabase/auth-forwarding.ts).
+  const sessionFetch = userSessionFetch(clientIpFromHeaders(request.headers))
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      global: { fetch: sessionFetch },
+      // HttpOnly, Secure over TLS: lib/supabase/cookie-options.ts.
+      cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {
           return request.cookies.getAll()
@@ -211,7 +308,7 @@ export async function GET(request: NextRequest) {
   // branch below. Before this they fell through to the login bounce with no
   // message, which reads as "det funkar inte" and invites a retry that voids
   // the mails just sent.
-  if (searchParams.get('flow') === 'email_change' && !token_hash) {
+  if (!click && searchParams.get('flow') === 'email_change') {
     const status = await resolveStockEmailChangeStatus(supabase, searchParams, code)
     const response = NextResponse.redirect(
       new URL(`/auth/email-change?status=${status}`, origin),
@@ -229,12 +326,16 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     authenticated = !error
   }
-  // Handle token hash flow (email verification / magic link)
-  else if (token_hash && type) {
-    const { data, error } = await supabase.auth.verifyOtp({
-      token_hash,
-      type: type as 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email',
-    })
+  // Handle token hash flow (email verification / magic link): the confirm
+  // click, with the token GET held for it. A click whose token is gone is
+  // answered as a rejected token, without asking GoTrue.
+  else if (click && type) {
+    const { data, error } = click.tokenHash
+      ? await supabase.auth.verifyOtp({
+          token_hash: click.tokenHash,
+          type: type as 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email',
+        })
+      : NO_HELD_TOKEN
 
     // Email change never lands silently: with secure email change enabled the
     // user must confirm from BOTH addresses, and dropping them on the
@@ -304,14 +405,17 @@ export async function GET(request: NextRequest) {
       const inviteTokenMatch = next.match(/^\/invite\/([A-Za-z0-9_-]+)$/)
       if (inviteTokenMatch) {
         // Mirrors buildInviteCookie in app/invite/[token]/page.tsx: readable
-        // by the client auth surfaces (not httpOnly), lifetime matching the
-        // 7-day invite TTL that the server re-checks on every acceptance.
+        // by the client auth surfaces (not httpOnly: consumeInviteCookie
+        // reads it and posts it to /api/team/accept), lifetime matching the
+        // invitation lifetime (INVITE_TTL_SECONDS) that the server re-checks
+        // on every acceptance. An invitation token bound to the invitee's
+        // address, not a session.
         response.cookies.set(INVITE_COOKIE_NAME, inviteTokenMatch[1], {
           path: '/',
           httpOnly: false,
-          secure: process.env.NODE_ENV === 'production',
+          secure: shouldUseSecureCookies(requestProtocol),
           sameSite: 'lax',
-          maxAge: 7 * 24 * 60 * 60,
+          maxAge: INVITE_TTL_SECONDS,
         })
       }
       return response
@@ -351,20 +455,21 @@ export async function GET(request: NextRequest) {
             .eq('token_hash', tokenHash)
             .single()
 
-          if (
+          // Claim the invitation and add the user to the company: the same
+          // single-use claim as POST /api/team/accept. A membership that
+          // already existed fulfils the invitation too. A lost claim or a
+          // failed insert created nothing: the flow continues below, and the
+          // cookie survives for the /onboarding retry when the invitation is
+          // still pending.
+          const redeemed =
             invite &&
             invite.status === 'pending' &&
             new Date(invite.expires_at) > new Date() &&
             user.email?.toLowerCase() === invite.email.toLowerCase()
-          ) {
-            // Add user to company
-            await serviceClient.from('company_members').insert({
-              company_id: invite.company_id,
-              user_id: user.id,
-              role: invite.role,
-              source: 'direct',
-            })
+              ? await redeemCompanyInvitation(serviceClient, user.id, invite)
+              : null
 
+          if (invite && (redeemed === 'accepted' || redeemed === 'already_member')) {
             // Set active company. Non-fatal on failure (middleware falls
             // back to the membership created above) but log so silent
             // persistence failures (#701) are observable.
@@ -377,12 +482,6 @@ export async function GET(request: NextRequest) {
               console.error('[auth/callback] failed to set active company', prefError)
             }
 
-            // Mark invite as accepted
-            await serviceClient
-              .from('company_invitations')
-              .update({ status: 'accepted' })
-              .eq('id', invite.id)
-
             // Invited user goes straight to dashboard: no onboarding needed
             redirectPath = '/'
 
@@ -391,14 +490,12 @@ export async function GET(request: NextRequest) {
             for (const { name, value, options } of pendingCookies) {
               response.cookies.set({ name, value, ...options })
             }
-            response.cookies.set('gnubok-company-id', invite.company_id, {
-              path: '/',
-              httpOnly: true,
-              secure: process.env.NODE_ENV === 'production',
-              sameSite: 'lax',
-              maxAge: 60 * 60 * 24 * 365,
-            })
-            response.cookies.delete('gnubok-invite-token')
+            response.cookies.set(
+              'gnubok-company-id',
+              invite.company_id,
+              httpOnlyCookieOptions(60 * 60 * 24 * 365, requestProtocol),
+            )
+            response.cookies.set(INVITE_COOKIE_NAME, '', expiredCookieOptions(requestProtocol))
             return response
           }
         } catch (err) {
@@ -499,7 +596,7 @@ export async function GET(request: NextRequest) {
     // would only 409). The company-invite success path returns earlier and
     // clears the cookie itself.
     if (inviteConsumed) {
-      response.cookies.delete('gnubok-invite-token')
+      response.cookies.set(INVITE_COOKIE_NAME, '', expiredCookieOptions(requestProtocol))
     }
     return response
   }

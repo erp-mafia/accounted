@@ -25,7 +25,7 @@ async function insertDocumentSurfaceEntry(params: Parameters<typeof insertPosted
 }
 
 /**
- * P1-3 (mcp_optimization_plan): both missing-document surfaces implement ONE
+ * Both missing-document surfaces implement ONE
  * predicate: posted, needs-doc source type, no CURRENT-version
  * document_attachments row, no journal_entry_no_doc_required waiver, no
  * supplier-invoice reference carrying a retained document: and the
@@ -61,6 +61,20 @@ async function verifikatSurface(companyId: string): Promise<VerifikatResult> {
     [companyId],
   )
   return rows[0].r
+}
+
+/**
+ * The verifikat list's "saknar underlag" filter (list_verifikat_missing_underlag,
+ * crm#1390): the same predicate narrowed by the list's filters, none here.
+ * Every id of the set, sorted, for a set comparison with the badge's RPC.
+ */
+async function missingListIds(companyId: string): Promise<{ total: number; ids: string[] }> {
+  const { rows } = await getPool().query<{ r: { ok: boolean; total_count: number; ids: string[] } }>(
+    `SELECT public.list_verifikat_missing_underlag($1, p_limit => 1000) AS r`,
+    [companyId],
+  )
+  expect(rows[0].r.ok).toBe(true)
+  return { total: rows[0].r.total_count, ids: [...rows[0].r.ids].sort() }
 }
 
 async function transactionsSurface(companyId: string): Promise<TransactionsResult> {
@@ -298,6 +312,12 @@ describe('document surfaces unification', () => {
     expect(ids).not.toContain(jeInvoiceCreated)
   })
 
+  it('the verifikat list filter finds the same set as the badge, arm by arm (crm#1390)', async () => {
+    const [badge, list] = await Promise.all([verifikatSurface(companyId), missingListIds(companyId)])
+    expect(list.ids).toEqual((badge.verifikat ?? []).map((v) => v.journal_entry_id).sort())
+    expect(list.total).toBe(badge.total_count)
+  })
+
   it('supplier-invoice references with an anchored doc silence both FK paths and the partial-payment path', async () => {
     const res = await verifikatSurface(companyId)
     const ids = (res.verifikat ?? []).map((v) => v.journal_entry_id)
@@ -357,6 +377,8 @@ describe('document surfaces unification', () => {
     }
     const res = await verifikatSurface(s.companyId)
     expect((res.verifikat ?? []).map((v) => v.journal_entry_id).sort()).toEqual(expected.sort())
+    // The verifikat list filter carries its own copy of the needs-doc list.
+    expect((await missingListIds(s.companyId)).ids).toEqual(expected.sort())
   })
 
   it('webshop_order: flagged without underlag, silenced by the archived orderunderlag (#1881)', async () => {
@@ -504,7 +526,7 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
       })
     }
 
-    // Case A (Emil's flow): doc pinned to the tx, never propagated.
+    // Case A: doc pinned to the tx, never propagated.
     const jeA = await mkPostedJe(1, s.fiscalPeriodId)
     const docA = await attachDocument({ userId: s.userId, companyId: s.companyId, journalEntryId: null })
     const txA = await insertTransaction({

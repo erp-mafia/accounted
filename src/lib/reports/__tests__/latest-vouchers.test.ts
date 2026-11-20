@@ -9,26 +9,13 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-interface Row {
-  id: string
-  voucher_series: string | null
-  voucher_number: number
-}
-
-function row(id: string, series: string | null, number: number): Row {
-  return { id, voucher_series: series, voucher_number: number }
-}
-
 describe('getLatestPostedVouchers', () => {
-  it('returns the highest number per series, sorted by series', async () => {
+  it('returns the highest number per series from the SQL function, sorted by series', async () => {
     const q = createQueuedMockSupabase()
     q.enqueue({
       data: [
-        row('e1', 'B', 12),
-        row('e2', 'A', 214),
-        row('e3', 'A', 7),
-        row('e4', 'B', 37),
-        row('e5', 'A', 100),
+        { voucher_series: 'B', last_number: 37 },
+        { voucher_series: 'A', last_number: 214 },
       ],
       error: null,
     })
@@ -62,30 +49,9 @@ describe('getLatestPostedVouchers', () => {
     expect(result).toEqual([])
   })
 
-  it('excludes drafts and cancelled entries, which is what voucher_number > 0 buys', async () => {
-    const q = createQueuedMockSupabase()
-    q.enqueue({ data: [row('e1', 'A', 5)], error: null })
-
-    await getLatestPostedVouchers(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      q.supabase as any,
-      'company-1',
-      'period-1',
-      { toDate: '2026-12-31' }
-    )
-
-    // Drafts and cancelled entries both carry voucher_number = 0.
-    expect(q.findCall('journal_entries', 'gt')).toEqual(['voucher_number', 0])
-    // Reversed entries keep their number and their slot in the series, so they
-    // count: excluding them would report a gap that is not there.
-    const statusFilter = q.findCall('journal_entries', 'in')
-    expect(statusFilter?.[0]).toBe('status')
-    expect(statusFilter?.[1]).toEqual(['posted', 'reversed'])
-  })
-
   it('bounds the window by toDate only when no fromDate is given (balansrapport)', async () => {
     const q = createQueuedMockSupabase()
-    q.enqueue({ data: [row('e1', 'A', 5)], error: null })
+    q.enqueue({ data: [{ voucher_series: 'A', last_number: 5 }], error: null })
 
     await getLatestPostedVouchers(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -95,15 +61,17 @@ describe('getLatestPostedVouchers', () => {
       { toDate: '2026-03-31' }
     )
 
-    expect(q.findCall('journal_entries', 'lte')).toEqual(['entry_date', '2026-03-31'])
-    // The fiscal period filter is the lower bound; no explicit gte.
-    expect(q.findCall('journal_entries', 'gte')).toBeUndefined()
-    expect(q.findCall('journal_entries', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(q.supabase.rpc).toHaveBeenCalledWith('latest_posted_vouchers', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+      p_from_date: null,
+      p_to_date: '2026-03-31',
+    })
   })
 
   it('bounds both ends when fromDate is given (resultatrapport)', async () => {
     const q = createQueuedMockSupabase()
-    q.enqueue({ data: [row('e1', 'A', 5)], error: null })
+    q.enqueue({ data: [{ voucher_series: 'A', last_number: 5 }], error: null })
 
     await getLatestPostedVouchers(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -113,28 +81,17 @@ describe('getLatestPostedVouchers', () => {
       { fromDate: '2026-01-01', toDate: '2026-03-31' }
     )
 
-    expect(q.findCall('journal_entries', 'gte')).toEqual(['entry_date', '2026-01-01'])
-    expect(q.findCall('journal_entries', 'lte')).toEqual(['entry_date', '2026-03-31'])
+    expect(q.supabase.rpc).toHaveBeenCalledWith('latest_posted_vouchers', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+      p_from_date: '2026-01-01',
+      p_to_date: '2026-03-31',
+    })
   })
 
-  it('orders on the primary key so paging cannot skip or duplicate rows', async () => {
+  it('reads the number as a number even when it arrives as a string', async () => {
     const q = createQueuedMockSupabase()
-    q.enqueue({ data: [row('e1', 'A', 5)], error: null })
-
-    await getLatestPostedVouchers(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      q.supabase as any,
-      'company-1',
-      'period-1',
-      { toDate: '2026-12-31' }
-    )
-
-    expect(q.findCall('journal_entries', 'order')).toEqual(['id', { ascending: true }])
-  })
-
-  it('falls back to series A for entries with a null voucher_series', async () => {
-    const q = createQueuedMockSupabase()
-    q.enqueue({ data: [row('e1', null, 9), row('e2', 'A', 4)], error: null })
+    q.enqueue({ data: [{ voucher_series: 'A', last_number: '9' }], error: null })
 
     const result = await getLatestPostedVouchers(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

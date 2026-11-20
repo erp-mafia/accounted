@@ -1,0 +1,343 @@
+[
+  {
+    "name": "accrual: a SEK row pays a registered invoice in full",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-28",
+          "description": "Utbetalning leverantörsfaktura F-7000, Kontorsbolaget AB (ankomstnr 140)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0001",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-28",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning från bank"
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-0",
+      "error": null
+    }
+  },
+  {
+    "name": "accrual: a whole-krona row settles an öre invoice with a bank fee on top",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-29",
+          "description": "Utbetalning leverantörsfaktura F-7001, Kontorsbolaget AB (ankomstnr 141)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0002",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-29",
+              "amount": -1520,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1499.6,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1520,
+              "line_description": "Utbetalning från bank"
+            },
+            {
+              "account_number": "6570",
+              "debit_amount": 20.4,
+              "credit_amount": 0,
+              "line_description": "Bankavgift"
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-1",
+      "error": null
+    }
+  },
+  {
+    "name": "cash: a never-booked invoice under kontantmetoden",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-30",
+          "description": "Kontantbetalning leverantörsfaktura F-7002",
+          "source_type": "supplier_invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0003",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-30",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-7002"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-7002"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Kontantbetalning leverantörsfaktura F-7002"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Kontantbetalning leverantörsfaktura F-7002"
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-2",
+      "error": null
+    }
+  },
+  {
+    "name": "custom lines: the caller's own rows",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-01",
+          "description": "Utbetalning leverantörsfaktura F-7003, Kontorsbolaget AB",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0004",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-01",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Egen rad"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-3",
+      "error": null
+    }
+  },
+  {
+    "name": "a categorized row with storno_existing: its verifikat is reversed before the payment is booked",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-02",
+          "description": "Utbetalning leverantörsfaktura F-7004, Kontorsbolaget AB (ankomstnr 144)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0005",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-02",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning från bank"
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-00000000e002"
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-4",
+      "error": null
+    }
+  },
+  {
+    "name": "a reconciliation link is refused, even with storno_existing: nothing is reversed or booked",
+    "calls": [],
+    "reversals": [],
+    "cancels": [],
+    "outcome": {
+      "status": 409,
+      "journal_entry_id": null,
+      "error": "MATCH_SI_TX_ALREADY_BOOKED"
+    }
+  },
+  {
+    "name": "a concurrent settlement wins: the payment verifikat is cancelled",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-04",
+          "description": "Utbetalning leverantörsfaktura F-7006, Kontorsbolaget AB (ankomstnr 146)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0007",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-04",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning från bank"
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "cancels": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-6",
+        {
+          "gapExplanation": "Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd"
+        }
+      ]
+    ],
+    "outcome": {
+      "status": 409,
+      "journal_entry_id": null,
+      "error": "MATCH_SI_NOT_OPEN"
+    }
+  }
+]

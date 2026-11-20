@@ -1,20 +1,18 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { OpeningBalanceCorrectSchema } from '@/lib/api/schemas'
 import { correctOpeningBalances } from '@/lib/import/opening-balance/service'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { withRouteContext } from '@/lib/api/with-route-context'
 
-ensureInitialized()
-
 /**
  * POST /api/import/opening-balance/correct
  *
- * Correct a period's existing opening balances the BFL-compliant way: the
- * current IB verifikat (immutable, posted) is stornoed and a corrected IB is
- * booked, then fiscal_periods.opening_balance_entry_id is relinked to the new
- * entry via the replace_period_opening_balance_link RPC.
+ * Correct a period's existing opening balances the BFL-compliant way: a
+ * corrected IB is booked, fiscal_periods.opening_balance_entry_id is relinked
+ * to it via the replace_period_opening_balance_link RPC, and the current IB
+ * verifikat (immutable, posted) is stornoed. Owner or admin only: the service
+ * refuses a member with FORBIDDEN before anything is booked.
  *
  * Because getOpeningBalances reads the linked entry directly and the
  * trial-balance / general-ledger movement queries include both `posted` and
@@ -49,8 +47,9 @@ export const POST = withRouteContext(
     const opLog = log.child({ fiscalPeriodId: fiscal_period_id })
 
     // Write-role (non-viewer) + company membership are enforced by
-    // withRouteContext({ requireWrite: true }); the service scopes every read
-    // by that verified companyId.
+    // withRouteContext({ requireWrite: true }); the service adds the
+    // owner/admin gate every door shares and scopes every read by that
+    // verified companyId.
     const outcome = await correctOpeningBalances(
       { supabase, companyId: companyId!, userId: user.id, log: opLog },
       { fiscal_period_id, lines, cascade },

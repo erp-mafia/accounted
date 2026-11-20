@@ -38,7 +38,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/dimensions/:id/values',
   summary: 'Create a dimension value (kostnadsställe/projekt code).',
   description:
-    'Registers a new value (SIE #OBJEKT) under a dimension: e.g. a new project code under dimension 6. Requires Idempotency-Key (UUID). Supports ?dry_run=true to validate the code format without committing. The `:id` path segment is the dimension row id (from GET …/dimensions), not the sie_dim_no. Send is_active=false to create the value archived. start_date/end_date are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt). Duplicate codes within the dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE.',
+    'Registers a new value (SIE #OBJEKT) under a dimension: e.g. a new project code under dimension 6. Requires Idempotency-Key (UUID). Supports ?dry_run=true to validate the code format without committing. The `:id` path segment is the dimension row id (from GET …/dimensions), not the sie_dim_no. Send is_active=false to create the value archived. start_date/end_date are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt). Duplicate codes within the dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE. Emits the webhook event dimension_value.created.',
   useWhen:
     'A voucher or invoice references a cost centre / project code that does not exist yet and the user has confirmed it should be created.',
   doNotUseFor:

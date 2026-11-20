@@ -1,12 +1,16 @@
 import type { Extension } from '@/lib/extensions/types'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { extractInvoiceFields, fetchOwnCompanyIdentity } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
+import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
+import { carryReadingToQueuedItems } from '@/lib/documents/inbox-extraction/carry-to-queue'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createLogger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
-import type { DocumentAttachment } from '@/types'
+import type { DocumentAttachment, InvoiceExtractionResult } from '@/types'
 import type { DocumentExtractionOwner } from '@/lib/events/types'
 
 const log = createLogger('document-extraction')
@@ -26,9 +30,9 @@ const SUPPORTED_MIME_TYPES = new Set([
 // AI-extraction extension: paid AI tier only.
 //
 // Subscribes to the existing document.uploaded event bus topic and runs the
-// configured extraction model (reusing invoice-inbox's extractInvoiceFields)
-// on every uploaded receipt or invoice. Writes the result to
-// document_attachments.extracted_data so the agent intent capture can use
+// configured extraction model on every uploaded receipt or invoice, through
+// the same extractAndMirror the inbox uses (lib/documents/inbox-extraction).
+// Writes the result to document_attachments.extracted_data so the agent intent capture can use
 // it without re-asking the user.
 //
 // Idempotency: skips when extracted_at is already set on the row.
@@ -169,48 +173,56 @@ async function extractAndPersist(
   }
   const buffer = Buffer.from(await blob.arrayBuffer())
 
-  let extractedData: Record<string, unknown> | null = null
-  let model: string
   try {
-    const { data, rawText, model: usedModel, skipped } = await extractInvoiceFields({
+    // Reads and stamps in one step, the same stamp the inbox writes for the
+    // documents it owns: skipped:<reason> when no model call was made,
+    // failed:no_raw_text when the call yielded nothing parseable, else the
+    // reading and the model that answered.
+    const { data, rawText, model, skipped } = await extractAndMirror(document.id, {
       buffer,
       mimeType,
       fileName: (document.file_name as string) || 'document',
       ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
     })
-    // extractInvoiceFields returns an "empty" result on failure rather than
-    // throwing. `skipped` means no model call was made (and why); a null
-    // rawText with no skip means the call failed or the JSON parse did.
-    if (skipped) {
-      await stamp(supabase, document.id, `skipped:${skipped}`)
-      return
+    // The same test the mirror stamps a reading by: a model call that answered and was parsed.
+    if (!skipped && rawText != null && data != null) {
+      log.info('extraction persisted', { doc: document.id, model, companyId })
+      await fillQueuedItems(supabase, companyId, document.id, data)
     }
-    if (!rawText) {
-      await stamp(supabase, document.id, 'failed:no_raw_text')
-      return
-    }
-    extractedData = data as unknown as Record<string, unknown>
-    model = usedModel ?? 'unknown'
   } catch (err) {
-    log.warn('extraction threw', {
-      doc: document.id,
+    // Stamped so nothing re-attempts it, then thrown: nothing retries a
+    // failed:exception, so the event bus logs it as an error with the event
+    // type and this consumer's name (lib/events/bus.ts).
+    await stamp(supabase, document.id, 'failed:exception')
+    throw err
+  }
+}
+
+/**
+ * The Underlag item Arkiv queued for this document while it was being read
+ * gets the reading now (lib/documents/inbox-extraction/carry-to-queue.ts),
+ * with the supplier match and the bank check the inbox gives an item it read
+ * itself. Best effort: the reading is on the document either way, and the
+ * inbox list shows it from there.
+ */
+async function fillQueuedItems(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+  reading: InvoiceExtractionResult,
+): Promise<void> {
+  try {
+    const filled = await carryReadingToQueuedItems(
+      supabase,
+      { companyId, documentId, reading: reading as unknown as Record<string, unknown> },
+      { supplierFor: () => matchSupplierId(supabase, companyId, reading.supplier) },
+    )
+    for (const itemId of filled) await proposeBankMatchForInboxItem(supabase, companyId, itemId, log)
+    if (filled.length > 0) log.info('reading carried to queued items', { doc: documentId, items: filled.length })
+  } catch (err) {
+    log.warn('carrying the reading to queued items failed', {
+      doc: documentId,
       err: err instanceof Error ? err.message : String(err),
     })
-    await stamp(supabase, document.id, 'failed:exception')
-    return
   }
-
-  const { error: updateErr } = await supabase
-    .from('document_attachments')
-    .update({
-      extracted_data: extractedData,
-      extracted_at: new Date().toISOString(),
-      extraction_model: model,
-    })
-    .eq('id', document.id)
-  if (updateErr) {
-    log.warn('persist failed', { doc: document.id, err: updateErr.message, companyId })
-    return
-  }
-  log.info('extraction persisted', { doc: document.id, model, companyId })
 }

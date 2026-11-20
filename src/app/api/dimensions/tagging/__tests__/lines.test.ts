@@ -5,7 +5,9 @@
  * Covers: 401, query validation (400), the voucher-grouped happy path (two
  * queries: qualifying entries → complete line sets), the hard-cap contract
  * (limit+1 entries → total_capped true, second query only for the page), the
- * empty result short-circuit (no line query), and the DB error paths.
+ * empty result short-circuit (no line query), the DB error paths, and
+ * retag_block: a voucher behind a period lock says so while browsing, before
+ * anyone tries to tag it (crm#1908).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -53,6 +55,7 @@ interface Voucher {
   reversed_by_id: string | null
   reverses_id: string | null
   fiscal_period_id: string
+  retag_block: { reason: string; message: string } | null
   lines: VoucherLine[]
 }
 
@@ -295,6 +298,62 @@ describe('GET /api/dimensions/tagging/lines', () => {
     expect(status).toBe(200)
     expect(body.data.vouchers).toHaveLength(2)
     expect(body.data.vouchers.every((v) => v.annulled)).toBe(true)
+  })
+
+  it('marks the vouchers behind a period lock with the reason, and leaves the open ones unmarked', async () => {
+    enqueue({
+      data: [
+        makeRawEntry({ id: 'entry-closed', entry_date: '2025-12-20', fiscal_period_id: 'period-closed' }),
+        makeRawEntry({ id: 'entry-locked', entry_date: '2026-01-15', fiscal_period_id: 'period-1' }),
+        makeRawEntry({ id: 'entry-open', entry_date: '2026-03-10', fiscal_period_id: 'period-1' }),
+      ],
+    })
+    enqueue({
+      data: [
+        makeRawLine({ id: 'line-1', journal_entry_id: 'entry-closed' }),
+        makeRawLine({ id: 'line-2', journal_entry_id: 'entry-locked' }),
+        makeRawLine({ id: 'line-3', journal_entry_id: 'entry-open' }),
+      ],
+    })
+    enqueue({ data: { bookkeeping_locked_through: '2026-01-31' } }) // company_settings
+    enqueue({
+      data: [
+        { id: 'period-closed', is_closed: true, locked_at: '2026-02-01T00:00:00Z' },
+        { id: 'period-1', is_closed: false, locked_at: null },
+      ],
+    }) // fiscal_periods
+
+    const response = await GET(request(), noParams)
+    const { status, body } = await parseJsonResponse<VouchersBody>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.vouchers.map((v) => [v.journal_entry_id, v.retag_block])).toEqual([
+      [
+        'entry-closed',
+        {
+          reason: 'period_closed',
+          message: 'Perioden är stängd: använd rättelseverifikat (storno) för att ändra dimensioner.',
+        },
+      ],
+      [
+        'entry-locked',
+        {
+          reason: 'company_lock_date',
+          message: 'Bokföringen är låst t.o.m. 2026-01-31: använd rättelseverifikat (storno).',
+        },
+      ],
+      ['entry-open', null],
+    ])
+  })
+
+  it('returns 500 when the period locks cannot be read: no voucher is shown as taggable unread', async () => {
+    enqueue({ data: [makeRawEntry()] })
+    enqueue({ data: [makeRawLine()] })
+    enqueue({ error: { message: 'connection reset' } }) // company_settings
+
+    const response = await GET(request(), noParams)
+
+    expect(response.status).toBe(500)
   })
 
   it('returns 500 when the entry query fails', async () => {

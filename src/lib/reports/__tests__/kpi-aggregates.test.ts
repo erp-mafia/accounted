@@ -202,3 +202,66 @@ describe('buildTrialBalanceRows', () => {
     expect(buildTrialBalanceRows(new Map(), [], accountMap)).toEqual([])
   })
 })
+
+// Parity: the KPI rows now come from the trial balance's own row builder.
+// The copy KPI used to keep (pinned to generateTrialBalance's tail) is
+// reproduced here as the reference and must agree on rows with float noise,
+// accounts missing from the chart, IB-only and period-only accounts.
+describe('buildTrialBalanceRows: parity with the copy it replaced', () => {
+  function legacyRows(
+    openingBalances: Map<string, { debit: number; credit: number }>,
+    periodSums: Array<{ account_number: string; debit: number; credit: number }>,
+    accountMap: Map<string, { name: string; class: number }>,
+  ) {
+    const periodBalances = new Map<string, { debit: number; credit: number }>()
+    for (const sums of periodSums) {
+      const existing = periodBalances.get(sums.account_number) || { debit: 0, credit: 0 }
+      existing.debit += Number(sums.debit) || 0
+      existing.credit += Number(sums.credit) || 0
+      periodBalances.set(sums.account_number, existing)
+    }
+    const r = (n: number) => Math.round(n * 100) / 100
+    const rows = []
+    for (const accountNumber of new Set([...openingBalances.keys(), ...periodBalances.keys()])) {
+      const opening = openingBalances.get(accountNumber) || { debit: 0, credit: 0 }
+      const period = periodBalances.get(accountNumber) || { debit: 0, credit: 0 }
+      const info = accountMap.get(accountNumber) || { name: `Konto ${accountNumber}`, class: parseInt(accountNumber[0]) || 0 }
+      rows.push({
+        account_number: accountNumber,
+        account_name: info.name,
+        account_class: info.class,
+        opening_debit: r(opening.debit),
+        opening_credit: r(opening.credit),
+        period_debit: r(period.debit),
+        period_credit: r(period.credit),
+        closing_debit: r(opening.debit + period.debit),
+        closing_credit: r(opening.credit + period.credit),
+      })
+    }
+    return rows.sort((a, b) => a.account_number.localeCompare(b.account_number))
+  }
+
+  it('gives the same rows as the old KPI copy', () => {
+    const accountMap = new Map([
+      ['1930', { name: 'Företagskonto', class: 1 }],
+      ['3001', { name: 'Försäljning', class: 3 }],
+    ])
+    const agg = emptyAgg({
+      ob: [
+        { account_number: '1930', debit: 0.1, credit: 0 },
+        { account_number: '1930', debit: 0.2, credit: 0 },
+        { account_number: '2440', debit: 0, credit: 1234.56 },
+      ],
+    })
+    const periodSums = [
+      { account_number: '1930', debit: 1000.1, credit: 0.7 },
+      { account_number: '1930', debit: 0.2, credit: 0 },
+      { account_number: '3001', debit: 0, credit: 800.05 },
+      { account_number: '6071', debit: 199.99, credit: 0 },
+    ]
+    const opening = buildOpeningBalances(agg, null)
+    expect(buildTrialBalanceRows(opening, periodSums, accountMap)).toEqual(
+      legacyRows(opening, periodSums, accountMap),
+    )
+  })
+})

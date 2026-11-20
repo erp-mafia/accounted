@@ -8,9 +8,9 @@ import { roundOre } from '@/lib/money'
  * This is the highest-leverage input for the cold-start majority: without it
  * the model sees only the bank line (merchant + amount); with it, it sees the
  * supplier name, line items and VAT off the actual receipt. Same sources the
- * transaction.categorization intent reads — receipts.matched_transaction_id,
+ * transaction.categorization intent reads - receipts.matched_transaction_id,
  * invoice_inbox_items.matched_transaction_id, and the transaction's own
- * attached document — but produced as a bounded string, not a tool loop.
+ * attached document - but produced as a bounded string, not a tool loop.
  *
  * Company-scoped and best-effort: any failing query is skipped, never fatal.
  * Returns '' when there is no underlag (the selector then works off the bank

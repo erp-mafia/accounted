@@ -1,16 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
-import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import {
+  ACCRUAL_RELEASE_FAILED_WARNING,
+  createSchedulesForCustomerInvoice,
+} from '@/lib/bookkeeping/accruals/from-invoices'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import type { Logger } from '@/lib/logger'
 import type { Customer, EntityType, Invoice, InvoiceItem } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
-// Statuses where the revenue entry can still be created afterwards. Paid
-// invoices are excluded: their payment flow has already booked the full
-// cash-style entry (mark-paid routes on the missing journal-entry link), so
-// booking the sale now would double-post revenue.
+// Statuses where the revenue entry can still be created afterwards. Paid and
+// partially paid invoices are excluded: a payment that reached one without a
+// verifikat booked either the whole sale (kontantmetoden, before a switch of
+// method), which this step would double-post, or only the 1510 clearing (a
+// deferring company's payment before sale-first.ts), which is corrected by a
+// rättelse. Every settlement door now books the sale first, through
+// bookInvoice, while the invoice is still in one of these statuses.
 export const INVOICE_BOOKABLE_STATUSES = ['sent', 'overdue']
 
 export interface BookDeferredWarning {
@@ -69,6 +76,9 @@ export async function bookInvoiceDeferred(opts: {
       invoice as Invoice,
       entityType,
       invoice.customer?.name,
+      // The posting port's event, while POSTING_EVENTS is on: the person (or
+      // the approved operation) booked the invoice with the Bokför step.
+      { posting: () => ({ linkBasis: linkBasisColumns('user_created') }) },
     )
   } catch (err) {
     if (isBookkeepingError(err)) {
@@ -139,6 +149,8 @@ export async function bookInvoiceDeferred(opts: {
         companyId,
         deliveryDocumentId,
         journalEntry.id,
+        // The delivered PDF of this invoice on the invoice's own verifikat.
+        linkBasisColumns('system_derived'),
       )
     } catch (err) {
       log.error('failed to link delivered invoice PDF on deferred booking', err as Error, {
@@ -173,6 +185,9 @@ export async function bookInvoiceDeferred(opts: {
           'Fakturan bokfördes, men en eller flera periodiseringar kunde inte ' +
           'skapas. Kontrollera under Bokföring → Periodiseringar.',
       })
+    }
+    if ((accrual.releasesFailed ?? 0) > 0) {
+      warnings.push({ code: ACCRUAL_RELEASE_FAILED_WARNING.code, message: ACCRUAL_RELEASE_FAILED_WARNING.message_sv })
     }
   } catch (err) {
     log.error('accrual schedule creation failed on deferred booking', err as Error, { invoiceId: id })

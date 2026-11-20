@@ -22,6 +22,7 @@ describe('skillAppliesToCompany: legal form', () => {
     // So is an ekonomisk förening, although it files INK2 like an aktiebolag:
     // AB skills speak of aktiekapital, ABL and aktieägare.
     ['ekonomisk_forening', { AB: false, EF: false, both: true, none: true }],
+    ['bostadsrattsforening', { AB: false, EF: false, both: true, none: true }],
   ] as const)('%s', (entityType, expected) => {
     const verdict = (tag: SkillApplicability['entity_type']) =>
       skillAppliesToCompany({ entity_type: tag }, company(entityType))
@@ -29,7 +30,7 @@ describe('skillAppliesToCompany: legal form', () => {
   })
 
   it('covers every legal form in the registry', () => {
-    expect([...ENTITY_TYPES].sort()).toEqual(['aktiebolag', 'ekonomisk_forening', 'enskild_firma', 'ideell_forening'])
+    expect([...ENTITY_TYPES].sort()).toEqual(['aktiebolag', 'bostadsrattsforening', 'ekonomisk_forening', 'enskild_firma', 'ideell_forening'])
   })
 
   // 'AB' and 'EF' are skill tags, never stored forms: the pre-fix filter

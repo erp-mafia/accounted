@@ -76,9 +76,12 @@ describe('generate_invoice_number RPC', () => {
     expect(persisted.rows[0]!.invoice_number).toBe(assigned)
   })
 
-  it('produces a PF- prefix when document_type is proforma', async () => {
+  it('produces a PF- number from the proforma counter when document_type is proforma', async () => {
     const { userId, companyId } = await seedCompany()
     await ensureCompanySettings({ userId, companyId, invoicePrefix: 'F', nextInvoiceNumber: 42 })
+    await getPool().query('UPDATE public.company_settings SET next_proforma_number = 42 WHERE company_id = $1', [
+      companyId,
+    ])
     const invoiceId = await insertDraftInvoice({ userId, companyId, documentType: 'proforma' })
 
     const { rows } = await getPool().query<{ generate_invoice_number: string }>(
@@ -87,6 +90,8 @@ describe('generate_invoice_number RPC', () => {
     )
 
     expect(rows[0]!.generate_invoice_number).toBe('PF-042')
+    // The invoice series is untouched: a proforma leaves no hole in it.
+    expect(await readCounter(companyId)).toBe(42)
   })
 
   it('is idempotent: a second call on the same invoice returns the same number without bumping the counter', async () => {

@@ -4,7 +4,7 @@
  * The prune execute phase is the safety-critical part: the client's
  * account_numbers list is a selection, not an authority. The tests assert
  * that used accounts, system accounts, and unknown numbers sent by the
- * client are skipped/reported — only freshly re-verified unused accounts
+ * client are skipped/reported - only freshly re-verified unused accounts
  * reach the DELETE.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -160,6 +160,7 @@ describe('POST /api/bookkeeping/accounts/prune', () => {
     const { supabase } = createCapturingSupabase([
       { data: chartAccounts }, // chart_of_accounts page
       { data: usageRows }, // usage RPC
+      { data: [] }, // budget usage RPC
     ])
     auth(supabase)
 
@@ -192,6 +193,7 @@ describe('POST /api/bookkeeping/accounts/prune', () => {
     const { supabase, calls } = createCapturingSupabase([
       { data: chartAccounts },
       { data: usageRows },
+      { data: [] }, // budget usage RPC
       { data: null }, // delete chunk
     ])
     auth(supabase)
@@ -223,6 +225,7 @@ describe('POST /api/bookkeeping/accounts/prune', () => {
     const { supabase, calls } = createCapturingSupabase([
       { data: chartAccounts },
       { data: usageRows },
+      { data: [] },
     ])
     auth(supabase)
 
@@ -237,6 +240,59 @@ describe('POST /api/bookkeeping/accounts/prune', () => {
     expect(status).toBe(200)
     expect(body.data.deleted).toEqual([])
     expect(body.data.skipped).toEqual(['3001'])
+    expect(calls.filter((c) => c.method === 'delete')).toHaveLength(0)
+  })
+
+  it('keeps an account a budget uses: not deletable, listed as used with its budget lines (accounted#134)', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: chartAccounts },
+      { data: usageRows },
+      { data: [{ account_number: '5410', budget_line_count: 12 }] },
+    ])
+    auth(supabase)
+
+    const req = createMockRequest('/api/bookkeeping/accounts/prune', {
+      method: 'POST',
+      body: { dry_run: false, account_numbers: ['5410', '19301'] },
+    })
+    const { status, body } = await parseJsonResponse<{
+      data: { deleted: string[]; skipped: string[] }
+    }>(await prunePOST(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(body.data.deleted).toEqual(['19301'])
+    expect(body.data.skipped).toEqual(['5410'])
+    expect(calls.filter((c) => c.method === 'rpc').map((c) => c.args)).toContainEqual([
+      'get_account_budget_line_counts',
+      { p_company_id: 'company-1' },
+    ])
+
+    const preview = createCapturingSupabase([
+      { data: chartAccounts },
+      { data: usageRows },
+      { data: [{ account_number: '5410', budget_line_count: 12 }] },
+    ])
+    auth(preview.supabase)
+    const dry = await parseJsonResponse<{
+      data: { deletable: Array<{ account_number: string }>; used: Array<{ account_number: string; usage_count: number; budget_line_count: number }> }
+    }>(await prunePOST(createMockRequest('/api/bookkeeping/accounts/prune', { method: 'POST', body: { dry_run: true } }), routeParams))
+    expect(dry.body.data.deletable.map((a) => a.account_number)).toEqual(['19301'])
+    expect(dry.body.data.used.find((a) => a.account_number === '5410')).toMatchObject({ usage_count: 0, budget_line_count: 12 })
+  })
+
+  it('returns 500 when the budget usage read fails, deleting nothing', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: chartAccounts },
+      { data: usageRows },
+      { error: { message: 'boom' } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/prune', {
+      method: 'POST',
+      body: { dry_run: false, account_numbers: ['5410'] },
+    })
+    const res = await prunePOST(req, routeParams)
+    expect(res.status).toBe(500)
     expect(calls.filter((c) => c.method === 'delete')).toHaveLength(0)
   })
 

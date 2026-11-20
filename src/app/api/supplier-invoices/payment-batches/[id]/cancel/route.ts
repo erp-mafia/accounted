@@ -2,9 +2,6 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { cancelPaymentBatch } from '@/lib/payments/batch-operations'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * Cancel a payment batch. Compare-and-set on status='created' so two racing

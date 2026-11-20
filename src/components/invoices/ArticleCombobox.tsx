@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { Input } from '@/components/ui/input'
 import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { foldText } from '@/lib/bookkeeping/account-search'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 
 export interface ArticleComboboxItem {
   id: string
@@ -57,7 +58,6 @@ export default function ArticleCombobox({
 
   const [search, setSearch] = useState(selectedLabel)
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(0)
   // aria-activedescendant is only announced once the user has explicitly
   // arrowed into the list: before that, the visual highlight is a hint for
   // Enter behavior, not a selection a screen reader should read out.
@@ -100,44 +100,6 @@ export default function ArticleCombobox({
     [filtered, freeTextLabel],
   )
 
-  // While typing, highlight the first actual match (index 1: index 0 is the
-  // pinned "Egen rad"), so type-and-Enter picks the searched article instead
-  // of silently detaching the line to free text.
-  useEffect(() => {
-    setHighlightedIndex(hasTyped && filtered.length > 0 ? 1 : 0)
-  }, [options.length, search, hasTyped, filtered.length])
-
-  // Opening on a committed selection starts the highlight ON that selection,
-  // like the Select this replaces, so Enter re-confirms instead of switching.
-  const openList = useCallback(() => {
-    const currentKey = value ?? 'none'
-    const idx = options.findIndex((o) => o.key === currentKey)
-    setHighlightedIndex(idx >= 0 ? idx : 0)
-    setHasArrowNavigated(false)
-    setIsOpen(true)
-  }, [options, value])
-
-  useEffect(() => {
-    if (!isOpen || !listRef.current) return
-    listRef.current
-      .querySelector('[data-highlighted="true"]')
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [highlightedIndex, isOpen])
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent | TouchEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
-    }
-  }, [])
-
   const select = useCallback(
     (option: Option) => {
       // Re-selecting the committed value is a no-op close: applyArticle
@@ -155,35 +117,40 @@ export default function ArticleCombobox({
     [onChange, value],
   )
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter') {
-        e.preventDefault()
-        openList()
-      }
-      return
-    }
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        setHasArrowNavigated(true)
-        setHighlightedIndex((prev) => Math.min(prev + 1, options.length - 1))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        setHasArrowNavigated(true)
-        setHighlightedIndex((prev) => Math.max(prev - 1, 0))
-        break
-      case 'Enter':
-        e.preventDefault()
-        if (options[highlightedIndex]) select(options[highlightedIndex])
-        break
-      case 'Escape':
-        e.preventDefault()
-        setIsOpen(false)
-        break
-    }
-  }
+  const close = useCallback(() => setIsOpen(false), [])
+  const insideRefs = useMemo(() => [containerRef], [])
+  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+    count: options.length,
+    isOpen,
+    // A text input inside a form submits on Enter; the Select this replaces
+    // opened its list instead.
+    openKeys: ['ArrowDown', 'ArrowUp', 'Enter'],
+    open: () => openList(),
+    close,
+    activate: (index) => {
+      if (options[index]) select(options[index])
+    },
+    onNavigate: () => setHasArrowNavigated(true),
+    listRef,
+    insideRefs,
+  })
+
+  // While typing, highlight the first actual match (index 1: index 0 is the
+  // pinned "Egen rad"), so type-and-Enter picks the searched article instead
+  // of silently detaching the line to free text.
+  useEffect(() => {
+    setHighlightedIndex(hasTyped && filtered.length > 0 ? 1 : 0)
+  }, [options.length, search, hasTyped, filtered.length, setHighlightedIndex])
+
+  // Opening on a committed selection starts the highlight ON that selection,
+  // like the Select this replaces, so Enter re-confirms instead of switching.
+  const openList = useCallback(() => {
+    const currentKey = value ?? 'none'
+    const idx = options.findIndex((o) => o.key === currentKey)
+    setHighlightedIndex(idx >= 0 ? idx : 0)
+    setHasArrowNavigated(false)
+    setIsOpen(true)
+  }, [options, value, setHighlightedIndex])
 
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     // Focus landing on an option inside the list is not a dismissal: closing

@@ -29,10 +29,16 @@ export const SHOPIFY_API_VERSION = '2026-07'
 /**
  * Orders per page. The API caps `first` at 250, but query cost is what binds
  * here: each order carries nested lineItems/shippingLines connections, and a
- * single GraphQL query must stay under the 1000-point ceiling
- * (25 * (~1 + lineItems 25 + shipping 5 + overhead) lands well below it).
+ * single GraphQL query must stay under the 1000-point ceiling. The requested
+ * cost is linear in this number (2 + pageSize * per-order cost), and the
+ * per-order cost is at least 36 (the order, lineItems 2 + 25, shippingLines
+ * 2 + 5, shippingAddress 1), so a 25-order page cost at least 902. Each
+ * address is one object with one enum (1 point per order; requiresShipping
+ * is a scalar, 0): 24 orders with billingAddress added (#98) never cost more
+ * than the 25 without it did, since 24 * (c + 1) <= 25 * c for any per-order
+ * cost c >= 24.
  */
-export const SHOPIFY_PAGE_SIZE = 25
+export const SHOPIFY_PAGE_SIZE = 24
 /** Line items fetched per order; more than this drops the line snapshot. */
 export const SHOPIFY_LINE_ITEMS_PAGE = 25
 /** Shipping lines fetched per order; >5 on one order is effectively unheard of. */
@@ -240,9 +246,22 @@ export async function createShopifySession(
   return { shopDomain: creds.shopDomain, accessToken: await exchangeAccessToken(creds) }
 }
 
+/** GraphQL error code Shopify uses for a missing scope or a protected-data refusal. */
+const ACCESS_DENIED_CODE = 'ACCESS_DENIED'
+
 interface GraphQLErrorShape {
   message?: string
   extensions?: { code?: string }
+  /** Response path of a field-level error, e.g. ['orders', 'nodes', 0, 'shippingAddress']. */
+  path?: Array<string | number>
+}
+
+/** Whether a GraphQL error is scoped to (or below) one of the optional fields. */
+function isOptionalFieldError(error: GraphQLErrorShape, optionalFields: readonly string[]): boolean {
+  return (
+    Array.isArray(error.path) &&
+    error.path.some((segment) => typeof segment === 'string' && optionalFields.includes(segment))
+  )
 }
 
 /**
@@ -256,6 +275,23 @@ export async function shopifyGraphQL<T>(
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<T> {
+  return (await requestGraphQL<T>(session, query, variables, [])).data
+}
+
+/**
+ * shopifyGraphQL, except that errors scoped to one of `optionalFields` are
+ * returned instead of thrown, provided data came back. Shopify answers a
+ * field the app may not read (protected customer data) with HTTP 200, null
+ * in that field and an `errors` entry whose path points at it; for a field
+ * the caller can do without, that is a degraded answer, not a failed one.
+ * Errors anywhere else still throw exactly as in shopifyGraphQL.
+ */
+async function requestGraphQL<T>(
+  session: ShopifySession,
+  query: string,
+  variables: Record<string, unknown>,
+  optionalFields: readonly string[],
+): Promise<{ data: T; optionalFieldErrors: GraphQLErrorShape[] }> {
   // Throws (non-retryable) when the stored domain is not a myshopify.com host.
   const url = `${shopOriginOf(session.shopDomain)}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`
   let lastError: unknown
@@ -300,19 +336,26 @@ export async function shopifyGraphQL<T>(
         await sleep(RETRY_DELAYS_MS[attempt])
         continue
       }
-      const accessDenied = body.errors.some((e) => e.extensions?.code === 'ACCESS_DENIED')
-      const message = body.errors[0]?.message ?? 'unknown GraphQL error'
+      const fatal = body.errors.filter((e) => !isOptionalFieldError(e, optionalFields))
+      if (fatal.length === 0 && body.data) {
+        return { data: body.data, optionalFieldErrors: body.errors }
+      }
+      // Only errors outside the optional fields decide the classification: a
+      // withheld optional field must never read as revoked credentials.
+      const reported = fatal[0] ?? body.errors[0]
+      const accessDenied = fatal.some((e) => e.extensions?.code === ACCESS_DENIED_CODE)
+      const message = reported?.message ?? 'unknown GraphQL error'
       throw new ShopifyApiError(
         `Shopify GraphQL error: ${message}`,
         accessDenied ? 403 : 0,
-        body.errors[0]?.extensions?.code ?? null,
+        reported?.extensions?.code ?? null,
       )
     }
 
     if (!body?.data) {
       throw new ShopifyApiError('Shopify API returned no data', 0)
     }
-    return body.data
+    return { data: body.data, optionalFieldErrors: [] }
   }
   throw lastError instanceof Error
     ? lastError
@@ -320,15 +363,28 @@ export async function shopifyGraphQL<T>(
 }
 
 /**
- * Order fields for the feed. Deliberately NO customer/PII fields (customer,
- * email, addresses): they are gated behind Shopify's protected customer data
- * program, and the order feed does not need them; the verifikat reference is
- * the order name/id. Tax lines, line items and shipping lines carry the
- * booking underlag (per-rate VAT, line snapshot) for the Orders page.
- * Refunds come inline (plain list, not a connection), so no per-order
- * follow-up requests are needed.
+ * Order fields for the feed. Customer/PII fields stay out (customer, email,
+ * names, street addresses): the order feed does not need them, and the
+ * verifikat reference is the order name/id. The one exception is the
+ * country code of the shipping and billing addresses and nothing else from
+ * them: the destination decides how a goods sale is taxed (domestic, EU
+ * distance sale under OSS, export; crm#1032), and for an order with nothing
+ * to ship (digital products, services) the customer's billing country is the
+ * evidence of where the customer is (#98). Each line's requiresShipping tells
+ * the two apart; it rides with the addresses, so the fallback query without
+ * them asks for exactly the fields that worked before either was added. Tax
+ * lines, line items and shipping lines carry the booking underlag (per-rate
+ * VAT, line snapshot). Refunds come inline (plain list, not a connection), so
+ * no per-order follow-up requests are needed.
+ *
+ * Shopify counts addresses as protected customer data (the protected field
+ * "Address", level 2, covering billing and shipping alike). A store that
+ * withholds it from the app answers with the address null plus a
+ * field-scoped error; listOrdersPage treats that as "no country", never as a
+ * failed page.
  */
-const ORDERS_QUERY = `
+function buildOrdersQuery(includeAddresses: boolean): string {
+  return `
 query OrdersFeed($first: Int!, $after: String, $query: String) {
   orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
     pageInfo { hasNextPage endCursor }
@@ -344,11 +400,14 @@ query OrdersFeed($first: Int!, $after: String, $query: String) {
       taxesIncluded
       totalPriceSet { shopMoney { amount currencyCode } }
       taxLines { ratePercentage priceSet { shopMoney { amount currencyCode } } }
+      ${includeAddresses ? 'shippingAddress { countryCodeV2 }' : ''}
+      ${includeAddresses ? 'billingAddress { countryCodeV2 }' : ''}
       lineItems(first: ${SHOPIFY_LINE_ITEMS_PAGE}) {
         pageInfo { hasNextPage }
         nodes {
           name
           quantity
+          ${includeAddresses ? 'requiresShipping' : ''}
           discountedTotalSet { shopMoney { amount currencyCode } }
           taxLines { ratePercentage priceSet { shopMoney { amount currencyCode } } }
         }
@@ -369,11 +428,23 @@ query OrdersFeed($first: Int!, $after: String, $query: String) {
     }
   }
 }`
+}
+
+const ORDERS_QUERY = buildOrdersQuery(true)
+const ORDERS_QUERY_WITHOUT_ADDRESSES = buildOrdersQuery(false)
+/** The address fields a store may withhold without failing the page. */
+const ADDRESS_FIELDS = ['shippingAddress', 'billingAddress'] as const
 
 export interface OrdersPage {
   orders: ShopifyOrder[]
   hasNextPage: boolean
   endCursor: string | null
+  /**
+   * The store refused the addresses on this request (protected customer data
+   * not granted to the app), so no order on the page carries a country. The
+   * page is otherwise complete. False when the addresses were not asked for.
+   */
+  addressesWithheld: boolean
 }
 
 export interface ListOrdersOptions {
@@ -381,6 +452,27 @@ export interface ListOrdersOptions {
   updatedAtMin: string
   /** Relay cursor from the previous page's endCursor, or null for page one. */
   after: string | null
+  /**
+   * Ask for the shipping and billing countries (default true). The sync
+   * stops asking for the rest of a run once the store refused them.
+   */
+  includeAddresses?: boolean
+}
+
+interface OrdersData {
+  orders: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null }
+    nodes: ShopifyOrder[]
+  }
+}
+
+function toOrdersPage(data: OrdersData, addressesWithheld: boolean): OrdersPage {
+  return {
+    orders: data.orders.nodes,
+    hasNextPage: data.orders.pageInfo.hasNextPage,
+    endCursor: data.orders.pageInfo.endCursor,
+    addressesWithheld,
+  }
 }
 
 /**
@@ -388,25 +480,41 @@ export interface ListOrdersOptions {
  * so the caller's cursor advances chronologically. Relay cursor pagination is
  * stable across same-second ties, so no offset fallback is needed (unlike the
  * WooCommerce client).
+ *
+ * A withheld address never fails the page. The documented answer (null field
+ * plus a field-scoped error) is tolerated in place. Should the store instead
+ * refuse the whole query with ACCESS_DENIED, the page is asked once more
+ * without the addresses: only if that also fails is read_orders itself
+ * missing, and the error propagates (classified as revoked) exactly as
+ * before the addresses were added. Without this, adding one optional field
+ * could flip a working connection to revoked and wipe its credentials.
  */
 export async function listOrdersPage(
   session: ShopifySession,
   options: ListOrdersOptions,
 ): Promise<OrdersPage> {
-  const data = await shopifyGraphQL<{
-    orders: {
-      pageInfo: { hasNextPage: boolean; endCursor: string | null }
-      nodes: ShopifyOrder[]
-    }
-  }>(session, ORDERS_QUERY, {
+  const variables = {
     first: SHOPIFY_PAGE_SIZE,
     after: options.after,
     query: `updated_at:>='${options.updatedAtMin}'`,
-  })
-  return {
-    orders: data.orders.nodes,
-    hasNextPage: data.orders.pageInfo.hasNextPage,
-    endCursor: data.orders.pageInfo.endCursor,
+  }
+  if (options.includeAddresses === false) {
+    const data = await shopifyGraphQL<OrdersData>(session, ORDERS_QUERY_WITHOUT_ADDRESSES, variables)
+    return toOrdersPage(data, false)
+  }
+
+  try {
+    const { data, optionalFieldErrors } = await requestGraphQL<OrdersData>(
+      session,
+      ORDERS_QUERY,
+      variables,
+      ADDRESS_FIELDS,
+    )
+    return toOrdersPage(data, optionalFieldErrors.length > 0)
+  } catch (error) {
+    if (!(error instanceof ShopifyApiError) || error.code !== ACCESS_DENIED_CODE) throw error
+    const data = await shopifyGraphQL<OrdersData>(session, ORDERS_QUERY_WITHOUT_ADDRESSES, variables)
+    return toOrdersPage(data, true)
   }
 }
 
@@ -417,20 +525,230 @@ query ConnectProbe {
 }`
 
 /**
+ * The scopes the store has actually granted this installation. A version's
+ * declared scopes are not that: a scope added in a new app version only
+ * reaches an installed store once the change is approved on the store, and
+ * the client credentials token carries the granted set (PH 161).
+ */
+const GRANTED_SCOPES_QUERY = `
+query GrantedScopes {
+  currentAppInstallation { accessScopes { handle } }
+}`
+
+/**
+ * Why connecting a store failed, as far as Shopify's answer tells. Each kind
+ * maps to one thing the merchant changes in Shopify.
+ */
+export type ShopifyConnectFailureKind =
+  /** Token exchange: the app exists but is not installed on this store. */
+  | 'app_not_installed'
+  /** Token exchange: shop_not_permitted, the app and store are in different organizations. */
+  | 'other_organization'
+  /** Token exchange refused the client id/secret (or the address is not that store's). */
+  | 'credentials_rejected'
+  /** The store has not granted read_orders to the installation (`grantedScopes` lists what it has). */
+  | 'orders_scope_not_granted'
+  /** read_orders is granted, yet orders are refused: protected customer data access is missing. */
+  | 'orders_protected_data'
+  /** Orders refused, and the granted scopes could not be read to tell the two causes apart. */
+  | 'orders_access_denied'
+  /** Network, 5xx, throttling or anything else: nothing for the merchant to change. */
+  | 'unreachable'
+
+export class ShopifyConnectError extends Error {
+  constructor(
+    readonly kind: ShopifyConnectFailureKind,
+    /** The underlying failure, kept for the log line. */
+    readonly underlying: unknown,
+    /** Scopes the store has granted the app, when the probe could read them. */
+    readonly grantedScopes: string[] | null = null,
+  ) {
+    super(underlying instanceof Error ? underlying.message : String(underlying))
+    this.name = 'ShopifyConnectError'
+  }
+}
+
+/** A write scope includes its read scope. */
+function grantsOrderRead(scopes: readonly string[]): boolean {
+  return scopes.includes('read_orders') || scopes.includes('write_orders')
+}
+
+/** The granted scope handles, or null when they cannot be read. Never throws. */
+export async function fetchGrantedScopes(session: ShopifySession): Promise<string[] | null> {
+  try {
+    const data = await shopifyGraphQL<{
+      currentAppInstallation: { accessScopes: Array<{ handle?: unknown } | null> | null } | null
+    }>(session, GRANTED_SCOPES_QUERY)
+    const scopes = data.currentAppInstallation?.accessScopes
+    if (!Array.isArray(scopes)) return null
+    return scopes
+      .map((scope) => scope?.handle)
+      .filter((handle): handle is string => typeof handle === 'string' && handle.length > 0)
+  } catch {
+    // Only enriches a connect error: unreadable scopes leave out the scope hint.
+    return null
+  }
+}
+
+/** Classify a failed token exchange (exchangeAccessToken's error). */
+function tokenFailureKind(error: unknown): ShopifyConnectFailureKind {
+  if (!(error instanceof ShopifyApiError)) return 'unreachable'
+  if (/not installed/i.test(error.message)) return 'app_not_installed'
+  if (error.code === 'shop_not_permitted' || /shop_not_permitted/i.test(error.message)) {
+    return 'other_organization'
+  }
+  // exchangeAccessToken reports every non-retryable 4xx as 401.
+  return error.status === 401 ? 'credentials_rejected' : 'unreachable'
+}
+
+/**
  * Verify credentials and read shop metadata. The one-order probe inside the
  * query is the authoritative check: it exercises the read_orders scope the
- * feed needs, so an app created without that scope fails here (ACCESS_DENIED)
+ * feed needs, so an app without that scope fails here (ACCESS_DENIED)
  * instead of at 03:15.
+ *
+ * Every failure is thrown as a ShopifyConnectError naming its cause. On
+ * ACCESS_DENIED the granted scopes are read in a second request (failure
+ * path only, so a working store's connect is unchanged): read_orders
+ * missing from them means the store never approved it, typically a scope
+ * added in a later app version; read_orders present means the refusal is
+ * the protected customer data gate on orders.
  */
 export async function testConnectionAndFetchShopInfo(
   creds: ShopifyCredentials,
 ): Promise<ShopifyShopInfo> {
-  const session = await createShopifySession(creds)
-  const data = await shopifyGraphQL<{
-    shop: { name: string | null; currencyCode: string | null }
-  }>(session, PROBE_QUERY)
+  let session: ShopifySession
+  try {
+    session = await createShopifySession(creds)
+  } catch (error) {
+    throw new ShopifyConnectError(tokenFailureKind(error), error)
+  }
+
+  let data: { shop: { name: string | null; currencyCode: string | null } | null }
+  try {
+    data = await shopifyGraphQL(session, PROBE_QUERY)
+  } catch (error) {
+    if (error instanceof ShopifyApiError && error.code === ACCESS_DENIED_CODE) {
+      const granted = await fetchGrantedScopes(session)
+      const kind: ShopifyConnectFailureKind =
+        granted === null
+          ? 'orders_access_denied'
+          : grantsOrderRead(granted)
+            ? 'orders_protected_data'
+            : 'orders_scope_not_granted'
+      throw new ShopifyConnectError(kind, error, granted)
+    }
+    const rejected =
+      error instanceof ShopifyApiError && (error.status === 401 || error.status === 403)
+    throw new ShopifyConnectError(rejected ? 'credentials_rejected' : 'unreachable', error)
+  }
   return {
     name: data.shop?.name ?? null,
     currency: data.shop?.currencyCode ? data.shop.currencyCode.toUpperCase() : null,
+  }
+}
+
+/**
+ * One order's billing contact, read on demand when the user creates an
+ * invoice from that order (Skapa faktura), never by the feed. The sync keeps
+ * storing no names or emails (crm#1032); this reads them one order at a time
+ * and the caller keeps them only on the customer the user creates.
+ *
+ * Name, email and address are protected customer data (level 2 fields, which
+ * Shopify grants a merchant's own app by plan). A store that withholds one
+ * answers with null plus a field-scoped error, reported in `withheld` rather
+ * than failing; a store that refuses the whole query (ACCESS_DENIED) reports
+ * all three withheld. Neither ever reads as revoked credentials here.
+ */
+const ORDER_CONTACT_QUERY = `
+query OrderContact($id: ID!) {
+  order(id: $id) {
+    email
+    billingAddress { name firstName lastName company }
+  }
+}`
+
+/** Fields the order contact lookup can report as withheld. */
+export type ShopifyContactField = 'name' | 'company' | 'email'
+
+export interface ShopifyOrderContact {
+  name: string | null
+  company: string | null
+  email: string | null
+  /** Fields the store did not share with the app (protected customer data). */
+  withheld: ShopifyContactField[]
+}
+
+interface OrderContactData {
+  order: {
+    email: string | null
+    billingAddress: {
+      name: string | null
+      firstName: string | null
+      lastName: string | null
+      company: string | null
+    } | null
+  } | null
+}
+
+const CONTACT_FIELDS: readonly ShopifyContactField[] = ['name', 'company', 'email']
+
+function cleanContactText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+/** The contact fields one field-scoped error covers. */
+function withheldContactFields(error: GraphQLErrorShape): ShopifyContactField[] {
+  const path = (error.path ?? []).filter((segment): segment is string => typeof segment === 'string')
+  if (path.includes('email')) return ['email']
+  if (!path.includes('billingAddress')) return []
+  if (path.includes('company')) return ['company']
+  if (path.some((segment) => segment === 'name' || segment === 'firstName' || segment === 'lastName')) {
+    return ['name']
+  }
+  return ['name', 'company']
+}
+
+/**
+ * The billing name, company and email of one order, by its numeric id
+ * (legacyResourceId). Null when the store has no such order (deleted since
+ * the sync, or another store's id).
+ */
+export async function fetchOrderContact(
+  session: ShopifySession,
+  orderId: string,
+): Promise<ShopifyOrderContact | null> {
+  let result: { data: OrderContactData; optionalFieldErrors: GraphQLErrorShape[] }
+  try {
+    result = await requestGraphQL<OrderContactData>(
+      session,
+      ORDER_CONTACT_QUERY,
+      { id: `gid://shopify/Order/${orderId}` },
+      ['email', 'billingAddress'],
+    )
+  } catch (error) {
+    if (error instanceof ShopifyApiError && error.code === ACCESS_DENIED_CODE) {
+      return { name: null, company: null, email: null, withheld: [...CONTACT_FIELDS] }
+    }
+    throw error
+  }
+
+  const order = result.data.order
+  if (!order) return null
+  const withheld = new Set<ShopifyContactField>()
+  for (const error of result.optionalFieldErrors) {
+    for (const field of withheldContactFields(error)) withheld.add(field)
+  }
+  const address = order.billingAddress
+  const joinedName = [address?.firstName, address?.lastName]
+    .map(cleanContactText)
+    .filter((part): part is string => part !== null)
+    .join(' ')
+  return {
+    name: cleanContactText(address?.name) ?? (joinedName || null),
+    company: cleanContactText(address?.company),
+    email: cleanContactText(order.email),
+    withheld: CONTACT_FIELDS.filter((field) => withheld.has(field)),
   }
 }

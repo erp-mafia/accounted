@@ -2,6 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { completeTaxDeadline } from '../complete-tax-deadline'
 
+// A failed auto-complete is never retried, so it must reach error tracking
+// (accounted#115): only `error` is swapped, the rest of the logger stays real.
+const { logError } = vi.hoisted(() => ({ logError: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      error: logError,
+    }),
+  }
+})
+
 /**
  * Chain mock that records every builder call and resolves to the given
  * result when awaited (the helper ends the chain with .select('id')).
@@ -74,8 +88,14 @@ describe('completeTaxDeadline', () => {
 
   it('swallows DB errors: logs and returns 0, never throws', async () => {
     const { supabase } = makeSupabase({ error: { message: 'permission denied' } })
+    logError.mockClear()
     await expect(
       completeTaxDeadline(supabase, 'company-1', ['moms_monthly'], '2026-06', 'submitted'),
     ).resolves.toEqual({ completed: 0 })
+    expect(logError).toHaveBeenCalledWith('Failed to auto-complete tax deadline', expect.objectContaining({
+      companyId: 'company-1',
+      taxPeriod: '2026-06',
+      error: 'permission denied',
+    }))
   })
 })

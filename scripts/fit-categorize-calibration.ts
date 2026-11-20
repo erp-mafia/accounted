@@ -9,8 +9,8 @@
  *
  *   npx tsx scripts/fit-categorize-calibration.ts
  *
- * Note: .env.local points at production; this only SELECTs, so it is safe, but
- * it is still the prod corpus you are reading.
+ * Note: this only SELECTs, but check which database your environment file
+ * points at: it may be a production corpus you are reading.
  *
  * The corpus is anonymous (20260922173222): a sample is a model score, the
  * proposed and booked BAS account, and whether they matched. It carries no

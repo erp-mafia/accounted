@@ -2,12 +2,9 @@ import { NextResponse } from 'next/server'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { validateBody } from '@/lib/api/validate'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { ensureInitialized } from '@/lib/init'
 import { PeppolAccessRequestSchema, requestPeppolAccessForCompany } from '@/lib/invoices/peppol-settings-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { createServiceClient } from '@/lib/supabase/server'
-
-ensureInitialized()
 
 /**
  * POST /api/settings/peppol/access: the company asks for Peppol access.

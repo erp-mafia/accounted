@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
-import { createMockRequest, createMockRouteParams, createQueuedMockSupabase } from '@/tests/helpers'
+import {
+  createMockRequest,
+  createMockRouteParams,
+  createQueuedMockSupabase,
+  makePayingCashAccount,
+  payingAccountReads,
+} from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, enqueueMany, reset, calls } = createQueuedMockSupabase()
 
@@ -76,6 +82,7 @@ describe('GET /api/salary/runs/[id]/payment/bank-list', () => {
       { data: run },
       { data: company },
       { data: settings },
+      ...payingAccountReads(),
       { data: [{ ...anna, employee: { ...anna.employee, clearing_number: '12' } }] },
     ])
     const response = await GET(createMockRequest(URL), createMockRouteParams({ id: 'run-1' }))
@@ -84,6 +91,29 @@ describe('GET /api/salary/runs/[id]/payment/bank-list', () => {
     expect(body.error.code).toBe('SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID')
     expect(body.error.message).toContain('Anna Test')
     expect(JSON.stringify(body)).not.toContain('123456789')
+  })
+
+  it('refuses naming the paying account in both languages when it has no IBAN (crm#1483)', async () => {
+    enqueueMany([
+      { data: run },
+      { data: company },
+      { data: settings },
+      ...payingAccountReads([
+        makePayingCashAccount({ name: 'Företagskonto' }),
+        makePayingCashAccount({ id: 'ca-1931', name: 'Sparkonto', ledger_account: '1931', is_primary: false, payee_iban: settings.iban }),
+      ]),
+    ])
+    const response = await GET(createMockRequest(URL), createMockRouteParams({ id: 'run-1' }))
+    expect(response.status).toBe(422)
+    const body = await response.json()
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS')
+    expect(body.error.message).toBe(
+      'Betalfilen betalar från Företagskonto (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+    )
+    expect(body.error.message_en).toBe(
+      'The payment file pays from Företagskonto (1930), but the account has no IBAN. Fill in its IBAN under Settings → Invoices, Bank accounts for customer invoices.',
+    )
+    expect(body.error.details.account).toMatchObject({ cash_account_id: 'ca-1930', ledger_account: '1930' })
   })
 
   it('returns the payee lines and total of the file, without archiving or stamping', async () => {

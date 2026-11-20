@@ -13,7 +13,7 @@ describe('toPickerAccounts', () => {
         bban: '832798443379915',
         currency: 'SEK',
         enabled: false,
-        claimed_by_company_id: 'ed461bc1-dbb5-4568-ae20-9337515878e2',
+        claimed_by_company_id: '0d1d0000-0000-4000-8000-000000000001',
         claimed_by_company_name: 'Arcim Technology AB',
       },
     ]

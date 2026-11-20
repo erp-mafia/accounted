@@ -329,6 +329,22 @@ const ACCOUNT_DESCRIPTIONS: Record<string, AccountDescription> = {
   },
 }
 
+/**
+ * The text a kontering row takes from its account when it has none of its
+ * own: the account's name in the company's own chart (`chart`, as the
+ * account picker lists it), else in the reference chart once the number is
+ * a whole four digits. An account the company added itself is in no
+ * reference chart, and a row on it was left without the text the API
+ * requires.
+ */
+export function accountNameForRow(
+  accountNumber: string,
+  chart: ReadonlyArray<{ account_number: string; account_name: string }> = [],
+): string {
+  const own = chart.find((account) => account.account_number === accountNumber)?.account_name
+  return own || (accountNumber.length === 4 ? getAccountDescription(accountNumber)?.name ?? '' : '')
+}
+
 export function getAccountDescription(accountNumber: string): AccountDescription | undefined {
   // Check hardcoded descriptions first (most detailed explanations)
   const hardcoded = ACCOUNT_DESCRIPTIONS[accountNumber]

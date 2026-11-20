@@ -6,31 +6,42 @@
  * `kontrollera`).
  *
  * Usage:
- *   npm run validate:ixbrl -- path/to/arsredovisning.xhtml
+ *   npm run validate:ixbrl -- path/to/arsredovisning.xhtml [--package <zip>]
+ *
+ * The taxonomy package follows the document's schemaRef: a K3 document
+ * (se/fr/gaap/k3/...) validates against taxonomi-paket-2026-08-31.zip, the
+ * package the K3 registry is generated from; anything else against the
+ * 2024-09-12 package the K2 registry comes from. --package overrides.
  *
  * Arelle discovery order:
  *   1. `arelleCmdLine` on PATH (pip install arelle-release)
  *   2. `python -m arelle.CntlrCmdLine`
  *   3. docker image `arelle/arelle` (mounts the file + taxonomy package)
  *
+ * Arelle itself exits 0 whatever it finds, so the log is read: any ERROR or
+ * CRITICAL message fails the run (exit 1); warnings are printed and pass.
  * Exits 0 with a notice when Arelle isn't available (CI machines without
- * Python shouldn't hard-fail), 1 on validation errors, 2 on usage errors.
+ * Python shouldn't hard-fail), 2 on usage errors.
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
-const TAXONOMY_PACKAGE = resolve(
-  ROOT,
-  'docs/reference/bokslut/taxonomi/taxonomi-paket-2024-09-12_rev20250312.zip',
-)
+const TAXONOMY_DIR = resolve(ROOT, 'docs/reference/bokslut/taxonomi')
+const K2_PACKAGE = resolve(TAXONOMY_DIR, 'taxonomi-paket-2024-09-12_rev20250312.zip')
+const K3_PACKAGE = resolve(TAXONOMY_DIR, 'taxonomi-paket-2026-08-31.zip')
 
-const fileArg = process.argv[2]
-if (!fileArg) {
-  console.error('Usage: npm run validate:ixbrl -- <file.xhtml>')
+const args = process.argv.slice(2)
+const packageFlag = args.indexOf('--package')
+const packageArg = packageFlag === -1 ? null : args[packageFlag + 1]
+const fileArg = args.find(
+  (arg, index) => !arg.startsWith('--') && (packageFlag === -1 || index !== packageFlag + 1),
+)
+if (!fileArg || (packageFlag !== -1 && !packageArg)) {
+  console.error('Usage: npm run validate:ixbrl -- <file.xhtml> [--package <taxonomy-package.zip>]')
   process.exit(2)
 }
 const file = resolve(process.cwd(), fileArg)
@@ -38,69 +49,67 @@ if (!existsSync(file)) {
   console.error(`File not found: ${file}`)
   process.exit(2)
 }
+const isK3 = /xbrl\.taxonomier\.se\/se\/fr\/gaap\/k3\//.test(readFileSync(file, 'utf8'))
+const TAXONOMY_PACKAGE = packageArg ? resolve(process.cwd(), packageArg) : isK3 ? K3_PACKAGE : K2_PACKAGE
 if (!existsSync(TAXONOMY_PACKAGE)) {
   console.error(`Taxonomy package missing: ${TAXONOMY_PACKAGE}`)
   process.exit(2)
 }
 
-const ARELLE_ARGS = [
+const LOG_FORMAT = '[%(levelname)s] [%(messageCode)s] %(message)s'
+const arelleArgs = (filePath, packagePath) => [
   '--file',
-  file,
+  filePath,
   '--packages',
-  TAXONOMY_PACKAGE,
+  packagePath,
   '--validate',
   '--logLevel',
   'warning',
+  '--logFormat',
+  LOG_FORMAT,
 ]
 
-function tryRun(cmd, args, label) {
-  const probe = spawnSync(cmd, ['--version'], { encoding: 'utf8', shell: false })
-  if (probe.error || probe.status !== 0) return null
-  console.log(`Validating with ${label} …`)
-  const run = spawnSync(cmd, args, { encoding: 'utf8', stdio: 'inherit', shell: false })
-  return run.status ?? 1
+/** Run Arelle, echo its log, and turn ERROR/CRITICAL messages into exit 1. */
+function runArelle(cmd, argv, label) {
+  console.log(`Validating ${basename(file)} against ${basename(TAXONOMY_PACKAGE)} with ${label} …`)
+  const run = spawnSync(cmd, argv, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  const output = `${run.stdout ?? ''}${run.stderr ?? ''}`
+  if (output.trim()) process.stdout.write(output.endsWith('\n') ? output : `${output}\n`)
+  const errors = output.split('\n').filter((line) => /^\[(ERROR|CRITICAL)\]/.test(line)).length
+  if ((run.status ?? 1) !== 0) return 1
+  if (errors > 0) {
+    console.error(`Arelle reported ${errors} error(s).`)
+    return 1
+  }
+  console.log('Arelle: no errors.')
+  return 0
 }
 
-let status = tryRun('arelleCmdLine', ARELLE_ARGS, 'arelleCmdLine')
-
-if (status === null) {
-  const probe = spawnSync('python', ['-c', 'import arelle'], { encoding: 'utf8' })
-  if (!probe.error && probe.status === 0) {
-    console.log('Validating with python -m arelle.CntlrCmdLine …')
-    const run = spawnSync('python', ['-m', 'arelle.CntlrCmdLine', ...ARELLE_ARGS], {
-      encoding: 'utf8',
-      stdio: 'inherit',
-    })
-    status = run.status ?? 1
-  }
+function available(cmd, probeArgs) {
+  const probe = spawnSync(cmd, probeArgs, { encoding: 'utf8', shell: false })
+  return !probe.error && probe.status === 0
 }
 
-if (status === null) {
-  const probe = spawnSync('docker', ['--version'], { encoding: 'utf8' })
-  if (!probe.error && probe.status === 0) {
-    console.log('Validating with docker image arelle/arelle …')
-    const run = spawnSync(
-      'docker',
-      [
-        'run',
-        '--rm',
-        '-v',
-        `${dirname(file)}:/data`,
-        '-v',
-        `${dirname(TAXONOMY_PACKAGE)}:/taxonomy`,
-        'arelle/arelle',
-        '--file',
-        `/data/${basename(file)}`,
-        '--packages',
-        `/taxonomy/${basename(TAXONOMY_PACKAGE)}`,
-        '--validate',
-        '--logLevel',
-        'warning',
-      ],
-      { encoding: 'utf8', stdio: 'inherit' },
-    )
-    status = run.status ?? 1
-  }
+let status = null
+if (available('arelleCmdLine', ['--version'])) {
+  status = runArelle('arelleCmdLine', arelleArgs(file, TAXONOMY_PACKAGE), 'arelleCmdLine')
+} else if (available('python', ['-c', 'import arelle'])) {
+  status = runArelle('python', ['-m', 'arelle.CntlrCmdLine', ...arelleArgs(file, TAXONOMY_PACKAGE)], 'python -m arelle.CntlrCmdLine')
+} else if (available('docker', ['--version'])) {
+  status = runArelle(
+    'docker',
+    [
+      'run',
+      '--rm',
+      '-v',
+      `${dirname(file)}:/data`,
+      '-v',
+      `${dirname(TAXONOMY_PACKAGE)}:/taxonomy`,
+      'arelle/arelle',
+      ...arelleArgs(`/data/${basename(file)}`, `/taxonomy/${basename(TAXONOMY_PACKAGE)}`),
+    ],
+    'docker image arelle/arelle',
+  )
 }
 
 if (status === null) {
@@ -111,4 +120,4 @@ if (status === null) {
   process.exit(0)
 }
 
-process.exit(status === 0 ? 0 : 1)
+process.exit(status)

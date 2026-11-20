@@ -95,6 +95,53 @@ describe('bank sync result persistence', () => {
     expect((await client.query('SELECT balance FROM cash_accounts WHERE id = $1', [cashId])).rows[0].balance).toBe('80')
   })
 
+  async function reference() {
+    return (await client.query('SELECT balance, balance_updated_at, balance_reference FROM cash_accounts WHERE id = $1', [cashId])).rows[0]
+  }
+  const later = { start: '2026-01-02T10:02:00Z', completed: '2026-01-02T10:03:00Z' }
+
+  it('stores the bank\'s day and type on the cash account, stamped with its time', async () => {
+    await persist([{ uid: account.uid, balance: 25, balance_updated_at: completed, balance_reference: { date: '2026-01-01', type: 'closingBooked' } }])
+    const stored = await reference()
+    expect(stored.balance_reference).toMatchObject({ date: '2026-01-01', type: 'closingBooked' })
+    expect(new Date(stored.balance_reference.fetched_at).getTime()).toBe(stored.balance_updated_at.getTime())
+    expect((await state()).accounts_data[0]).not.toHaveProperty('balance_reference')
+    // A sync that skipped the refresh sends the same observation without its day, and keeps it.
+    await persist([{ uid: account.uid, balance: 25, balance_updated_at: completed }], later)
+    expect((await reference()).balance_reference).toEqual(stored.balance_reference)
+  })
+
+  it('counts the day as part of the observation: the configuration token and twin plan stay put', async () => {
+    const snapshot = async () => (await client.query(`SELECT bank_configuration_token($1) AS token,
+      plan_cash_account_twins($1)->>'fingerprint' AS fingerprint`, [owner.companyId])).rows[0]
+    const before = await snapshot()
+    await persist([{ uid: account.uid, balance: 25, balance_updated_at: completed, balance_reference: { date: '2026-01-01', type: 'closingBooked' } }])
+    expect((await reference()).balance_reference).toMatchObject({ date: '2026-01-01' })
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it.each([
+    ['no reference', undefined],
+    ['a null reference', null],
+    ['an impossible day', { date: '2026-02-30', type: 'closingBooked' }],
+    ['a timestamp', { date: '2026-01-02T00:00:00Z', type: 'closingBooked' }],
+    ['a bare string', '2026-01-02'],
+  ])('a newer balance with %s lands and clears the old day', async (_label, balanceReference) => {
+    await persist([{ uid: account.uid, balance: 25, balance_updated_at: completed, balance_reference: { date: '2026-01-01', type: 'CLBD' } }])
+    await persist([{
+      uid: account.uid, balance: 30, balance_updated_at: later.completed,
+      ...(balanceReference === undefined ? {} : { balance_reference: balanceReference }),
+    }], later)
+    expect(await reference()).toMatchObject({ balance: '30', balance_reference: null })
+  })
+
+  it('keeps the day without a type, and stores no day for an observation without a balance', async () => {
+    await persist([{ uid: account.uid, balance: 25, balance_updated_at: completed, balance_reference: { date: '2024-02-29', type: '' } }])
+    expect((await reference()).balance_reference).toMatchObject({ date: '2024-02-29', type: null })
+    await persist([{ uid: account.uid, balance_updated_at: later.completed, balance_reference: { date: '2026-01-02', type: 'CLBD' } }], later)
+    expect(await reference()).toMatchObject({ balance: '25', balance_reference: null })
+  })
+
   it('rolls back the first balance write when a later account observation fails', async () => {
     await client.query(`UPDATE bank_connections SET accounts_data = $2 WHERE id = $1`,
       [connectionId, JSON.stringify([account, { uid: 'disabled', dedup_scope: 'fixed' }])])
@@ -269,6 +316,29 @@ describe('bank sync and configuration concurrency', () => {
     } finally {
       await client.query('ROLLBACK')
       await pending?.catch(() => {})
+      await other.query('ROLLBACK')
+      other.release()
+      await client.query('DELETE FROM cash_accounts WHERE id = $1', [cashId])
+      await client.query('DELETE FROM bank_connections WHERE id = $1', [connectionId])
+      await client.query('BEGIN')
+    }
+  })
+
+  it('writes a balance with its day without the company lock that configuration writes need', async () => {
+    // Only these isolated fixture rows are committed so both connections can see them.
+    await client.query('COMMIT')
+    const other = await getClient()
+    try {
+      await client.query('BEGIN')
+      await other.query('BEGIN')
+      await client.query('SELECT id FROM companies WHERE id = $1 FOR NO KEY UPDATE', [owner.companyId])
+      await other.query(`UPDATE cash_accounts SET balance = 7, balance_updated_at = $2::timestamptz,
+        balance_reference = jsonb_build_object('date', '2026-01-01', 'type', 'closingBooked', 'fetched_at', $2::timestamptz)
+        WHERE id = $1`, [cashId, completed])
+      await expect(other.query('UPDATE cash_accounts SET is_primary = true WHERE id = $1', [cashId]))
+        .rejects.toMatchObject({ code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY' })
+    } finally {
+      await client.query('ROLLBACK')
       await other.query('ROLLBACK')
       other.release()
       await client.query('DELETE FROM cash_accounts WHERE id = $1', [cashId])

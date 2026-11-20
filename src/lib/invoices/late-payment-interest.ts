@@ -1,38 +1,46 @@
+import { roundOre } from '@/lib/money'
+
 /**
- * Statutory late-payment interest (dröjsmålsränta) per Räntelagen §6.
+ * Statutory late-payment interest (dröjsmålsränta) per Räntelagen (1975:635).
  *
- * The default rate is Riksbankens referensränta + 8 percentage points,
- * applied as a simple annual interest on the overdue amount over the
- * number of days the invoice has been overdue.
+ * 3 §: on a claim with a due date fixed in advance, interest runs from the
+ * due date. 6 §: the yearly rate is "den vid varje tid gällande
+ * referensräntan enligt 9 §" plus eight percentage points. "Vid varje tid"
+ * means the rate follows the referensränta: a delay that spans 1 January or
+ * 1 July is charged at each half-year's own rate, not frozen at the due
+ * date's.
  *
- * Formula:
- *   interest = overdueAmount × annualRate × overdueDays / 365
+ * Formula, per half-year segment of the delay:
+ *   interest = amount × (referensränta + 0.08) × days in segment / 365
+ * summed over the segments and rounded to öre once (roundOre).
  *
- * We use 365 days (not 360): this matches Swedish practice and is what
- * Skatteverket / Kronofogden use in their late-payment calculators.
+ * The days are the days after the due date up to and including the as-of
+ * date: paid on the due date is 0 days, paid the day after is 1. We use 365
+ * days (not 360), as Swedish practice and Kronofogden do.
  *
- * Companies may override the statutory rate via
- * `company_settings.reminder_interest_rate_override`. When an override is
- * supplied we apply it directly (i.e. NOT referensränta + override) since
- * that's the simpler mental model for users entering "11.5% per year".
+ * Companies may set their own rate in
+ * `company_settings.reminder_interest_rate_override` (the agreed rate). An
+ * override is applied flat for the whole delay, as typed (not referensränta
+ * plus the override): "11.5% per year" means 11.5%.
  *
- * Referensränta is set by Riksbanken twice a year on January 1 and July 1.
- * We hardcode the lookup table here to avoid a network call on every
- * reminder; the table is small (one row per six months) and the values
- * are public, durable records. Update this table when Riksbanken publishes
- * a new rate.
+ * Towards a consumer the rate has a ceiling. Konsumentkreditlagen
+ * (2026:1011) 4 kap. 4 §: "Krediträntan eller dröjsmålsräntan per år får
+ * inte överstiga den vid varje tid gällande referensräntan enligt 9 §
+ * räntelagen (1975:635) med ett tillägg av 20 procentenheter." The same
+ * ceiling stood in 19 a § of the 2010 act (prop. 2025/26:223, kommentaren
+ * till 4 kap. 4 §), so it holds for every invoice to a private person,
+ * whatever its date. The statutory rate (plus eight) is always under it; the
+ * ceiling only ever lowers a company's own rate, and because it follows the
+ * referensränta a capped delay is split per half-year like a statutory one.
  */
 
 /**
- * Riksbankens referensränta history. Each entry is the rate effective from
- * the given date onward (until the next entry). Most recent first is more
- * efficient to search but for clarity we keep them in ascending order and
- * walk from newest to oldest at lookup time.
+ * Riksbankens referensränta (Räntelagen 9 §), each entry effective from its
+ * date until the next. Set twice a year, on the last weekday before
+ * 1 January and 1 July; add the new row when Riksbanken publishes it.
  *
- * Source: https://www.riksbank.se/sv/statistik/rantor-och-valutakurser/referensranta/
- *
- * The "annual default rate" applied to invoices is referensränta + 0.08
- * (eight percentage points, Räntelagen §6).
+ * Source, read 2026-10-26:
+ * https://www.riksbank.se/sv/statistik/rantor-och-valutakurser/referensranta/
  */
 const REFERENSRANTA_HISTORY: ReadonlyArray<{ from: string; rate: number }> = [
   { from: '2022-01-01', rate: 0.0 },
@@ -40,24 +48,33 @@ const REFERENSRANTA_HISTORY: ReadonlyArray<{ from: string; rate: number }> = [
   { from: '2023-01-01', rate: 0.025 },
   { from: '2023-07-01', rate: 0.035 },
   { from: '2024-01-01', rate: 0.04 },
-  { from: '2024-07-01', rate: 0.0425 },
-  { from: '2025-01-01', rate: 0.0375 },
-  { from: '2025-07-01', rate: 0.0325 },
-  { from: '2026-01-01', rate: 0.025 },
+  { from: '2024-07-01', rate: 0.04 },
+  { from: '2025-01-01', rate: 0.03 },
+  { from: '2025-07-01', rate: 0.02 },
+  { from: '2026-01-01', rate: 0.02 },
+  { from: '2026-07-01', rate: 0.02 },
 ] as const
 
-const LATE_PAYMENT_PREMIUM = 0.08 // 8 procentenheter per Räntelagen §6
+const LATE_PAYMENT_PREMIUM = 0.08 // 8 procentenheter, Räntelagen 6 §
+const CONSUMER_RATE_CEILING_PREMIUM = 0.2 // 20 procentenheter, konsumentkreditlagen 4 kap. 4 §
+
+/** The highest yearly rate a consumer can be charged on a given date. */
+export function getConsumerRateCeilingAt(date: string): number {
+  return roundRate(getReferensrantaAt(date) + CONSUMER_RATE_CEILING_PREMIUM)
+}
+
+// Rates are fractions with at most four decimals (12.34%); adding two of them
+// in binary floating point must not leave a 0.22000000000000003.
+function roundRate(rate: number): number {
+  return Math.round(rate * 10_000) / 10_000
+}
 
 /**
- * Look up the Riksbanken referensränta that was effective on a given date.
- * Returns the rate as a decimal fraction (e.g. 0.025 = 2.5%).
- *
- * If the requested date is before the earliest entry in the table we fall
- * back to the earliest entry (this is a defensive measure, should never
- * happen in practice since Accounted was launched after 2022).
+ * The referensränta in effect on a given date, as a decimal fraction
+ * (0.02 = 2%). A date before the first entry falls back to the first entry
+ * (defensive: Accounted holds no claims from before 2022).
  */
 export function getReferensrantaAt(date: string): number {
-  // Walk newest-first so the first match wins.
   for (let i = REFERENSRANTA_HISTORY.length - 1; i >= 0; i--) {
     const entry = REFERENSRANTA_HISTORY[i]
     if (date >= entry.from) {
@@ -68,48 +85,55 @@ export function getReferensrantaAt(date: string): number {
 }
 
 /**
- * Compute the statutory annual late-payment interest rate for a given
- * "from date" (typically the invoice due date). If an override is
- * supplied, it is returned as-is.
+ * The yearly late-payment rate in effect on a given date: the override
+ * when the company set one, else referensränta + 8 percentage points. For a
+ * consumer the override is held at the ceiling of that date.
  */
-export function getAnnualInterestRate(fromDate: string, overrideRate?: number | null): number {
+export function getAnnualInterestRate(date: string, overrideRate?: number | null, consumer = false): number {
   if (overrideRate !== undefined && overrideRate !== null) {
-    return overrideRate
+    return consumer ? Math.min(overrideRate, getConsumerRateCeilingAt(date)) : overrideRate
   }
-  return getReferensrantaAt(fromDate) + LATE_PAYMENT_PREMIUM
+  return getReferensrantaAt(date) + LATE_PAYMENT_PREMIUM
 }
 
 export interface LatePaymentInterestInput {
-  /** Outstanding overdue amount (the invoice total or remaining balance). */
+  /** The amount paid late or still unpaid, in the invoice's currency. */
   overdueAmount: number
-  /** Invoice due date (YYYY-MM-DD). Interest starts the day AFTER due date. */
+  /** Invoice due date (YYYY-MM-DD). Interest counts the days after it. */
   dueDate: string
-  /** Reference date for the calculation (YYYY-MM-DD). Defaults to today. */
+  /** The payment date, or the day the interest is computed up to (YYYY-MM-DD). */
   asOfDate: string
-  /**
-   * Optional annual rate override (e.g. 0.115 for 11.5%). When supplied
-   * we use this verbatim instead of looking up Räntelagen §6.
-   */
+  /** The company's own yearly rate (0.115 = 11.5%), applied flat. */
   overrideRate?: number | null
+  /** The debtor is a private person: the rate is held at the consumer ceiling. */
+  consumer?: boolean
+}
+
+export interface LatePaymentInterestPeriod {
+  /** First interest day of the segment (YYYY-MM-DD). */
+  from: string
+  /** Last interest day of the segment, inclusive (YYYY-MM-DD). */
+  to: string
+  days: number
+  /** Yearly rate applied in the segment (decimal fraction). */
+  rate: number
 }
 
 export interface LatePaymentInterestResult {
-  /** Annual rate actually applied (decimal fraction, e.g. 0.115 = 11.5%). */
+  /** Yearly rate on the last interest day (decimal fraction), for display. */
   rate: number
-  /** Computed interest amount in SEK, rounded to 2 decimals. */
+  /** Interest in the invoice's currency, rounded to öre. */
   amount: number
-  /** Start date used for the interest calc (= dueDate). */
+  /** The due date the interest counts from. */
   fromDate: string
-  /** Number of overdue days (positive integer, 0 if not overdue). */
+  /** Days late (0 when not late). */
   days: number
+  /** One entry per referensränta half-year the delay spans; [] when not late. */
+  periods: LatePaymentInterestPeriod[]
 }
 
 /**
  * Compute statutory late-payment interest (dröjsmålsränta).
- *
- * Returns the rate that was applied, the rounded amount, the from-date
- * used (= dueDate), and the number of overdue days. If the invoice is
- * not yet overdue the amount and days are both 0.
  *
  * Throws if `overdueAmount` is negative (callers should clamp to 0 if
  * they want to silently no-op, but this is almost always a bug).
@@ -117,32 +141,59 @@ export interface LatePaymentInterestResult {
 export function calculateLatePaymentInterest(
   input: LatePaymentInterestInput,
 ): LatePaymentInterestResult {
-  const { overdueAmount, dueDate, asOfDate, overrideRate } = input
+  const { overdueAmount, dueDate, asOfDate, overrideRate, consumer = false } = input
 
   if (overdueAmount < 0) {
     throw new Error('overdueAmount must be non-negative')
   }
 
   const days = daysBetween(dueDate, asOfDate)
-  const rate = getAnnualInterestRate(dueDate, overrideRate)
-
   if (days <= 0 || overdueAmount === 0) {
-    return { rate, amount: 0, fromDate: dueDate, days: 0 }
+    return { rate: getAnnualInterestRate(dueDate, overrideRate, consumer), amount: 0, fromDate: dueDate, days: 0, periods: [] }
   }
 
-  const raw = overdueAmount * rate * (days / 365)
-  const amount = Math.round(raw * 100) / 100
+  const periods = splitIntoRatePeriods(addDays(dueDate, 1), asOfDate, overrideRate, consumer)
+  const raw = periods.reduce((sum, p) => sum + overdueAmount * p.rate * (p.days / 365), 0)
 
-  return { rate, amount, fromDate: dueDate, days }
+  return {
+    rate: periods[periods.length - 1].rate,
+    amount: roundOre(raw),
+    fromDate: dueDate,
+    days,
+    periods,
+  }
 }
 
 /**
- * Compute whole-day difference between two YYYY-MM-DD dates. Positive if
- * `to` is after `from`. Returns 0 if `to <= from`.
- *
- * We use UTC midnight to avoid DST artifacts (Sweden observes DST). The
- * inputs are date-only strings so timezone doesn't affect the result as
- * long as we anchor both at UTC.
+ * Split the interest days firstDay..lastDay (inclusive) at every
+ * referensränta change. With an override the rate never changes, so the
+ * whole delay is one period, unless the debtor is a consumer and the override
+ * can meet the ceiling, which moves with the referensränta.
+ */
+function splitIntoRatePeriods(
+  firstDay: string,
+  lastDay: string,
+  overrideRate: number | null | undefined,
+  consumer: boolean,
+): LatePaymentInterestPeriod[] {
+  const hasOverride = overrideRate !== undefined && overrideRate !== null
+  const changes = hasOverride && !consumer
+    ? []
+    : REFERENSRANTA_HISTORY.map((e) => e.from).filter((from) => from > firstDay && from <= lastDay)
+
+  const periods: LatePaymentInterestPeriod[] = []
+  let from = firstDay
+  for (const next of [...changes, addDays(lastDay, 1)]) {
+    const to = addDays(next, -1)
+    periods.push({ from, to, days: daysBetween(from, to) + 1, rate: getAnnualInterestRate(from, overrideRate, consumer) })
+    from = next
+  }
+  return periods
+}
+
+/**
+ * Whole days from `from` to `to`, 0 when `to` is not after `from`. Both are
+ * date-only strings anchored at UTC midnight, so DST cannot shift the count.
  */
 function daysBetween(from: string, to: string): number {
   const fromMs = Date.parse(`${from}T00:00:00Z`)
@@ -152,4 +203,8 @@ function daysBetween(from: string, to: string): number {
   }
   const diff = Math.floor((toMs - fromMs) / 86_400_000)
   return diff > 0 ? diff : 0
+}
+
+function addDays(date: string, n: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10)
 }

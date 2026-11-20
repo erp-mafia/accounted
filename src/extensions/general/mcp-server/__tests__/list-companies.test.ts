@@ -178,7 +178,7 @@ describe('gnubok_list_companies', () => {
         company_id: OTHER_COMPANY_ID,
         role: 'admin',
         joined_at: '2026-02-01',
-        companies: { id: OTHER_COMPANY_ID, name: 'Wennberg Konsult', org_number: '559000-0002', entity_type: 'AB', archived_at: null, created_at: '2026-02-01' },
+        companies: { id: OTHER_COMPANY_ID, name: 'Nordvik Konsult', org_number: '559000-0002', entity_type: 'AB', archived_at: null, created_at: '2026-02-01' },
       },
     ] as never)
     const supabase = {

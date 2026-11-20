@@ -109,3 +109,45 @@ describe('mapTrialBalancesToK2: ekonomisk förening equity (ÅRL 3 kap. 10 b §)
     expect(res.warnings).toEqual([])
   })
 })
+
+// crm#1080: an ekonomisk förening closes to 2099 and carries to 2098 like an
+// aktiebolag (lib/company/forms/se-ekonomisk-forening.ts), and its fritt eget
+// kapital has the same two posts, so the comparison year is derived the same
+// way with the förening's own equity table.
+describe('mapTrialBalancesToK2: ekonomisk förening comparison year never closed (crm#1080)', () => {
+  const current = { full: FULL, preClosing: PRE_CLOSING }
+
+  it('derives Årets resultat and keeps the insatser posts', () => {
+    const res = mapTrialBalancesToK2(
+      current,
+      { full: PRE_CLOSING, preClosing: PRE_CLOSING },
+      { legalForm: 'ekonomisk_forening' },
+    )
+    expect(res.br['AretsResultatEgetKapital']).toEqual({ current: 20_000, previous: 20_000 })
+    expect(res.br['BalanseratResultat']).toEqual({ current: 10_000, previous: 10_000 })
+    expect(res.br['Medlemsinsatser']).toEqual({ current: 200_000, previous: 200_000 })
+    expect(res.totals.tillgangar.previous).toBe(300_000)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(300_000)
+    expect(res.warnings).toEqual([
+      'Jämförelseåret avslutades aldrig i bokföringen: årets resultat (20000 kr) står kvar på resultatkontona. Årets resultat i jämförelseårets balansräkning är därför hämtat från resultaträkningen. Stäm av jämförelsetalen mot föregående års fastställda årsredovisning.',
+    ])
+  })
+
+  it('presents an earlier result left on 2099 as Balanserat resultat', () => {
+    const rows = [
+      ...PRE_CLOSING.filter((r) => r.account_number !== '2091'),
+      { ...row('2099', 'Årets resultat', 0, 10_000), period_debit: 0, period_credit: 0 },
+    ]
+    const res = mapTrialBalancesToK2(current, { full: rows, preClosing: rows }, {
+      legalForm: 'ekonomisk_forening',
+    })
+    expect(res.br['AretsResultatEgetKapital'].previous).toBe(20_000)
+    expect(res.br['BalanseratResultat'].previous).toBe(10_000)
+    expect(res.totals.tillgangar.previous).toBe(300_000)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(300_000)
+    expect(res.warnings).toHaveLength(1)
+    expect(res.warnings[0]).toContain(
+      'Saldot på konto 2099 (10000 kr) fanns redan vid jämförelseårets ingång och visas som Balanserat resultat.',
+    )
+  })
+})

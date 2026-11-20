@@ -3,6 +3,7 @@ import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
@@ -36,7 +37,13 @@ export const GET = withRouteContext(
     }
 
     try {
-      const result = await generateBalanceSheet(supabase, companyId!, periodId, range)
+      // data_status beside the report (lib/reports/data-status.ts). The
+      // balances at to_date carry every row from the period start, so the
+      // status covers the period start to to_date, as the MCP balance sheet's.
+      const [result, dataStatus] = await Promise.all([
+        generateBalanceSheet(supabase, companyId!, periodId, range),
+        buildReportDataStatus(supabase, companyId!, { periodId, toDate: range.toDate }),
+      ])
 
       if (period) {
         result.period = {
@@ -45,7 +52,7 @@ export const GET = withRouteContext(
         }
       }
 
-      return NextResponse.json({ data: result })
+      return NextResponse.json({ data: result, data_status: dataStatus })
     } catch (err) {
       opLog.error('balance sheet generation failed', err as Error)
       return errorResponseFromCode('REPORT_GENERATION_FAILED', opLog, {

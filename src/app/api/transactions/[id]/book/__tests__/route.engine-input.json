@@ -1,0 +1,310 @@
+[
+  {
+    "name": "a withdrawal booked on the person's own rows",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-14",
+          "description": "Programvarulicens",
+          "source_type": "bank_transaction",
+          "source_id": "00000000-0000-4000-8000-0000000a0001",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0001",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-14",
+              "amount": -1250,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5420",
+              "debit_amount": 1000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 250,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1250
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-0",
+      "error": null
+    }
+  },
+  {
+    "name": "a deposit on a bank account with its own series, under the suggestions' rule version",
+    "calls": [
+      [
+        6,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-15",
+          "description": "Konsultuppdrag",
+          "source_type": "bank_transaction",
+          "source_id": "00000000-0000-4000-8000-0000000a0002",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0002",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-15",
+              "amount": 10000,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 10000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "3041",
+              "debit_amount": 0,
+              "credit_amount": 8000
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Utgående moms 25 %"
+            }
+          ],
+          "voucher_series": "B"
+        },
+        "<undefined>",
+        "bank-proposals.1+a38016f12abc"
+      ]
+    ],
+    "reversals": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-1",
+      "error": null
+    }
+  },
+  {
+    "name": "an explicit series from the dialog on a foreign row",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-16",
+          "description": "Hotell Berlin",
+          "source_type": "bank_transaction",
+          "source_id": "00000000-0000-4000-8000-0000000a0003",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0003",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-16",
+              "amount": -100,
+              "currency": "EUR"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5800",
+              "debit_amount": 1150.25,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1150.25
+            }
+          ],
+          "voucher_series": "C"
+        }
+      ]
+    ],
+    "reversals": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-2",
+      "error": null
+    }
+  },
+  {
+    "name": "a stranded row re-pointed to its live sibling ledger, replacing a stale pointer",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-17",
+          "description": "Kontorsmaterial",
+          "source_type": "bank_transaction",
+          "source_id": "00000000-0000-4000-8000-0000000a0004",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0004",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-17",
+              "amount": -1250,
+              "currency": "SEK",
+              "target_cash_account_id": "00000000-0000-4000-8000-00000000ca02"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6110",
+              "debit_amount": 1250,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1250
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [],
+    "outcome": {
+      "status": 200,
+      "journal_entry_id": "je-3",
+      "error": null
+    }
+  },
+  {
+    "name": "a concurrent booking wins the bank line: the verifikat is reversed",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-18",
+          "description": "Kontorsmaterial",
+          "source_type": "bank_transaction",
+          "source_id": "00000000-0000-4000-8000-0000000a0005",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0005",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-18",
+              "amount": -1250,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6110",
+              "debit_amount": 1250,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1250
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-4"
+      ]
+    ],
+    "outcome": {
+      "status": 409,
+      "journal_entry_id": null,
+      "error": "TX_CATEGORIZE_RACE"
+    }
+  },
+  {
+    "name": "the bank line update fails: the verifikat is reversed",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-19",
+          "description": "Kontorsmaterial",
+          "source_type": "bank_transaction",
+          "source_id": "00000000-0000-4000-8000-0000000a0006",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0006",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-09-19",
+              "amount": -1250,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6110",
+              "debit_amount": 1250,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1250
+            }
+          ]
+        }
+      ]
+    ],
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-5"
+      ]
+    ],
+    "outcome": {
+      "status": 403,
+      "journal_entry_id": null,
+      "error": "FORBIDDEN"
+    }
+  }
+]

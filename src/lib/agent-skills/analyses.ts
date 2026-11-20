@@ -56,26 +56,28 @@ const kassaprognos = `# Kassaprognos 30 dagar
 Hur mycket pengar som finns på företagskontot dag för dag de kommande 30 dagarna, och om det riskerar att bli för lite.
 
 ## Så räknas den
-- Start: saldot på företagskontot idag enligt senaste banksynk (konto 1930, eller de 19xx-konton som är bankkonton). Finns ingen banksynk: använd det bokförda saldot och säg tydligt att det inte är bankens.
-- In: obetalda kundfakturor på sitt förfallodatum. Redan förfallna kundfakturor räknas inte in i saldot, de listas separat som möjliga extra inbetalningar.
-- Ut: obetalda leverantörsfakturor på sitt förfallodatum (redan förfallna dras dag 1), och kostnader som dragits varje månad de senaste tre månaderna (lön, skatt, hyra, abonnemang) på ungefär samma dag igen, med snittbeloppet. En dragning som hamnar på en helg flyttas till närmaste vardag.
-- En kostnad som redan finns som leverantörsfaktura räknas inte två gånger.
-- Varningsgräns: en månads vanliga utbetalningar, om användaren inte sagt något annat.
+- Accounted räknar prognosen, inte du. Hämta den med \`gnubok_get_cash_forecast\` och räkna inte om den ur fakturor eller bokföring: där räknas varje krona en gång (en faktura i betalningskön på betalningsdagen, en lön som nettolön på utbetalningsdagen och skatten på den via skattekontot, en prognosrad som pekar på en faktura viker för fakturan).
+- Dag för dag: de 30 raderna i \`days\` (\`opening\`, \`inflow\`, \`outflow\`, \`closing\`). Posterna bakom dem står i \`flows\`, med datum, belopp, riktning, motpart och källa.
+- Start: \`opening\`. \`source: bank\` är bankens senast rapporterade saldo, med \`as_of\` och \`age_days\`; \`booked\` är det bokförda saldot, när ingen bank rapporterar något. Säg tydligt när det inte är bankens eller när det är äldre än tre dagar.
+- Känt eller uppskattat: \`kind\` är \`known\` (en faktura, en betalning i kön, en lön, Skatteverkets egen dragning), \`derived\` (räknat ur bokföringen, till exempel momsen hittills i en period som inte deklarerats) eller \`forecast\` (en prognosrad). \`estimate: true\` är en uppskattning.
+- Förfallna kund- och leverantörsfakturor ingår inte i saldot: de står under \`overdue\`, eftersom inget säger när de betalas.
+- \`complete: false\` betyder att en källa inte kunde läsas: \`caveats\` säger vilken. Säg det överst, och säg vad de andra \`caveats\` varnar för.
+- Varningsgräns: en månads utbetalningar, samma regel som sidan Likviditetsprognos: summan av \`outflow\` i \`weeks\` delat med antalet dagar från \`horizon.start\` till \`horizon.end\`, gånger 365/12, i hela kronor. Gäller om användaren inte sagt något annat.
 
 ## Så visas den
-- Överst: saldot idag, lägsta saldot under perioden och vilken dag, och om varningsgränsen underskrids.
+- Överst: saldot idag, lägsta saldot de 30 dagarna och vilken dag (lägsta \`closing\` i \`days\`; \`lowest\` gäller hela prognosen på 13 veckor), och om varningsgränsen underskrids.
 - En linje dag för dag med saldot, gränsen som en streckad linje och de stora in- och utbetalningarna markerade.
-- En tabell med de tio största posterna, med datum, belopp och om beloppet är känt (faktura) eller uppskattat (återkommande).
+- En tabell med de tio största posterna de 30 dagarna, med datum, belopp, motpart och om beloppet är känt, härlett eller en prognosrad, och om det är uppskattat.
 - Listan med förfallna kundfakturor som kan ge extra pengar.
 
 ## Så läser du den
-- Det är en prognos. Skilj alltid på kända belopp och uppskattningar, och säg när banken senast synkades.
+- Det är en prognos. Skilj alltid på kända belopp och uppskattningar, och säg när banken senast rapporterade saldot.
 - Underskrids gränsen: föreslå vad som kan göras (flytta pengar från ett annat konto, skjuta en betalning, påminna en kund), men gör ingenting själv.
+- Hela prognosen, 13 veckor med posterna bakom varje vecka, finns i Accounted under Rapporter, Likviditetsprognos.
 
 ## Tools
-- \`gnubok_list_cash_accounts\` (finns inte i tools/list: anropa den via \`gnubok_call_tool\`) och \`gnubok_connect_bank\` för bankkonton, saldo och senaste synk.
-- \`gnubok_list_invoices\` och \`gnubok_list_supplier_invoices\` för obetalda fakturor och förfallodagar.
-- \`gnubok_query_journal\` och \`gnubok_list_uncategorized_transactions\` för återkommande dragningar de senaste tre månaderna.
+- \`gnubok_get_cash_forecast\` (finns inte i tools/list: anropa den via \`gnubok_call_tool\`), utan argument: 30 dagar dag för dag och 13 veckor.
+- \`gnubok_list_cash_forecast_rows\` (också via \`gnubok_call_tool\`) när användaren vill se prognosraderna bakom en post.
 
 ${DASHBOARD_RULES}
 `

@@ -116,6 +116,18 @@ describe('getErrorMessage: what our own RPCs write for the reader still gets thr
     expect(getErrorMessage(err, { locale: 'en' })).toBe(entry.message_en)
   })
 
+  it('the fiscal-year date guards answer with their registry sentences', () => {
+    // enforce_entry_date_in_fiscal_period and guard_fiscal_period_redate_entries
+    // (migration 20261024140200) raise under 23514.
+    const entryDate = pg(
+      '23514',
+      'ENTRY_DATE_OUTSIDE_FISCAL_PERIOD: verifikationsdatumet 2025-12-31 ligger utanför räkenskapsåret 2026 (2026-01-01 till 2026-12-31)',
+    )
+    expect(getErrorMessage(entryDate)).toBe(getErrorEntry('ENTRY_DATE_OUTSIDE_FISCAL_PERIOD')!.message_sv)
+    const redate = pg('23514', 'FISCAL_PERIOD_DATES_BLOCKED: 2 verifikationer skulle hamna utanför räkenskapsåret 2026-02-01 till 2026-12-31')
+    expect(getErrorMessage(redate)).toBe(getErrorEntry('FISCAL_PERIOD_DATES_BLOCKED')!.message_sv)
+  })
+
   it('a registered code raised as P0001 answers with its registry sentence', () => {
     const err = pg('P0001', 'INVOICE_QUOTE_ALREADY_INVOICED: quote 1 has a live converted invoice')
     expect(getErrorMessage(err)).toBe(getErrorEntry('INVOICE_QUOTE_ALREADY_INVOICED')!.message_sv)

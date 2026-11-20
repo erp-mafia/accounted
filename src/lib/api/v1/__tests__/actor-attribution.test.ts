@@ -7,16 +7,15 @@
  * production call site (the pending-operations commit), so anything reaching
  * the ledger by another route committed anonymously.
  *
- * Measured on production over 90 days: 99.8% of `storno` entries and 100% of
- * `correction` entries had no actor. Those are the two sanctioned rättelse
- * paths under BFL 5 kap. 5 §, which makes them the entries where "who did
- * this" is a legal question and the ones with the least attribution.
+ * Nearly every `storno` entry and every `correction` entry had no actor.
+ * Those are the two sanctioned rättelse paths under BFL 5 kap. 5 §, which
+ * makes them the entries where "who did this" is a legal question and the
+ * ones with the least attribution.
  *
  * The test asserts the scope is visible from INSIDE the handler, which is what
  * a helper several frames down (reverseEntry, correctEntry) actually sees.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NextResponse } from 'next/server'
 
 beforeAll(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'
@@ -37,6 +36,39 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { withApiV1 } from '../with-api-v1'
 import { ok } from '../response'
+import { z } from 'zod'
+import { registerEndpoint } from '../registry'
+
+// withApiV1 reads each handler's scope from its endpoint definition, by
+// operation id and method. These fixtures stand in for the route files the
+// tests imitate, with the scopes those routes declare. Vitest isolates module
+// state per test file, so the registrations stay in this file.
+for (const [operation, method, path, scope] of [
+  ['companies.list', 'GET', '/api/v1/companies', 'companies:read'],
+  ['api-key.get', 'GET', '/api/v1/api-key', 'authenticated'],
+  ['health.check', 'GET', '/api/v1/health', null],
+  ['journal-entries.create', 'POST', '/api/v1/companies/:companyId/journal-entries', 'bookkeeping:write'],
+  ['journal-entries.list', 'GET', '/api/v1/companies/:companyId/journal-entries', 'reports:read'],
+] as const) {
+  registerEndpoint({
+    operation,
+    method,
+    path,
+    summary: `${operation} (test fixture).`,
+    description: 'Fixture registration for the wrapper tests.',
+    useWhen: 'never: test fixture',
+    doNotUseFor: 'anything outside this test file',
+    pitfalls: [],
+    example: { response: {} },
+    scope,
+    risk: method === 'GET' ? 'low' : 'medium',
+    idempotent: method === 'GET',
+    reversible: false,
+    dryRunSupported: false,
+    response: { success: z.object({}) },
+  })
+}
+
 
 const mockValidate = vi.mocked(validateApiKey)
 const mockServiceClient = vi.mocked(createServiceClientNoCookies)
@@ -89,7 +121,7 @@ describe('v1 handlers run inside the commit-actor scope', () => {
       companyId: COMPANY,
       scopes: ['companies:read'],
       apiKeyId: 'key-1',
-      apiKeyName: 'DueCue automation stager',
+      apiKeyName: 'Partner automation stager',
       mode: 'live',
     } as Awaited<ReturnType<typeof validateApiKey>>)
   })
@@ -117,7 +149,21 @@ describe('v1 handlers run inside the commit-actor scope', () => {
 
     await handler(makeRequest(URL_FOR), staticParams())
 
-    expect(seen?.label).toBe('DueCue automation stager')
+    expect(seen?.label).toBe('Partner automation stager')
+  })
+
+  it("names the key's user as the person the request acts for", async () => {
+    let seen: ReturnType<typeof getActor>
+    const handler = withApiV1(OPERATION, async (_req, ctx) => {
+      seen = getActor()
+      return ok({ ok: true }, { requestId: ctx.requestId })
+    })
+
+    await handler(makeRequest(URL_FOR), staticParams())
+
+    // The audit log reads it from the x-accounted-actor header of every
+    // service-role request the handler makes (lib/supabase/actor-header.ts).
+    expect(seen?.userId).toBe('user-1')
   })
 
   it('falls back to a stable label when the key is unnamed', async () => {
@@ -139,6 +185,41 @@ describe('v1 handlers run inside the commit-actor scope', () => {
     await handler(makeRequest(URL_FOR), staticParams())
 
     expect(seen?.label).toBe('Unnamed API key')
+  })
+
+  it("acts as service_account, named after the account, for a service account's key", async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'sponsor-1',
+      companyId: COMPANY,
+      scopes: ['companies:read'],
+      apiKeyId: 'key-sa',
+      apiKeyName: 'Nyckel 1',
+      mode: 'live',
+      unattendedCommitLimit: null,
+      allowedCompanyIds: [COMPANY],
+      readOnlyCompanyIds: null,
+      serviceAccount: { id: 'sa-1', name: 'Nattlig fakturasynk' },
+    } as Awaited<ReturnType<typeof validateApiKey>>)
+
+    let seen: ReturnType<typeof getActor>
+    let ctxSeen: { actor: unknown; serviceAccount: unknown; userId: string } | undefined
+    const handler = withApiV1(OPERATION, async (_req, ctx) => {
+      seen = getActor()
+      ctxSeen = { actor: ctx.actor, serviceAccount: ctx.serviceAccount, userId: ctx.userId }
+      return ok({ ok: true }, { requestId: ctx.requestId })
+    })
+
+    await handler(makeRequest(URL_FOR), staticParams())
+
+    // The sponsor rides on the actor too: the audit log names them for the
+    // request's service-role writes (lib/supabase/actor-header.ts).
+    expect(seen).toEqual({ type: 'service_account', label: 'Nattlig fakturasynk', userId: 'sponsor-1' })
+    // The rows it writes carry the sponsor: the user the key acts as.
+    expect(ctxSeen).toEqual({
+      actor: { type: 'service_account', label: 'Nattlig fakturasynk', userId: 'sponsor-1' },
+      serviceAccount: { id: 'sa-1', name: 'Nattlig fakturasynk' },
+      userId: 'sponsor-1',
+    })
   })
 
   it('leaves no actor bound after the request completes', async () => {

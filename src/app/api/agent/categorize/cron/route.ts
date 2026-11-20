@@ -1,17 +1,17 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getAiStatus } from '@/lib/ai'
 import { planAssistantReads, readTransaction, storeRead } from '@/lib/agent/categorize/read'
-
-ensureInitialized()
 
 const PER_RUN = Number(process.env.ASSISTANT_READS_PER_RUN ?? 25)
 const PER_COMPANY = Number(process.env.ASSISTANT_READS_PER_COMPANY ?? 8)
 const WINDOW_DAYS = Number(process.env.ASSISTANT_READS_WINDOW_DAYS ?? 45)
 /** Background reads take two samples: the row's opener can always ask for a fuller one. */
 const SAMPLES = Number(process.env.ASSISTANT_READS_SAMPLES ?? 2)
+
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
 
 /**
  * GET /api/agent/categorize/cron, every ten minutes.

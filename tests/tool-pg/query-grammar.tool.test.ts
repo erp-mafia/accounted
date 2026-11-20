@@ -42,6 +42,16 @@ const MALFORMED_QUERY_CODES = new Set([
 ])
 
 /**
+ * A missing grant: the query cannot run in production either, because the
+ * replay carries production's grants. Matched on Postgres's own message, since
+ * many RPCs raise 42501 themselves as a domain refusal ("Company access
+ * required"), and those are not what this file is about.
+ */
+function isMissingGrant(f: CapturedFailure): boolean {
+  return f.code === '42501' && /^permission denied for /.test(f.message)
+}
+
+/**
  * Errors are captured at the TRANSPORT, not from the thrown Error.
  *
  * This matters more than it sounds. Sweeping the tools and inspecting what they
@@ -137,6 +147,21 @@ describe('MCP read tools against real PostgREST', () => {
     captured.length = before
   }, 30_000)
 
+  it('detects a missing grant, so the replay is not granting more than production', async () => {
+    // 20260911140531 revokes this table from service_role on purpose. A bulk
+    // GRANT after the replay would hand it back, and every grant the sweep
+    // relies on would then be one production may not have.
+    currentTool = '(self-test)'
+    const before = captured.length
+    await client.from('sie_period_read_leases').select('*').limit(1)
+    currentTool = '(none)'
+
+    const detected = captured.slice(before).filter(isMissingGrant)
+    expect(detected.length, 'a table service_role has no grant on was readable').toBeGreaterThan(0)
+
+    captured.length = before
+  }, 30_000)
+
   it('issues no malformed query', async () => {
     for (const tool of readTools) {
       currentTool = tool.name
@@ -163,7 +188,7 @@ describe('MCP read tools against real PostgREST', () => {
     expect(requestCount, 'the sweep barely reached PostgREST').toBeGreaterThan(50)
 
     const malformed = captured
-      .filter((f) => f.code && MALFORMED_QUERY_CODES.has(f.code))
+      .filter((f) => (f.code && MALFORMED_QUERY_CODES.has(f.code)) || isMissingGrant(f))
       .map((f) => `${f.tool}: ${f.code} ${f.message}`)
 
     expect([...new Set(malformed)]).toEqual([])

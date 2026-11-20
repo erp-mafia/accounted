@@ -91,13 +91,21 @@ import {
   handleMcpRequest,
   tools,
   isDefaultCatalogTool,
-  isStagingTool,
+  callableViaFor,
   STAGE_BRIDGE_TARGETS,
+  WITHDRAW_TOOL_NAME,
+  type CatalogViewer,
+  type McpTool,
 } from '../server'
-import { toolCallableVia } from '../tool-reach'
 import { RECOMMENDED_WORKFLOW_LOADOUTS } from '../recommended-tools'
+import { isViewOnlyTool } from '../tool-reach'
 import { workflowSkills } from '../skills'
 import { prompts } from '../prompts'
+
+// The connector grant for an owner on a multi-company account: every scope,
+// so the widest tools/list a caller gets. Reach below is read off it.
+const OWNER_CONNECTOR: CatalogViewer = { anonymous: false, simpleCompanyMode: false, keyScopes: [...ALL_SCOPES] }
+const reach = (tool: McpTool) => callableViaFor(tool, OWNER_CONNECTOR)
 
 const DRAFT_ROUND_TRIP_WRITES = [
   'gnubok_create_invoice',
@@ -157,7 +165,7 @@ describe('connector-minted key: invoice draft round trip', () => {
 
   it('the pre-read is bridged, and the update tool tells the agent how', () => {
     const getInvoice = tools.find((t) => t.name === 'gnubok_get_invoice')!
-    expect(toolCallableVia(getInvoice, isStagingTool(getInvoice))).toBe('call_tool')
+    expect(reach(getInvoice)).toBe('call_tool')
     const updateInvoice = tools.find((t) => t.name === 'gnubok_update_invoice')!
     expect(updateInvoice.description).toMatch(/gnubok_get_invoice.*gnubok_call_tool/)
   })
@@ -165,7 +173,7 @@ describe('connector-minted key: invoice draft round trip', () => {
   it('no tool in the draft round trip is unreachable', () => {
     for (const name of [...DRAFT_ROUND_TRIP_WRITES, 'gnubok_get_invoice', 'gnubok_list_invoices']) {
       const tool = tools.find((t) => t.name === name)!
-      expect(toolCallableVia(tool, isStagingTool(tool)), name).not.toBe('none')
+      expect(reach(tool), name).not.toBe('none')
     }
   })
 })
@@ -198,16 +206,27 @@ describe('connector-minted key: invoice draft round trip', () => {
  * from tools/list. Prefer making it stage. If it truly must commit directly,
  * list it; an entry here also has to pass the "nothing names it" test below.
  */
-const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {}
+const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {
+  // The liquidity forecast's rows (accounted#136, decision 2026-10-28): not
+  // bookkeeping, so they commit directly (DIRECT_WRITE_SCOPES) instead of
+  // staging, and search-only because tools/list is at its ceiling. Reachable
+  // over v1 REST and a raw tools/call; for a client that only calls listed
+  // tools, the operator picks between listing the upsert and a bridge for
+  // direct writes.
+  gnubok_upsert_cash_forecast_rows: 'Direct forecast-row write (not bookkeeping), search-only by the tools/list ceiling; v1 POST /cash-forecast-rows carries it.',
+  gnubok_cancel_cash_forecast_row: 'Direct forecast-row write (not bookkeeping), search-only by the tools/list ceiling; v1 POST /cash-forecast-rows/cancel carries it.',
+}
 
 describe('no search-only WRITE is out of reach (issue #2800)', () => {
+  // The approval view's own door is not search-only: it is listed, app-only,
+  // to a connection with the view, and only the view calls it (view-approval.ts).
   const searchOnlyWrites = tools.filter(
-    (t) => !isDefaultCatalogTool(t) && t.annotations.readOnlyHint !== true,
+    (t) => !isDefaultCatalogTool(t) && !isViewOnlyTool(t) && t.annotations.readOnlyHint !== true,
   )
 
   it('every search-only WRITE is carried by gnubok_stage_tool, or is on record as unreachable', () => {
     const unreachable = searchOnlyWrites
-      .filter((t) => toolCallableVia(t, isStagingTool(t)) === 'none')
+      .filter((t) => reach(t) === 'none')
       .map((t) => t.name)
       .filter((name) => !(name in UNREACHABLE_SEARCH_ONLY_WRITES))
     expect(
@@ -221,7 +240,7 @@ describe('no search-only WRITE is out of reach (issue #2800)', () => {
   it('no entry outlives its fix', () => {
     const stale = Object.keys(UNREACHABLE_SEARCH_ONLY_WRITES).filter((name) => {
       const tool = tools.find((t) => t.name === name)
-      return !tool || toolCallableVia(tool, isStagingTool(tool)) !== 'none'
+      return !tool || reach(tool) !== 'none'
     })
     expect(stale, 'now reachable or renamed: delete the entry: ' + stale.join(', ')).toEqual([])
   })
@@ -240,7 +259,7 @@ describe('no search-only WRITE is out of reach (issue #2800)', () => {
     for (const name of [...frozenBy2768, ...DRAFT_ROUND_TRIP_WRITES]) {
       const tool = tools.find((t) => t.name === name)
       expect(tool, `${name} was renamed or removed: update this list`).toBeDefined()
-      expect(toolCallableVia(tool!, isStagingTool(tool!)), name).not.toBe('none')
+      expect(reach(tool!), name).not.toBe('none')
     }
   })
 })
@@ -252,9 +271,11 @@ describe('gnubok_stage_tool carries exactly what the dispatcher says it carries'
   })
 
   it('STAGE_BRIDGE_TARGETS and callable_via agree for every tool in the registry', () => {
-    const carried = new Set(STAGE_BRIDGE_TARGETS.map((t) => t.name))
+    // Plus the one carried write that does not stage: the stager's own
+    // withdrawal (ridesStageBridge in server.ts).
+    const carried = new Set([...STAGE_BRIDGE_TARGETS.map((t) => t.name), WITHDRAW_TOOL_NAME])
     for (const tool of tools) {
-      expect(toolCallableVia(tool, isStagingTool(tool)) === 'stage_tool', tool.name).toBe(
+      expect(reach(tool) === 'stage_tool', tool.name).toBe(
         carried.has(tool.name),
       )
     }
@@ -294,7 +315,17 @@ describe('gnubok_stage_tool carries exactly what the dispatcher says it carries'
         }),
       )
       off()
-      const expected = carried.has(tool.name) ? 'scope_denied' : 'bridge_refused'
+      // A view-only tool does not exist to a bridge (view-approval.ts): the
+      // model learns nothing about it, not even advice to call it directly.
+      // The withdrawal has no scope (ownership is its gate), so the bridge
+      // carries it into its own argument check: no operation_id was sent.
+      const expected = isViewOnlyTool(tool)
+        ? 'unknown_tool'
+        : tool.name === WITHDRAW_TOOL_NAME
+          ? 'execution'
+          : carried.has(tool.name)
+            ? 'scope_denied'
+            : 'bridge_refused'
       if (kinds[0] !== expected) disagreements.push(`${tool.name}: expected ${expected}, got ${kinds[0]}`)
     }
     expect(disagreements).toEqual([])
@@ -317,6 +348,12 @@ describe('gnubok_stage_tool carries exactly what the dispatcher says it carries'
     const carried = STAGE_BRIDGE_TARGETS.map((t) => t.name)
     expect(carried).not.toContain('gnubok_approve_pending_operation')
     expect(carried).not.toContain('gnubok_reject_pending_operation')
+    // The withdrawal the bridge does carry is not one of them: it is not a
+    // staging target, it cannot approve, and it settles only the caller's own.
+    expect(carried).not.toContain(WITHDRAW_TOOL_NAME)
+    const withdrawal = tools.find((t) => t.name === WITHDRAW_TOOL_NAME)!
+    expect(isDefaultCatalogTool(withdrawal)).toBe(false)
+    expect(reach(withdrawal)).toBe('stage_tool')
     // And the approve step is LISTED, so the human-visible approval keeps its
     // own name, its own destructive annotation and its own client permission.
     const approve = tools.find((t) => t.name === 'gnubok_approve_pending_operation')!
@@ -338,16 +375,14 @@ describe('every tool a listed tool, skill, prompt, loadout or the instructions n
   const byName = new Map(tools.map((t) => [t.name, t]))
   const TOOL_NAME = /gnubok_[a-z0-9]+(?:_[a-z0-9]+)*/g
 
-  type ReachInput = Parameters<typeof toolCallableVia>[0] & { outputSchema?: Record<string, unknown> }
-
-  function unreachableNamesIn(text: string, registry: Map<string, ReachInput> = byName): string[] {
+  function unreachableNamesIn(text: string, registry: Map<string, McpTool> = byName): string[] {
     const named = new Set(text.match(TOOL_NAME) ?? [])
     return [...named].filter((name) => {
       const tool = registry.get(name)
       // Not a registry tool (an API-key prefix, a truncated "_suffix" list):
       // phantom names are other tests' business.
       if (!tool) return false
-      return toolCallableVia(tool, isStagingTool(tool)) === 'none'
+      return reach(tool) === 'none'
     })
   }
 
@@ -426,7 +461,7 @@ describe('every tool a listed tool, skill, prompt, loadout or the instructions n
     const text = `Undo it with ${victim.name}, then re-read gnubok_get_reconciliation_status.`
     expect(unreachableNamesIn(text)).toEqual([])
 
-    const rigged = new Map<string, ReachInput>(byName)
+    const rigged = new Map<string, McpTool>(byName)
     rigged.set(victim.name, { ...victim, outputSchema: { type: 'object' } })
     expect(unreachableNamesIn(text, rigged)).toEqual([victim.name])
   })

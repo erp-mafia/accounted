@@ -1,19 +1,26 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { roundOre } from '@/lib/money'
-import { getLineItemAccount } from '@/lib/salary/account-mapping'
-import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import { extractBirthDate, validatePersonnummer } from '@/lib/salary/personnummer'
+import { lineItemAccount } from '@/lib/salary/account-mapping'
+import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
+import type { PayrollConfig } from '@/lib/salary/payroll-config'
+import {
+  encryptPersonnummer,
+  extractBirthDate,
+  validatePersonnummer,
+} from '@/lib/salary/personnummer'
+import { fetchTaxTableRates, type TaxTableRate } from '@/lib/salary/tax-tables'
 import { FALLBACK_TAX_TABLES_2026 } from '@/lib/salary/tax-tables-fallback'
 import {
   SANDBOX_EMPLOYEE_LAST_NAMES,
-  SANDBOX_PAYROLL_FIGURES,
-  SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER,
   buildSandboxEmployees,
   buildSandboxSalaryLineItems,
   buildSandboxSalaryRunEmployees,
   buildSandboxSalaryRuns,
+  calculateSandboxPayroll,
   mapSandboxEmployeeIds,
   resolveSandboxSalaryPeriods,
+  sandboxVacationAccrualAvgifterTotal,
+  type SandboxPayroll,
 } from '../salary'
 
 // Mid-year reference date: the previous month is May, inside the same
@@ -50,6 +57,90 @@ function employees(today: Date = TODAY) {
   return { rows, plaintext: seen }
 }
 
+/**
+ * salary_payroll_config for 2026, as migration 20260414120000 and its rate
+ * updates seed it (the same fixture the engine's own suite uses).
+ */
+const CONFIG_2026: PayrollConfig = {
+  configYear: 2026,
+  avgifterTotal: 0.3142,
+  avgifterAlderspension: 0.1021,
+  avgifterSjukforsakring: 0.0355,
+  avgifterForaldraforsakring: 0.0200,
+  avgifterEfterlevandepension: 0.0030,
+  avgifterArbetsmarknad: 0.0264,
+  avgifterArbetsskada: 0.0010,
+  avgifterAllmanLoneavgift: 0.1262,
+  avgifterReduced65plus: 0.1021,
+  avgifterYouthRate: 0.2081,
+  avgifterYouthSalaryCap: 25000,
+  avgifterVaxaStodRate: 0.1021,
+  avgifterVaxaStodCap: 35000,
+  avgifterMinimumAnnual: 1000,
+  egenavgifterTotal: 0.2897,
+  slpRate: 0.2426,
+  prisbasbelopp: 59200,
+  inkomstbasbelopp: 83400,
+  maxPgi: 625500,
+  sgiCeiling: 592000,
+  statligSkattBrytpunkt: 660400,
+  traktamenteHeldag: 300,
+  traktamenteHalvdag: 150,
+  traktamenteNatt: 150,
+  milersattningEgenBil: 25,
+  milersattningFormansbilFossil: 12,
+  milersattningFormansbilEl: 9.5,
+  kostformanHeldag: 310,
+  kostformanLunch: 124,
+  kostformanFrukost: 62,
+  friskvardCap: 5000,
+  bilformanSlr: 0.0255,
+  sjuklonRate: 0.8,
+  karensavdragFactor: 0.2,
+  maxKarensavdragPerYear: 10,
+  reducedAvgiftAge: 67,
+}
+
+// Table 34 column 1 through the real loader: with Skatteverket's API
+// unreachable it serves the bundled 2026 table, which is what this suite
+// compares against.
+let TAX_RATES: TaxTableRate[] = []
+let PAYROLL: SandboxPayroll
+
+beforeAll(async () => {
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+  TAX_RATES = (await fetchTaxTableRates(2026, 34, 1)).rates
+  PAYROLL = payrollFor(TODAY)
+})
+
+afterAll(() => {
+  vi.unstubAllGlobals()
+})
+
+/** The engine's figures for the two employees, with real ciphertext. */
+function payrollFor(today: Date): SandboxPayroll {
+  return calculateSandboxPayroll({
+    employees: buildSandboxEmployees({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      today,
+      encrypt: encryptPersonnummer,
+    }),
+    today,
+    config: CONFIG_2026,
+    taxRates: TAX_RATES,
+  })
+}
+
+function runs(today: Date = TODAY) {
+  return buildSandboxSalaryRuns({
+    userId: USER_ID,
+    companyId: COMPANY_ID,
+    today,
+    payroll: today === TODAY ? PAYROLL : payrollFor(today),
+  })
+}
+
 function runEmployeeRows(today: Date = TODAY) {
   return buildSandboxSalaryRunEmployees({
     companyId: COMPANY_ID,
@@ -58,6 +149,7 @@ function runEmployeeRows(today: Date = TODAY) {
     draftRunId: DRAFT_RUN_ID,
     annaEmployeeId: ANNA_ID,
     erikEmployeeId: ERIK_ID,
+    payroll: today === TODAY ? PAYROLL : payrollFor(today),
   })
 }
 
@@ -114,13 +206,13 @@ describe('sandbox employee seed data', () => {
       table.find(([from, to]) => income >= from && income <= to)![2]
 
     // Column 1 of table 34: ordinary employment income, under 66.
-    expect(SANDBOX_PAYROLL_FIGURES.anna.taxWithheld).toBe(lookup(38000))
-    expect(SANDBOX_PAYROLL_FIGURES.erik.taxWithheld).toBe(lookup(245 * 80))
+    expect(PAYROLL.anna.taxWithheld).toBe(lookup(38000))
+    expect(PAYROLL.erik.taxWithheld).toBe(lookup(245 * 80))
 
     // A flat 30 % / 24 % schablon was the previous behaviour; assert we are
     // nowhere near it, so a regression back to one fails loudly.
-    expect(SANDBOX_PAYROLL_FIGURES.anna.taxWithheld).not.toBe(38000 * 0.3)
-    expect(SANDBOX_PAYROLL_FIGURES.erik.taxWithheld).not.toBe(245 * 80 * 0.24)
+    expect(PAYROLL.anna.taxWithheld).not.toBe(38000 * 0.3)
+    expect(PAYROLL.erik.taxWithheld).not.toBe(245 * 80 * 0.24)
   })
 
   it('satisfies every CHECK constraint in migration 20260414120000', () => {
@@ -224,13 +316,13 @@ describe('sandbox employee seed data', () => {
 
 describe('sandbox salary run seed data', () => {
   it('emits one booked and one draft run with a legal status and series', () => {
-    const runs = buildSandboxSalaryRuns({ userId: USER_ID, companyId: COMPANY_ID, today: TODAY })
+    const rows = runs()
 
-    expect(runs).toHaveLength(2)
-    assertUniformKeys(runs)
-    expect(runs.map((r) => r.status)).toEqual(['booked', 'draft'])
+    expect(rows).toHaveLength(2)
+    assertUniformKeys(rows)
+    expect(rows.map((r) => r.status)).toEqual(['booked', 'draft'])
 
-    for (const run of runs) {
+    for (const run of rows) {
       expect(['draft', 'review', 'approved', 'paid', 'booked', 'corrected']).toContain(run.status)
       expect(run.voucher_series as string).toMatch(/^[A-Z]$/)
       expect(run.period_month as number).toBeGreaterThanOrEqual(1)
@@ -239,17 +331,14 @@ describe('sandbox salary run seed data', () => {
       expect(run.user_id).toBe(USER_ID)
       expect(run.company_id).toBe(COMPANY_ID)
       // Non-null calculation_params is what makes the run detail page render
-      // the KPI cards, Beräkningsdetaljer and the bokförings-preview.
-      expect(run.calculation_params).not.toBeNull()
+      // the KPI cards, Beräkningsdetaljer and the bokförings-preview. It is
+      // the config the figures were computed with, marked as seeded.
+      expect(run.calculation_params).toEqual({ ...CONFIG_2026, demoSeed: true })
     }
   })
 
   it('completes the booked run and leaves the draft untouched', () => {
-    const [booked, draft] = buildSandboxSalaryRuns({
-      userId: USER_ID,
-      companyId: COMPANY_ID,
-      today: TODAY,
-    })
+    const [booked, draft] = runs()
 
     expect(booked.paid_at).toBeTruthy()
     expect(booked.booked_at).toBeTruthy()
@@ -266,13 +355,12 @@ describe('sandbox salary run seed data', () => {
   })
 
   it('keeps run totals equal to the sum of the per-employee rows', () => {
-    const runs = buildSandboxSalaryRuns({ userId: USER_ID, companyId: COMPANY_ID, today: TODAY })
     const perEmployee = runEmployeeRows()
 
     const runIdOf = (status: string) =>
       status === 'booked' ? BOOKED_RUN_ID : DRAFT_RUN_ID
 
-    for (const run of runs) {
+    for (const run of runs()) {
       const rows = perEmployee.filter((r) => r.salary_run_id === runIdOf(run.status))
       expect(rows).toHaveLength(2)
 
@@ -299,15 +387,11 @@ describe('sandbox salary run seed data', () => {
   it('exports the vacation-avgifter total the semester voucher needs', () => {
     const rows = runEmployeeRows().filter((r) => r.salary_run_id === BOOKED_RUN_ID)
 
-    expect(SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER).toBe(
+    expect(sandboxVacationAccrualAvgifterTotal(PAYROLL)).toBe(
       roundOre(rows.reduce((n, r) => n + r.vacation_accrual_avgifter, 0)),
     )
     // Not a salary_runs column: it must never leak onto the run row.
-    const [booked] = buildSandboxSalaryRuns({
-      userId: USER_ID,
-      companyId: COMPANY_ID,
-      today: TODAY,
-    })
+    const [booked] = runs()
     expect(Object.keys(booked)).not.toContain('total_vacation_accrual_avgifter')
   })
 })
@@ -333,19 +417,15 @@ describe('sandbox salary periods', () => {
       draft: { year: 2026, month: 2, paymentDate: '2026-02-25' },
     })
 
-    const runs = buildSandboxSalaryRuns({
-      userId: USER_ID,
-      companyId: COMPANY_ID,
-      today: new Date(2026, 0, 3),
-    })
-    for (const run of runs) {
+    const january = runs(new Date(2026, 0, 3))
+    for (const run of january) {
       expect(run.period_year).toBe(2026)
       expect(run.payment_date as string).toMatch(/^2026-/)
     }
-    expect(runs.map((r) => r.period_month)).toEqual([1, 2])
+    expect(january.map((r) => r.period_month)).toEqual([1, 2])
     // And the completion stamps stay on or before "today" even though the
     // January payday has not arrived yet.
-    expect(runs[0].booked_at).toBe('2026-01-03T09:00:00.000Z')
+    expect(january[0].booked_at).toBe('2026-01-03T09:00:00.000Z')
   })
 })
 
@@ -484,10 +564,10 @@ describe('sandbox salary run employee seed data', () => {
 
 describe('sandbox salary line item seed data', () => {
   const inserted = [
-    { id: 'sre-booked-anna', employee_id: ANNA_ID },
-    { id: 'sre-booked-erik', employee_id: ERIK_ID },
-    { id: 'sre-draft-anna', employee_id: ANNA_ID },
-    { id: 'sre-draft-erik', employee_id: ERIK_ID },
+    { id: 'sre-booked-anna', employee_id: ANNA_ID, salary_run_id: 'run-booked' },
+    { id: 'sre-booked-erik', employee_id: ERIK_ID, salary_run_id: 'run-booked' },
+    { id: 'sre-draft-anna', employee_id: ANNA_ID, salary_run_id: 'run-draft' },
+    { id: 'sre-draft-erik', employee_id: ERIK_ID, salary_run_id: 'run-draft' },
   ]
 
   function lineItems() {
@@ -495,7 +575,9 @@ describe('sandbox salary line item seed data', () => {
       companyId: COMPANY_ID,
       annaEmployeeId: ANNA_ID,
       erikEmployeeId: ERIK_ID,
+      bookedRunId: 'run-booked',
       runEmployees: inserted,
+      payroll: PAYROLL,
     })
   }
 
@@ -517,12 +599,17 @@ describe('sandbox salary line item seed data', () => {
     }
   })
 
-  it('takes the BAS account from the salary account map, as a string', () => {
+  it('gives the booked run the account it was booked on and the draft run none', () => {
     for (const row of lineItems()) {
-      expect(typeof row.account_number).toBe('string')
-      expect(row.account_number).toBe(getLineItemAccount(row.item_type, 'employee'))
-      // Ordinary employees: 7210 Löner till tjänstemän.
-      expect(row.account_number).toBe('7210')
+      if (row.salary_run_employee_id.startsWith('sre-booked')) {
+        expect(row.account_number).toBe(lineItemAccount(row.item_type, { employmentType: 'employee' }))
+        // Ordinary employees: 7210 Löner till tjänstemän.
+        expect(row.account_number).toBe('7210')
+      } else {
+        // An unbooked line carries no cached default: the booking resolves
+        // it from the employee's category (account-mapping.ts).
+        expect(row.account_number).toBeNull()
+      }
     }
   })
 
@@ -548,7 +635,13 @@ describe('sandbox salary line item seed data', () => {
       companyId: COMPANY_ID,
       annaEmployeeId: ANNA_ID,
       erikEmployeeId: ERIK_ID,
-      runEmployees: runEmployees.map((r, i) => ({ id: `sre-${i}`, employee_id: r.employee_id })),
+      bookedRunId: BOOKED_RUN_ID,
+      runEmployees: runEmployees.map((r, i) => ({
+        id: `sre-${i}`,
+        employee_id: r.employee_id,
+        salary_run_id: r.salary_run_id as string,
+      })),
+      payroll: PAYROLL,
     })
 
     for (const [i, row] of rows.entries()) {
@@ -562,8 +655,91 @@ describe('sandbox salary line item seed data', () => {
         companyId: COMPANY_ID,
         annaEmployeeId: ANNA_ID,
         erikEmployeeId: ERIK_ID,
-        runEmployees: [{ id: 'sre-x', employee_id: 'someone-else' }],
+        bookedRunId: 'run-booked',
+        runEmployees: [{ id: 'sre-x', employee_id: 'someone-else', salary_run_id: 'run-booked' }],
+        payroll: PAYROLL,
       }),
     ).toThrow(/unknown employee/)
+  })
+})
+
+/**
+ * Parity: the seed's former hand-written mirror of the engine (kept here
+ * verbatim, with its constants) and the engine itself give the same figures
+ * for the two demo employees. The mirror is gone from the seed; this pins that
+ * moving onto calculateSalary changed no booked or displayed amount.
+ */
+describe('sandbox payroll parity with the former hand-written figures', () => {
+  const OLD_AVGIFTER_RATE = 0.3142
+  const OLD_VACATION_ACCRUAL_RATE = 0.12
+
+  function oldLookupTaxWithheld(monthlyIncome: number): number {
+    const table = FALLBACK_TAX_TABLES_2026[34]
+    const income = Math.round(monthlyIncome)
+    const row = table.find(([from, to]) => income >= from && income <= to)!
+    return row[1 + 1]
+  }
+
+  function oldComputeFigures(grossSalary: number) {
+    const gross = roundOre(grossSalary)
+    const taxWithheld = oldLookupTaxWithheld(gross)
+    const netDeductions = 0
+    const vacationAccrual = roundOre(gross * OLD_VACATION_ACCRUAL_RATE)
+    const vacationAccrualAvgifter = roundOre(vacationAccrual * OLD_AVGIFTER_RATE)
+    const avgifterAmount = roundOre(gross * OLD_AVGIFTER_RATE)
+    return {
+      grossSalary: gross,
+      taxableIncome: gross,
+      taxWithheld,
+      netDeductions,
+      netSalary: roundOre(gross - taxWithheld - netDeductions),
+      avgifterRate: OLD_AVGIFTER_RATE,
+      avgifterBasis: gross,
+      avgifterAmount,
+      vacationAccrual,
+      vacationAccrualAvgifter,
+      totalEmployerCost: roundOre(
+        gross + avgifterAmount + vacationAccrual + vacationAccrualAvgifter,
+      ),
+    }
+  }
+
+  const pick = (r: SandboxPayroll['anna']) => ({
+    grossSalary: r.grossSalary,
+    taxableIncome: r.taxableIncome,
+    taxWithheld: r.taxWithheld,
+    netDeductions: r.netDeductions,
+    netSalary: r.netSalary,
+    avgifterRate: r.avgifterRate,
+    avgifterBasis: r.avgifterBasis,
+    avgifterAmount: r.avgifterAmount,
+    vacationAccrual: r.vacationAccrual,
+    vacationAccrualAvgifter: r.vacationAccrualAvgifter,
+    totalEmployerCost: r.totalEmployerCost,
+  })
+
+  it.each([
+    ['the monthly employee', 'anna' as const, 38000],
+    ['the hourly employee', 'erik' as const, 245 * 80],
+  ])('gives %s the same figures as before', (_label, who, gross) => {
+    expect(pick(PAYROLL[who])).toEqual(oldComputeFigures(gross))
+  })
+
+  it('in every month, January included', () => {
+    for (const month of [0, 3, 11]) {
+      const payroll = payrollFor(new Date(2026, month, 11))
+      expect(pick(payroll.anna)).toEqual(oldComputeFigures(38000))
+      expect(pick(payroll.erik)).toEqual(oldComputeFigures(245 * 80))
+    }
+  })
+
+  it('reads the age band from the real ciphertext, not a fallback', () => {
+    // A personnummer the engine cannot decrypt also lands on the standard
+    // rate, so the category step is what proves the age was read.
+    for (const who of ['anna', 'erik'] as const) {
+      expect(PAYROLL[who].avgifterCategory).toBe('standard')
+      const category = PAYROLL[who].steps.find((s) => s.label === 'Avgiftskategori')
+      expect(category?.formula ?? '').not.toContain('kunde inte dekrypteras')
+    }
   })
 })

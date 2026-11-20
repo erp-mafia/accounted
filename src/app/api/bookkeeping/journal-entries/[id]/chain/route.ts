@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { readSieDeleteBlock, type SieDeleteBlock } from '@/lib/core/bookkeeping/voucher-delete-guard'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.chain',
@@ -116,6 +117,20 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     isLastInSeries = maxResult?.voucher_number === entry.voucher_number
   }
 
-  return NextResponse.json({ data: { entry, chain, is_last_in_series: isLastInSeries } })
+  // Where the page would offer "Radera verifikat", whether the database
+  // refuses that delete whatever the user does: an SIE-imported verifikat or
+  // the storno of an undone SIE import (PH 212, crm#1438). The page then
+  // offers no delete. The reversed original is in the chain already.
+  let deleteBlock: SieDeleteBlock | null = null
+  if (entry.status === 'draft' || isLastInSeries) {
+    const original = entry.reverses_id
+      ? chain.find((linked) => linked.id === entry.reverses_id)
+      : undefined
+    deleteBlock = await readSieDeleteBlock(supabase, companyId, entry, original)
+  }
+
+  return NextResponse.json({
+    data: { entry, chain, is_last_in_series: isLastInSeries, delete_block: deleteBlock },
+  })
   },
 )

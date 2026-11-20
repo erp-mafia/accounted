@@ -314,7 +314,7 @@ describe('mapSalesInvoice: free-text rows', () => {
   it('does not let a text row state a 0 % rate beside the priced rows', () => {
     // Fortnox ships "5 st M, 8 st L" as a row with Total 0 and VAT 0. Counting
     // that as a stated rate made the invoice "mixed" and nulled the header
-    // rate on roughly half of the Loftux and Clearstoq registers.
+    // rate on roughly half of two migrated registers.
     const { invoice } = mapSalesInvoice(
       salesDto({
         lines: [

@@ -91,7 +91,7 @@ export function routineSummary({ choice, readOnly, company }: Omit<RoutineReques
  * The link that opens Claude Desktop in a new Cowork task with the request
  * filled in. A claude:// link is a local handoff to the app, with no HTTP
  * request and no URL log, like a paste: it may carry the user's own text and
- * the company (founder decision). An https ?q= link never does.
+ * the company (product decision). An https ?q= link never does.
  */
 export function coworkLink(prompt: string): string {
   return `claude://cowork/new?q=${encodeURIComponent(prompt)}`

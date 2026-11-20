@@ -59,14 +59,14 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('the worker deadline reaches the Visma request', () => {
-  it('aborts the register page at the deadline, defers the job, and starts no retry afterwards', async () => {
+  it('aborts the register page at the deadline, releases the job as a stall, and starts no retry afterwards', async () => {
     let signal: AbortSignal | undefined
     const fetch = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
       signal = init.signal!
       signal.addEventListener('abort', () => reject(signal!.reason), { once: true })
     }))
     vi.stubGlobal('fetch', fetch)
-    const db = database({ resources: ['supplierInvoices'], next_page: 4, failures: 4 })
+    const db = database({ resources: ['supplierInvoices'], next_page: 4 })
 
     // 20 s invocation: the page may use 15 s, the Visma attempt would wait 60 s.
     const run = runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 20_000 })
@@ -75,10 +75,10 @@ describe('the worker deadline reaches the Visma request', () => {
 
     expect(String(fetch.mock.calls[0][0])).toContain('/supplierinvoices?%24page=4&%24pagesize=1000')
     expect(signal?.aborted).toBe(true)
-    expect(db.job).toMatchObject({ state: 'queued', next_page: 4, failures: 0, error_code: null })
+    expect(db.job).toMatchObject({ state: 'retry_wait', next_page: 4, failures: 1, error_code: 'MIGRATION_STALLED' })
     expect(db.rows).toHaveLength(0)
     expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
-      code: 'MIGRATION_DEADLINE', needsAttention: false, resource: 'supplierInvoices', page: 4,
+      code: 'MIGRATION_STALLED', needsAttention: false, resource: 'supplierInvoices', page: 4,
     }))
 
     // Past the 60 s attempt and its 1 s backoff: no second attempt.

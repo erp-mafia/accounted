@@ -16,8 +16,12 @@
  *     auth.uid() admin check do not apply.
  *   - payee details only on giro/bank rows (BAS 1920-1999), never a PSP
  *     clearing account or a till;
- *   - never the same IBAN on two rows (the Grönsinka 1938 case: one physical
- *     account twice means a second ledger for the same money);
+ *   - never the same IBAN on two rows (seen on a 1938 account: one physical
+ *     account twice means a second ledger for the same money). A disabled
+ *     row counts too: a bank connection is matched on its iban whether it is
+ *     enabled or not. Clearing or changing the IBAN of a disabled account
+ *     typed in by hand moves that bank identity along, so a duplicate added
+ *     by mistake can let go of it (crm#1270);
  *   - enabled: never a connection-held row, never disable the primary or an
  *     account with unbooked transactions (setEnabled's UPDATE carries the
  *     first two, so a row that changes in between is still refused);
@@ -30,28 +34,32 @@
 import type { z } from 'zod'
 import type { CashAccount, Currency } from '@/types'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
-import type { CreateCashAccountSchema, UpdateCashAccountFieldsSchema } from '@/lib/api/schemas'
+import type { CreateCardAccountSchema, CreateCashAccountSchema, UpdateCashAccountFieldsSchema } from '@/lib/api/schemas'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { hasOpenTransactions, setEnabled, setVoucherSeries } from '@/lib/cash-accounts/service'
+import { isBankCashAccount, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
 import {
+  ensureChartAccount,
   insertManualBankAccount,
-  isBankCashAccount,
-  isUsableInvoicePayee,
   loadInvoicePayeeState,
   planManualBankAccount,
   setInvoicePayeeDefault,
+  setTypedAccountIdentity,
   updateCashAccountPayee,
   type InvoicePayeeState,
   type PayeeUpdate,
 } from '@/lib/cash-accounts/invoice-payee'
 import { makePrimary, primaryIneligibleReason } from '@/lib/cash-accounts/primary'
+import { isCardLedgerAccount, suggestCardLedger, type CardLedgerUsage } from '@/lib/cash-accounts/card-ledger'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 
 const BANK_ADMIN_MESSAGE = 'Bara företagets ägare eller en administratör kan ändra bankkonton och betaluppgifter.'
+const CARD_ADMIN_MESSAGE = 'Bara företagets ägare eller en administratör kan lägga till företagskort.'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 export type CreateCashAccountInput = z.infer<typeof CreateCashAccountSchema>
+export type CreateCardAccountInput = z.infer<typeof CreateCardAccountSchema>
 export type UpdateCashAccountInput = z.infer<typeof UpdateCashAccountFieldsSchema>
 
 /** The keys of UpdateCashAccountSchema that are payee concerns (owner/admin). */
@@ -164,6 +172,131 @@ export async function createCashAccount(
   }
 }
 
+/**
+ * A company card (företagskort): a cash account of kind 'card' whose
+ * statement rows book against a liability account (lib/cash-accounts/
+ * card-ledger.ts). Owner/admin, like a bank account: it decides where card
+ * purchases settle. The ledger is the one asked for, or the suggestion: the
+ * first card ledger no cash account holds and no verifikat uses, so the card
+ * stays reconcilable against its statement (2890 only when unused). Adds the
+ * chart row the ledger needs, as the bank path does. No verifikat is
+ * created, so nothing here touches the books.
+ */
+export async function createCardAccount(
+  ctx: OperationContext,
+  input: CreateCardAccountInput,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<CashAccount>> {
+  const { supabase, companyId, userId, log } = ctx
+  const denied = await requireCompanyAdmin(ctx, CARD_ADMIN_MESSAGE)
+  if (denied) return denied
+
+  const requested = input.ledger_account?.trim() || null
+  // The schema holds the allowlist; checked again here because the database
+  // CHECK would otherwise be the first to say so, as a 500.
+  if (requested !== null && !isCardLedgerAccount(requested)) {
+    return { ok: false, code: 'CARD_ACCOUNT_LEDGER_INVALID', details: { ledger_account: requested } }
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account')
+    .eq('company_id', companyId)
+  if (existingError) return failed(existingError)
+  const taken = new Set(((existing ?? []) as { ledger_account: string }[]).map((row) => row.ledger_account))
+
+  let ledger = requested
+  let autoPicked = false
+  if (ledger !== null) {
+    if (taken.has(ledger)) {
+      return { ok: false, code: 'CASH_ACCOUNT_LEDGER_TAKEN', details: { ledger_account: ledger } }
+    }
+  } else {
+    let usage: Record<string, CardLedgerUsage>
+    try {
+      usage = await loadCardLedgerUsage(ctx)
+    } catch (err) {
+      log.error('card ledger usage lookup failed', err as Error)
+      return failed(err)
+    }
+    ledger = suggestCardLedger({ taken, usage }).ledger
+    if (ledger === null) return { ok: false, code: 'CARD_ACCOUNT_NO_FREE_LEDGER' }
+    autoPicked = true
+  }
+
+  const name = input.name.trim()
+  const currency = input.currency.toUpperCase()
+  const cardLast4 = input.card_last4 && input.card_last4.length > 0 ? input.card_last4 : null
+  const voucherSeries = input.voucher_series ?? null
+
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      preview: {
+        name,
+        kind: 'card',
+        currency,
+        ledger_account: ledger,
+        ledger_auto_picked: autoPicked,
+        card_issuer: input.card_issuer,
+        card_last4: cardLast4,
+        voucher_series: voucherSeries,
+        source: 'manual',
+      },
+    }
+  }
+
+  try {
+    await ensureChartAccount(supabase, companyId, userId, ledger, name)
+
+    const { data, error } = await supabase
+      .from('cash_accounts')
+      .insert({
+        company_id: companyId,
+        ledger_account: ledger,
+        currency,
+        name,
+        kind: 'card',
+        card_issuer: input.card_issuer,
+        card_last4: cardLast4,
+        voucher_series: voucherSeries,
+        enabled: true,
+        is_primary: false,
+        invoice_payee: false,
+        source: 'manual',
+      })
+      .select('*')
+      .single()
+    if (error) {
+      // Another card or account took the ledger between the read and the write.
+      if ((error as { code?: string }).code === '23505') {
+        return { ok: false, code: 'CASH_ACCOUNT_LEDGER_TAKEN', details: { ledger_account: ledger } }
+      }
+      throw new Error(`cash_accounts insert failed: ${error.message}`)
+    }
+    return { ok: true, data: data as CashAccount, created: true }
+  } catch (err) {
+    log.error('card account create failed', err as Error)
+    return failed(err)
+  }
+}
+
+/**
+ * How many journal lines each card ledger candidate already carries in this
+ * company (any status, the kontoplan's own usage aggregate). A ledger absent
+ * from the answer is unused.
+ */
+async function loadCardLedgerUsage(ctx: OperationContext): Promise<Record<string, CardLedgerUsage>> {
+  const { data, error } = await ctx.supabase.rpc('get_account_usage_counts', { p_company_id: ctx.companyId })
+  if (error) throw new Error(`get_account_usage_counts failed: ${error.message}`)
+  const usage: Record<string, CardLedgerUsage> = {}
+  for (const row of (data ?? []) as { account_number: string; usage_count: number }[]) {
+    if (isCardLedgerAccount(row.account_number)) usage[row.account_number] = { lines: Number(row.usage_count) || 0 }
+  }
+  return usage
+}
+
 // ---------------------------------------------------------------------------
 // Update
 // ---------------------------------------------------------------------------
@@ -204,18 +337,28 @@ export async function updateCashAccount(
   }
 
   let verified = false
+  // The bank identity (iban) a disabled, hand-typed account takes along with
+  // its printed IBAN; undefined leaves the column alone.
+  let identityIban: string | null | undefined
   if (touchesPayee) {
     // Only giro/bank accounts (1920-1999) can be printed as payee. Stripe,
     // Woo and Shopify clearing rows live in the same table and must stay out.
     const { data: existing, error: existingError } = await supabase
       .from('cash_accounts')
-      .select('id, ledger_account, iban, payee_iban')
+      .select('id, ledger_account, iban, payee_iban, enabled, source, bank_connection_id')
       .eq('company_id', companyId)
       .eq('id', cashAccountId)
       .maybeSingle()
     if (existingError) return failed(existingError)
     if (!existing) return NOT_FOUND
-    const row = existing as { ledger_account: string; iban?: string | null; payee_iban?: string | null }
+    const row = existing as {
+      ledger_account: string
+      iban?: string | null
+      payee_iban?: string | null
+      enabled?: boolean
+      source?: string
+      bank_connection_id?: string | null
+    }
     if (!isBankCashAccount(row)) {
       return {
         ok: false,
@@ -229,18 +372,44 @@ export async function updateCashAccount(
     // the IBAN actually changes: a healed twin may still carry this row's own
     // IBAN, and re-saving the form must not trip over it.
     const newIban = ibanKey(payeeUpdate.iban)
-    if (newIban && newIban !== ibanKey(row.iban) && newIban !== ibanKey(row.payee_iban)) {
+    const checksTwin = newIban !== null && newIban !== ibanKey(row.iban) && newIban !== ibanKey(row.payee_iban)
+
+    // An account typed in by hand got the typed IBAN as its bank identity
+    // too (insertManualBankAccount), and nothing else ever showed or edited
+    // that column. While the account is in use the identity stays: a later
+    // bank connection with that IBAN takes the row over in place, and
+    // printing no IBAN does not make it another account. Once it is turned
+    // off (here or in the same request), writing its printed IBAN takes the
+    // identity along, or a duplicate added by mistake keeps the IBAN from
+    // the real account for good (crm#1270). Never a row a bank holds or
+    // held (source), and never an identity another row shares: that is the
+    // twin of a bank-fed account and stays the bank's word.
+    const typedIdentity = ibanKey(row.iban)
+    const followsIdentity = payeeUpdate.iban !== undefined
+      && typedIdentity !== null
+      && newIban !== typedIdentity
+      && row.source === 'manual'
+      && (row.bank_connection_id ?? null) === null
+      && (input.enabled ?? row.enabled) === false
+
+    if (checksTwin || followsIdentity) {
       const { data: others, error: othersError } = await supabase
         .from('cash_accounts')
         .select('id, iban, payee_iban')
         .eq('company_id', companyId)
         .neq('id', cashAccountId)
       if (othersError) return failed(othersError)
-      const twin = ((others ?? []) as { id: string; iban: string | null; payee_iban: string | null }[]).find(
-        (other) => ibanKey(other.iban) === newIban || ibanKey(other.payee_iban) === newIban,
-      )
+      const rows = (others ?? []) as { id: string; iban: string | null; payee_iban: string | null }[]
+      const twin = checksTwin
+        ? rows.find((other) => ibanKey(other.iban) === newIban || ibanKey(other.payee_iban) === newIban)
+        : undefined
       if (twin) {
         return { ok: false, code: 'CASH_ACCOUNT_IBAN_DUPLICATE', details: { existing_cash_account_id: twin.id } }
+      }
+      const carried = (iban: string | null) =>
+        iban !== null && rows.some((other) => ibanKey(other.iban) === iban || ibanKey(other.payee_iban) === iban)
+      if (followsIdentity && !rows.some((other) => ibanKey(other.iban) === typedIdentity) && !carried(newIban)) {
+        identityIban = newIban
       }
     }
   }
@@ -295,6 +464,7 @@ export async function updateCashAccount(
     const changes: Record<string, unknown> = { ...payeeUpdate }
     if (input.voucher_series !== undefined) changes.voucher_series = input.voucher_series
     if (input.enabled !== undefined) changes.enabled = input.enabled
+    if (identityIban !== undefined) changes.bank_identity_iban = identityIban
     return { ok: true, dryRun: true, preview: { cash_account_id: cashAccountId, changes } }
   }
 
@@ -310,6 +480,16 @@ export async function updateCashAccount(
     if (input.enabled !== undefined) {
       updated = await setEnabled(supabase, companyId, cashAccountId, input.enabled)
       if (!updated) return (await explainEnabledRefusal()) ?? NOT_FOUND
+    }
+    // Last, so a request that also turns the account off has done so. The
+    // UPDATE re-checks the row: one a bank took over or someone turned back
+    // on in between keeps its identity.
+    if (identityIban !== undefined) {
+      const moved = await setTypedAccountIdentity(supabase, companyId, cashAccountId, identityIban)
+      if (moved) {
+        updated = moved
+        log.info('cash account bank identity follows its typed IBAN', { companyId, cashAccountId, cleared: identityIban === null })
+      }
     }
   } catch (err) {
     log.error('cash_accounts update failed', err as Error)
@@ -513,6 +693,95 @@ export async function removeCashAccount(
       released_obligations: result.released_obligations,
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// Archive
+// ---------------------------------------------------------------------------
+
+/** Why archive_cash_account refused, as the RPC names it. */
+export type CashAccountArchiveRefusal =
+  | 'already_archived'
+  | 'bank_connected'
+  | 'primary'
+  | 'invoice_payee'
+  | 'removable'
+
+/** Connection and primary keep removal's codes: the same way out applies. */
+export const CASH_ACCOUNT_ARCHIVE_CODES: Record<CashAccountArchiveRefusal, string> = {
+  already_archived: 'CASH_ACCOUNT_ARCHIVE_ALREADY',
+  bank_connected: 'CASH_ACCOUNT_REMOVE_BANK_CONNECTED',
+  primary: 'CASH_ACCOUNT_REMOVE_PRIMARY',
+  invoice_payee: 'CASH_ACCOUNT_ARCHIVE_INVOICE_PAYEE',
+  removable: 'CASH_ACCOUNT_ARCHIVE_REMOVABLE',
+}
+
+export type ArchivedCashAccount = {
+  cash_account_id: string
+  ledger_account: string
+  /** The removal refusal that keeps the rows. */
+  kept_because: string
+  /** Unbooked, not ignored rows kept with the account. */
+  open_transactions: number
+}
+
+type ArchiveResult =
+  | ({ ok: false; reason: CashAccountArchiveRefusal | 'not_found' } & Record<string, unknown>)
+  | ({ ok: true; dry_run: boolean } & ArchivedCashAccount)
+
+/**
+ * Archive a bank account that removal must keep (PH 222): a mistaken
+ * connection whose ledger already holds history, or with a row booked,
+ * ignored or matched. The account is turned off (enabled = false), so it
+ * leaves Konton and the booking flows; every row stays and nothing posted is
+ * touched. Decided inside archive_cash_account (migration 20261027051317),
+ * which asks remove_cash_account's dry run, so the two never disagree. A
+ * refusal names the reason and changes nothing.
+ */
+export async function archiveCashAccount(
+  ctx: OperationContext,
+  cashAccountId: string,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<ArchivedCashAccount>> {
+  const { supabase, companyId, userId, log } = ctx
+  if (!UUID_RE.test(cashAccountId)) return NOT_FOUND
+  const denied = await requireCompanyAdmin(ctx, BANK_ADMIN_MESSAGE)
+  if (denied) return denied
+
+  const { data, error } = await supabase.rpc('archive_cash_account', {
+    p_company_id: companyId,
+    p_cash_account_id: cashAccountId,
+    p_user_id: userId,
+    p_dry_run: options.dryRun === true,
+  })
+  if (error) {
+    if (error.code === '42501') {
+      return { ok: false, code: 'FORBIDDEN', messageSv: BANK_ADMIN_MESSAGE, details: { required_roles: ['owner', 'admin'] } }
+    }
+    log.error('cash_accounts archive failed', error)
+    return failed(error)
+  }
+
+  const result = data as ArchiveResult | null
+  if (!result) return failed(new Error('archive_cash_account returned no result'))
+  if (!result.ok) {
+    if (result.reason === 'not_found') return NOT_FOUND
+    const { ok: _ok, reason, ...rest } = result
+    return {
+      ok: false,
+      code: CASH_ACCOUNT_ARCHIVE_CODES[reason] ?? 'UNKNOWN_ERROR',
+      details: { cash_account_id: cashAccountId, reason, ...rest },
+    }
+  }
+  const archived: ArchivedCashAccount = {
+    cash_account_id: result.cash_account_id,
+    ledger_account: result.ledger_account,
+    kept_because: result.kept_because,
+    open_transactions: result.open_transactions,
+  }
+  if (result.dry_run) return { ok: true, dryRun: true, preview: archived }
+  log.info('cash account archived', { companyId, cashAccountId, keptBecause: result.kept_because })
+  return { ok: true, data: archived }
 }
 
 // ---------------------------------------------------------------------------

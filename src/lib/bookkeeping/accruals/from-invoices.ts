@@ -13,7 +13,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, InvoiceItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { createAccrualSchedule } from '@/lib/bookkeeping/accruals/service'
+import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
+import { createAccrualSchedule, postDueInstallments } from '@/lib/bookkeeping/accruals/service'
 import {
   coerceDimensionsBag,
   mergeDimensionBags,
@@ -23,8 +24,8 @@ import {
   suggestBalanceAccount,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
-import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
-import { toSingleLine } from '@/lib/invoices/display'
+import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
+import { toSingleLine } from '@/lib/utils'
 import type { EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
 
@@ -33,7 +34,29 @@ const log = createLogger('bookkeeping.accruals.from-invoices')
 export interface ScheduleCreationResult {
   created: number
   failed: number
+  /**
+   * Months that were due at creation but could not be posted (they stay
+   * pending with last_error, retried by the cron and Bokför förfallna). For
+   * an upplupen kostnad or intäkt every month is due at once, so a failure
+   * leaves the interim account (29xx debited, 17xx credited) without its
+   * cost or revenue until the retry succeeds.
+   */
+  releasesFailed?: number
 }
+
+/**
+ * The warning a door returns when a periodisering month could not be posted
+ * right after the registration (ScheduleCreationResult.releasesFailed).
+ */
+export const ACCRUAL_RELEASE_FAILED_WARNING = {
+  code: 'ACCRUAL_RELEASE_FAILED',
+  message_sv:
+    'Fakturan bokfördes, men en eller flera periodiseringsmånader kunde inte bokföras. ' +
+    'De står kvar som väntande med orsaken under Bokföring → Periodiseringar: åtgärda den och välj Bokför förfallna.',
+  message_en:
+    'The invoice was booked, but one or more accrual months (periodiseringar) could not be posted. ' +
+    'They stay pending with the reason under Bokföring > Periodiseringar: fix it and choose Bokför förfallna.',
+} as const
 
 export async function createSchedulesForSupplierInvoice(
   supabase: SupabaseClient,
@@ -44,7 +67,7 @@ export async function createSchedulesForSupplierInvoice(
   originJournalEntryId: string,
 ): Promise<ScheduleCreationResult> {
   const accrualItems = items.filter(itemHasAccrual)
-  const result: ScheduleCreationResult = { created: 0, failed: 0 }
+  const result: ScheduleCreationResult = { created: 0, failed: 0, releasesFailed: 0 }
   if (accrualItems.length === 0) return result
 
   const { data: existing } = await supabase
@@ -65,13 +88,14 @@ export async function createSchedulesForSupplierInvoice(
 
   for (const item of accrualItems) {
     if (item.id && covered.has(item.id)) continue
+    let scheduleId: string
     try {
       const totalSek =
         Math.round(
           resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate) *
             100,
         ) / 100
-      await createAccrualSchedule(
+      const schedule = await createAccrualSchedule(
         supabase,
         companyId,
         userId,
@@ -86,20 +110,39 @@ export async function createSchedulesForSupplierInvoice(
           totalAmountSek: totalSek,
           periodStart: item.accrual_period_start as string,
           periodEnd: item.accrual_period_end as string,
-          description: `${toSingleLine(item.description)} (leverantörsfaktura ${invoice.supplier_invoice_number})`,
+          description: `${toSingleLine(item.description)} (leverantörsfaktura ${supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number)})`,
           dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
         },
         {
           originJournalEntryId,
-          // The registration entry is dated invoice_date: dissolutions may
-          // never precede it.
+          // The registration entry is dated invoice_date: a förutbetald
+          // kostnad (17xx) may never dissolve before it. An upplupen kostnad
+          // (29xx) books on its own month-ends, before it.
           postingFloorDate: invoice.invoice_date,
+          // Catch-up runs below, so its failures reach the caller.
+          postCatchUp: false,
         },
       )
+      scheduleId = schedule.id
       result.created++
     } catch (error) {
       result.failed++
       log.error('failed to create accrual schedule for supplier invoice line', error, {
+        companyId,
+        entityId: invoice.id,
+      })
+      continue
+    }
+
+    // Post every month that has already begun (an upplupen kostnad: all of
+    // them). A month that fails stays pending with last_error for the cron
+    // and Bokför förfallna; the count goes back so the door can say so now.
+    try {
+      const catchUp = await postDueInstallments(supabase, companyId, { userId, scheduleId })
+      result.releasesFailed = (result.releasesFailed ?? 0) + catchUp.failed
+    } catch (error) {
+      result.releasesFailed = (result.releasesFailed ?? 0) + 1
+      log.error('accrual catch-up posting failed for supplier invoice line', error, {
         companyId,
         entityId: invoice.id,
       })
@@ -121,7 +164,7 @@ export async function createSchedulesForCustomerInvoice(
   const accrualItems = items.filter(
     (item) => itemHasAccrual(item) && item.line_type !== 'text' && !item.deduction_type,
   )
-  const result: ScheduleCreationResult = { created: 0, failed: 0 }
+  const result: ScheduleCreationResult = { created: 0, failed: 0, releasesFailed: 0 }
   if (accrualItems.length === 0) return result
 
   const { data: existing } = await supabase
@@ -135,7 +178,7 @@ export async function createSchedulesForCustomerInvoice(
     ),
   )
 
-  // Same merge the revenue entry used for the item's interim 29xx line
+  // Same merge the revenue entry used for the item's interim 29xx/17xx line
   // (generatePerRateLines): item bag wins per key over the invoice default.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
@@ -146,6 +189,7 @@ export async function createSchedulesForCustomerInvoice(
     // ruta 39/40 in the momsdeklaration stay correct: never deferred. The
     // generator applies the same exclusion, so the net stays on 3308/3305.
     if (target.special) continue
+    let scheduleId: string
     try {
       const targetAccount = target.account
       const totalSek =
@@ -153,7 +197,7 @@ export async function createSchedulesForCustomerInvoice(
           resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate) *
             100,
         ) / 100
-      await createAccrualSchedule(
+      const schedule = await createAccrualSchedule(
         supabase,
         companyId,
         userId,
@@ -174,13 +218,34 @@ export async function createSchedulesForCustomerInvoice(
         },
         {
           originJournalEntryId,
+          // The revenue entry is dated invoice_date: a förutbetald intäkt
+          // (29xx) may never dissolve before it. An upplupen intäkt (17xx)
+          // books on its own month-ends, before it.
           postingFloorDate: invoice.invoice_date,
+          // Catch-up runs below, so its failures reach the caller.
+          postCatchUp: false,
         },
       )
+      scheduleId = schedule.id
       result.created++
     } catch (error) {
       result.failed++
       log.error('failed to create accrual schedule for invoice line', error, {
+        companyId,
+        entityId: invoice.id,
+      })
+      continue
+    }
+
+    // Post every month that has already begun (an upplupen intäkt: all of
+    // them). A month that fails stays pending with last_error for the cron
+    // and Bokför förfallna; the count goes back so the door can say so now.
+    try {
+      const catchUp = await postDueInstallments(supabase, companyId, { userId, scheduleId })
+      result.releasesFailed = (result.releasesFailed ?? 0) + catchUp.failed
+    } catch (error) {
+      result.releasesFailed = (result.releasesFailed ?? 0) + 1
+      log.error('accrual catch-up posting failed for invoice line', error, {
         companyId,
         entityId: invoice.id,
       })
@@ -192,8 +257,9 @@ export async function createSchedulesForCustomerInvoice(
 
 /**
  * Resolve a line's revenue account exactly the way generatePerRateLines does:
- * per-line override only for ordinary domestic rates; reverse_charge/export
- * force the statutory account and are flagged `special` (never deferrable).
+ * per-line override only for ordinary domestic rates; reverse charge (EU or
+ * domestic) and export force the statutory account and are flagged `special`
+ * (never deferrable).
  */
 function resolveRevenueTarget(
   item: InvoiceItem,
@@ -201,11 +267,8 @@ function resolveRevenueTarget(
   entityType: EntityType,
 ): { account: string; special: boolean } {
   const rate = item.vat_rate ?? 0
-  const treatment =
-    rate === 0 && (invoiceTreatment === 'reverse_charge' || invoiceTreatment === 'export')
-      ? invoiceTreatment
-      : getVatTreatmentForRate(rate)
-  const special = treatment === 'reverse_charge' || treatment === 'export'
+  const treatment = resolveLineVatTreatment(rate, invoiceTreatment)
+  const special = isZeroRatedInvoiceTreatment(treatment)
   const account =
     !special && item.revenue_account
       ? item.revenue_account

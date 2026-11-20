@@ -10,7 +10,6 @@ vi.mock('@/lib/auth/cron', () => ({
 }))
 
 const registryGet = vi.fn()
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
 }))
@@ -77,10 +76,11 @@ beforeEach(() => {
 })
 
 describe('GET /api/extensions/zettle/orders/cron', () => {
-  it('returns 503 when the extension is disabled', async () => {
+  it('answers 200 skipped when the extension is disabled, without syncing', async () => {
     registryGet.mockReturnValue(null)
     const res = await callRoute()
-    expect(res.status).toBe(503)
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(syncZettlePurchases).not.toHaveBeenCalled()
   })
 

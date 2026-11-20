@@ -152,7 +152,8 @@ describe('runPostConnectRefresh', () => {
     const result = await runPostConnectRefresh(supabase, USER, COMPANY)
 
     expect(result.synced).toBe(false)
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(supabase, USER, COMPANY, 'MISSING_SCOPE')
+    // No token version on a scope verdict: the row is flagged whatever its version.
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(supabase, USER, COMPANY, 'MISSING_SCOPE', undefined)
   })
 
   it('does not persist needs_reconsent for non-terminal auth error codes', async () => {

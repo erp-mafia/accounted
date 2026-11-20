@@ -1,8 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
+import { signOut } from '@/lib/auth/session-client'
 import {
   SESSION_TIMEOUT_CHANNEL,
   SESSION_TIMEOUT_REASON_HEADER,
@@ -47,10 +46,12 @@ export function SessionTimeoutController() {
   const expire = useCallback(async (reason: SessionTimeoutReason) => {
     if (expiringRef.current) return
     expiringRef.current = true
-    resetAnalyticsIdentity()
 
+    // Ends this session only (scope local) and clears what the browser held
+    // for it: token, storage, analytics identity. If the proxy already
+    // expired the session the call answers 401, which is the same outcome.
     try {
-      await createClient().auth.signOut({ scope: 'local' })
+      await signOut({ scope: 'local' })
     } catch {
       // Middleware remains authoritative and clears the server cookies.
     }

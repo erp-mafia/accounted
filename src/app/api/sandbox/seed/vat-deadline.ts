@@ -1,5 +1,6 @@
 import { getVatDeadlineForPeriod } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 export interface SandboxVatDeadline {
   title: string
@@ -9,8 +10,8 @@ export interface SandboxVatDeadline {
 
 /** Build the current quarter's canonical, banking-day-adjusted sandbox deadline. */
 export function buildSandboxVatDeadline(today: Date): SandboxVatDeadline {
-  const year = today.getFullYear()
-  const quarter = Math.floor(today.getMonth() / 3) + 1
+  const { year, month } = stockholmYearMonth(today)
+  const quarter = Math.ceil(month / 3)
   const rawDeadline = getVatDeadlineForPeriod('quarterly', year, quarter, {
     vat_taxable_base_over_40m: false,
   })

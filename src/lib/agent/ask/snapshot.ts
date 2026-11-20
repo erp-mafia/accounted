@@ -66,7 +66,7 @@ export async function buildAssistantSnapshot(
     const [{ data }, activeEmployees] = await Promise.all([
       supabase
         .from('company_settings')
-        .select('vat_registered, moms_period, accounting_method, pays_salaries, employer_registered')
+        .select('vat_registered, moms_period, accounting_method, defer_invoice_booking, pays_salaries, employer_registered')
         .eq('company_id', companyId)
         .maybeSingle(),
       loadActiveEmployeeCount(supabase, companyId),
@@ -75,6 +75,7 @@ export async function buildAssistantSnapshot(
       vat_registered?: boolean | null
       moms_period?: string | null
       accounting_method?: string | null
+      defer_invoice_booking?: boolean | null
       pays_salaries?: boolean | null
       employer_registered?: boolean | null
     } | null
@@ -87,6 +88,12 @@ export async function buildAssistantSnapshot(
       )
       const method = accountingMethodLabel(row.accounting_method)
       if (method) parts.push(`bokföringsmetod: ${method}`)
+      // PH 244: without this, a sent invoice with no verifikat read as a
+      // fault to the assistant, which sent the user to drafts and agent
+      // proposals instead of the Bokför step (lib/bookkeeping/booking-mode.ts).
+      if (method === 'fakturametod' && row.defer_invoice_booking) {
+        parts.push('fakturor bokförs i ett separat steg: en skickad kundfaktura eller registrerad leverantörsfaktura har inget verifikat förrän någon trycker Bokför på fakturan')
+      }
       const salary = salaryPart(
         resolveEmployeeFacts({
           activeEmployees,

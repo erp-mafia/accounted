@@ -110,8 +110,7 @@ const MONEY_TYPES = new Set(['receipt', 'supplier_invoice', 'credit_note', 'cust
  * Systembolaget, 2 388,80 kr" and not "IMG_7483". The counterparty and the
  * date carry over to any type; the amount only to a receipt or an invoice
  * (or a document not typed yet): on minutes or a subscription list the
- * reader's "total" is a prominent figure, not what the document is worth
- * (Arcim, prod 2026-09-23: "Bolagsstämma 20,83 kr").
+ * reader's "total" is a prominent figure, not what the document is worth.
  */
 export function underlagPayload(extracted: Record<string, unknown> | null | undefined, docType: string | null): Payload {
   if (!extracted || typeof extracted !== 'object') return {}

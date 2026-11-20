@@ -28,6 +28,7 @@ describe('writeSkatteverketAudit', () => {
       { companyId: 'company-1', userId: 'user-1' },
       {
         endpoint: '/momsdeklarationer',
+        authMode: 'user',
         outcome: 'ok',
         responseStatus: 200,
         correlationId: 'corr-1',
@@ -51,7 +52,7 @@ describe('writeSkatteverketAudit', () => {
   it('records a call the system made with no user as a null user_id', async () => {
     await writeSkatteverketAudit(
       { companyId: 'company-1', userId: null },
-      { endpoint: 'kvittenser', outcome: 'ok', responseStatus: 200 },
+      { endpoint: 'kvittenser', authMode: 'system', outcome: 'ok', responseStatus: 200 },
     )
 
     expect(insert).toHaveBeenCalledWith(
@@ -66,6 +67,7 @@ describe('writeSkatteverketAudit', () => {
       { companyId: 'company-1', userId: 'user-1' },
       {
         endpoint: '/momsdeklarationer',
+        authMode: 'user',
         outcome: 'internal_error',
         correlationId: 'corr-2',
       },
@@ -80,6 +82,53 @@ describe('writeSkatteverketAudit', () => {
         error: 'database unavailable',
       }),
     )
+  })
+})
+
+describe('writeSkatteverketAudit: auth_mode', () => {
+  const insert = vi.fn()
+  const from = vi.fn(() => ({ insert }))
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    insert.mockResolvedValue({ error: null })
+    createServiceClientMock.mockReturnValue({ from })
+  })
+
+  it('records which credentials the call ran on', async () => {
+    await writeSkatteverketAudit(
+      { companyId: 'company-1', userId: 'user-1' },
+      { endpoint: 'skattekonto/saldo', authMode: 'user', outcome: 'ok', responseStatus: 200 },
+    )
+    await writeSkatteverketAudit(
+      { companyId: 'company-1', userId: 'user-1' },
+      { endpoint: 'skattekonto/saldo', authMode: 'system', outcome: 'ok', responseStatus: 200 },
+    )
+    expect(insert.mock.calls[0]![0]).toMatchObject({ auth_mode: 'user' })
+    expect(insert.mock.calls[1]![0]).toMatchObject({ auth_mode: 'system' })
+  })
+
+  it('before the column reaches the database the row is still written, without it', async () => {
+    insert
+      .mockResolvedValueOnce({ error: { code: 'PGRST204', message: "Could not find the 'auth_mode' column" } })
+      .mockResolvedValueOnce({ error: null })
+
+    await writeSkatteverketAudit(
+      { companyId: 'company-1', userId: 'user-1' },
+      { endpoint: 'agi/submit', authMode: 'user', outcome: 'ok', responseStatus: 200 },
+    )
+
+    expect(insert).toHaveBeenCalledTimes(2)
+    expect(insert.mock.calls[1]![0]).not.toHaveProperty('auth_mode')
+    expect(insert.mock.calls[1]![0]).toMatchObject({ endpoint: 'agi/submit', outcome: 'ok', company_id: 'company-1' })
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('any other insert error is not retried', async () => {
+    insert.mockResolvedValue({ error: { code: '23514', message: 'check violation' } })
+    await writeSkatteverketAudit({ companyId: 'company-1', userId: null }, { endpoint: 'x', authMode: 'system', outcome: 'ok' })
+    expect(insert).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalled()
   })
 })
 

@@ -11,6 +11,8 @@ const detectMocks = vi.hoisted(() => ({
   expiring: vi.fn(),
   unexplained: vi.fn(),
   other: vi.fn(),
+  bankSwitch: vi.fn(),
+  pos: vi.fn(),
 }))
 
 // The Skatteverket predicate reads a column end-user roles cannot, so the
@@ -28,6 +30,8 @@ vi.mock('../categories', () => ({
   detectExpiringBankConnections: detectMocks.expiring,
   detectSkvUnexplained: detectMocks.unexplained,
   detectOtherAccountHint: detectMocks.other,
+  detectBankSwitchNotices: detectMocks.bankSwitch,
+  detectPosConnectionAction: detectMocks.pos,
 }))
 
 import { getCompanyNotices } from '../aggregate'
@@ -53,6 +57,8 @@ beforeEach(() => {
   detectMocks.expiring.mockResolvedValue(null)
   detectMocks.unexplained.mockResolvedValue(null)
   detectMocks.other.mockResolvedValue(null)
+  detectMocks.bankSwitch.mockResolvedValue([])
+  detectMocks.pos.mockResolvedValue(null)
   mockResult({ data: [] }) // notice_dismissals: none
 })
 
@@ -66,9 +72,11 @@ describe('getCompanyNotices', () => {
   it('orders notices by the documented priority regardless of resolution order', async () => {
     detectMocks.other.mockResolvedValue(notice('other_account_hint', 'other_account_hint'))
     detectMocks.expiring.mockResolvedValue(notice('bank_connection_expiring', 'exp:1'))
+    detectMocks.bankSwitch.mockResolvedValue([notice('bank_switch_uncovered', 'bank_switch_uncovered:u1'), notice('bank_switch_needed', 'bank_switch_needed:c1')])
     detectMocks.broken.mockResolvedValue(notice('bank_connection_broken', 'broken:1'))
     detectMocks.backup.mockResolvedValue(notice('backup_failing', 'backup:1'))
     detectMocks.skv.mockResolvedValue(notice('skv_disconnected', 'skv:1'))
+    detectMocks.pos.mockResolvedValue(notice('pos_connection_action', 'pos_connection_action:p1'))
     detectMocks.noFiscalYear.mockResolvedValue(notice('no_fiscal_year', 'no_fiscal_year:0'))
 
     const notices = await getCompanyNotices(supabase, 'company-1', { userId: 'user-1' })
@@ -76,7 +84,12 @@ describe('getCompanyNotices', () => {
       // Nothing can be booked without a fiscal year: it leads.
       'no_fiscal_year',
       'bank_connection_broken',
+      // The switch has a date on it: below a failed connection, above an expiring consent.
+      'bank_switch_needed',
+      'bank_switch_uncovered',
       'skv_disconnected',
+      // Sales that stop arriving outrank a failing copy.
+      'pos_connection_action',
       'backup_failing',
       'bank_connection_expiring',
       'other_account_hint',

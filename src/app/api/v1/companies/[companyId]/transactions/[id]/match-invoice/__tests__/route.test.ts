@@ -39,44 +39,13 @@ import {
 } from '@/lib/bookkeeping/engine'
 import { eventBus } from '@/lib/events/bus'
 import { POST as matchInvoice } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockCreateJournalEntry = mockedCreateJournalEntry as ReturnType<typeof vi.fn>
 
-type MockResult = { data?: unknown; error?: unknown }
 type RecordedCall = { table: string; method: string; args: unknown[] }
-
-function makeFlexibleSupabase(
-  byTable: Record<string, MockResult | MockResult[]>,
-  calls?: RecordedCall[],
-) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [table, value] of Object.entries(byTable)) {
-    queues.set(table, Array.isArray(value) ? [...value] : [value])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (value: unknown) => void) => {
-            const queue = queues.get(table)
-            const next = queue && queue.length > 1
-              ? queue.shift()!
-              : (queue?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls?.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -142,14 +111,11 @@ beforeEach(() => {
 
 describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () => {
   it('persists and returns the bank transaction date as paid_at', async () => {
-    const calls: RecordedCall[] = []
     const matchedHandler = vi.fn()
     eventBus.on('invoice.match_confirmed', matchedHandler)
     const paidHandler = vi.fn()
     eventBus.on('invoice.paid', paidHandler)
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: TRANSACTION, error: null },
           invoices: [
@@ -166,9 +132,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
             { data: [], error: null },
             { data: { id: 'ip-1' }, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const response = await matchInvoice(
@@ -237,7 +203,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
     const paidHandler = vi.fn()
     eventBus.on('invoice.paid', paidHandler)
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { ...TRANSACTION, amount: 5000 }, error: null },
         invoices: [
@@ -252,7 +218,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
           { data: [], error: null },
           { data: { id: 'ip-1' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const response = await matchInvoice(
@@ -272,16 +238,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
   })
 
   it('3740 residual: the invoice_payments row carries the applied amount, not the cash received (#2250)', async () => {
-    // Remaining 999.60 settled by a whole-krona 1 000.00 bank line: 3740
-    // absorbs the 0.40 and paid_amount advances by the remaining only, so the
-    // AR sub-ledger row must be 999.60 as well (parity with the dashboard
-    // route and the pending-operation commit path).
-    const calls: RecordedCall[] = []
     const paidHandler = vi.fn()
     eventBus.on('invoice.paid', paidHandler)
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: { ...TRANSACTION, amount: 1000 }, error: null },
           invoices: [
@@ -301,9 +260,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
             { data: [], error: null },
             { data: { id: 'ip-1' }, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const response = await matchInvoice(
@@ -330,6 +289,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
           expect.objectContaining({ account_number: '3740', credit_amount: 0.4 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     const invoiceUpdate = calls.find(
       (call) => call.table === 'invoices' && call.method === 'update',
@@ -359,7 +320,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
     // 1 000 on a never-booked 999,60 invoice: the cash entry recognises
     // revenue and moms on the invoice amounts, 1930 takes what arrived.
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { ...TRANSACTION, amount: 1000 }, error: null },
         invoices: [
@@ -385,7 +346,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
           { data: [], error: null },
           { data: { id: 'ip-1' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const response = await matchInvoice(
@@ -413,7 +374,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
   })
 
   it('returns 401 when no bearer token is supplied', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const response = await matchInvoice(
       new Request(
         `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
@@ -435,9 +396,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
 
   it('returns 400 VALIDATION_ERROR when invoice_id is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const response = await matchInvoice(
       makeRequest(
@@ -453,11 +414,11 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
 
   it('returns 404 when the invoice does not belong to the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: TRANSACTION, error: null },
         invoices: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const response = await matchInvoice(
       makeRequest(
@@ -475,7 +436,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
 describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: custom lines', () => {
   it('books each custom line with its own dimensions', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: TRANSACTION, error: null },
         invoices: [
@@ -490,7 +451,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: cust
           { data: [], error: null },
           { data: { id: 'ip-1' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const response = await matchInvoice(
@@ -529,24 +490,20 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
     )
   }
 
-  it('refuses a payment date outside an open period before any write, the storno included', async () => {
-    const calls: RecordedCall[] = []
-    ;(mockedFindFiscalPeriod as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+  it('refuses a payment date outside an open period before any write', async () => {
+(mockedFindFiscalPeriod as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          // A categorised row: the match would storno its verifikat first.
-          transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
+          transactions: { data: TRANSACTION, error: null },
           invoices: { data: SENT_INVOICE, error: null },
           company_settings: {
             data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
             error: null,
           },
           invoice_payments: { data: [], error: null },
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const response = await matchInvoice(
@@ -565,11 +522,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
   })
 
   it('fails closed when the payment entry books nothing: the invoice stays unpaid', async () => {
-    const calls: RecordedCall[] = []
     mockCreateJournalEntry.mockResolvedValueOnce(null)
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: TRANSACTION, error: null },
           invoices: [
@@ -584,9 +538,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
             { data: [], error: null },
             { data: { id: 'ip-1' }, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const response = await matchInvoice(
@@ -602,5 +556,254 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
     expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
     expect(body.error.details).toMatchObject({ reason: 'no_journal_entry_created' })
     expect(businessWrites(calls)).toEqual([])
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: kontantmetod and refusal order', () => {
+  function businessWrites(calls: RecordedCall[]) {
+    return calls.filter(
+      (c) => c.table !== 'idempotency_keys' && (c.method === 'update' || c.method === 'insert'),
+    )
+  }
+
+  function cashSupabase(invoice: Record<string, unknown>, tx: Record<string, unknown> = TRANSACTION) {
+    return createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: tx, error: null },
+      invoices: [
+        { data: invoice, error: null },
+        { data: [{ id: INVOICE_ID }], error: null },
+      ],
+      company_settings: {
+        data: { accounting_method: 'cash', entity_type: 'enskild_firma' },
+        error: null,
+      },
+      invoice_payments: [
+        { data: [], error: null },
+        { data: { id: 'ip-1' }, error: null },
+      ],
+    })
+  }
+
+  it('refuses the final payment of a never-booked part-paid kontantmetod invoice instead of booking the whole invoice again', async () => {
+    // 5 000 already received and recognised by a manual verifikat; the cash
+    // entry would book revenue and moms on the full 12 500 a second time.
+    const { supabase, calls } = cashSupabase(
+      { ...SENT_INVOICE, status: 'partially_paid', paid_amount: 5000, remaining_amount: 7500 },
+      { ...TRANSACTION, amount: 7500, journal_entry_id: 'je-categorised' },
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(body.error.details).toMatchObject({ reason: 'previously_partially_paid' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+
+  it('refuses a partial payment of a never-booked kontantmetod invoice with the same code', async () => {
+    const { supabase, calls } = cashSupabase(SENT_INVOICE, {
+      ...TRANSACTION,
+      amount: 5000,
+      journal_entry_id: 'je-categorised',
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(body.error.details).toMatchObject({ reason: 'partial_payment' })
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+
+  it('still clears 1510 for a partial payment of an invoice booked at issue', async () => {
+    const { supabase } = cashSupabase(
+      { ...SENT_INVOICE, journal_entry_id: 'je-issue' },
+      { ...TRANSACTION, amount: 5000 },
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.invoice_status).toBe('partially_paid')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.source_type).toBe('invoice_paid')
+    expect(input.lines.find((l) => l.account_number === '1510')?.credit_amount).toBe(5000)
+  })
+
+  it('refuses unbalanced custom lines before anything is written', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: TRANSACTION, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+        error: null,
+      },
+      invoice_payments: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        {
+          invoice_id: INVOICE_ID,
+          lines: [
+            { account_number: '1930', debit_amount: 12500, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 12000 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+
+  it('refuses custom lines that balance only before each line is rounded', async () => {
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: TRANSACTION, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+        error: null,
+      },
+      invoice_payments: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        {
+          invoice_id: INVOICE_ID,
+          lines: [
+            { account_number: '1930', debit_amount: 100.004, credit_amount: 0 },
+            { account_number: '6570', debit_amount: 100.004, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 200.01 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses an inactive settlement account before anything is written', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: TRANSACTION, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+        error: null,
+      },
+      invoice_payments: { data: [], error: null },
+      // No active 1930, and an inactive row blocks the BAS backfill.
+      chart_of_accounts: [
+        { data: [], error: null },
+        { data: [{ account_number: '1930' }], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+})
+
+// One 1500 kr row booked twice moved 1930 by 3000 kr. This door refuses through
+// the gate every door asks; every shape runs on real Postgres in
+// tests/pg/customer-bank-match-doors.pg.test.ts.
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: a booked or ignored row', () => {
+  function writes(calls: RecordedCall[]) {
+    return calls.filter((c) => c.table !== 'idempotency_keys' && (c.method === 'update' || c.method === 'insert'))
+  }
+
+  async function match(tx: Record<string, unknown>) {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: { ...TRANSACTION, ...tx }, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      transaction_voucher_links: { data: [], error: null },
+      journal_entries: {
+        data: [{ id: 'je-own', status: 'posted', source_type: 'bank_transaction', source_id: TX_ID, voucher_series: 'A', voucher_number: 12 }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const response = await matchInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`, { invoice_id: INVOICE_ID }),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    return { status: response.status, body: await response.json(), calls }
+  }
+
+  it('answers 409 naming the verifikat and how to undo it, and reverses and books nothing', async () => {
+    const { status, body, calls } = await match({ journal_entry_id: 'je-own' })
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_INVOICE_TX_ALREADY_BOOKED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-own', voucher: 'A12', via: 'pointer', undo: 'uncategorize' })
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(writes(calls)).toEqual([])
+  })
+
+  it('answers 409 BANK_ROW_IGNORED for an ignored row', async () => {
+    const { status, body, calls } = await match({ is_ignored: true })
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BANK_ROW_IGNORED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(writes(calls)).toEqual([])
   })
 })

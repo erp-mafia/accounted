@@ -17,6 +17,7 @@
 import {
   listEndpoints,
   queryParameters,
+  responseJsonSchema,
   zodToJsonSchema,
   NoBodyResponse,
   type EndpointDefinition,
@@ -27,51 +28,7 @@ import {
 // call runs as a result of loading this module, populating the shared
 // ENDPOINTS map that listEndpoints() reads from.
 import '@/lib/api/v1/load-routes'
-
-interface ResourceGroup {
-  /** URL slug, used in /docs/api/reference/{slug}. */
-  slug: string
-  /** Display label for headings + nav. */
-  label: string
-  /** One-line description for the resource landing card. */
-  description: string
-  /** URL pattern segment that identifies endpoints belonging to this resource. */
-  matcher: (path: string) => boolean
-}
-
-const RESOURCES: ResourceGroup[] = [
-  { slug: 'companies', label: 'Companies', description: 'List, create and read the companies the API key can access, and read and update their settings: payment, contact and invoicing, the tax and VAT profile, and the bookkeeping lock.', matcher: (p) => /\/companies(?:\/:companyId)?(?:\/settings(?:\/(?:tax-profile|bookkeeping-lock))?)?$/.test(p) },
-  { slug: 'portfolio', label: 'Portfolio', description: 'Cross-company reads for keys that reach more than one company: one overview call over a membership-checked scope (all, byrå team, or explicit ids) instead of one call per company.', matcher: (p) => /\/portfolio(\/|$)/.test(p) },
-  { slug: 'customers', label: 'Customers', description: 'CRM-side: who you invoice. Business and individual (sole-trader) customers with VIES validation.', matcher: (p) => /\/customers(\/|$)/.test(p) },
-  { slug: 'invoices', label: 'Invoices', description: 'Outbound invoicing: draft, send, mark paid, credit, PDF download. Mixed-rate VAT supported.', matcher: (p) => /\/invoices(\/|$)/.test(p) },
-  { slug: 'articles', label: 'Articles', description: 'Read the article/product catalogue used to build invoice line items.', matcher: (p) => /\/articles(\/|$)/.test(p) },
-  { slug: 'suppliers', label: 'Suppliers', description: 'AP-side counterparties. Mirrors customers on the supplier vertical.', matcher: (p) => /\/suppliers(\/|$)/.test(p) },
-  { slug: 'supplier-invoices', label: 'Supplier invoices', description: 'AP lifecycle: register, approve, book (deferred booking), mark paid, credit. With ROT/RUT and reverse-charge support.', matcher: (p) => /\/supplier-invoices(\/|$)/.test(p) },
-  { slug: 'supplier-payment-batches', label: 'Supplier payment files', description: 'Betalfil (pain.001) for supplier invoices: preview what can be paid, create a batch, download the file for the bank, cancel.', matcher: (p) => /\/supplier-payment-batches(\/|$)/.test(p) },
-  { slug: 'expense-claims', label: 'Expense claims', description: 'Utlägg: costs an owner or employee paid privately. Register, list, delete, record the payout, and match a bank payout to open claims.', matcher: (p) => /\/expense-claims(\/|$)/.test(p) || /\/transactions\/:id\/match-expense-payout$/.test(p) },
-  { slug: 'transactions', label: 'Transactions', description: 'Bank transactions: ingest, categorise, match to invoices, reconcile.', matcher: (p) => /\/transactions(\/|$)/.test(p) },
-  { slug: 'reconciliation', label: 'Reconciliation', description: 'Run bank-to-ledger reconciliation and read the current matching status.', matcher: (p) => /\/reconciliation(\/|$)/.test(p) },
-  { slug: 'bank-accounts', label: 'Bank accounts', description: 'The company\'s bank accounts (cash accounts, whose ids filter transactions) and the bank connections that sync them.', matcher: (p) => /\/(?:cash-accounts|bank-connections)(\/|$)/.test(p) },
-  { slug: 'journal-entries', label: 'Journal entries', description: 'The bookkeeping engine surface: verifikation lifecycle (draft, commit, reverse, correct).', matcher: (p) => /\/journal-entries(\/|$)/.test(p) },
-  { slug: 'voucher-gap-explanations', label: 'Voucher gap explanations', description: 'Documented explanations for gaps in the voucher series, per BFNAR 2013:2.', matcher: (p) => /\/voucher-gap/.test(p) },
-  { slug: 'fiscal-periods', label: 'Fiscal periods', description: 'Fiscal years and their lifecycle: create, edit, lock, unlock, close, year-end, opening balances, FX revaluation, and klarmarkering of years closed in a previous system.', matcher: (p) => /\/fiscal-periods(\/|$)/.test(p) },
-  { slug: 'accounts', label: 'Accounts', description: 'The chart of accounts (BAS): read, add, edit, activate, deactivate and delete unused accounts.', matcher: (p) => /\/accounts(\/|$)/.test(p) },
-  { slug: 'fixed-assets', label: 'Fixed assets', description: 'The anläggningsregister: register an asset (no voucher, the purchase is already booked), correct it while no depreciation is posted, and dispose it, which posts the avyttring voucher with gain or loss, VAT and jämkning.', matcher: (p) => /\/assets(\/|$)/.test(p) },
-  { slug: 'documents', label: 'Documents', description: 'Underlag: multipart upload, list and read metadata, signed-URL download (15-min TTL), link to journal entries, delete an unlinked document.', matcher: (p) => /\/documents(\/|$)/.test(p) },
-  { slug: 'inbox-items', label: 'Inbox items', description: 'The invoice inbox: list and read items, correct the extracted fields, convert an item to a supplier invoice, unmatch a transaction, stamp or delete an item.', matcher: (p) => /\/inbox-items(\/|$)/.test(p) },
-  { slug: 'dimensions', label: 'Dimensions', description: 'Cost-centre / project dimensions and their values for tagging journal lines.', matcher: (p) => /\/dimensions(\/|$)/.test(p) },
-  { slug: 'employees', label: 'Employees', description: 'Payroll roster: CRUD with personnummer masking on list endpoints.', matcher: (p) => /\/employees(\/|$)/.test(p) },
-  { slug: 'salary-runs', label: 'Salary runs', description: 'Payroll lifecycle: create, calculate, approve, mark paid, book, generate AGI XML, and close the vacation year.', matcher: (p) => /\/salary-runs(\/|$)|\/salary\//.test(p) },
-  { slug: 'mileage-trips', label: 'Mileage trips', description: 'Körjournal: list the trip log with total and unbooked distance, and log a trip (date, route, km, purpose, vehicle) as a draft for later milersättning.', matcher: (p) => /\/mileage-trips(\/|$)/.test(p) },
-  { slug: 'reports', label: 'Reports', description: 'Reports and filing: trial balance, P&L, balance sheet, GL, VAT with eSKD and the settlement, INK2 and NE-bilaga with SRU files, periodisk sammanställning, cash flow, KPI, behandlingshistorik, bokslutsbilagor, the audit trail, SIE export and more.', matcher: (p) => /\/(?:reports|audit-trail|vat)(\/|$)/.test(p) },
-  { slug: 'imports', label: 'Imports', description: 'Bulk async ingest: SIE files (Fortnox/Visma/BL/SpeedLedger/Bokio migrations) and bank statements (12 formats).', matcher: (p) => /\/imports(\/|$)/.test(p) },
-  { slug: 'compliance', label: 'Compliance check', description: 'Pre-flight verification: voucher gaps, year-end readiness, before submitting to Skatteverket.', matcher: (p) => /\/compliance(\/|$)/.test(p) },
-  { slug: 'skatteverket', label: 'Skatteverket', description: 'Skatteverket: filed VAT declarations and their decisions, AGI pre-validation, and syncing the skattekonto now.', matcher: (p) => /\/(?:skatteverket|skattekonto)(\/|$)/.test(p) },
-  { slug: 'peppol', label: 'Peppol', description: 'Peppol e-invoicing for the company: participant registration status, registering to receive, and requesting access. Sending an invoice over Peppol is on the invoices page.', matcher: (p) => /\/companies\/:companyId\/peppol(\/|$)/.test(p) },
-  { slug: 'webhooks', label: 'Webhooks', description: 'Subscribe to events with HMAC-signed delivery, exponential retries, and dead-letter replay.', matcher: (p) => /\/webhooks|\/webhook-deliveries/.test(p) },
-  { slug: 'operations', label: 'Operations', description: 'Poll long-running async operations (year-end closing, imports, currency revaluation).', matcher: (p) => /\/operations(\/|$)/.test(p) },
-  { slug: 'health', label: 'Health', description: 'Unauthenticated liveness check.', matcher: (p) => /^\/api\/v1\/health$/.test(p) },
-]
+import { RESOURCES, type ResourceGroup } from './reference-resources'
 
 /** Discover the resource a given endpoint path belongs to. Returns null if it doesn't fit any. */
 function classifyEndpoint(path: string): ResourceGroup | null {
@@ -167,7 +124,7 @@ function fieldRows(schema: JsonSchema, prefix = ''): FieldRow[] {
 function responseRows(ep: EndpointDefinition): FieldRow[] {
   if (ep.response.success === NoBodyResponse) return []
   if (ep.response.contentType && ep.response.contentType !== 'application/json') return []
-  const data = zodToJsonSchema(ep.response.success).properties?.data
+  const data = responseJsonSchema(ep).properties?.data
   if (!data) return []
   if (data.type === 'array' && data.items?.properties) return fieldRows(data.items, '[].')
   const props = Object.entries(data.properties ?? {})
@@ -188,7 +145,9 @@ function renderEndpoint(ep: EndpointDefinition): string {
   const methodBadge = ep.method
   lines.push(`### \`${methodBadge}\` ${ep.path} {#${endpointAnchor(ep)}}`)
   lines.push('')
-  lines.push(`**\`${ep.operation}\`**${ep.scope ? ` · scope \`${ep.scope}\`` : ' · public'}`)
+  const access =
+    ep.scope === 'authenticated' ? ' · any valid key, no scope' : ep.scope ? ` · scope \`${ep.scope}\`` : ' · public'
+  lines.push(`**\`${ep.operation}\`**${access}`)
   lines.push('')
   lines.push(ep.summary)
   lines.push('')
@@ -208,6 +167,7 @@ function renderEndpoint(ep: EndpointDefinition): string {
   flags.push(`**Idempotent:** ${ep.idempotent ? 'yes' : 'no'}`)
   flags.push(`**Reversible:** ${ep.reversible ? 'yes' : 'no'}`)
   flags.push(`**Dry-run supported:** ${ep.dryRunSupported ? 'yes' : 'no'}`)
+  if (ep.stageSupported) flags.push('**Stage for approval:** yes (`?stage=true`)')
   lines.push(flags.join(' · '))
   lines.push('')
   // The same schemas the OpenAPI spec publishes, as tables: before #2515 the

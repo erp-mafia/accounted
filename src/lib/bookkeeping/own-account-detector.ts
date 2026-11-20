@@ -84,10 +84,9 @@ export async function detectOwnAccountTransfer(
     transaction.currency?.toUpperCase() === counterAccount.currency?.toUpperCase()
 
   let q = supabase
-    .from('transactions')
+    .from('open_bank_rows')
     .select('id, amount, date')
     .eq('company_id', companyId)
-    .is('journal_entry_id', null)
     .gte('date', dateFrom)
     .lte('date', dateTo)
     .neq('id', transaction.id)

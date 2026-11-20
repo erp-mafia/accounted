@@ -26,10 +26,12 @@ export const FORTNOX_RESOURCE_CONFIGS: Partial<Record<ResourceType, FortnoxResou
     supportsLastModified: true,
   },
   [ResourceType.SupplierInvoices]: {
-    // Only fetch unpaid/open supplier invoices. Historic paid invoices add
-    // noise and Fortnox's list endpoint doesn't reliably expose FullyPaid,
-    // which caused paid invoices to be imported as unpaid.
-    listEndpoint: '/supplierinvoices?filter=unpaid',
+    // The whole register. Only open invoices are imported by default (the
+    // paid ones are in the ledger as the SIE file's verifikat), decided per
+    // list item by fortnoxSupplierInvoiceNotOpen: Fortnox's ?filter=unpaid
+    // left out open, booked invoices (PH 230). A member can still ask for
+    // every invoice for one sync (crm#1114).
+    listEndpoint: '/supplierinvoices',
     listKey: 'SupplierInvoices',
     detailEndpoint: '/supplierinvoices/{id}',
     detailKey: 'SupplierInvoice',

@@ -15,6 +15,12 @@ vi.mock('../lib/audit', () => ({
   writeSkatteverketAudit: (...args: unknown[]) => mockWriteSkatteverketAudit(...args),
 }))
 
+// The company's own redovisare, which the lock route now reads instead of the URL's.
+vi.mock('../lib/declaration-prep', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/declaration-prep')>()),
+  resolveRedovisare: vi.fn(async () => '165560000000'),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return {
@@ -26,6 +32,15 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
 
+/** The write-role gate reads company_members; this caller is a member. */
+function memberSupabase() {
+  const membership = {
+    eq: () => membership,
+    maybeSingle: async () => ({ data: { role: 'member' }, error: null }),
+  }
+  return { from: () => ({ select: () => membership }) }
+}
+
 function makeContext(): ExtensionContext {
   return {
     userId: 'user-1',
@@ -33,7 +48,7 @@ function makeContext(): ExtensionContext {
     extensionId: 'skatteverket',
     requestId: 'req-lock-audit',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    supabase: {} as any,
+    supabase: memberSupabase() as any,
     emit: vi.fn().mockResolvedValue(undefined),
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     settings: {
