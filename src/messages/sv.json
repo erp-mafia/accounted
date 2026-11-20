@@ -9120,6 +9120,10 @@
     "review_shown": "Granskad innan den bokfördes"
   },
   "journal_detail": {
+    "dimension_edit": "Ändra dimensioner",
+    "dimension_edit_hint": "Ändra dimensioner (påverkar endast internredovisningen)",
+    "corrected_label": "Rättad",
+    "dimension_history": "Ändringshistorik för dimensioner",
     "owned_by_field": "Hör till",
     "owner_name_invoice": "Faktura",
     "owner_name_credit_note": "Kreditfaktura",
