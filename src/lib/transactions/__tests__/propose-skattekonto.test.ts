@@ -9,7 +9,7 @@ import { makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
 /**
  * crm#1275: a payment to Skatteverket was offered 5890 with 25 % moms (a
  * template learned from a booking undone two seconds later) above the
- * catalog's 2510, which itself ranked above 1630. The bank line only ever
+ * catalog's preliminary tax (2518), which itself ranked above 1630. The bank line only ever
  * touches the skattekonto (swedish-daily-bookkeeping, skattekonto-and-owner.md
  * §1.1), so that proposal now leads.
  */
@@ -26,13 +26,13 @@ describe('leadWithSkattekonto', () => {
   it('puts Insättning skattekonto first where the catalog ranked preliminary tax first', async () => {
     const tx = skvPayment()
     const catalog = await getSuggestedTemplates(tx, 'aktiebolag')
-    expect(catalog[0].debit_account).toBe('2510')
+    expect(catalog[0].debit_account).toBe('2518')
 
     const led = leadWithSkattekonto(catalog, tx)
 
     expect(led[0]).toMatchObject({ template_id: 'financial_tax_account', source: 'catalog', debit_account: '1630', vat_treatment: null })
     expect(led.filter((p) => p.template_id === 'financial_tax_account')).toHaveLength(1)
-    expect(led.map((p) => p.debit_account)).toContain('2510')
+    expect(led.map((p) => p.debit_account)).toContain('2518')
     expect(rowProposal(led)?.template_id).toBe('financial_tax_account')
   })
 
