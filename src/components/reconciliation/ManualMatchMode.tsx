@@ -14,7 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { SortableTh, TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
 import { useToast } from '@/components/ui/use-toast'
 import { chunk, cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
@@ -63,49 +63,9 @@ const LIMIT = 200
 /** Most rows one pair may carry (ReconciliationPairSchema). */
 const MAX_ROWS_PER_PAIR = 50
 
-/**
- * Sortable header for the two match tables. Deliberately local: the matching
- * view is not on a shared list table (a selection in one table constrains the
- * other), so it borrows the idiom rather than a component.
- */
-function SortTh({
-  label,
-  column,
-  sort,
-  onSort,
-  className,
-  align,
-}: {
-  label: string
-  column: ReconSortColumn
-  sort: ReconSort
-  onSort: (column: ReconSortColumn) => void
-  className?: string
-  align?: 'right'
-}) {
-  const active = sort.column === column
-  return (
-    <th
-      className={cn(TH_CLASS, className)}
-      // Only the active header carries aria-sort. "none" is the default, so
-      // stating it on every other column adds noise without adding meaning.
-      aria-sort={active ? (sort.direction === 'asc' ? 'ascending' : 'descending') : undefined}
-    >
-      <button
-        type="button"
-        onClick={() => onSort(column)}
-        className={cn(
-          'inline-flex min-h-8 items-center gap-1 rounded-sm uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-          align === 'right' && 'ml-auto justify-end',
-        )}
-      >
-        {label}
-        <span aria-hidden="true" className={cn('text-[9px]', !active && 'text-muted-foreground/60')}>
-          {active ? (sort.direction === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
-        </span>
-      </button>
-    </th>
-  )
+/** A column's sort for SortableTh: its direction, or null when the table is sorted on another column. */
+function sortDirection(sort: ReconSort, column: ReconSortColumn): ReconSort['direction'] | null {
+  return sort.column === column ? sort.direction : null
 }
 
 export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeProps) {
@@ -409,9 +369,9 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                       />
                     )}
                   </th>
-                  <SortTh label={t('col_date')} column="date" sort={externalSort} onSort={onExternalSort} className="w-[96px]" />
-                  <SortTh label={t('col_event')} column="description" sort={externalSort} onSort={onExternalSort} />
-                  <SortTh label={t('col_amount')} column="amount" sort={externalSort} onSort={onExternalSort} className="w-[120px] text-right" align="right" />
+                  <SortableTh label={t('col_date')} direction={sortDirection(externalSort, 'date')} onSort={() => onExternalSort('date')} className="w-[96px]" />
+                  <SortableTh label={t('col_event')} direction={sortDirection(externalSort, 'description')} onSort={() => onExternalSort('description')} />
+                  <SortableTh label={t('col_amount')} direction={sortDirection(externalSort, 'amount')} onSort={() => onExternalSort('amount')} className="w-[120px] text-right" align="right" />
                 </tr>
               </thead>
               <tbody className="stagger-enter">
@@ -468,10 +428,10 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-8 px-2')} />
-                  <SortTh label={t('col_date')} column="date" sort={ledgerSort} onSort={onLedgerSort} className="w-[96px]" />
-                  <SortTh label={t('col_voucher')} column="voucher" sort={ledgerSort} onSort={onLedgerSort} className="w-[90px]" />
-                  <SortTh label={t('col_event')} column="description" sort={ledgerSort} onSort={onLedgerSort} />
-                  <SortTh label={t('col_amount')} column="amount" sort={ledgerSort} onSort={onLedgerSort} className="w-[120px] text-right" align="right" />
+                  <SortableTh label={t('col_date')} direction={sortDirection(ledgerSort, 'date')} onSort={() => onLedgerSort('date')} className="w-[96px]" />
+                  <SortableTh label={t('col_voucher')} direction={sortDirection(ledgerSort, 'voucher')} onSort={() => onLedgerSort('voucher')} className="w-[90px]" />
+                  <SortableTh label={t('col_event')} direction={sortDirection(ledgerSort, 'description')} onSort={() => onLedgerSort('description')} />
+                  <SortableTh label={t('col_amount')} direction={sortDirection(ledgerSort, 'amount')} onSort={() => onLedgerSort('amount')} className="w-[120px] text-right" align="right" />
                 </tr>
               </thead>
               <tbody className="stagger-enter">
