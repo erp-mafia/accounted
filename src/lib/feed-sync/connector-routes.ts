@@ -84,6 +84,11 @@ export interface FeedConnectorSpec<C extends FeedConnectionRow, S extends FeedSy
   notConnectedMessage: string
   /** Columns safe to hand to the browser: never the encrypted credentials. */
   statusColumns: string
+  /**
+   * The column naming the store a connection reaches, for a connector that
+   * may hold several (WooCommerce). Absent: one connection per company.
+   */
+  storeColumn?: string
   isConfigured: () => boolean
   /**
    * One run on the service client: the connection's secrets are withheld
@@ -128,6 +133,33 @@ async function featureGate(
 }
 
 /**
+ * The connections a company holds now, from its connect attempts (newest
+ * first): per store, every active row, or else the newest attempt unless it
+ * was revoked. An older attempt on the same store is history: a store that
+ * failed to connect several times and then connected is one connection, not
+ * one plus a pile of errors (crm#2056). Original order is kept.
+ */
+export function currentConnections<R extends { status: string }>(
+  rows: readonly R[],
+  storeOf: (row: R) => unknown = () => null,
+): R[] {
+  const byStore = new Map<unknown, R[]>()
+  for (const row of rows) {
+    const key = storeOf(row) ?? null
+    const attempts = byStore.get(key)
+    if (attempts) attempts.push(row)
+    else byStore.set(key, [row])
+  }
+  const kept = new Set<R>()
+  for (const attempts of byStore.values()) {
+    const active = attempts.filter((r) => r.status === 'active')
+    if (active.length > 0) active.forEach((r) => kept.add(r))
+    else if (attempts[0].status !== 'revoked') kept.add(attempts[0])
+  }
+  return rows.filter((r) => kept.has(r))
+}
+
+/**
  * GET /status for a connector with one connection per company: the active
  * row, or else the most recent one so the panel can show its pending, error
  * or revoked state.
@@ -146,7 +178,7 @@ export function feedStatusRoute<C extends FeedConnectionRow, S extends FeedSyncS
         .order('created_at', { ascending: false })
         .limit(10)
       const list = (rows ?? []) as unknown as Array<{ status: string }>
-      const connection = list.find((r) => r.status === 'active') ?? list[0] ?? null
+      const connection = currentConnections(list)[0] ?? list[0] ?? null
       return NextResponse.json({ configured: spec.isConfigured(), connection })
     },
   }

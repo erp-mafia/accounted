@@ -11,6 +11,7 @@ import {
   feedDisconnectRoute,
   feedSyncRoute,
   feedTransactionSyncRoute,
+  currentConnections,
   type FeedConnectorSpec,
 } from '@/lib/feed-sync/connector-routes'
 import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
@@ -70,6 +71,7 @@ export const woocommerceFeed: FeedConnectorSpec<WooCommerceConnection, WooCommer
   settlementAccounts: [DEFAULT_PAYMENT_ACCOUNT],
   notConnectedMessage: 'Ingen ansluten WooCommerce-butik.',
   statusColumns: STATUS_COLUMNS,
+  storeColumn: 'store_url',
   isConfigured: isWooCommerceConfigured,
   sync: (supabase, connection, deadlineMs) =>
     syncWooCommerceOrders(supabase, connection, undefined, deadlineMs),
@@ -193,8 +195,9 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
     method: 'GET',
     path: '/status',
     handler: async (_request: Request, ctx: ExtensionContext) => {
-      // Multi-store: every active connection, plus the most recent inactive
-      // row when nothing is active (so the panel can show a pending/error/
+      // Multi-store: per store its active connection, or else its newest
+      // pending or failed attempt (so it can be retried or removed), and the
+      // most recent row when nothing is left (so the panel can show a
       // revoked state instead of an empty list). `connection` mirrors the
       // first entry for callers of the old single-store shape.
       const { data: rows } = await ctx.supabase
@@ -204,8 +207,8 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         .order('created_at', { ascending: false })
         .limit(25)
 
-      const active = (rows ?? []).filter((r) => r.status === 'active')
-      const listed = active.length > 0 ? active : rows?.[0] ? [rows[0]] : []
+      const current = currentConnections(rows ?? [], (r) => r.store_url)
+      const listed = current.length > 0 ? current : rows?.[0] ? [rows[0]] : []
       const connections = await withSkippedOrders(
         ctx.supabase,
         ctx.companyId,

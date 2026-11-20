@@ -262,7 +262,49 @@ describe('gnubok_list_feed_connections', () => {
       },
     ])
     expect(findCalls('stripe_connections', 'eq')).toContainEqual(['company_id', 'company-1'])
-    expect(findCalls('stripe_connections', 'neq')).toContainEqual(['status', 'revoked'])
+  })
+
+  it('lists per store the live connection, not the failed attempts before it (crm#2056)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const shop = 'https://shop.example.se'
+    const row = (id: string, status: string, store_url: string) => ({
+      id,
+      status,
+      store_url,
+      connected_at: status === 'active' ? '2026-11-13T10:30:10.810Z' : null,
+      error_message: status === 'error' ? 'Butiken svarade inte.' : null,
+      transaction_sync_enabled: status === 'active',
+      last_order_synced_at: null,
+    })
+    enqueue({
+      data: [
+        row('live', 'active', shop),
+        row('gone', 'revoked', shop),
+        ...Array.from({ length: 9 }, (_, i) => row(`retry-${i}`, 'error', shop)),
+        row('other', 'error', 'https://www.shop.example.se'),
+      ],
+    })
+    const result = (await list.execute({ provider: 'woocommerce' }, 'company-1', 'user-1', supabase as never)) as {
+      connections: Array<Record<string, unknown>>
+    }
+    expect(result.connections.map((c) => [c.connection_id, c.status])).toEqual([
+      ['live', 'active'],
+      ['other', 'error'],
+    ])
+  })
+
+  it('drops a single-store feed whose newest attempt was revoked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'gone', status: 'revoked', connected_at: null, error_message: null, transaction_sync_enabled: false },
+        { id: 'old', status: 'error', connected_at: null, error_message: 'x', transaction_sync_enabled: false },
+      ],
+    })
+    const result = (await list.execute({ provider: 'shopify' }, 'company-1', 'user-1', supabase as never)) as {
+      connections: unknown[]
+    }
+    expect(result.connections).toEqual([])
   })
 
   it('reads all four feeds when no provider is named', async () => {

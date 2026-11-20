@@ -459,7 +459,9 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                     {props.renderNotes?.(connection)}
                   </div>
                 </div>
-                {isActive &&
+                {/* A failed attempt can be removed too (crm#2056); only an
+                    active one can sync. */}
+                {(isActive || connection.status === 'error') &&
                   (confirmDisconnectId === connection.id ? (
                     <div className="flex items-center gap-2">
                       <Button
@@ -479,15 +481,17 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => handleSyncNow(connection.id)}
-                        disabled={blocked}
-                        loading={syncing}
-                      >
-                        {!syncing && <ArrowPathIcon className="h-4 w-4" />}
-                        {syncing ? tf('syncing') : tf('sync_now')}
-                      </Button>
+                      {isActive && (
+                        <Button
+                          variant="outline"
+                          onClick={() => handleSyncNow(connection.id)}
+                          disabled={blocked}
+                          loading={syncing}
+                        >
+                          {!syncing && <ArrowPathIcon className="h-4 w-4" />}
+                          {syncing ? tf('syncing') : tf('sync_now')}
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         onClick={() => setConfirmDisconnectId(connection.id)}

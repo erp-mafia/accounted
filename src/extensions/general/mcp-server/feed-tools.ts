@@ -25,6 +25,7 @@ import { dbError } from '@/lib/errors/db-error'
 import { createLogger } from '@/lib/logger'
 import {
   RATE_LIMIT_BACKFILL,
+  currentConnections,
   runFeedBackfill,
   type FeedBackfillRefusal,
   type FeedConnectorSpec,
@@ -152,15 +153,20 @@ export function createFeedTools(deps: { readOnly: McpToolAnnotations; writeOpenW
         const connections: Array<Record<string, unknown>> = []
         for (const provider of providers) {
           const spec = FEEDS[provider]
+          const storeColumn = spec.storeColumn ? `, ${spec.storeColumn}` : ''
           const { data, error } = await supabase
             .from(spec.table)
-            .select(`id, status, connected_at, error_message, transaction_sync_enabled, ${spec.cursorColumn}`)
+            .select(`id, status, connected_at, error_message, transaction_sync_enabled, ${spec.cursorColumn}${storeColumn}`)
             .eq('company_id', companyId)
-            .neq('status', 'revoked')
             .order('created_at', { ascending: false })
-            .limit(10)
+            .limit(25)
           if (error) throw dbError(error, `${provider} connections`)
-          for (const row of (data ?? []) as unknown as Array<Record<string, unknown>>) {
+          // Per store the live connection, not every failed attempt before it.
+          const rows = currentConnections(
+            (data ?? []) as unknown as Array<Record<string, unknown> & { status: string }>,
+            (row) => (spec.storeColumn ? row[spec.storeColumn] : null),
+          )
+          for (const row of rows) {
             connections.push({
               connection_id: row.id,
               provider,
