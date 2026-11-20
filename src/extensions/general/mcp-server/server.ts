@@ -26799,10 +26799,6 @@ export const tools: McpTool[] = [
       } catch (e) {
         throw new Error(`SIE-filen kunde inte tolkas: ${e instanceof Error ? e.message : 'okänt fel'}`)
       }
-      const validation = validateSIEFile(parsed)
-      if (!validation.valid) {
-        throw new Error(`SIE-filen är ogiltig och importeras inte: ${validation.errors.join('; ')}`)
-      }
 
       // What to bring, as the job reads it: an omitted flag takes the job's
       // default (import everything, as the dashboard and v1 do). It used to
@@ -26823,6 +26819,12 @@ export const tools: McpTool[] = [
         )
       }
       const flags = flagsParse.data
+      // The warnings describe this import: without its IB they say nothing
+      // about an IB the job will not book (crm#1294).
+      const validation = validateSIEFile(parsed, { importOpeningBalances: flags.importOpeningBalances })
+      if (!validation.valid) {
+        throw new Error(`SIE-filen är ogiltig och importeras inte: ${validation.errors.join('; ')}`)
+      }
       // Top up an imported year with only the file's new vouchers (issue #108):
       // its own batch beside the year's import. 'append_with_duplicates' also
       // books the possible duplicates (same date and lines as a posted entry).
@@ -26920,6 +26922,15 @@ export const tools: McpTool[] = [
         )
       }
 
+      // What the approver signs: only the parts the flags import (crm#1294).
+      const importParts = [
+        flags.createFiscalPeriod && 'create fiscal period',
+        flags.importOpeningBalances && 'opening balances',
+        flags.importTransactions && 'journal entries',
+      ].filter(Boolean)
+      const importWill = `${importParts.join(' + ')} from the parsed SIE` +
+        (flags.importOpeningBalances ? '' : '; the file\'s opening balances are not imported (import_opening_balances=false)')
+
       return stage({
         supabase,
         companyId,
@@ -26972,7 +26983,7 @@ export const tools: McpTool[] = [
           ...(remapped.length > 0 ? { remapped_accounts: remapped } : {}),
           will: appendPlan
             ? `add ${appendPlan.counts.toAdd} new vouchers to the imported year as their own batch; ${appendPlan.counts.present} already booked are skipped`
-            : 'create fiscal period + opening balances + journal entries from the parsed SIE',
+            : importWill,
         },
         ...(remapped.length > 0 ? { complianceNote: remappedSIEAccountsText(remapped) } : {}),
         actor,
