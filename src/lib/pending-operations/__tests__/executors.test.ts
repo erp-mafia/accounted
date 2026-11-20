@@ -569,6 +569,27 @@ describe('commitPendingOperation: credit-note issuance guard', () => {
     },
   )
 
+  it.each(['send_invoice', 'mark_invoice_sent'] as const)(
+    '%s on a cancelled credit note is refused as cancelled, not told to send its PDF',
+    async (type) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({
+        data: makeInvoice({ id: 'credit-1', status: 'cancelled', credited_invoice_id: 'invoice-1' }),
+        error: null,
+      })
+      enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+      const op = makePendingOp({ operation_type: type, params: { invoice_id: 'credit-1' } })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(result.status).toBe('rejected')
+      expect(result.http_status).toBe(409)
+      expect(result.code).toBe('INVOICE_SEND_CANCELLED')
+      expect(result.error).not.toContain('PDF')
+    },
+  )
+
   it('records delivery history when a regular invoice is marked as sent', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

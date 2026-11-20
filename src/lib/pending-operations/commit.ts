@@ -2907,10 +2907,17 @@ async function commitCreditNoteRefund(
  * A credit note staged as an ordinary send or mark-sent (crm#2061): the
  * refusal says how it does reach the customer. A linked draft is sent from
  * its page, which issues and books it; an issued one is not emailed again by
- * any door, so its PDF goes by hand. The last sentence is the agent's and is
- * stripped from the person's copy (approval-refusal.ts).
+ * any door, so its PDF goes by hand; a cancelled one goes nowhere. The
+ * last sentence of the issued refusal is the agent's and is stripped from the
+ * person's copy (approval-refusal.ts).
  */
 function creditNoteSendRefusal(invoice: Pick<Invoice, 'status' | 'credited_invoice_id'>): ExecutorResult {
+  // A cancelled credit note is not a valid document: no PDF goes to anyone.
+  // 409 as for the other cases, so the dispatcher consumes the operation.
+  if (invoice.status === 'cancelled') {
+    const message = getErrorEntry('INVOICE_SEND_CANCELLED')?.message_sv ?? 'INVOICE_SEND_CANCELLED'
+    return { error: message, errorCode: 'INVOICE_SEND_CANCELLED', status: 409 }
+  }
   const code =
     invoice.status !== 'draft'
       ? 'INVOICE_SEND_CREDIT_NOTE_ISSUED'
