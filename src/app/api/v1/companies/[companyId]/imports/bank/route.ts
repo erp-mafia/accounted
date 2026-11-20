@@ -22,6 +22,7 @@
  */
 
 import { z } from 'zod'
+import { BANK_FILE_FORMAT_IDS } from '@/lib/api/schemas'
 import { accepted } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -61,23 +62,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB: matches dashboard
 // The canonical BankFileFormatId values a `format` override may name. The
 // handler validates the parameter against it before anything reaches the
 // format module.
-const BankFormatEnum = z.enum([
-  'nordea',
-  'nordea_business',
-  'seb',
-  'swedbank',
-  'handelsbanken',
-  'lansforsakringar',
-  'ica_banken',
-  'skandia',
-  'lunar',
-  'northmill',
-  'avanza',
-  'wise',
-  'wise_statement',
-  'generic_csv',
-  'camt053',
-])
+const BankFormatEnum = z.enum(BANK_FILE_FORMAT_IDS)
 
 const ImportQuery = z.object({
   format: BankFormatEnum.optional().describe(

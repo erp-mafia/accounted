@@ -22,11 +22,11 @@
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
-import { roundOre } from '@/lib/money'
+import { parseSwedishAmount } from '@/lib/money'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
-import { normalizeMinusSign } from './generic-csv'
 import { parseCSVLine } from './nordea'
+import { finishParseResult } from '../parse-result'
 
 function splitHeader(line: string): string[] {
   return parseCSVLine(line, ';').map((h) => h.trim().toLowerCase())
@@ -38,17 +38,6 @@ function isAvanzaHeader(fields: string[]): boolean {
     fields.includes('värdepapper/beskrivning') &&
     fields.includes('belopp')
   )
-}
-
-/**
- * Strict comma-decimal amount: "548,7", "-322400", "1 234,50". Anything else
- * ("12abc", "1.234,5") is NaN rather than a silently truncated number.
- */
-function parseAvanzaAmount(value: string | undefined): number {
-  if (!value) return NaN
-  const cleaned = normalizeMinusSign(value).replace(/[\s ]/g, '')
-  if (!/^-?\d+(,\d+)?$/.test(cleaned)) return NaN
-  return parseFloat(cleaned.replace(',', '.'))
 }
 
 function buildDescription(type: string, text: string): string {
@@ -120,8 +109,10 @@ export const avanzaFormat: BankFileFormat = {
       }
 
       const amountStr = fields[amountIdx]
-      const amount = parseAvanzaAmount(amountStr)
-      if (isNaN(amount)) {
+      // Avanza writes a decimal comma ("548,7", "-322400", "1 234,50"), so
+      // the comma is the only decimal mark; "12abc" is null, never truncated.
+      const amount = parseSwedishAmount(amountStr, ',')
+      if (amount === null) {
         issues.push({ row: i + 1, message: `Ogiltigt belopp: ${amountStr ?? ''}`, severity: 'warning' })
         skippedRows++
         continue
@@ -137,7 +128,7 @@ export const avanzaFormat: BankFileFormat = {
       transactions.push({
         date,
         description: buildDescription(type, text),
-        amount: roundOre(amount),
+        amount,
         currency: currency.toUpperCase(),
         balance: null,
         reference: null,
@@ -154,22 +145,13 @@ export const avanzaFormat: BankFileFormat = {
       })
     }
 
-    const dates = transactions.map((t) => t.date).sort()
-
-    return {
+    return finishParseResult({
       format: 'avanza',
       format_name: 'Avanza',
       transactions,
-      date_from: dates[0] || null,
-      date_to: dates[dates.length - 1] || null,
       issues,
-      stats: {
-        total_rows: lines.length - 1,
-        parsed_rows: transactions.length,
-        skipped_rows: skippedRows,
-        total_income: roundOre(transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
-        total_expenses: roundOre(transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0)),
-      },
-    }
+      totalRows: lines.length - 1,
+      skippedRows,
+    })
   },
 }
