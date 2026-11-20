@@ -73,7 +73,7 @@ export function roundOre(n: number): number {
 }
 
 /** A finite number's shortest round-trip decimal as an integer and its count of decimals: 1.005 → [1005n, 3]. */
-function decimalDigits(n: number): [bigint, number] {
+export function decimalDigits(n: number): [bigint, number] {
   const [mantissa, e] = String(Math.abs(n)).split('e')
   const [whole, fraction = ''] = mantissa.split('.')
   const scale = fraction.length - (e ? Number(e) : 0)
@@ -81,7 +81,7 @@ function decimalDigits(n: number): [bigint, number] {
 }
 
 /** 10 to the power of a non-negative integer, as a bigint (no bigint literals: the build targets ES2017). */
-function pow10(exponent: number): bigint {
+export function pow10(exponent: number): bigint {
   return BigInt(`1${'0'.repeat(exponent)}`)
 }
 

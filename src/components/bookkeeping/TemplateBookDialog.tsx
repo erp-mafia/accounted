@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { AmountInput } from '@/components/ui/amount-input'
+import { parseAmountExpression } from '@/lib/money-expression'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -31,7 +33,6 @@ import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { parseAmountInput } from '@/lib/money'
 import { ArrowLeftIcon, ArrowUturnLeftIcon, CheckIcon } from '@/components/icons'
 import type { BookingTemplateLibrary } from '@/types'
 import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
@@ -93,8 +94,12 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     setEntryDate(todayIsoStockholm())
   }, [open])
 
+  // parseAmountExpression, not parseAmountInput: the field accepts arithmetic
+  // (1200+300, 4500*0,25). Parsing it here as well as on blur keeps the
+  // kontering preview and the Balanserar row live while the sum is typed,
+  // instead of staying empty until focus leaves the field.
   const amount = useMemo(() => {
-    const parsed = parseAmountInput(amountInput)
+    const parsed = parseAmountExpression(amountInput)
     return parsed !== null && parsed > 0 ? parsed : 0
   }, [amountInput])
 
@@ -261,12 +266,11 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
               </div>
               <div className="space-y-2">
                 <Label htmlFor="tpl-amount">{t('tpl_amount_label')}</Label>
-                <Input
+                <AmountInput
                   id="tpl-amount"
-                  inputMode="decimal"
                   placeholder="0,00"
                   value={amountInput}
-                  onChange={(e) => setAmountInput(e.target.value)}
+                  onValueChange={setAmountInput}
                   autoFocus
                   className="tabular-nums"
                 />
