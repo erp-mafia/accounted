@@ -123,6 +123,11 @@ describe('bank-anchor audit (#2407)', () => {
     const s = await company()
     const original = await bankEntry(s)
     const { tx, link } = await bookedRow(s, original)
+    // A counterparty that is an individual: its org number is a personnummer.
+    await getPool().query(
+      `UPDATE public.transactions SET counterparty_org_number = '198001011234', counterparty_iban = 'SE4550000000058398257466' WHERE id = $1`,
+      [tx],
+    )
     const correction = await correctionOf(s, original, 2)
 
     await withUserContext(s.userId, async (client) => {
@@ -140,6 +145,14 @@ describe('bank-anchor audit (#2407)', () => {
       expect(pointer).toHaveLength(1)
       expect(pointer[0]).toMatchObject({ action: 'UPDATE', company_id: s.companyId, user_id: s.userId, actor_type: 'user' })
       expect([pointer[0].old_state?.journal_entry_id, pointer[0].new_state?.journal_entry_id]).toEqual([original, correction])
+      // Only the columns that name the row and its booking: the counterparty's
+      // org number (a personnummer for an individual) and IBAN never enter the log.
+      for (const state of [pointer[0].old_state, pointer[0].new_state]) {
+        expect(Object.keys(state ?? {}).sort()).toEqual(
+          ['amount', 'cash_account_id', 'company_id', 'currency', 'date', 'description', 'id', 'journal_entry_id', 'user_id'],
+        )
+      }
+      expect(JSON.stringify(pointer[0])).not.toMatch(/198001011234|SE4550000000058398257466/)
 
       const junction = await auditRows('transaction_voucher_links', link, client)
       expect(junction).toHaveLength(1)
