@@ -6775,6 +6775,8 @@
     "doc_label_delivery_note": "Följesedel",
     "validation_description_required": "Beskrivning krävs",
     "validation_quantity_number": "Ange antal",
+    "validation_quantity_deduction": "Rader med skattereduktion behöver ett positivt antal",
+    "validation_quantity_order_line": "Antalet på en orderrad kan inte vara negativt",
     "validation_unit_required": "Enhet krävs",
     "validation_customer_required": "Välj en kund",
     "validation_invoice_date_required": "Fakturadatum krävs",

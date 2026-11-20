@@ -844,6 +844,7 @@ import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/li
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 import { noteCompletionLog } from '@/lib/extensions/completion-log'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
+import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
 import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 
 // ── Actor context ────────────────────────────────────────────
@@ -979,10 +980,11 @@ function resolveInvoiceLineFromArticle(
       vat_rate: 0,
     }
   }
-  // Zero and negative quantities are valid, as on the web (#3553): a 0 x 0
-  // information row, or a deduction as a negative quantity.
-  if (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity)) {
-    throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: quantity must be a number`)
+  // The web's quantity rule (lib/invoices/line-quantity.ts): zero and
+  // negative are valid, except on a skattereduktion row.
+  const quantityIssue = lineQuantityIssue(item)
+  if (quantityIssue) {
+    throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: ${LINE_QUANTITY_MESSAGES[quantityIssue]}`)
   }
   // Strict typeof: a host that skips inputSchema validation could send a
   // string, which JS comparisons would coerce past a bare range check while
@@ -25941,12 +25943,12 @@ export const tools: McpTool[] = [
         }
         for (const [i, item] of rawItems.entries()) {
           // Text rows are stored with quantity 0 and legitimately come back
-          // that way from gnubok_get_invoice. Product rows take any number,
-          // zero and negative included (#3553, web parity with the canonical
-          // CreateInvoiceItemSchema).
+          // that way from gnubok_get_invoice. Product rows follow the web's
+          // quantity rule (lib/invoices/line-quantity.ts).
           if (item.line_type === 'text') continue
-          if (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity)) {
-            throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: quantity must be a number`)
+          const quantityIssue = lineQuantityIssue(item)
+          if (quantityIssue) {
+            throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: ${LINE_QUANTITY_MESSAGES[quantityIssue]}`)
           }
         }
       }

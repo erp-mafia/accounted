@@ -123,6 +123,7 @@ import {
   PERIOD_PLACEHOLDER_REQUIRES_START_MESSAGE,
 } from '@/lib/invoices/recurring-placeholders'
 import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
+import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
 
 export const SIECreateAccountsSchema = z.object({
   accounts: z.array(z.object({ number: accountNumberSchema, name: z.string().max(500) })).min(1).max(10_000),
@@ -714,18 +715,11 @@ export const CreateInvoiceItemSchema = z
     if (item.description.trim().length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: 'Item description is required' })
     }
-    // Zero and negative quantities are allowed (#3553), as negative prices
-    // are: a 0 x 0 row carries information on a Peppol invoice, and a
-    // negative quantity at a positive price is the line deduction EN 16931
-    // accepts (BR-27 forbids only a negative item price). An order line is
-    // the exception: a negative quantity would lower what the order counts
-    // as invoiced.
-    if (item.sales_order_item_id && item.quantity < 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['quantity'],
-        message: 'Quantity on a sales order line cannot be negative',
-      })
+    // Zero and negative quantities are allowed, except on a skattereduktion
+    // row or (negative) a sales order row: lib/invoices/line-quantity.ts.
+    const quantityIssue = lineQuantityIssue(item)
+    if (quantityIssue) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: LINE_QUANTITY_MESSAGES[quantityIssue] })
     }
     if (item.unit.length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: 'Unit is required' })

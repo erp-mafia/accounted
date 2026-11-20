@@ -37,7 +37,7 @@ The first stable release of the public REST API. Six phases of development cover
 
 ### Invoices: zero and negative quantities (2026-11)
 
-- **Behaviour change: an invoice line's \`quantity\` may be 0 or negative** (#3553, 2026-11-20), on \`POST /invoices\`, \`PATCH /invoices/{id}\` and the MCP invoice tools, as \`unit_price\` already could be. A 0 x 0 line carries information on a Peppol invoice, where text rows do not travel, and a negative quantity at a positive price is a deduction Peppol accepts (BR-27 refuses only a negative item price). A line linked to a sales order line still refuses a negative quantity, and \`quantity\` must still be a number. **Before**, a quantity of 0 or less was refused with \`400 VALIDATION_ERROR\`.
+- **Behaviour change: an invoice line's \`quantity\` may be 0 or negative** (#3553, 2026-11-20), on \`POST /invoices\`, \`PATCH /invoices/{id}\` and the MCP invoice tools, as \`unit_price\` already could be. A 0 x 0 line carries information on a Peppol invoice, where text rows do not travel, and a negative quantity at a positive price is a deduction Peppol accepts (BR-27 refuses only a negative item price). A line with a skattereduktion (\`deduction_type\` rot, rut or gron_teknik) still needs a positive quantity, since the claim counts only positive lines; a line linked to a sales order line still refuses a negative quantity; and \`quantity\` must still be a number. **Before**, a quantity of 0 or less was refused with \`400 VALIDATION_ERROR\`.
 
 ### General ledger: a date window (2026-11)
 

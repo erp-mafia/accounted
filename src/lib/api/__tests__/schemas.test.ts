@@ -671,6 +671,14 @@ describe('CreateInvoiceItemSchema', () => {
     expect(result.success).toBe(false)
   })
 
+  it('rejects a negative quantity on a ROT row: the claim sums positive rows only', () => {
+    const result = CreateInvoiceItemSchema.safeParse(
+      validInvoiceItem({ quantity: -2, unit_price: 500, deduction_type: 'rot', work_type: 'bygg', labor_hours: 2 }),
+    )
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues.map((i) => i.path.join('.'))).toContain('quantity')
+  })
+
   it('rejects a product row whose quantity is not a number', () => {
     const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: Number.NaN }))
     expect(result.success).toBe(false)

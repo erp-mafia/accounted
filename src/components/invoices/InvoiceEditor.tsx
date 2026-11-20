@@ -258,6 +258,7 @@ import {
 } from '@/types'
 import { addDaysIso, todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
+import { lineQuantityIssue } from '@/lib/invoices/line-quantity'
 
 const currencies: readonly Currency[] = CURRENCIES
 
@@ -550,12 +551,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       if (item.description.trim().length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: t('validation_description_required') })
       }
-      // Zero and negative quantities are allowed (#3553): a 0 x 0 row carries
-      // information on a Peppol invoice, where text rows cannot travel, and
-      // a negative quantity at a positive price is the deduction EN 16931
-      // accepts (BR-27 forbids only a negative item price).
-      if (!Number.isFinite(item.quantity)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: t('validation_quantity_number') })
+      // Zero and negative quantities are allowed, except on a skattereduktion
+      // row or (negative) a sales order row: lib/invoices/line-quantity.ts.
+      const quantityIssue = lineQuantityIssue(item)
+      if (quantityIssue) {
+        const message =
+          quantityIssue === 'deduction_needs_positive'
+            ? t('validation_quantity_deduction')
+            : quantityIssue === 'negative_on_order_line'
+              ? t('validation_quantity_order_line')
+              : t('validation_quantity_number')
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message })
       }
       if (item.unit.trim().length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: t('validation_unit_required') })
