@@ -136,7 +136,7 @@
               "debit_amount": "1000",
               "credit_amount": "0",
               "exchange_rate": null,
-              "account_number": "2510",
+              "account_number": "2518",
               "line_description": "Preliminär skatt",
               "amount_in_currency": null
             },
@@ -246,7 +246,7 @@
               "debit_amount": "1500",
               "credit_amount": "0",
               "exchange_rate": null,
-              "account_number": "2510",
+              "account_number": "2518",
               "line_description": "Preliminär skatt",
               "amount_in_currency": null
             },
