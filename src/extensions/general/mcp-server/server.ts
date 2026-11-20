@@ -12427,7 +12427,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_invoice_deliveries',
     keywords: ['fakturaleverans', 'studs', 'kundfaktura'],
     title: 'Get Invoice Delivery History',
-    description: 'Email delivery attempts for one invoice with the provider outcome (delivered, bounced, complained, delayed, suppressed). Call before chasing an unpaid invoice: a bounce means the customer never received it. Recipients are masked, message content is never returned.',
+    description: 'Email delivery attempts for one invoice with the provider outcome. A bounce means the customer never got it; delivered only that their mail server accepted it, not that it reached the inbox: spam or quarantine never reports back. Recipients masked, content never returned.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -12450,7 +12450,7 @@ export const tools: McpTool[] = [
               provider: { type: ['string', 'null'] },
               provider_status: {
                 type: ['string', 'null'],
-                description: 'What the receiving server did. NULL means no report yet: accepted by the provider, nothing more.',
+                description: 'What the receiving server did: delivered, bounced, complained, delayed or suppressed. delivered means the server accepted the mail, not that the customer saw it: spam or quarantine is never reported back, so confirm receipt before chasing. NULL means no report yet: accepted by the provider, nothing more.',
               },
               provider_status_at: { type: ['string', 'null'] },
               provider_status_detail: {
