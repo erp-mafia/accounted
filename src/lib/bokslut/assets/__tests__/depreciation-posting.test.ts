@@ -4,9 +4,10 @@
  * The old shape called createJournalEntry() and then wrote the
  * depreciation_schedules row in a second statement, so a failure in between
  * left a posted voucher with no register row. The voucher and the link are now
- * one engine call backed by one database transaction; these tests pin that
- * this module issues no register write of its own, and how a batch behaves
- * when the database refuses one asset.
+ * one engine commit backed by one database transaction
+ * (commitAssetDepreciation, after the draft the posting port makes); these
+ * tests pin that this module issues no register write of its own, and how a
+ * batch behaves when the database refuses one asset.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Asset } from '@/types'
@@ -15,9 +16,15 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
-const createAssetDepreciationEntry = vi.fn()
+let drafts = 0
+const createDraftEntry = vi.fn(async (_s: unknown, _c: unknown, _u: unknown, input: { fiscal_period_id: string }) => ({
+  id: `draft-${++drafts}`,
+  fiscal_period_id: input.fiscal_period_id,
+}))
+const commitAssetDepreciation = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
-  createAssetDepreciationEntry: (...args: unknown[]) => createAssetDepreciationEntry(...args),
+  createDraftEntry: (...args: Parameters<typeof createDraftEntry>) => createDraftEntry(...args),
+  commitAssetDepreciation: (...args: unknown[]) => commitAssetDepreciation(...args),
 }))
 
 const listAssets = vi.fn()
@@ -109,12 +116,13 @@ const posted = (entryId: string, scheduleId: string) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  drafts = 0
 })
 
 describe('commitAnnualPostings', () => {
-  it('posts each asset through ONE engine call and writes nothing to the register itself', async () => {
+  it('posts each asset as a draft and ONE atomic commit, and writes nothing to the register itself', async () => {
     listAssets.mockResolvedValue([makeAsset('a1', 'Maskin'), makeAsset('a2', 'Truck')])
-    createAssetDepreciationEntry
+    commitAssetDepreciation
       .mockResolvedValueOnce(posted('je-1', 'sched-1'))
       .mockResolvedValueOnce(posted('je-2', 'sched-2'))
     const { supabase, writes } = makeSupabase()
@@ -129,8 +137,10 @@ describe('commitAnnualPostings', () => {
     // The regression itself: no second statement. The link is the RPC's job.
     expect(writes()).toEqual([])
 
-    const [, companyId, userId, input, link] = createAssetDepreciationEntry.mock.calls[0]
-    expect([companyId, userId]).toEqual(['co', 'user-1'])
+    const [, companyId, userId, input] = createDraftEntry.mock.calls[0]
+    const [, commitCompanyId, commitUserId, draft, link] = commitAssetDepreciation.mock.calls[0]
+    expect([companyId, userId, commitCompanyId, commitUserId]).toEqual(['co', 'user-1', 'co', 'user-1'])
+    expect(draft).toEqual({ id: 'draft-1', fiscal_period_id: 'period-1' })
     expect(input).toMatchObject({
       fiscal_period_id: 'period-1',
       entry_date: '2026-12-31',
@@ -154,10 +164,10 @@ describe('commitAnnualPostings', () => {
       opening_accumulated_depreciation: 10000,
       opening_depreciation_date: '2026-06-30',
     }])
-    createAssetDepreciationEntry.mockResolvedValueOnce(posted('je-1', 'sched-1'))
+    commitAssetDepreciation.mockResolvedValueOnce(posted('je-1', 'sched-1'))
     const { supabase } = makeSupabase()
     await commitAnnualPostings(supabase, 'co', 'user-1', 'period-1')
-    expect(createAssetDepreciationEntry.mock.calls[0][4]).toMatchObject({
+    expect(commitAssetDepreciation.mock.calls[0][4]).toMatchObject({
       opening_accumulated_depreciation: 10000,
       opening_depreciation_date: '2026-06-30',
     })
@@ -170,12 +180,13 @@ describe('commitAnnualPostings', () => {
     const result = await commitAnnualPostings(supabase, 'co', 'user-1', 'period-1')
 
     expect(result).toEqual({ posted: [], skipped: [{ assetId: 'a1', reason: 'already_posted' }] })
-    expect(createAssetDepreciationEntry).not.toHaveBeenCalled()
+    expect(createDraftEntry).not.toHaveBeenCalled()
+    expect(commitAssetDepreciation).not.toHaveBeenCalled()
   })
 
   it('skips an asset someone else posted first and carries on with the rest of the batch', async () => {
     listAssets.mockResolvedValue([makeAsset('a1', 'Maskin'), makeAsset('a2', 'Truck')])
-    createAssetDepreciationEntry
+    commitAssetDepreciation
       .mockRejectedValueOnce(new AssetDepreciationRefusedError('already_posted'))
       .mockResolvedValueOnce(posted('je-2', 'sched-2'))
     const { supabase } = makeSupabase()
@@ -188,7 +199,7 @@ describe('commitAnnualPostings', () => {
 
   it('skips an asset that was deleted while its posting waited on the row lock', async () => {
     listAssets.mockResolvedValue([makeAsset('a1', 'Maskin'), makeAsset('a2', 'Truck')])
-    createAssetDepreciationEntry
+    commitAssetDepreciation
       .mockRejectedValueOnce(new AssetDepreciationRefusedError('asset_not_found'))
       .mockResolvedValueOnce(posted('je-2', 'sched-2'))
     const { supabase } = makeSupabase()
@@ -201,18 +212,18 @@ describe('commitAnnualPostings', () => {
 
   it('does not swallow a real failure: a locked period stops the batch', async () => {
     listAssets.mockResolvedValue([makeAsset('a1', 'Maskin'), makeAsset('a2', 'Truck')])
-    createAssetDepreciationEntry.mockRejectedValueOnce(new Error('Cannot post in a locked period'))
+    commitAssetDepreciation.mockRejectedValueOnce(new Error('Cannot post in a locked period'))
     const { supabase } = makeSupabase()
 
     await expect(commitAnnualPostings(supabase, 'co', 'user-1', 'period-1')).rejects.toThrow(
       /locked period/,
     )
-    expect(createAssetDepreciationEntry).toHaveBeenCalledTimes(1)
+    expect(commitAssetDepreciation).toHaveBeenCalledTimes(1)
   })
 
   it('honours the assetIds filter', async () => {
     listAssets.mockResolvedValue([makeAsset('a1', 'Maskin'), makeAsset('a2', 'Truck')])
-    createAssetDepreciationEntry.mockResolvedValueOnce(posted('je-2', 'sched-2'))
+    commitAssetDepreciation.mockResolvedValueOnce(posted('je-2', 'sched-2'))
     const { supabase } = makeSupabase()
 
     const result = await commitAnnualPostings(supabase, 'co', 'user-1', 'period-1', {
@@ -220,6 +231,6 @@ describe('commitAnnualPostings', () => {
     })
 
     expect(result.posted.map((p) => p.assetId)).toEqual(['a2'])
-    expect(createAssetDepreciationEntry).toHaveBeenCalledTimes(1)
+    expect(commitAssetDepreciation).toHaveBeenCalledTimes(1)
   })
 })

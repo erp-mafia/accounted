@@ -5,10 +5,9 @@
  * the classify cron then re-runs the model verdicts of those types made
  * under an older version, a bounded batch every run (requeueStaleVerdicts).
  *
- * Why: fixes used to be forward-only. The six supplier invoices under
- * Arcim's Kundfakturor (2026-09-27) were verdicts from the 21st, three rule
- * changes old, and nothing re-ran them; 569 documents in 58 companies sat
- * in the wrong invoice folder the same way.
+ * Why: fixes used to be forward-only. A verdict made under older rules
+ * stayed as it was, and nothing re-ran it, so documents sat in the wrong
+ * invoice folder.
  *
  * Rows written before the column exists have no version. For those, `since`
  * says when the rule for that type last changed: a verdict older than that

@@ -1,8 +1,9 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { documentDate, documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { searchDocumentPages, type PageHit } from '@/lib/documents/read/search'
@@ -24,6 +25,9 @@ export interface ArkivDocumentRow {
   document_id: string
   created_at: string
   file_name: string
+  /** The stored file's type and size: what a picker that sends the file on checks (accounted#42). */
+  mime_type: string | null
+  file_size_bytes: number | null
   /** What the document is called: read off its record, the file name when nothing was read. */
   title: string
   /** The date the document carries; the upload date stands in when it has none. */
@@ -59,7 +63,6 @@ const querySchema = z.object({
 const FOLDER_PAGE_MAX = 200
 
 export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response
   const { q, year, limit, folder, offset } = parsed.data
@@ -108,7 +111,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
 
   let query = ctx.supabase
     .from('document_attachments')
-    .select('id, created_at, file_name, doc_type, admission_state, journal_entry_id, journal_entry_line_id, extracted_data, page_count')
+    .select('id, created_at, file_name, mime_type, file_size_bytes, doc_type, admission_state, journal_entry_id, journal_entry_line_id, extracted_data, page_count')
     .eq('company_id', ctx.companyId)
     .in('admission_state', ['admitted', 'held'])
     .or(NOT_STRUCTURED_MIME_FILTER)
@@ -118,7 +121,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   if (pageOrder) query = query.in('id', pageOrder)
   const { data, error } = await query
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
-  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
+  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; mime_type?: string | null; file_size_bytes?: number | null; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
   if (docs.length === 0) return NextResponse.json(pageOrder ? { data: [], next_offset: nextOffset } : { data: [] })
   const ids = docs.map((d) => d.id)
   // A document tied to a closed or locked period keeps its type on the classification (lib/documents/locked-period.ts).
@@ -152,7 +155,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   const voucherOf = new Map(
     entryRows.map((e) => [
       e.id,
-      `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`,
+      formatVoucher(e),
     ]),
   )
   const expectedCount = new Map<string, number>()
@@ -176,7 +179,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
     const settled = (...names: string[]) => names.map((n) => payload[n]?.normalized).find((v) => v != null) ?? null
     const counterparty =
       agreement?.counterparty_name ??
-      (d.doc_type ? (ISSUER[d.doc_type] ?? null) : null) ??
+      (d.doc_type ? ISSUER[d.doc_type] : null) ??
       (settled(
         'counterparty_name',
         'landlord_name',
@@ -212,6 +215,8 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
       document_id: d.id,
       created_at: d.created_at,
       file_name: d.file_name,
+      mime_type: d.mime_type ?? null,
+      file_size_bytes: d.file_size_bytes ?? null,
       title: documentTitle({ docType: d.doc_type, fileName: d.file_name, payload, agreementTitle: agreement?.title ?? null }),
       document_date: documentDate(d.doc_type, payload) ?? (d.journal_entry_id ? (entryDateOf.get(d.journal_entry_id) ?? null) : null),
       doc_type: d.doc_type,
@@ -227,7 +232,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
         expected: agreement ? (expectedCount.get(agreement.id) ?? 0) : 0,
         held: d.admission_state === 'held',
         // A person is asked only about what the model read and could not name. A document with no type yet is
-        // still being read and typed (prod 2026-09-25: most archives were untyped history, and every row asked).
+        // still being read and typed (seen 2026-09-25: most archives were untyped history, and every row asked).
         // Never for a booked document: the verifikat already says what it is, and nothing reads or types it in the background.
         unclassified: d.admission_state === 'admitted' && d.doc_type === 'other' && !d.journal_entry_id && !d.journal_entry_line_id,
         reading: d.admission_state === 'admitted' && d.doc_type == null && !d.journal_entry_id && !d.journal_entry_line_id,

@@ -20,11 +20,10 @@ const HINT_COLUMN_BY_KIND: Record<SettledInvoiceKind, string> = {
  * nothing revisited them. When one of several identical recurring invoices was
  * paid off by a DIFFERENT transaction, every other transaction kept a pointer
  * at a now fully paid invoice. Read paths already refuse to offer such a
- * candidate (lib/invoices/matchable-statuses.ts, lib/worklist/categories.ts,
- * the transactions page), but the row still blocks a fresh suggestion: both
- * re-suggestion scans require the column to be NULL
- * (lib/bookkeeping/handlers/supplier-invoice-handler.ts and
- * app/api/transactions/batch-match-invoices/route.ts).
+ * candidate (lib/bookkeeping/matchable-statuses.ts, lib/worklist/categories.ts,
+ * the transactions page), but the row still blocks a fresh suggestion: the
+ * re-suggestion scan requires the column to be NULL
+ * (lib/invoices/supplier-invoice-handler.ts).
  *
  * This complements the read-time revalidation rather than replacing it: the
  * guards stay the backstop for the settle paths not wired up here.

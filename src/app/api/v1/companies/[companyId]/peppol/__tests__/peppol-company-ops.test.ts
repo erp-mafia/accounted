@@ -45,6 +45,7 @@ vi.mock('@/lib/support', () => ({ getSupportRecipientEmail: () => 'support@examp
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as registrationGet, POST as registrationPost } from '../registration/route'
 import { POST as accessRequestPost } from '../access-request/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -89,7 +90,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** withApiV1's own bookkeeping (the idempotency cache) is not the operation's. */
 const DOOR_TABLES = new Set(['idempotency_keys', 'company_members'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (!DOOR_TABLES.has(c.table) && WRITES.has(c.method)) || c.table === 'rpc')
+  client.calls.some((c) => (!DOOR_TABLES.has(c.table) && WRITES.has(c.method)) || (c.table === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const REG_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -202,7 +203,8 @@ describe('GET /api/v1/companies/:companyId/peppol/registration', () => {
       peppol_registrations: { data: [registeredRow], error: null },
       company_settings: SETTINGS,
       peppol_access: { data: GRANT, error: null },
-      peppol_deliveries: { data: null, error: null, count: 2 },
+      // This month's sends: stamped, then unstamped.
+      peppol_deliveries: [{ data: null, error: null, count: 2 }, { data: null, error: null, count: 0 }],
     }))
     const res = await get()
     expect(res.status).toBe(200)

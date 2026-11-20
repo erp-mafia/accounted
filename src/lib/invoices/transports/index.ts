@@ -9,8 +9,7 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { peppolConnectorMode } from '@/lib/connect/instance/upstreams'
 import {
   CONNECTOR_PEPPOL_PROVIDER,
-  getPeppolTransport,
-  registerPeppolTransport,
+  registerPeppolTransportIfAbsent,
   type PeppolParticipant,
   type PeppolTransport,
 } from '@/lib/invoices/peppol-transport'
@@ -55,29 +54,25 @@ export function registerConfiguredPeppolTransports(
 ): PeppolTransport[] {
   const registered: PeppolTransport[] = []
 
-  if (!getPeppolTransport(QVALIA_PROVIDER)) {
+  const qvalia = registerPeppolTransportIfAbsent(QVALIA_PROVIDER, () => {
     const qvaliaConfig = readQvaliaConfigFromEnv(env)
-    if (qvaliaConfig) {
-      const transport = createQvaliaTransport(qvaliaConfig)
-      registerPeppolTransport(transport)
-      registered.push(transport)
-    }
-  }
+    return qvaliaConfig ? createQvaliaTransport(qvaliaConfig) : null
+  })
+  if (qvalia) registered.push(qvalia)
 
   // Self-hosted instance in connector mode (connector key, no own Qvalia
   // keys): reach Arcim's access point through the hosted proxy. Hosted has
   // its own keys, so peppolConnectorMode() is null there and nothing changes.
-  if (!getPeppolTransport(CONNECTOR_PEPPOL_PROVIDER)) {
+  const connectorTransport = registerPeppolTransportIfAbsent(CONNECTOR_PEPPOL_PROVIDER, () => {
     const connector = peppolConnectorMode()
-    if (connector) {
-      const transport = createConnectorPeppolTransport(connector, {
-        companyFor: connectorCompanyForSubmission,
-        companyForParticipant: connectorCompanyForParticipant,
-      })
-      registerPeppolTransport(transport)
-      registered.push(transport)
-    }
-  }
+    return connector
+      ? createConnectorPeppolTransport(connector, {
+          companyFor: connectorCompanyForSubmission,
+          companyForParticipant: connectorCompanyForParticipant,
+        })
+      : null
+  })
+  if (connectorTransport) registered.push(connectorTransport)
 
   return registered
 }

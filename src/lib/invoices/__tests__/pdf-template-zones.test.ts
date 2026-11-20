@@ -5,8 +5,12 @@
  * - every page has the footer: the statutory line and "Sida X av Y";
  * - pages 2 and later have the running header, and the table header repeats
  *   while the table continues;
- * - the totals, the notice, the fine print and the payment area land on the
- *   same page, the last one (crm#242: the fine print was stranded alone);
+ * - the summary (totals and the notice) is never split and stays on the page
+ *   where the rows end when it fits there (agent feedback seq 1080289); a
+ *   short fine print and the payment area land together on the last page
+ *   (crm#242: the fine print was stranded alone), a long one follows the
+ *   summary and may break across pages (crm#1787: it left page 1 mostly
+ *   empty);
  * - the payment area is only on the last page and never overprints the flow;
  * - the footer states Momsreg.nr and F-skatt only when they apply, and the
  *   seller's second address line;
@@ -19,8 +23,9 @@ import { describe, expect, it } from 'vitest'
 import type { ReactElement } from 'react'
 import { Font, pdf, renderToBuffer } from '@react-pdf/renderer'
 import layoutDocument from '@react-pdf/layout'
-import { InvoicePDF, PAYMENT_AREA_GAP_PT, PAYMENT_AREA_HEIGHT_PT, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
-import { CONTENT_WIDTH_PT, HEADER_TEXT_MAX_WIDTH_PT, STATUS_STAMP_RESERVE_PT } from '@/lib/invoices/pdf/styles'
+import { InvoicePDF, PAGE_PADDING_BOTTOM_PT, PAYMENT_AREA_GAP_PT, PAYMENT_AREA_HEIGHT_PT, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
+import { A4_HEIGHT_PT } from '@/lib/invoices/pdf/geometry'
+import { CONTENT_WIDTH_PT, HEADER_TEXT_MAX_WIDTH_PT, STATUS_STAMP_RESERVE_PT, createStyles } from '@/lib/invoices/pdf/styles'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { pdfTextStrings } from '@/tests/pdf-text'
 import type { CompanySettings, InvoiceItem } from '@/types'
@@ -196,20 +201,83 @@ describe('running header and table header', () => {
 })
 
 describe('totals block and payment area', () => {
-  // Row counts around the page-1 break: the totals block moves as one unit.
+  // Row counts around the page-1 break: the summary and the payment area's
+  // reservation are two units, each kept whole.
   for (const count of [16, 18, 20, 22, 24, 26]) {
-    it(`keeps totals, fine print and the payment area together on the last page (${count} rows)`, { timeout: 30_000 }, async () => {
+    it(`keeps the summary whole and the fine print with the payment area on the last page (${count} rows)`, { timeout: 30_000 }, async () => {
       const text = await pages(invoice({ reverse_charge_text: 'Omvänd betalningsskyldighet' }), rows(count))
       const last = text.length - 1
+      const lastRowAt = text.findIndex((page) => page.includes(`Konsulttimmar vecka ${count}`))
       const totalsAt = text.findIndex((page) => page.includes('Delsumma'))
-      expect(totalsAt).toBe(last)
-      expect(text[last]).toContain('Omvänd betalningsskyldighet')
+      // The summary follows the rows, at most one page on, and is never
+      // split: Delsumma, the notice and Att betala share its page.
+      expect(totalsAt - lastRowAt).toBeGreaterThanOrEqual(0)
+      expect(totalsAt - lastRowAt).toBeLessThanOrEqual(1)
+      expect(text[totalsAt]).toContain('Omvänd betalningsskyldighet')
+      expect(text[totalsAt]).toContain('Att betala')
+      // The fine print and the payment area land together on the last page.
       expect(text[last]).toContain(FINE_PRINT)
       expect(text[last]).toContain('BETALNING')
-      // The payment area is drawn on the last page only.
-      for (const page of text.slice(0, last)) expect(page).not.toContain('BETALNING')
+      for (const page of text.slice(0, last)) {
+        expect(page).not.toContain('BETALNING')
+        expect(page).not.toContain(FINE_PRINT)
+      }
     })
   }
+
+  // Agent feedback seq 1080289: an invoice with 8 rows and a 9-line note
+  // printed Delsumma, moms and Att betala alone on page 2, because they moved
+  // with the payment area's reservation, while page 1 was half empty.
+  it('keeps the summary on page 1 when only the payment area does not fit there', { timeout: 30_000 }, async () => {
+    const note = Array.from({ length: 9 }, (_, i) => `Avräkningsrad ${i + 1}: mätarställning och period enligt avtal.`).join('\n')
+    const text = await pages(invoice({ notes: note, reverse_charge_text: 'Omvänd betalningsskyldighet' }), rows(8))
+    expect(text).toHaveLength(2)
+    const [page1, page2] = text
+    expect(page1).toContain('Konsulttimmar vecka 8')
+    expect(page1).toContain('Avräkningsrad 9')
+    expect(page1).toContain('Delsumma')
+    expect(page1).toContain('Moms 25%')
+    expect(page1).toContain('Omvänd betalningsskyldighet')
+    expect(page1).toContain('Att betala')
+    expect(page1).not.toContain(FINE_PRINT)
+    expect(page1).not.toContain('BETALNING')
+    // Page 2 carries the fine print and the payment area, nothing of the summary.
+    expect(page2).toContain(FINE_PRINT)
+    expect(page2).toContain('BETALNING')
+    expect(page2).not.toContain('Delsumma')
+  })
+
+  it('renders a one-page invoice with the summary, the fine print and the payment area on page 1', { timeout: 30_000 }, async () => {
+    for (const count of [1, 2, 6, 12]) {
+      const text = await pages(invoice({ reverse_charge_text: 'Omvänd betalningsskyldighet' }), rows(count))
+      expect(text, `${count} rows`).toHaveLength(1)
+      for (const needle of ['Delsumma', 'Omvänd betalningsskyldighet', 'Att betala', FINE_PRINT, 'BETALNING']) {
+        expect(text[0], `${count} rows: ${needle}`).toContain(needle)
+      }
+    }
+  })
+
+  it('places the fine print directly under the summary on a one-page invoice', { timeout: 30_000 }, async () => {
+    // The two units follow each other as the one block did: the fine print
+    // starts its own top margin under the notice slot's bottom edge.
+    const [page] = await layOut(InvoicePDF({ invoice: invoice({ reverse_charge_text: 'Omvänd betalningsskyldighet' }), customer, items: rows(2), company: company() }))
+    const placed = placedTexts(page)
+    const notice = placed.find((t) => t.text === 'Omvänd betalningsskyldighet')
+    const finePrint = placed.find((t) => t.text === FINE_PRINT)
+    expect(notice).toBeDefined()
+    expect(finePrint).toBeDefined()
+    const s = createStyles()
+    const slotBottomEdge = Number(s.noticeSlot.paddingVertical) + Number(s.noticeSlot.borderWidth)
+    expect(finePrint!.top - notice!.bottom).toBeCloseTo(slotBottomEdge + Number(s.finePrint.marginTop), 1)
+  })
+
+  it('keeps the fine print with the totals on a proforma, which has no payment area', { timeout: 30_000 }, async () => {
+    for (const count of [16, 18, 20, 22, 24, 26]) {
+      const text = await pages(invoice({ document_type: 'proforma' }), rows(count))
+      const totalsAt = text.findIndex((page) => page.includes('Delsumma'))
+      expect(text[totalsAt], `${count} rows`).toContain(FINE_PRINT)
+    }
+  })
 
   it('never lets the payment area overprint the flow above it', { timeout: 30_000 }, async () => {
     for (const count of [1, 18, 22, 40]) {
@@ -224,7 +292,7 @@ describe('totals block and payment area', () => {
     }
   })
 
-  it('keeps the totals with the payment area when a long ROT breakdown has to split', { timeout: 60_000 }, async () => {
+  it('keeps the summary whole and the fine print with the payment area when a long ROT breakdown has to split', { timeout: 60_000 }, async () => {
     const rotRows: InvoiceItem[] = rows(16).map((row, i) => ({
       ...row,
       description: `Renovering av badrum etapp ${i + 1}: rivning av kakel, fuktspärr, ny golvbrunn, montering av väggskivor och kakelsättning enligt ritning`,
@@ -236,10 +304,15 @@ describe('totals block and payment area', () => {
     const text = await pages(invoice({ deduction_total: 4800 }), rotRows)
     expect(text.length).toBeGreaterThan(1)
     const last = text.length - 1
-    expect(text.findIndex((page) => page.includes('Delsumma'))).toBe(last)
+    // The summary after the breakdown is never split.
+    const totalsAt = text.findIndex((page) => page.includes('Delsumma'))
+    expect(text[totalsAt]).toContain('Att betala')
     expect(text[last]).toContain(FINE_PRINT)
     expect(text[last]).toContain('BETALNING')
-    for (const page of text.slice(0, last)) expect(page).not.toContain('BETALNING')
+    for (const page of text.slice(0, last)) {
+      expect(page).not.toContain('BETALNING')
+      expect(page).not.toContain(FINE_PRINT)
+    }
     // The whole breakdown is printed.
     expect(text.join('\n')).toContain('etapp 16')
   })
@@ -277,6 +350,107 @@ describe('totals block and payment area', () => {
     expect(text).toContain('Makulerad, ska inte betalas.')
     expect(text).not.toContain('Bankgiro')
     expect(text).not.toContain('UTKAST')
+  })
+})
+
+// crm#1787: a long fine print, such as the statutory information an
+// electricity invoice must carry (about ten lines), was kept whole with the
+// payment area's reservation. Once the two no longer fitted under the
+// summary, both moved to the next page and left page 1 mostly empty. A long
+// fine print now follows the summary as ordinary text and may break across
+// pages; the payment area stays whole, on the last page.
+describe('a long fine print (crm#1787)', () => {
+  const LONG_TERMS = Array.from(
+    { length: 10 },
+    (_, i) => `Upplysning ${i + 1} av 10: en uppgift som enligt gällande föreskrifter ska framgå av fakturan.`,
+  )
+  const longTerms = () => company({ invoice_credit_terms_text: LONG_TERMS.join('\n') })
+  // What only the payment area prints.
+  const PAYMENT_AREA_TEXT = ['BETALNING', 'Bankgiro', '5050-1055', 'OCR/Referens']
+  const PAYMENT_AREA_LABELS = ['Betalning', 'Bankgiro', 'OCR/Referens']
+  const FLOW_BOTTOM_PT = A4_HEIGHT_PT - PAGE_PADDING_BOTTOM_PT
+  const PAYMENT_AREA_TOP_PT = FLOW_BOTTOM_PT - PAYMENT_AREA_HEIGHT_PT
+
+  it('stays on page 1 under the summary when it fits there; the payment area takes the next page whole', { timeout: 30_000 }, async () => {
+    for (const count of [12, 16]) {
+      const text = await pages(invoice(), rows(count), longTerms())
+      expect(text, `${count} rows`).toHaveLength(2)
+      const [page1, page2] = text
+      for (const needle of [`Konsulttimmar vecka ${count}`, 'Delsumma', 'Att betala', FINE_PRINT, ...LONG_TERMS]) {
+        expect(page1, `${count} rows: ${needle}`).toContain(needle)
+      }
+      for (const needle of PAYMENT_AREA_TEXT) {
+        expect(page1, `${count} rows: ${needle}`).not.toContain(needle)
+        expect(page2, `${count} rows: ${needle}`).toContain(needle)
+      }
+    }
+  })
+
+  it('breaks across pages when it does not fit under the summary, every line printed once', { timeout: 30_000 }, async () => {
+    const text = await pages(invoice(), rows(20), longTerms())
+    expect(text).toHaveLength(2)
+    const [page1, page2] = text
+    expect(page1).toContain('Delsumma')
+    expect(page1).toContain('Att betala')
+    expect(page1).toContain(LONG_TERMS[0])
+    expect(page2).toContain(LONG_TERMS[LONG_TERMS.length - 1])
+    for (const line of LONG_TERMS) expect(text.filter((page) => page.includes(line)), line).toHaveLength(1)
+    for (const needle of PAYMENT_AREA_TEXT) {
+      expect(page1, needle).not.toContain(needle)
+      expect(page2, needle).toContain(needle)
+    }
+  })
+
+  it('leaves page 1 less empty space than the payment area it gave to the next page', { timeout: 30_000 }, async () => {
+    for (const count of [12, 16, 20]) {
+      const [page1] = await layOut(InvoicePDF({ invoice: invoice(), customer, items: rows(count), company: longTerms() }))
+      // The flow's last text on page 1; the footer sits below the flow.
+      const flowEnd = Math.max(...placedTexts(page1).filter((t) => t.bottom <= FLOW_BOTTOM_PT).map((t) => t.bottom))
+      expect(FLOW_BOTTOM_PT - flowEnd, `${count} rows`).toBeLessThan(PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT)
+    }
+  })
+
+  it('keeps the payment area whole on the last page only, never under the fine print', { timeout: 60_000 }, async () => {
+    for (const count of [1, 12, 16, 20, 24]) {
+      const laidOut = await layOut(InvoicePDF({ invoice: invoice(), customer, items: rows(count), company: longTerms() }))
+      laidOut.forEach((page, index) => {
+        const placed = placedTexts(page)
+        const isLast = index === laidOut.length - 1
+        const area = placed.filter((t) => PAYMENT_AREA_LABELS.includes(t.text))
+        expect(area.map((t) => t.text).sort(), `${count} rows, page ${index + 1}`).toEqual(isLast ? [...PAYMENT_AREA_LABELS].sort() : [])
+        for (const t of area) {
+          expect(t.top, `${count} rows: ${t.text}`).toBeGreaterThanOrEqual(PAYMENT_AREA_TOP_PT)
+          expect(t.bottom, `${count} rows: ${t.text}`).toBeLessThanOrEqual(FLOW_BOTTOM_PT)
+        }
+        if (isLast) {
+          for (const t of placed.filter((p) => p.text.startsWith('Upplysning'))) {
+            expect(t.bottom, `${count} rows: ${t.text}`).toBeLessThanOrEqual(PAYMENT_AREA_TOP_PT)
+          }
+        }
+      })
+    }
+  })
+
+  it('follows the summary on a proforma too, so the summary stays with its rows', { timeout: 30_000 }, async () => {
+    const text = await pages(invoice({ document_type: 'proforma' }), rows(20), longTerms())
+    const lastRowAt = text.findIndex((page) => page.includes('Konsulttimmar vecka 20'))
+    const totalsAt = text.findIndex((page) => page.includes('Delsumma'))
+    expect(totalsAt).toBe(lastRowAt)
+    expect(text[totalsAt]).toContain('Att betala')
+    for (const line of LONG_TERMS) expect(text.join('\n')).toContain(line)
+    expect(text.join('\n')).not.toContain('BETALNING')
+  })
+
+  it('leaves a fine print of two short sentences with the payment area, as before (crm#242)', { timeout: 30_000 }, async () => {
+    const terms = 'Betalningsvillkor 30 dagar netto. Anmärkningar på fakturan ska göras inom 8 dagar.'
+    const text = await pages(invoice(), rows(16), company({ invoice_credit_terms_text: terms }))
+    expect(text).toHaveLength(2)
+    const [page1, page2] = text
+    expect(page1).toContain('Delsumma')
+    for (const needle of [FINE_PRINT, terms, 'BETALNING']) {
+      expect(page1, needle).not.toContain(needle)
+      expect(page2, needle).toContain(needle)
+    }
   })
 })
 

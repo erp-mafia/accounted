@@ -1,4 +1,4 @@
-import type { HusDeductionType } from './rot-rut-rules'
+import type { HusDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * The "Redo att begäras" tile on /invoices/rot-rut.

@@ -16,20 +16,25 @@
  * app/api/bookkeeping/journal-entries/[id]/ and
  * app/api/bookkeeping/no-doc-required/batch.
  *
- * MCP: the three corrections and the batch flag stage (gnubok_correct_entry
- * stays the storno tool); the note keeps its hand-written
- * gnubok_set_voucher_note, so journal-entries.set-note has no MCP binding.
+ * MCP: the three corrections, the batch flag, the draft cancel and the note
+ * (gnubok_set_voucher_note) stage; gnubok_correct_entry stays the storno tool.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { z } from 'zod'
 import { CreateJournalEntrySchema, InlineRattelseLineSchema } from '@/lib/api/schemas'
 import { isoDateSchema } from '@/lib/invariants/zod'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import {
   correctJournalEntryMetadata,
   getJournalEntryRattelseLog,
   redateJournalEntry,
   strikeJournalEntryLines,
 } from '@/lib/core/bookkeeping/journal-entry-corrections'
-import { setJournalEntryNote, updateDraftJournalEntry } from '@/lib/core/bookkeeping/journal-entry-edits'
+import {
+  cancelDraftJournalEntry,
+  setJournalEntryNote,
+  updateDraftJournalEntry,
+} from '@/lib/core/bookkeeping/journal-entry-edits'
 import {
   NO_DOC_BATCH_MAX,
   batchSetNoDocumentRequired,
@@ -44,7 +49,7 @@ const META_EXAMPLE = { request_id: 'req_…', api_version: '2026-05-12' }
 const JOURNAL_ENTRY_ID = z
   .string()
   .uuid()
-  .describe('The verifikat id (journal entry UUID), from GET /journal-entries or gnubok_query_journal.')
+  .describe('The verifikat id, from GET /journal-entries or gnubok_query_journal.')
 
 const INLINE_ENVELOPE_PITFALL =
   'Inline rättelse is only for an open, unlocked period after the company lock date: otherwise 409 JOURNAL_RATTELSE_PERIOD_LOCKED, and storno (POST /journal-entries/{id}/correct) is the only lawful path (BFL 5 kap 5 §).'
@@ -215,6 +220,7 @@ export const journalEntriesStrikeLines = defineOperation({
     'JOURNAL_ENTRY_NOT_BALANCED',
     'ACCOUNTS_NOT_IN_CHART',
     'MEANINGLESS_CORRECTION',
+    'IMPORT_VAT_WITHOUT_BASE',
     'JOURNAL_RATTELSE_REFUSED',
     'JOURNAL_RATTELSE_PERIOD_LOCKED',
     'JOURNAL_RATTELSE_FAILED',
@@ -350,7 +356,13 @@ export const journalEntriesRedate = defineOperation({
     },
   },
   run: async (ctx, { journal_entry_id, new_entry_date, allow_deep_chain }, { dryRun }) => {
-    const outcome = await redateJournalEntry(ctx, journal_entry_id, { new_entry_date, allow_deep_chain }, { dryRun })
+    // The posting port's events, while POSTING_EVENTS is on: the caller moved
+    // the verifikat (client_asserted on a key, agent_proposed_user_approved
+    // when an approval commits the staged redate_entry).
+    const outcome = await redateJournalEntry(ctx, journal_entry_id, { new_entry_date, allow_deep_chain }, {
+      dryRun,
+      posting: () => ({ linkBasis: linkBasisColumns('user_created') }),
+    })
     if (!outcome.ok || outcome.dryRun) return outcome
     const { reversal, corrected } = outcome.data
     return {
@@ -516,8 +528,102 @@ export const journalEntriesUpdateDraft = defineOperation({
 })
 
 // ---------------------------------------------------------------------------
-// journal-entries.set-note (v1 only; MCP has gnubok_set_voucher_note)
+// journal-entries.cancel-draft (MCP; v1 DELETE /journal-entries/{id} is the
+// hand-written route over the same service, which keeps its optional
+// Idempotency-Key)
 // ---------------------------------------------------------------------------
+
+const CancelledDraftOut = z.object({
+  id: z.string().uuid(),
+  fiscal_period_id: z.string().uuid(),
+  voucher_series: z.string(),
+  voucher_number: z.number().int().nullable(),
+  entry_date: z.string(),
+  description: z.string(),
+  status: z.literal('cancelled'),
+  source_type: z.string(),
+  source_id: z.string().nullable(),
+  notes: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+})
+
+export const journalEntriesCancelDraft = defineOperation({
+  id: 'journal-entries.cancel-draft',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  // Nothing leaves the ledger: a draft is not bokförd, holds no voucher
+  // number, and the row survives as cancelled.
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Cancel an uncommitted DRAFT verifikat, so it stops blocking the year-end close.',
+    description:
+      'Flips a draft journal entry to status cancelled through the engine. A draft holds no voucher number, so cancelling it leaves no gap in the löpande nummerordning (BFL 5 kap 7 §) and needs no gap explanation; the row and its lines stay archived as cancelled. Posted and reversed entries are refused with CANNOT_CANCEL_NON_DRAFT: storno them instead. Dry-runnable.',
+    useWhen:
+      'A draft will never be committed (a duplicate, an abandoned import, a draft the agent decided against), typically one gnubok_year_end_readiness lists under drafts with the DRAFT_ENTRIES blocker.',
+    doNotUseFor: 'Undoing a posted verifikat (gnubok_reverse_journal_entry, storno) or editing a draft.',
+    pitfalls: [
+      'Only status draft can be cancelled: a posted entry answers CANNOT_CANCEL_NON_DRAFT with details.currentStatus.',
+      'A draft in a locked or closed period, or behind the company lock date, answers PERIOD_LOCKED: the lock is the user\'s decision, never lift it to make a cancel fit.',
+      'A draft that is already cancelled is not staged again (JOURNAL_ENTRY_ALREADY_CANCELLED): nothing is left to do.',
+      'A draft that holds underlag is refused with DRAFT_HAS_DOCUMENTS (details.documents lists them): a cancelled draft\'s documents can never be moved to another verifikat, so it must be booked instead.',
+    ],
+    example: {
+      request: { journal_entry_id: '0e9c…' },
+      response: {
+        data: { id: '0e9c…', voucher_series: 'A', voucher_number: 0, entry_date: '2026-05-12', status: 'cancelled' },
+        meta: META_EXAMPLE,
+      },
+    },
+  },
+  input: z.object({ journal_entry_id: JOURNAL_ENTRY_ID }),
+  output: CancelledDraftOut,
+  errorCodes: [
+    'JOURNAL_ENTRY_NOT_FOUND',
+    'CANNOT_CANCEL_NON_DRAFT',
+    'PERIOD_LOCKED',
+    'JOURNAL_ENTRY_ALREADY_CANCELLED',
+    'DRAFT_HAS_DOCUMENTS',
+    'BOOKKEEPING_DATABASE_ERROR',
+  ],
+  mcp: {
+    name: 'gnubok_cancel_draft_entry',
+    title: 'Cancel Draft Journal Entry',
+    description:
+      'Stage cancelling a DRAFT verifikat (never posted, no voucher number) that blocks year-end as DRAFT_ENTRIES; ids from gnubok_year_end_readiness drafts. The row stays as cancelled, no number gap. Posted entries are refused: storno them.',
+    keywords: ['utkast', 'makulera utkast', 'ta bort utkast', 'radera utkast', 'draft', 'delete draft', 'discard draft'],
+    stage: {
+      pendingType: 'cancel_draft_entry',
+      title: () => 'Makulera utkast till verifikat',
+    },
+  },
+  run: async (ctx, { journal_entry_id }, { dryRun }) => {
+    const outcome = await cancelDraftJournalEntry(ctx, journal_entry_id, { dryRun })
+    // v1 answers an already cancelled draft with the entry, on a dry run too.
+    // Here a dry run is the staging preview: refuse instead of staging a
+    // cancel that has nothing left to do.
+    if (dryRun && outcome.ok && !outcome.dryRun) {
+      return { ok: false, code: 'JOURNAL_ENTRY_ALREADY_CANCELLED', details: { journal_entry_id } }
+    }
+    if (!outcome.ok || outcome.dryRun) return outcome
+    return { ...outcome, data: { ...outcome.data, status: 'cancelled' as const } }
+  },
+})
+
+// ---------------------------------------------------------------------------
+// journal-entries.set-note
+// ---------------------------------------------------------------------------
+
+/** "A142", or "utkast" for a draft that holds no voucher number yet. */
+function voucherLabel(preview: Record<string, unknown>): string {
+  return preview.voucher_number
+    ? formatVoucher({
+        voucher_series: preview.voucher_series as string | null | undefined,
+        voucher_number: preview.voucher_number as number | null | undefined,
+      })
+    : 'utkast'
+}
 
 export const journalEntriesSetNote = defineOperation({
   id: 'journal-entries.set-note',
@@ -531,7 +637,11 @@ export const journalEntriesSetNote = defineOperation({
       'The note is annotation metadata beside the verifikat, not räkenskapsinformation: it may be edited on posted entries too, while every bookkeeping field stays immutable (the journal_entries trigger allows a notes-only update and nothing else). null or a blank string clears it. Idempotent. Dry-runnable.',
     useWhen: 'Recording context for a verifikat (who approved it, what an odd booking is about) or clearing an outdated note.',
     doNotUseFor: 'Changing the verifikationstext (POST /journal-entries/{id}/correct-metadata) or anything that belongs in the books.',
-    pitfalls: ['At most 2000 characters.', 'The whole note is replaced, not appended to.'],
+    pitfalls: [
+      'At most 2000 characters.',
+      'The whole note is replaced, not appended to.',
+      'A closed or locked period is read-only, the note included: 409 JOURNAL_ENTRY_NOTE_PERIOD_LOCKED, on the dry run too.',
+    ],
     example: {
       request: { notes: 'Godkänd av Anna 2026-09-12' },
       response: {
@@ -550,11 +660,38 @@ export const journalEntriesSetNote = defineOperation({
     voucher_number: z.number().int().nullable(),
     notes: z.string().nullable(),
   }),
-  errorCodes: ['JOURNAL_ENTRY_NOT_FOUND', 'JOURNAL_ENTRY_NOTE_FAILED'],
+  errorCodes: ['JOURNAL_ENTRY_NOT_FOUND', 'JOURNAL_ENTRY_NOTE_PERIOD_LOCKED', 'JOURNAL_ENTRY_NOTE_FAILED'],
   http: {
     method: 'PATCH',
     path: '/api/v1/companies/:companyId/journal-entries/:id/notes',
     pathParams: { id: 'journal_entry_id' },
+  },
+  mcp: {
+    name: 'gnubok_set_voucher_note',
+    title: 'Set Voucher Note (Anteckning)',
+    description:
+      'Stage setting or clearing the internal note (anteckning) on a verifikat in an open period, posted ones too: only the note changes. Read via gnubok_query_journal (entry_notes).',
+    visibility: 'default',
+    keywords: ['verifikat', 'anteckning', 'notering'],
+    hints: { idempotent: true },
+    stage: {
+      pendingType: 'set_voucher_note',
+      title: (_input, preview = {}) =>
+        preview.new_notes === null
+          ? `Rensa anteckning på verifikat ${voucherLabel(preview)}`
+          : `Anteckning på verifikat ${voucherLabel(preview)}`,
+      preview: (_input, preview) => ({
+        journal_entry_id: preview.journal_entry_id,
+        voucher: voucherLabel(preview),
+        entry_description: preview.description,
+        entry_status: preview.status,
+        old_notes: preview.old_notes,
+        new_notes: preview.new_notes,
+      }),
+      extras: (_input, preview) => ({
+        periodDate: typeof preview.entry_date === 'string' ? preview.entry_date : undefined,
+      }),
+    },
   },
   run: (ctx, { journal_entry_id, notes: note }, { dryRun }) => setJournalEntryNote(ctx, journal_entry_id, note, { dryRun }),
 })
@@ -584,11 +721,11 @@ export const journalEntriesSetNoDocumentRequired = defineOperation({
     summary: 'Mark a verifikat as "Inget underlag krävs" (no supporting document required).',
     description: `${NO_DOC_BASIS} Setting it again replaces the reason. Idempotent. Dry-runnable.`,
     useWhen:
-      'The user confirms a verifikat has no external underlag by nature (avskrivning, periodisering, bokslutspost, transfer between own accounts) and it should stop showing as missing underlag.',
+      'The user confirms a verifikat has no external underlag by nature (avskrivning, periodisering, bokslutspost, transfer between own accounts), or that an imported verifikat\'s underlag is kept with the earlier books (previous system, byrå or paper), and it should stop showing as missing underlag.',
     doNotUseFor:
       'Hiding a purchase or sale whose receipt or invoice is simply missing: that underlag must be found and attached (POST /documents), not waived.',
     pitfalls: [
-      'Only mark what genuinely has no external underlag: a waived receipt is a compliance gap, not a fix.',
+      'Only mark what genuinely has no external underlag, or imported underlag the user confirms is kept with the earlier books: a waived receipt is a compliance gap, not a fix.',
       'Undo with DELETE /journal-entries/{id}/no-document-required.',
     ],
     example: {
@@ -652,7 +789,7 @@ export const journalEntriesBatchNoDocumentRequired = defineOperation({
     summary: 'Mark many posted verifikat as "Inget underlag krävs" in one call.',
     description: `${NO_DOC_BASIS} Only posted verifikat of this company whose type normally needs an underlag are marked; every other id is returned in skipped_ids, never an error. Already-marked entries keep their existing reason. At most ${NO_DOC_BATCH_MAX} ids. Idempotent. Dry-runnable: the dry run lists what would be marked and what is skipped.`,
     useWhen:
-      'Clearing many entries that by nature have no external underlag (e.g. historical SIE-imported bokslutsposter) out of the missing-underlag worklist after the user has reviewed them.',
+      'Clearing many entries out of the missing-underlag worklist after the user has reviewed them: entries with no external underlag by nature, or SIE-imported verifikat whose underlag the user confirms is kept with the earlier books (reason "Underlag arkiverat utanför Accounted (tidigare system eller papper)").',
     doNotUseFor: 'Waiving receipts that are missing: find and attach them instead.',
     pitfalls: [
       'Check data.skipped_ids: drafts, reversed entries, other companies\' ids and entry types that never need an underlag are skipped.',
@@ -685,7 +822,7 @@ export const journalEntriesBatchNoDocumentRequired = defineOperation({
     name: 'gnubok_mark_no_document_required',
     title: 'Mark Vouchers as No Underlag Required',
     description:
-      'Stage marking posted verifikat "Inget underlag krävs" (no external underlag by nature: avskrivning, periodisering, bokslutspost). Removes them from the missing-underlag list; verifikat unchanged. Never for a missing receipt.',
+      'Stage "Inget underlag krävs" on posted verifikat: none by nature (avskrivning, periodisering, bokslutspost), or imported ones whose underlag the user confirms is kept with the earlier books. Never for a missing receipt.',
     // English too, for guessed waiver names (waive_document_requirement).
     // Matching only: the description's rule, never for a missing receipt, stands.
     keywords: ['inget underlag krävs', 'saknat underlag', 'underlag saknas', 'egen handling', 'utan underlag', 'waive', 'waiver', 'not required', 'no document needed'],

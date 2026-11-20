@@ -53,15 +53,17 @@ vi.mock('@/lib/api/idempotency', async () => {
   return {
     ...actual,
     checkIdempotencyKey: vi.fn(),
-    storeIdempotencyResponse: vi.fn(),
+    claimIdempotencyKey: vi.fn(),
   }
 })
 
 import { createServiceClientNoCookies, validateApiKey } from '@/lib/auth/api-keys'
 import {
   checkIdempotencyKey,
+  claimIdempotencyKey,
+  type IdempotencyClaimTarget,
+  IdempotencyKeyInProgressError,
   IdempotencyKeyReuseError,
-  storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
 import { withApiV1 } from '../with-api-v1'
 import { dryRunPreview } from '../dry-run'
@@ -72,9 +74,11 @@ import { registerEndpoint } from '../registry'
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockCheckIdempotency = checkIdempotencyKey as ReturnType<typeof vi.fn>
-const mockStoreIdempotency = storeIdempotencyResponse as ReturnType<typeof vi.fn>
+const mockClaimIdempotency = claimIdempotencyKey as ReturnType<typeof vi.fn>
+/** Every response stored under a claim (claim.complete), in order. */
+const mockStoreIdempotency = vi.fn()
 
-const COMPANY_ID = 'company-1'
+const COMPANY_ID = 'c0ffee01-0000-4000-8000-000000000001'
 const USER_ID = 'user-1'
 const INVOICES_URL = `https://x.test/api/v1/companies/${COMPANY_ID}/invoices`
 const REQUEST_BODY = { customer_id: 'cust-1', amount: 1250 }
@@ -107,7 +111,9 @@ function makeSupabaseStub(membership: { company_id: string; role: string } | nul
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            is: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            }),
           }),
         }),
       }),
@@ -128,21 +134,30 @@ function keyAuth(mode: 'live' | 'test') {
 
 interface StoredRow {
   requestHash: string
-  status: 'success' | 'error'
-  body: Record<string, unknown>
+  state: 'in_progress' | 'completed'
+  status?: 'success' | 'error'
+  body?: Record<string, unknown>
 }
 
 /**
- * In-memory stand-in for the `idempotency_keys` table. Reproduces the three
+ * In-memory stand-in for the `idempotency_keys` table. Reproduces the
  * behaviours the wrapper depends on:
  *   - rows are scoped by (user_id, company_id, key)
- *   - a stored row whose request_hash differs raises IdempotencyKeyReuseError
- *   - insert is first-writer-wins (the unique index swallows the loser)
+ *   - a live row whose request_hash differs raises IdempotencyKeyReuseError
+ *   - a claim in progress with the same hash raises IdempotencyKeyInProgressError
+ *   - a completed row with the same hash replays
+ *   - complete() stores the response, release() gives the key back
  */
 function installIdempotencyTable(): Map<string, StoredRow> {
   const rows = new Map<string, StoredRow>()
-  const rowKey = (userId: string, companyId: string, key: string) =>
+  const rowKey = (userId: string, companyId: string | null, key: string) =>
     `${userId}::${companyId}::${key}`
+
+  const answer = (row: StoredRow, key: string, requestHash: string) => {
+    if (row.requestHash !== requestHash) throw new IdempotencyKeyReuseError(key)
+    if (row.state === 'in_progress') throw new IdempotencyKeyInProgressError(key)
+    return { status: row.status!, body: row.body! }
+  }
 
   mockCheckIdempotency.mockImplementation(
     async (
@@ -153,27 +168,27 @@ function installIdempotencyTable(): Map<string, StoredRow> {
       requestHash: string,
     ) => {
       const row = rows.get(rowKey(userId, companyId, key))
-      if (!row) return null
-      if (row.requestHash !== requestHash) throw new IdempotencyKeyReuseError(key)
-      return { status: row.status, body: row.body }
+      return row ? answer(row, key, requestHash) : null
     },
   )
 
-  mockStoreIdempotency.mockImplementation(
-    async (
-      _supabase: unknown,
-      userId: string,
-      companyId: string,
-      key: string,
-      requestHash: string,
-      status: 'success' | 'error',
-      body: Record<string, unknown>,
-    ) => {
-      const k = rowKey(userId, companyId, key)
-      if (rows.has(k)) return
-      rows.set(k, { requestHash, status, body })
-    },
-  )
+  mockClaimIdempotency.mockImplementation(async (_supabase: unknown, target: IdempotencyClaimTarget) => {
+    const k = rowKey(target.userId, target.companyId, target.key)
+    const row = rows.get(k)
+    if (row) return { replay: answer(row, target.key, target.requestHash) }
+    rows.set(k, { requestHash: target.requestHash, state: 'in_progress' })
+    return {
+      claim: {
+        complete: async (status: 'success' | 'error', body: Record<string, unknown>) => {
+          mockStoreIdempotency(status, body)
+          rows.set(k, { requestHash: target.requestHash, state: 'completed', status, body })
+        },
+        release: async () => {
+          rows.delete(k)
+        },
+      },
+    }
+  })
 
   return rows
 }
@@ -396,6 +411,66 @@ describe('withApiV1: idempotent replay of real commits (must not regress)', () =
   })
 })
 
+describe('withApiV1: a resent multipart upload replays under its key', () => {
+  // Every FormData encoding gets a fresh random boundary, so the raw body of a
+  // resend never equals the first one. Hashing that text answered every
+  // honest multipart retry with IDEMPOTENCY_KEY_REUSE.
+  function makeUploadRoute() {
+    const stored: string[] = []
+    const route = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'invoices.create',
+      async (request, ctx) => {
+        const form = await request.formData()
+        const file = form.get('file') as File
+        stored.push(file.name)
+        return created({ id: `doc-${stored.length}`, file_name: file.name }, { requestId: ctx.requestId })
+      },
+      { requireScope: 'invoices:write' },
+    )
+    return { route, stored }
+  }
+
+  function postUpload(bytes: string, fields: Record<string, string> = {}): Request {
+    const form = new FormData()
+    for (const [name, value] of Object.entries(fields)) form.append(name, value)
+    form.append('file', new File([new TextEncoder().encode(bytes)], 'faktura.pdf', { type: 'application/pdf' }))
+    return new Request(INVOICES_URL, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gnubok_sk_x', 'Idempotency-Key': 'upload-key' },
+      body: form,
+    })
+  }
+
+  it('replays a resend whose encoding differs only in its boundary', async () => {
+    const { route, stored } = makeUploadRoute()
+    const first = postUpload('%PDF-1.4 a', { external_ref: 'billo-1' })
+    const second = postUpload('%PDF-1.4 a', { external_ref: 'billo-1' })
+    // Precondition: the two encodings really differ.
+    expect(await first.clone().text()).not.toBe(await second.clone().text())
+
+    const a = await route(first, companyParams(COMPANY_ID))
+    const b = await route(second, companyParams(COMPANY_ID))
+
+    expect(a.status).toBe(201)
+    expect(b.headers.get('Idempotent-Replayed')).toBe('true')
+    expect((await b.json()).data.id).toBe('doc-1')
+    expect(stored).toEqual(['faktura.pdf'])
+  })
+
+  it('still refuses the same key with another file or another field value', async () => {
+    const { route, stored } = makeUploadRoute()
+    await route(postUpload('%PDF-1.4 a', { external_ref: 'billo-1' }), companyParams(COMPANY_ID))
+
+    const otherFile = await route(postUpload('%PDF-1.4 b', { external_ref: 'billo-1' }), companyParams(COMPANY_ID))
+    const otherField = await route(postUpload('%PDF-1.4 a', { external_ref: 'billo-2' }), companyParams(COMPANY_ID))
+
+    expect(otherFile.status).toBe(409)
+    expect((await otherFile.json()).error.code).toBe('IDEMPOTENCY_KEY_REUSE')
+    expect(otherField.status).toBe(409)
+    expect(stored).toEqual(['faktura.pdf'])
+  })
+})
+
 describe('withApiV1: dry-run query flag is case-insensitive', () => {
   // '?dry_run=True' used to fall through the exact-match check and COMMIT for
   // real while the caller believed it previewed: the one direction this flag
@@ -502,5 +577,51 @@ describe('withApiV1: test keys (forced dry-run) never poison the cache', () => {
     expect(commit.status).toBe(201)
     expect(commit.headers.get('Idempotent-Replayed')).toBeNull()
     expect(committed).toEqual(['inv-1'])
+  })
+})
+
+describe('withApiV1: overlapping requests with one Idempotency-Key', () => {
+  // The gap step 1 left: the row was stored only after the first call
+  // finished, so a repeat sent meanwhile (a stateless MCP bridge resending a
+  // broken stream, a client timeout) ran the write a second time.
+  it('runs the write once: the overlapping repeat gets 409 IN_PROGRESS, the later one the replay', async () => {
+    const committed: string[] = []
+    let finishFirst: () => void = () => {}
+    const route = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'invoices.create',
+      async (_request, ctx) => {
+        if (committed.length === 0) {
+          await new Promise<void>((resolve) => {
+            finishFirst = resolve
+          })
+        }
+        committed.push(`inv-${committed.length + 1}`)
+        return created({ id: committed[committed.length - 1] }, { requestId: ctx.requestId })
+      },
+      { requireScope: 'invoices:write' },
+    )
+
+    const first = route(postInvoice({ key: 'key-overlap' }), companyParams(COMPANY_ID))
+    await vi.waitFor(() => expect(mockClaimIdempotency).toHaveBeenCalledTimes(1))
+
+    const overlapping = await route(postInvoice({ key: 'key-overlap' }), companyParams(COMPANY_ID))
+    expect(overlapping.status).toBe(409)
+    expect(overlapping.headers.get('Retry-After')).toBe('2')
+    expect((await overlapping.json()).error.code).toBe('IDEMPOTENCY_KEY_IN_PROGRESS')
+
+    finishFirst()
+    expect((await first).status).toBe(201)
+
+    const later = await route(postInvoice({ key: 'key-overlap' }), companyParams(COMPANY_ID))
+    expect(later.status).toBe(200)
+    expect(later.headers.get('Idempotent-Replayed')).toBe('true')
+    expect(committed).toEqual(['inv-1'])
+  })
+
+  it('never claims for a dry run: a preview holds no key the commit could collide with', async () => {
+    const { route } = makeInvoiceRoute()
+    await route(postInvoice({ key: 'key-preview-claim', dryRunQuery: true }), companyParams(COMPANY_ID))
+    expect(mockClaimIdempotency).not.toHaveBeenCalled()
+    expect(mockCheckIdempotency).toHaveBeenCalledTimes(1)
   })
 })

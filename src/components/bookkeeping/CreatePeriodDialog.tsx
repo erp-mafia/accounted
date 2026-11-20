@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -19,6 +19,7 @@ import { computeSuggestedPeriod, fiscalYearName } from '@/lib/bookkeeping/sugges
 import { fiscalPeriodAdvisoryText } from '@/lib/bookkeeping/fiscal-period-warnings'
 import type { FiscalPeriod } from '@/types'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 interface Props {
   open: boolean
@@ -37,25 +38,12 @@ interface CreatedWithAdvisory {
   advisory: string
 }
 
-/** Read a user-facing message from either a legacy string error or the
- *  canonical { code, message } envelope. */
-function errorMessage(err: unknown, fallback = 'Ett oväntat fel uppstod.'): string {
-  if (typeof err === 'string') return err
-  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
-    return (err as { message: string }).message
-  }
-  return fallback
-}
-
 export default function CreatePeriodDialog({ open, onOpenChange, entryDate, periods, onCreated }: Props) {
   const { toast } = useToast()
-  // The form copy below is pre-existing hardcoded Swedish and is left as it
-  // stands (out of scope here). Every string added for the created-state is
-  // keyed in both messages/sv.json and messages/en.json. The advisory itself is
-  // not keyed: the route emits one Swedish sentence and no English twin, and
-  // bokslut/räkenskapsår domain copy stays Swedish in both locales anyway
-  // (.claude/rules/i18n.md).
+  // The advisory is not keyed: the route emits one Swedish sentence and no
+  // English twin.
   const t = useTranslations('bookkeeping')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
   const tCommon = useTranslations('common')
   const suggested = useMemo(() => computeSuggestedPeriod(entryDate, periods), [entryDate, periods])
 
@@ -115,8 +103,12 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
 
       if (!res.ok) {
         toast({
-          title: 'Kunde inte skapa räkenskapsår',
-          description: errorMessage(result?.error),
+          title: t('create_period_failed'),
+          description: getErrorMessage(result, {
+            locale,
+            statusCode: res.status,
+            fallback: t('create_period_failed_unexpected'),
+          }),
           variant: 'destructive',
         })
         return
@@ -137,13 +129,13 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
         return
       }
 
-      toast({ title: 'Räkenskapsår skapat', description: `${name} har skapats.` })
+      toast({ title: t('period_created_title'), description: t('create_period_created_description', { name }) })
       onOpenChange(false)
       onCreated()
     } catch {
       toast({
-        title: 'Kunde inte skapa räkenskapsår',
-        description: 'Ett nätverksfel uppstod. Försök igen.',
+        title: t('create_period_failed'),
+        description: t('create_period_failed_network'),
         variant: 'destructive',
       })
     } finally {
@@ -179,15 +171,13 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>Skapa räkenskapsår</DialogTitle>
-              <DialogDescription>
-                Det finns inget räkenskapsår som täcker datumet {entryDate}. Skapa ett nytt nedan.
-              </DialogDescription>
+              <DialogTitle>{t('create_period_title')}</DialogTitle>
+              <DialogDescription>{t('create_period_description', { date: entryDate })}</DialogDescription>
             </DialogHeader>
 
             <div className="space-y-3">
               <div>
-                <Label>Namn</Label>
+                <Label>{t('create_period_name')}</Label>
                 <Input
                   value={name}
                   onChange={(e) => {
@@ -199,11 +189,11 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label>Startdatum</Label>
+                  <Label>{t('create_period_start')}</Label>
                   <Input type="date" value={periodStart} onChange={(e) => updateDates(e.target.value, periodEnd)} className="mt-1" />
                 </div>
                 <div>
-                  <Label>Slutdatum</Label>
+                  <Label>{t('create_period_end')}</Label>
                   <Input type="date" value={periodEnd} onChange={(e) => updateDates(periodStart, e.target.value)} className="mt-1" />
                 </div>
               </div>
@@ -211,10 +201,10 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
 
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-                Avbryt
+                {tCommon('cancel')}
               </Button>
               <Button onClick={handleCreate} disabled={!name || !periodStart || !periodEnd} loading={isSubmitting}>
-                Skapa
+                {t('create_period_submit')}
               </Button>
             </DialogFooter>
           </>

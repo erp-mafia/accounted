@@ -33,6 +33,8 @@ import {
 } from '@/lib/vat/account-vat-treatment'
 import { isVatBoxAccount, type AccountVatBox } from '@/lib/vat/account-vat-box'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import type { z } from 'zod'
+import type { UpdateAccountSchema } from '@/lib/api/schemas'
 
 export const ACCOUNT_TYPES = ['asset', 'equity', 'liability', 'revenue', 'expense', 'untaxed_reserves'] as const
 export type ChartAccountType = (typeof ACCOUNT_TYPES)[number]
@@ -313,20 +315,13 @@ export async function createAccount(
   return { ok: true, data: data as ChartAccountRow, created: true }
 }
 
-export interface UpdateAccountInput {
-  account_name?: string
-  /** '' and null both clear. */
-  description?: string | null
-  default_vat_code?: string | null
-  default_vat_rate?: AccountVatRate
-  /** null restores the BAS fallback. */
-  default_vat_treatment?: AccountVatTreatment | null
-  /** null restores the BAS momsruta. */
-  vat_box?: AccountVatBox | null
-  sru_code?: string | null
-  /** false deactivates: history and balances stay, new verifikat cannot use it. */
-  is_active?: boolean
-}
+/**
+ * The request every door validates (UpdateAccountSchema). description: '' and
+ * null both clear; default_vat_treatment and vat_box: null restores the BAS
+ * fallback; is_active false deactivates (history and balances stay, new
+ * verifikat cannot use it).
+ */
+export type UpdateAccountInput = z.output<typeof UpdateAccountSchema>
 
 const UPDATABLE_FIELDS = [
   'account_name',
@@ -484,6 +479,27 @@ export async function deleteAccount(
   const usageCount = usage.counts.get(accountNumber) ?? 0
   if (usageCount > 0) {
     return { ok: false, code: 'ACCOUNT_IN_USE', details: { account_number: accountNumber, usage_count: usageCount } }
+  }
+
+  // A budget's amounts on the account would go with it (ON DELETE CASCADE):
+  // an account a budget uses is not unused (accounted#134).
+  const { data: budgetLines, error: budgetError } = await supabase
+    .from('budget_lines')
+    .select('budget_id')
+    .eq('company_id', companyId)
+    .eq('account_number', accountNumber)
+    .limit(1)
+  if (budgetError) {
+    log.error('account budget usage failed', budgetError)
+    return { ok: false, code: 'UNKNOWN_ERROR', error: budgetError }
+  }
+  if ((budgetLines ?? []).length > 0) {
+    return {
+      ok: false,
+      code: 'ACCOUNT_IN_USE',
+      messageSv: `Konto ${accountNumber} har belopp i en budget och kan inte tas bort. Ta bort beloppen ur budgeten först, eller inaktivera kontot.`,
+      details: { account_number: accountNumber, usage_count: 0, budget_id: (budgetLines as { budget_id: string }[])[0]!.budget_id },
+    }
   }
 
   if (options.dryRun) {

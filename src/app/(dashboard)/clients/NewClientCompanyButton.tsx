@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import NewClientCompanyDialog from '@/components/dashboard/NewClientCompanyDialog'
 
@@ -18,8 +18,8 @@ export default function NewClientCompanyButton() {
 
   return (
     <>
-      <Button size="sm" onClick={() => setOpen(true)}>
-        <Plus className="mr-2 h-4 w-4" />
+      <Button size="toolbar" onClick={() => setOpen(true)}>
+        <PlusIcon className="h-4 w-4" />
         {t('new_client_company')}
       </Button>
       <NewClientCompanyDialog open={open} onOpenChange={setOpen} />

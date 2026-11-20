@@ -353,7 +353,7 @@ These are the receipts that break the reverse-charge reflex. Huvudregeln has exc
 | Receipt | Rule | Booking |
 |------|------|------|
 | **Hotel abroad** | Tjänst med anknytning till fastighet: supplied where the property is (**ML 6 kap. 38 §**) | Gross incl. foreign VAT to **5832** Kost och logi i utlandet. No ruta. EU VAT may be reclaimable (§4) |
-| **Restaurant/catering abroad** | Supplied where physically performed (**ML 6 kap. 48 §**) | Gross to **5832** or **6071** if representation. No ruta |
+| **Restaurant/catering abroad** | Supplied where physically performed (**ML 6 kap. 48 §**) | Gross to **5832**, or **6072** if representation: a meal is not income-tax deductible (IL 16 kap 2 §). No ruta |
 | **Conference/event admission abroad (physical)** | Tillträde till evenemang: supplied where the event takes place (**ML 6 kap. 45-46 §§**) | Gross incl. foreign VAT to **7610** Utbildning (or 5800-series). No ruta |
 | **Conference/webinar attended virtually** | ML 6 kap. 46 § expressly does **not** cover events where attendance is virtual (Lag 2024:942) → falls back to huvudregeln | **Reverse charge**: 4535/4531, ruta 21 or 22 |
 | **Short-term car hire abroad** (≤ 30 days, vehicles) | Supplied where the vehicle is actually placed at the customer's disposal (**ML 6 kap. 52 §**) | Gross to **5820** Hyrbilskostnader. No ruta |

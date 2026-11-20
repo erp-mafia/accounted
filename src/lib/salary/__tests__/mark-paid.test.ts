@@ -3,8 +3,9 @@
  * POST /salary-runs/{id}/mark-paid and the MCP tool
  * gnubok_mark_salary_run_paid. Only an approved run moves, the write is
  * guarded against a concurrent transition, and a dry run writes nothing.
+ * A payment date still ahead needs the caller's confirmation (crm#1216).
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { markSalaryRunPaid } from '../mark-paid'
@@ -98,5 +99,52 @@ describe('markSalaryRunPaid', () => {
     const writeError = { code: '40P01', message: 'deadlock detected' }
     mock.setTable('salary_runs', [{ data: APPROVED }, { error: writeError }])
     expect(await markSalaryRunPaid(ctx, RUN_ID)).toEqual({ ok: false, code: 'UNKNOWN_ERROR', error: writeError })
+  })
+})
+
+describe('markSalaryRunPaid with the payment date still ahead (crm#1216)', () => {
+  const AHEAD = { ...APPROVED, payment_date: '2026-10-23' }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-15T10:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('refuses without the confirmation and writes nothing', async () => {
+    mock.setTable('salary_runs', { data: AHEAD })
+    expect(await markSalaryRunPaid(ctx, RUN_ID)).toEqual({
+      ok: false,
+      code: 'SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED',
+      details: { payment_date: '2026-10-23', today: '2026-10-15' },
+    })
+    expect(mock.findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('refuses on a dry run too, so an MCP stage fails before it reaches the approver', async () => {
+    mock.setTable('salary_runs', { data: AHEAD })
+    const result = await markSalaryRunPaid(ctx, RUN_ID, { dryRun: true })
+    expect(result).toMatchObject({ ok: false, code: 'SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED' })
+  })
+
+  it('marks a confirmed run paid', async () => {
+    const paid = { id: RUN_ID, status: 'paid', paid_at: '2026-10-15T10:00:00.000Z' }
+    mock.setTable('salary_runs', [{ data: AHEAD }, { data: paid }])
+    expect(await markSalaryRunPaid(ctx, RUN_ID, { confirmPaymentDateAhead: true })).toEqual({ ok: true, data: paid })
+  })
+
+  it('needs no confirmation for a run with nothing paid out', async () => {
+    const paid = { id: RUN_ID, status: 'paid', paid_at: '2026-10-15T10:00:00.000Z' }
+    mock.setTable('salary_runs', [{ data: { ...AHEAD, total_net: 0 } }, { data: paid }])
+    expect(await markSalaryRunPaid(ctx, RUN_ID)).toEqual({ ok: true, data: paid })
+  })
+
+  it('needs no confirmation on the payment date itself', async () => {
+    vi.setSystemTime(new Date('2026-10-23T05:00:00Z'))
+    const paid = { id: RUN_ID, status: 'paid', paid_at: '2026-10-23T05:00:00.000Z' }
+    mock.setTable('salary_runs', [{ data: AHEAD }, { data: paid }])
+    expect(await markSalaryRunPaid(ctx, RUN_ID)).toEqual({ ok: true, data: paid })
   })
 })

@@ -44,6 +44,7 @@ vi.mock('@/lib/reconciliation/actions', () => ({
   setItemIgnored: (...args: unknown[]) => ignoreMock(...args),
 }))
 
+import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { GET as listGET } from '../route'
 import { GET as statusGET } from '../[accountKey]/route'
 import { GET as itemsGET } from '../[accountKey]/items/route'
@@ -173,6 +174,133 @@ describe('dashboard reconciliation routes', () => {
     expect(invalid.status).toBe(400)
   })
 
+  it('links: forwards the page button\'s set_confidence_threshold and rejects one above 1 (crm#1668)', async () => {
+    matchMock.mockResolvedValue({ dry_run: false, considered: 0, applied: [], skipped: [] })
+    const res = await linksPOST(
+      createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links`, {
+        method: 'POST',
+        body: { use_proposals: true, set_confidence_threshold: 0.9 },
+      }),
+      p({ accountKey: `bank:${CASH}` }),
+    )
+    expect(res.status).toBe(200)
+    expect(matchMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      `bank:${CASH}`,
+      { use_proposals: true, set_confidence_threshold: 0.9 },
+      { dryRun: false },
+    )
+
+    const invalid = await linksPOST(
+      createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links`, {
+        method: 'POST',
+        body: { use_proposals: true, set_confidence_threshold: 1.5 },
+      }),
+      p({ accountKey: `bank:${CASH}` }),
+    )
+    expect(invalid.status).toBe(400)
+  })
+
+  describe('links without an outside row: verifikat settled against each other (crm#1074)', () => {
+    const SETTLEMENT_ID = '66666666-6666-4666-8666-666666666666'
+    const settlement = {
+      settlement_id: SETTLEMENT_ID,
+      account_number: '1930',
+      entries: [
+        { journal_entry_id: ENTRY, voucher_series: 'A', voucher_number: 12, entry_date: '2026-03-18', amount: -1250 },
+        { journal_entry_id: ENTRY_2, voucher_series: 'A', voucher_number: 31, entry_date: '2026-04-21', amount: 1250 },
+      ],
+    }
+    const post = (body: unknown, accountKey = `bank:${CASH}`) =>
+      linksPOST(
+        createMockRequest(`/api/reconciliation/accounts/${accountKey}/links`, { method: 'POST', body }),
+        p({ accountKey }),
+      )
+
+    it('401 when unauthenticated, 403 for a viewer', async () => {
+      requireAuthMock.mockResolvedValue({
+        user: null,
+        supabase,
+        error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+      })
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY, ENTRY_2] }] })).status).toBe(401)
+      expect(matchMock).not.toHaveBeenCalled()
+
+      requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+      requireWriteMock.mockResolvedValueOnce({ ok: false, response: NextResponse.json({ error: 'Read only' }, { status: 403 }) })
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY, ENTRY_2] }] })).status).toBe(403)
+      expect(matchMock).not.toHaveBeenCalled()
+    })
+
+    it('400 for one verifikat with no outside row, with or without an empty external_ids', async () => {
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY] }] })).status).toBe(400)
+      expect((await post({ pairs: [{ external_ids: [], journal_entry_ids: [ENTRY] }] })).status).toBe(400)
+      expect((await post({ pairs: [{ external_ids: [], journal_entry_ids: [] }] })).status).toBe(400)
+      expect(matchMock).not.toHaveBeenCalled()
+    })
+
+    it('404 for a malformed account key and for an account the company does not have', async () => {
+      const malformed = await post({ pairs: [{ journal_entry_ids: [ENTRY, ENTRY_2] }] }, 'bank:nope')
+      expect(malformed.status).toBe(404)
+      expect(matchMock).not.toHaveBeenCalled()
+
+      matchMock.mockResolvedValue(null)
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY, ENTRY_2] }] })).status).toBe(404)
+    })
+
+    it('forwards two verifikat with no outside row, external_ids defaulting to empty, and returns the settlement', async () => {
+      matchMock.mockResolvedValue({ dry_run: false, considered: 1, applied: [], settled: [settlement], skipped: [] })
+      const res = await post({ pairs: [{ journal_entry_ids: [ENTRY, ENTRY_2] }] })
+      expect(res.status).toBe(200)
+      expect(matchMock).toHaveBeenCalledWith(
+        supabase,
+        'company-1',
+        'user-1',
+        `bank:${CASH}`,
+        { pairs: [{ external_ids: [], journal_entry_ids: [ENTRY, ENTRY_2] }] },
+        { dryRun: false },
+      )
+      const { body } = await parseJsonResponse<{ data: { settled: unknown[]; applied: unknown[] } }>(res)
+      expect(body.data.settled).toEqual([settlement])
+      expect(body.data.applied).toEqual([])
+
+      await post({ pairs: [{ external_ids: [], journal_entry_ids: [ENTRY, ENTRY_2] }], dry_run: true })
+      expect(matchMock).toHaveBeenLastCalledWith(
+        supabase,
+        'company-1',
+        'user-1',
+        `bank:${CASH}`,
+        { pairs: [{ external_ids: [], journal_entry_ids: [ENTRY, ENTRY_2] }] },
+        { dryRun: true },
+      )
+    })
+
+    it('DELETE with the settlement id undoes it: 200 with the verifikat, 404 for a non-uuid id or an unknown account', async () => {
+      unmatchMock.mockResolvedValue({
+        external_id: SETTLEMENT_ID,
+        previous_journal_entry_id: null,
+        settlement_id: SETTLEMENT_ID,
+        journal_entry_ids: [ENTRY, ENTRY_2],
+      })
+      const del = (linkId: string) =>
+        linkDELETE(
+          createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links/${linkId}`, { method: 'DELETE' }),
+          p({ accountKey: `bank:${CASH}`, linkId }),
+        )
+      const res = await del(SETTLEMENT_ID)
+      expect(res.status).toBe(200)
+      expect(unmatchMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', `bank:${CASH}`, SETTLEMENT_ID)
+      const { body } = await parseJsonResponse<{ data: { settlement_id: string; journal_entry_ids: string[] } }>(res)
+      expect(body.data).toMatchObject({ settlement_id: SETTLEMENT_ID, journal_entry_ids: [ENTRY, ENTRY_2] })
+
+      expect((await del('not-a-uuid')).status).toBe(404)
+      unmatchMock.mockResolvedValue(null)
+      expect((await del(SETTLEMENT_ID)).status).toBe(404)
+    })
+  })
+
   it('unlink and ignore call the service with the ids', async () => {
     const del = await linkDELETE(createMockRequest(`/api/reconciliation/accounts/skattekonto/links/${ROW}`, { method: 'DELETE' }), p({ accountKey: 'skattekonto', linkId: ROW }))
     expect(del.status).toBe(200)
@@ -180,6 +308,18 @@ describe('dashboard reconciliation routes', () => {
 
     const ign = await ignorePOST(createMockRequest(`/api/reconciliation/accounts/skattekonto/items/${ROW}/ignore`, { method: 'POST', body: { ignored: false } }), p({ accountKey: 'skattekonto', itemId: ROW }))
     expect(ign.status).toBe(200)
-    expect(ignoreMock).toHaveBeenCalledWith(supabase, 'company-1', 'skattekonto', ROW, false)
+    expect(ignoreMock).toHaveBeenCalledWith(supabase, 'company-1', 'skattekonto', ROW, false, 'user-1')
+  })
+
+  it('Koppla bort on a bank row booked from itself answers its Swedish refusal, not 500 (PH 194)', async () => {
+    const sv = 'Transaktionen är bokförd med verifikatet, inte bara kopplad till det, så kopplingen kan inte tas bort.'
+    unmatchMock.mockRejectedValueOnce(new SkattekontoLinkError(sv, 'LINK_IS_BOOKING'))
+    const res = await linkDELETE(
+      createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links/${ROW}`, { method: 'DELETE' }),
+      p({ accountKey: `bank:${CASH}`, linkId: ROW }),
+    )
+    expect(res.status).toBe(400)
+    const { body } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(body).toEqual({ error: sv, code: 'LINK_IS_BOOKING' })
   })
 })

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { readOnlyResponse } from '@/lib/auth/require-write'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 
 // GET /api/agent/profile?company_id=...
@@ -36,21 +37,14 @@ const GetQuerySchema = z.object({
   company_id: z.string().uuid().optional(),
 })
 
-const forbidden = (code: 'NOT_COMPANY_MEMBER' | 'WRITE_PERMISSION_REQUIRED') =>
+const notCompanyMember = () =>
   NextResponse.json(
     {
-      error:
-        code === 'NOT_COMPANY_MEMBER'
-          ? {
-              code,
-              message: 'Du är inte medlem i detta företag.',
-              message_en: 'Not a member of this company.',
-            }
-          : {
-              code,
-              message: 'Du har endast läsbehörighet i detta företag.',
-              message_en: 'You only have read access in this company.',
-            },
+      error: {
+        code: 'NOT_COMPANY_MEMBER',
+        message: 'Du är inte medlem i detta företag.',
+        message_en: 'Not a member of this company.',
+      },
     },
     { status: 403 },
   )
@@ -72,7 +66,7 @@ export const GET = withRouteContext('agent.profile.get', async (request, ctx) =>
     .eq('company_id', companyId)
     .eq('user_id', user.id)
     .maybeSingle()
-  if (!membership) return forbidden('NOT_COMPANY_MEMBER')
+  if (!membership) return notCompanyMember()
 
   const { data, error } = await supabase
     .from('agent_profiles')
@@ -88,7 +82,7 @@ export const GET = withRouteContext('agent.profile.get', async (request, ctx) =>
 })
 
 export const PATCH = withRouteContext('agent.profile.update', async (request, ctx) => {
-  const { supabase, companyId: activeCompanyId, user, log } = ctx
+  const { supabase, companyId: activeCompanyId, user, log, requestId } = ctx
 
   const validation = await validateBody(request, PatchBody, {
     log,
@@ -108,8 +102,8 @@ export const PATCH = withRouteContext('agent.profile.update', async (request, ct
     .eq('company_id', companyId)
     .eq('user_id', user.id)
     .maybeSingle()
-  if (!membership) return forbidden('NOT_COMPANY_MEMBER')
-  if (membership.role === 'viewer') return forbidden('WRITE_PERMISSION_REQUIRED')
+  if (!membership) return notCompanyMember()
+  if (membership.role === 'viewer') return readOnlyResponse(log, requestId)
 
   // Load current overrides to merge timestamp-stamped entries. Avoids round-trip
   // when caller sends only an atom-array change.

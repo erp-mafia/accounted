@@ -1,6 +1,7 @@
 import { PEPPOL_OPERATIONS, connectorErrorSchema, type PeppolOperation } from '@accounted/connect-contract'
 import type { z } from 'zod'
-import { CONNECTOR_COMPANY_HEADER, type ConnectorUpstream } from '@/lib/connect/instance/upstreams'
+import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
+import type { ConnectorUpstream } from '@/lib/connect/instance/upstreams'
 import {
   CONNECTOR_PEPPOL_PROVIDER,
   PeppolTransportError,
@@ -22,18 +23,19 @@ import {
  * Instance-side Peppol transport for connector mode (WS3).
  *
  * A self-hosted instance with a connector key and no Qvalia keys of its own
- * reaches Arcim's contracted access point through the Accounted Connect
+ * reaches the access point through the Accounted Connect
  * service (`/api/connect/peppol/*` under GNUBOK_CONNECT_URL). The service
- * lives in its own private repo; this repo keeps only the wire contract
+ * is a separate service; this repo keeps only the wire contract
  * (`@accounted/connect-contract`). The service speaks the PeppolTransport
- * operations, not Qvalia paths, so the instance never learns Arcim's partner
+ * operations, not Qvalia paths, so the instance never holds partner
  * or account numbers and the service can enforce ownership: a key can
  * only poll, fetch evidence for, or receive documents belonging to
  * participants and submissions it registered itself.
  *
- * Webhooks are not brokered: Qvalia posts to the hosted webhook, which only
- * knows hosted deliveries. The instance learns outbound status by polling
- * (`pollDeliveryStatus`, already driven by /api/peppol/outbound/status/cron).
+ * Webhooks are not brokered: Qvalia posts to the service's own webhook route,
+ * which keeps only failure reasons and attaches them to the polled status.
+ * The instance learns outbound status by polling (`pollDeliveryStatus`,
+ * already driven by /api/peppol/outbound/status/cron).
  */
 
 export const CONNECTOR_PROVIDER = CONNECTOR_PEPPOL_PROVIDER
@@ -162,12 +164,8 @@ export function createConnectorPeppolTransport(
         signal: controller.signal,
         redirect: 'error',
         cache: 'no-store',
-        headers: {
-          Authorization: `Bearer ${upstream.key}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(options.companyRef ? { [CONNECTOR_COMPANY_HEADER]: options.companyRef } : {}),
-        },
+        // Bearer key, contract version and (when known) the company header.
+        headers: connectorHeaders({ key: upstream.key, companyId: options.companyRef, json: true }),
         body: body === undefined ? undefined : JSON.stringify(body),
       })
       const json = await readJson(response)
@@ -258,7 +256,10 @@ export function createConnectorPeppolTransport(
   }
 
   async function listInboundDocuments(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]> {
-    const items = await call('inboundList', PEPPOL_OPERATIONS.inboundList.response, 'POST', PEPPOL_OPERATIONS.inboundList.path, options)
+    // The caller's time limit is not part of the hosted request: this listing
+    // is a cursor read that consumes nothing, given up at the read limit.
+    const { timeoutMs: _callerLimit, ...request } = options
+    const items = await call('inboundList', PEPPOL_OPERATIONS.inboundList.response, 'POST', PEPPOL_OPERATIONS.inboundList.path, request)
     return (items ?? []).map(withProvider)
   }
 

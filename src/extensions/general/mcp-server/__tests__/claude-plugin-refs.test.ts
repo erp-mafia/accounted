@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { workflowSkills } from '../skills'
-import { dataResources } from '../resources'
+import { dataResources, findCompanyScopedResource } from '../resources'
 import { toCanonicalToolName } from '../tool-namespace'
 import { discoverAtoms } from '@/scripts/lib/atom-discovery'
+
+const COMPANY_PREFIX = 'Accounted://company/{company_id}/'
 
 /**
  * The Claude Code plugin (packages/claude-plugin/) ships thin wrapper skills whose value
@@ -66,8 +68,13 @@ describe('claude-plugin wrapper references', () => {
   it('every Accounted:// resource URI exists on the server', () => {
     const uris = new Set(dataResources.map((r) => r.uri))
     for (const { file, body } of pluginSkills) {
-      for (const [uri] of body.matchAll(/Accounted:\/\/[a-z/-]+/g)) {
-        expect(uris.has(uri), `${file} references unknown resource "${uri}"`).toBe(true)
+      for (const [uri] of body.matchAll(/Accounted:\/\/[a-z{}_/-]+/g)) {
+        // The company-scoped form (crm#1637): a data resource under one company.
+        const known = uri.startsWith(COMPANY_PREFIX)
+          ? uri === COMPANY_PREFIX ||
+            findCompanyScopedResource(uri.replace('{company_id}', '00000000-0000-4000-8000-000000000000')) !== null
+          : uris.has(uri)
+        expect(known, `${file} references unknown resource "${uri}"`).toBe(true)
       }
     }
   })
@@ -82,5 +89,19 @@ describe('claude-plugin wrapper references', () => {
         ).toBe(true)
       }
     }
+  })
+
+  it('is one plugin under three manifests: same name and version, same MCP server, every marketplace pointing at this folder', () => {
+    const pluginDir = join(repoRoot, 'packages', 'claude-plugin')
+    const json = (...parts: string[]) => JSON.parse(readFileSync(join(...parts), 'utf8'))
+    const claude = json(pluginDir, '.claude-plugin', 'plugin.json')
+    for (const manifest of [json(pluginDir, 'plugin.json'), json(pluginDir, '.cursor-plugin', 'plugin.json')]) {
+      expect(manifest.name).toBe(claude.name)
+      expect(manifest.version).toBe(claude.version)
+    }
+    expect(json(pluginDir, 'mcp.json').mcpServers.accounted.url).toBe(json(pluginDir, '.mcp.json').mcpServers.accounted.url)
+    expect(json(repoRoot, '.claude-plugin', 'marketplace.json').plugins[0].source.path).toBe('packages/claude-plugin')
+    expect(json(repoRoot, '.agents', 'plugins', 'marketplace.json').plugins[0].source.path).toBe('./packages/claude-plugin')
+    expect(json(repoRoot, '.cursor-plugin', 'marketplace.json').plugins[0].source).toBe('packages/claude-plugin')
   })
 })

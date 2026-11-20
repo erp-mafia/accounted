@@ -22,12 +22,14 @@
  * period in the app: `year` is the calendar year the räkenskapsår ENDS in and
  * `period` is always 1. Where the räkenskapsår ends is a company fact, not
  * part of the key, so the functions that place a period in time (its
- * tax_period label and its dates) also take the company's fiscal-year end
- * month (vatFilingFiscalYearEndMonth). Monthly and quarterly ignore it.
+ * tax_period label and its dates) also take the fiscal-year end month of the
+ * year it names (fiscalYearEndMonthIn in lib/tax/deadline-config.ts, the
+ * deadline generator's own years, so the filing record and the deadline row
+ * can never disagree on a label). Monthly and quarterly ignore it.
  */
 import { FISCAL_YEAR_RE } from '@/lib/invariants'
-import { fiscalYearEndMonthFor, getFiscalYearLabel } from '@/lib/tax/deadline-config'
-import type { EntityType } from '@/types'
+import { hasEnded } from '@/lib/dates/iso'
+import { getFiscalYearLabel } from '@/lib/tax/deadline-config'
 
 export type VatFilingPeriodType = 'monthly' | 'quarterly' | 'yearly'
 
@@ -59,22 +61,6 @@ export interface VatFilingRecord {
   source: 'skatteverket' | 'manual'
   /** Skatteverket's reference (kvittensnummer) as typed by the user, if any. */
   reference: string | null
-}
-
-/**
- * The month (1-12) the company's räkenskapsår ends, which places its yearly
- * VAT periods. Derived by the deadline generator's own rule
- * (fiscalYearEndMonthFor), so the filing record and the deadline row can
- * never disagree on a label. Falls back to December when the start month is
- * not configured: the column's default is January, a calendar year.
- */
-export function vatFilingFiscalYearEndMonth(
-  settings:
-    | { entity_type?: EntityType | string | null; fiscal_year_start_month?: number | null }
-    | null
-    | undefined,
-): number {
-  return fiscalYearEndMonthFor(settings ?? {}) ?? 12
 }
 
 /**
@@ -128,8 +114,8 @@ export function vatFilingPeriodFromTaxPeriod(
 /**
  * The fiscal-year end month a stored yearly label was written under. A
  * `YYYY` label is a calendar räkenskapsår whatever the company says today;
- * a `YYYY-1/YYYY` label takes today's end month, the only source there is
- * (the label does not carry it).
+ * a `YYYY-1/YYYY` label takes the end month of the year it names, the only
+ * source there is (the label does not carry it).
  */
 export function vatFilingLabelFiscalYearEndMonth(
   taxPeriod: string,
@@ -164,9 +150,9 @@ function isoDate(date: Date): string {
 /**
  * First and last calendar day of the period as `YYYY-MM-DD`. A yearly period
  * spans the twelve months ending in `fiscalYearEndMonth` of `year`. A first
- * or changed räkenskapsår may be longer or shorter (BFL 3 kap 3 §); its
- * figures come from the fiscal period itself, while the filing record only
- * needs the period's place in the year.
+ * or changed räkenskapsår may be longer or shorter (BFL 3 kap 3 §): the filing
+ * record puts the recorded year's own first day on it, where the years are at
+ * hand (filing-record-store.ts); the end is right either way.
  */
 export function vatFilingPeriodRange(
   periodType: VatFilingPeriodType,
@@ -212,7 +198,7 @@ export function vatFilingDateProblem(
   fiscalYearEndMonth: number,
 ): VatFilingDateProblem | null {
   const periodEnd = vatFilingPeriodEnd(input.periodType, input.year, input.period, fiscalYearEndMonth)
-  if (periodEnd >= today) return 'VAT_FILING_PERIOD_NOT_ENDED'
+  if (!hasEnded(periodEnd, today)) return 'VAT_FILING_PERIOD_NOT_ENDED'
   if (input.filedOn <= periodEnd) return 'VAT_FILING_DATE_BEFORE_PERIOD_END'
   if (input.filedOn > today) return 'VAT_FILING_DATE_IN_FUTURE'
   return null

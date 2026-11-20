@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeNeighbors,
   listContextKey,
+  listReturnHref,
   readListContext,
   writeListContext,
   type ListContext,
@@ -51,6 +52,17 @@ describe('writeListContext / readListContext', () => {
     expect(readListContext('key', makeStorage({ key: '{"ids":"nope"}' }))).toBeNull()
     expect(readListContext('key', makeStorage({ key: '{"ids":["a",1]}' }))).toBeNull()
     expect(readListContext('key', makeStorage({ key: '{"other":["a"]}' }))).toBeNull()
+  })
+
+  it("round-trips the list's address", () => {
+    const storage = makeStorage()
+    const context: ListContext = { ids: ['a'], href: '/bookkeeping?series=B&page=2' }
+    writeListContext('key', context, storage)
+    expect(readListContext('key', storage)).toEqual(context)
+  })
+
+  it('drops an address that is not a string and keeps the ids', () => {
+    expect(readListContext('key', makeStorage({ key: '{"ids":["a"],"href":42}' }))).toEqual({ ids: ['a'] })
   })
 
   it('tolerates extra properties, so contexts stored by older builds still parse', () => {
@@ -129,5 +141,33 @@ describe('computeNeighbors', () => {
   it('returns null when the record is not in the context (stale/foreign context)', () => {
     expect(computeNeighbors(ids, 'zzz')).toBeNull()
     expect(computeNeighbors([], 'a')).toBeNull()
+  })
+})
+
+/**
+ * The verifikat page's link back to the list opens the list as it was when
+ * the verifikat was opened from it (crm#1998).
+ */
+describe('listReturnHref', () => {
+  const href = '/bookkeeping?series=B&q=hyra&page=2'
+
+  it("leads back to the list's address when this record was opened from it", () => {
+    expect(listReturnHref({ ids: ['a', 'b'], href }, 'b', '/bookkeeping')).toBe(href)
+    expect(listReturnHref({ ids: ['a'], href: '/bookkeeping' }, 'a', '/bookkeeping')).toBe('/bookkeeping')
+  })
+
+  it('leads to the plain list without a context or an address', () => {
+    expect(listReturnHref(null, 'a', '/bookkeeping')).toBe('/bookkeeping')
+    expect(listReturnHref({ ids: ['a'] }, 'a', '/bookkeeping')).toBe('/bookkeeping')
+  })
+
+  it('leads to the plain list for a record reached some other way', () => {
+    expect(listReturnHref({ ids: ['a', 'b'], href }, 'z', '/bookkeeping')).toBe('/bookkeeping')
+  })
+
+  it("never leads anywhere but the list's own path", () => {
+    for (const stored of ['https://example.com/bookkeeping', '//example.com', '/invoices?status=sent', '/bookkeeping-x', '/bookkeeping/abc']) {
+      expect(listReturnHref({ ids: ['a'], href: stored }, 'a', '/bookkeeping')).toBe('/bookkeeping')
+    }
   })
 })

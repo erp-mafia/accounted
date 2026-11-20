@@ -1,6 +1,6 @@
 # Ekonomisk förening support - research and implementation design
 
-Status: design proposal, 2026-09-15; Phase 1 (legal-form spine behind a flag) implemented on `feat/ekonomisk-forening-foundation`, see "Implementation status" at the end. This is not legal advice. Regulatory facts should be rechecked against the cited primary sources when implementation ships.
+Status: design proposal, 2026-09-15; Phase 1 (the legal-form spine) is implemented, see "Implementation status" at the end. This is not legal advice. Regulatory facts should be rechecked against the cited primary sources when implementation ships.
 
 ## Executive decision
 
@@ -30,10 +30,10 @@ The correct design is a capability/policy layer behind the exhaustive `EntityTyp
 
 The September 2026 `ideell_forening` work created the right extension seam:
 
-- `types/index.ts` has a closed `EntityType` union.
-- `lib/company/entity-type.ts` uses exhaustive `Record<EntityType, T>` dispatch and fails closed on unknown types.
+- `src/types/index.ts` has a closed `EntityType` union.
+- `src/lib/company/entity-type.ts` uses exhaustive `Record<EntityType, T>` dispatch and fails closed on unknown types.
 - `supabase/migrations/20260908143051_ideell_forening_entity_type.sql` centralises the database whitelist through `supported_entity_types()` and updates all live company-creation RPCs.
-- Registry mapping is allow-listed in `lib/company-lookup/entity-type-map.ts` rather than inferred by substring.
+- Registry mapping is allow-listed in `src/lib/company-lookup/entity-type-map.ts` rather than inferred by substring.
 - The year-end result account and prior-year carry account are already policy-driven.
 
 This should be extended, not bypassed. The ideell implementation changed 111 files; economic-association support will have a similar cross-section plus member-capital and association-specific annual-report work.
@@ -46,7 +46,7 @@ This should be extended, not bypassed. The ideell implementation changed 111 fil
 
 ### 2. Accounting framework is incorrectly documented and enforced as AB-only
 
-`AccountingFramework = 'k2' | 'k3'` is valid for an economic association, but `types/index.ts` describes it as AB-only and `app/api/company/current/route.ts` rejects K3 for every non-AB. Replace this with a capability such as `annualReportFrameworks(entityType)`. Economic associations allow K2 or K3 subject to the same general eligibility assessment plus form/subtype restrictions.
+`AccountingFramework = 'k2' | 'k3'` is valid for an economic association, but `src/types/index.ts` describes it as AB-only and `src/app/api/company/current/route.ts` rejects K3 for every non-AB. Replace this with a capability such as `annualReportFrameworks(entityType)`. Economic associations allow K2 or K3 subject to the same general eligibility assessment plus form/subtype restrictions.
 
 ### 3. Chart of accounts
 
@@ -107,7 +107,7 @@ This module is necessary for complete legal-form support. It can be deferred fro
 
 ### 6. Year-end closing and corporate tax
 
-`lib/bokslut/dispositions-proposal-builder.ts`, `overavskrivningar-calculator.ts` and the UI currently gate juridical-person dispositions on `entityType === 'aktiebolag'`. This would omit legitimate and necessary closing items for an economic association.
+`src/lib/bokslut/dispositions-proposal-builder.ts`, `overavskrivningar-calculator.ts` and the UI currently gate juridical-person dispositions on `entityType === 'aktiebolag'`. This would omit legitimate and necessary closing items for an economic association.
 
 Introduce capabilities instead:
 
@@ -127,7 +127,7 @@ Close the year to 2099 and carry the previous year's result to 2098, then post t
 
 ### 7. INK2/INK2R/INK2S
 
-`lib/reports/ink2/ink2-engine.ts` rejects non-AB at runtime even though Skatteverket requires INK2 for economic associations. Replace the gate with `usesInk2` and add association-specific tax adjustments:
+`src/lib/reports/ink2/ink2-engine.ts` rejects non-AB at runtime even though Skatteverket requires INK2 for economic associations. Replace the gate with `usesInk2` and add association-specific tax adjustments:
 
 - tax-exempt membership fees → INK2S 4.5c;
 - matching non-deductible administration cost → 4.3c, with user-confirmed allocation rather than assuming equality;
@@ -206,7 +206,6 @@ Exit: a Swedish accountant/auditor who works with economic associations signs of
 - Add type, DB constraints, central supported list, all creation RPCs, exact registry mapping and onboarding label.
 - Extend exhaustive entity policies; replace every material AB equality gate with a named capability.
 - Seed association chart and add form-specific templates.
-- Keep creation disabled in production until Phase 2 acceptance passes.
 
 Exit: compiler exhaustiveness, DB tests, create/onboard tests, chart snapshot, no AB/EF owner accounts, ordinary invoices/VAT/payroll/SIE round trips pass.
 
@@ -270,8 +269,8 @@ The critical release rule is simple: the feature is not “supported” when onb
 
 Shipped, behind `NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED`:
 
-- `ekonomisk_forening` in `EntityType`, `ENTITY_TYPES`, the registry mapping (exact spellings only) and the onboarding picker; DB CHECK constraints, `supported_entity_types()` and the chart seed (2083, 2084, 2086, 2091, 2099, 2890, personnel accounts) in migration `20260922200000`, covered by `ekonomisk-forening-foundation.pg.test.ts`.
-- Capabilities in `lib/company/entity-type.ts`: `usesInk2`, `booksCurrentTax`, `supportsCorporateTaxDispositions`, `requiresAuditorRegardlessOfSize`, `supportsMemberCapital`, `supportsAccountingFramework`, `preparesArsredovisning`.
+- `ekonomisk_forening` in `EntityType`, `ENTITY_TYPES`, the registry mapping (exact spellings only) and the onboarding picker; DB CHECK constraints, `supported_entity_types()` and the chart seed (2083, 2084, 2086, 2091, 2099, 2890, personnel accounts) in migration `20261002200000`, covered by `ekonomisk-forening-foundation.pg.test.ts`.
+- Capabilities in `src/lib/company/entity-type.ts`: `usesInk2`, `booksCurrentTax`, `supportsCorporateTaxDispositions`, `requiresAuditorRegardlessOfSize`, `supportsMemberCapital`, `supportsAccountingFramework`, `preparesArsredovisning`.
 - Sites moved from `=== 'aktiebolag'` to a capability: dispositions proposal, överavskrivningar, INK2 engine, statement reconciliation, historical result repair, K2/K3 route and settings, skattekonto rule scoping, Peppol supplier gate, agent atom fallback, INK2 navigation and report catalog.
 - Deadlines: `inkomstdeklaration_ekonomisk_forening`, `arsredovisning_ekonomisk_forening`, `foreningsstamma`.
 - Booking templates: payroll, pension and placement templates apply to both juridiska personer; new `member_contribution_received` (2083), `debenture_contribution_received` (2084) and `membership_fee_received` (3901, INK2S 4.5c/4.3c note).
@@ -279,8 +278,8 @@ Shipped, behind `NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED`:
 Also shipped on the same branch (second iteration):
 
 - INK2S (section 7): membership fees on the seeded 3901 account are detected as a 4.5c deduction (`detectedTaxAdjustmentAccounts`), and the INK2 engine warns until the 4.3c administration cost has been entered manually.
-- K2 annual report (section 8): the K2 mapper has a legal-form option (2083 Medlemsinsatser, 2084 Förlagsinsatser as own posts; share capital flagged), the balance sheet, the equity-change table, the resultatdisposition table and the fastställelseintyg use association wording, förvaltningsberättelsen carries the four ÅRL 6 kap. 3 § member disclosures (new narrative columns, migration `20260922200100`), the revisionsberättelse is mandatory (EFL 8 kap. 1 §) and the ÅRL 6 kap. 3 § member statement blocks filing. iXBRL preview and direct filing stay disabled for the form; K3 fails closed.
-- Misclassified company (section 11, empty-books class): `correct_company_entity_type()` (migration `20260922200200`, owner-only, re-seeds the chart, audit-logged) exposed through `PATCH /api/company/current { entity_type }`.
+- K2 annual report (section 8): the K2 mapper has a legal-form option (2083 Medlemsinsatser, 2084 Förlagsinsatser as own posts; share capital flagged), the balance sheet, the equity-change table, the resultatdisposition table and the fastställelseintyg use association wording, förvaltningsberättelsen carries the four ÅRL 6 kap. 3 § member disclosures (new narrative columns, migration `20261002200100`), the revisionsberättelse is mandatory (EFL 8 kap. 1 §) and the ÅRL 6 kap. 3 § member statement blocks filing. iXBRL preview and direct filing stay disabled for the form; K3 fails closed.
+- Misclassified company (section 11, empty-books class): `correct_company_entity_type()` (migration `20261002200200`, owner-only, re-seeds the chart, audit-logged) exposed through `PATCH /api/company/current { entity_type }`.
 
 Deliberately not in this branch (fails closed or manual):
 

@@ -5,6 +5,8 @@
  * - lib/extensions/_generated/extension-list.ts
  * - lib/extensions/_generated/workspace-map.tsx
  * - lib/extensions/_generated/sector-definitions.ts
+ * - lib/extensions/_generated/enabled-extensions.ts
+ * - lib/extensions/_generated/branding-list.ts
  *
  * Usage:
  *   npx tsx scripts/generate-extension-registry.ts          # Generate files
@@ -44,12 +46,18 @@ interface ManifestDefinition {
   subscriptionNotice?: string
 }
 
-interface Manifest {
+export interface Manifest {
   id: string
   sector: string
   exportName: string | null
   entryPoint: string | null
   workspace: string | null
+  /**
+   * The extension calls registerBrandingService() at module load. Its entry
+   * point is then imported by the branding list, which the root layout and
+   * the web manifest load instead of every extension.
+   */
+  branding?: boolean
   requiredEnvVars: string[]
   optionalEnvVars: string[]
   npmDependencies: string[]
@@ -197,6 +205,32 @@ function generateEnabledExtensions(manifests: Manifest[]): string {
   ].join('\n')
 }
 
+/**
+ * Side-effect imports of the enabled extensions that override branding. The
+ * root layout and app/manifest.ts import this module so a fork's
+ * registerBrandingService() call runs before getBranding() is read, without
+ * loading every enabled extension on every page render. With no branding
+ * extension enabled (hosted, core-only CI) the module imports nothing.
+ */
+export function generateBrandingList(manifests: Manifest[]): string {
+  const branded = manifests.filter(m => m.branding === true)
+  for (const m of branded) {
+    if (!m.entryPoint) {
+      throw new Error(`Extension "${m.id}" declares "branding": true but has no entryPoint to import`)
+    }
+  }
+
+  return [
+    `// AUTO-GENERATED: do not edit. Run \`npm run setup:extensions\` to regenerate.`,
+    `// Enabled extensions whose manifest declares "branding": true. Importing one`,
+    `// runs its registerBrandingService() call; nothing else is loaded.`,
+    ...branded.map(m => `import '${m.entryPoint}'`),
+    ``,
+    `export {}`,
+    ``,
+  ].join('\n')
+}
+
 // ── Env var check ────────────────────────────────────────────
 
 function checkEnvVars(manifests: Manifest[]): void {
@@ -279,6 +313,10 @@ function main(): void {
     path.join(OUTPUT_DIR, 'enabled-extensions.ts'),
     generateEnabledExtensions(enabledManifests),
   )
+  fs.writeFileSync(
+    path.join(OUTPUT_DIR, 'branding-list.ts'),
+    generateBrandingList(enabledManifests),
+  )
 
   // Summary
   const enabledNames = enabledManifests.map(m => m.id)
@@ -292,4 +330,7 @@ function main(): void {
   checkEnvVars(enabledManifests)
 }
 
-main()
+// Only run when invoked directly (not when imported by tests).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main()
+}

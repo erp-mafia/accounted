@@ -259,6 +259,30 @@ describe('signOffAccount', () => {
     expect(emitMock).not.toHaveBeenCalled()
   })
 
+  it('previews the status\'s own is_reconciled: explained but rows still open signs unforced and says is_reconciled false (crm#1183)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(
+      status({
+        unexplained_difference: 0,
+        is_reconciled: false,
+        counts: { proposed: 0, unmatched_external: 1, unmatched_ledger: 2, matched: 0, ignored: 0 },
+      }),
+    )
+    const result = await signOffAccount(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { through_date: '2026-07-31' },
+      { today: TODAY, dryRun: true },
+    )
+    expect(result).toMatchObject({
+      dry_run: true,
+      would_sign: { unexplained_difference: 0, is_reconciled: false, forced: false },
+    })
+    expect(insertMock).not.toHaveBeenCalled()
+  })
+
   it('refuses an unexplained difference unless forced with a note, then records the difference', async () => {
     const { supabase } = createQueuedMockSupabase()
     statusMock.mockResolvedValue(status({ unexplained_difference: 12.5, is_reconciled: false }))

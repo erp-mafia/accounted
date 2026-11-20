@@ -1,21 +1,21 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   TransactionCategory,
   MappingResult,
-  VatJournalLine,
   Transaction,
   EntityType,
   VatTreatment,
   RiskLevel,
 } from '@/types'
-import {
-  getVatRate,
-  generateReverseChargePurchaseLines,
-  costAccountReportsRcBasis,
-  reverseChargeKindForSupplierType,
-  generateInputVatLine,
-} from './vat-entries'
+import { bankRowVatLines, reverseChargeKindForSupplierType } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
 import { templateAccountForForm } from '@/lib/company/entity-type'
+import {
+  resolveSkattekontoAccount,
+  templateSkattekontoAccount,
+  templateTouchesSkattekonto,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
 import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
 
 // ============================================================
@@ -65,7 +65,18 @@ export interface BookingTemplate {
   deductibility_note_sv?: string
   special_rules_sv?: string
   mcc_codes: number[]
+  /**
+   * Words in the bank text that point at this template. A keyword of more
+   * than three letters may sit inside a word; a shorter one, or one written
+   * with a leading '=', matches a whole word only (keywordMatches).
+   */
   keywords: string[]
+  /**
+   * Words that say the text is something this template is not, matched like
+   * keywords: any one of them keeps the template out, whatever its keywords
+   * or MCC say.
+   */
+  excluded_keywords?: readonly string[]
   risk_level: RiskLevel
   requires_review: boolean
   impact_score: number
@@ -99,48 +110,25 @@ export function templateAppliesToForm(
   return Array.isArray(scope) ? scope.includes(entityType) : scope === entityType
 }
 
-export interface TemplateGroupInfo {
-  group: TemplateGroup
-  label_sv: string
-  label_en: string
-  templates: BookingTemplate[]
-}
-
 export interface TemplateMatch {
   template: BookingTemplate
   confidence: number
 }
 
 // ============================================================
-// Template Group Labels
-// ============================================================
-
-const GROUP_LABELS: Record<TemplateGroup, { sv: string; en: string }> = {
-  premises: { sv: 'Lokalkostnader', en: 'Premises' },
-  vehicle: { sv: 'Fordon', en: 'Vehicle' },
-  it_software: { sv: 'IT & Programvara', en: 'IT & Software' },
-  office_supplies: { sv: 'Kontorsmaterial', en: 'Office Supplies' },
-  marketing: { sv: 'Marknadsföring', en: 'Marketing' },
-  travel: { sv: 'Resor & Transport', en: 'Travel & Transport' },
-  representation: { sv: 'Representation', en: 'Representation' },
-  insurance: { sv: 'Försäkringar', en: 'Insurance' },
-  professional_services: { sv: 'Professionella tjänster', en: 'Professional Services' },
-  bank_finance: { sv: 'Bank & Finans', en: 'Banking & Finance' },
-  telecom: { sv: 'Telekom & Internet', en: 'Telecom & Internet' },
-  education: { sv: 'Utbildning', en: 'Education' },
-  personnel: { sv: 'Personal', en: 'Personnel' },
-  revenue: { sv: 'Intäkter', en: 'Revenue' },
-  financial: { sv: 'Finansiella poster', en: 'Financial Items' },
-  private_transfers: { sv: 'Privata transaktioner', en: 'Private Transfers' },
-  equipment: { sv: 'Inventarier & Utrustning', en: 'Equipment' },
-  goods: { sv: 'Varor & material', en: 'Goods & Materials' },
-  tax: { sv: 'Skatt & moms', en: 'Tax & VAT' },
-  closing: { sv: 'Bokslut', en: 'Year-end' },
-}
-
-// ============================================================
 // Template Data
 // ============================================================
+
+/**
+ * Words that make a text a gift. A gift books by who gets it and why (6071
+ * within 300 kr exkl. moms to a customer, 5960 as a reklamgåva, 7690/7699 to
+ * staff, 6993 to a charity: swedish-daily-bookkeeping, B9), never as a meal,
+ * so these keep the meal templates out (accounted#86, #92). 'present' is a
+ * whole word: it sits inside "representation".
+ */
+const GIFT_WORDS: readonly string[] = [
+  'gåva', 'gåvor', 'julklapp', 'presentkort', '=present', '=presenter', '=gift', '=gifts', 'gift card',
+]
 
 export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
   // --- PREMISES (3) ---
@@ -315,7 +303,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     common: false,
   },
 
-  // --- IT & SOFTWARE (3) ---
+  // --- IT & SOFTWARE (4) ---
   {
     id: 'it_saas_subscription',
     name_sv: 'Programvara / SaaS',
@@ -329,14 +317,20 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_rate: 0.25,
     deductibility: 'full',
     mcc_codes: [5734, 5817, 5818],
-    keywords: ['software', 'saas', 'programvara', 'licens', 'subscription', 'app', 'microsoft', 'google', 'adobe', 'slack', 'notion', 'figma', 'github', 'atlassian', 'jira', 'antivirus', 'vpn', 'norton', '1password', 'lastpass', 'bitwarden', 'spotify', 'crm', 'hubspot', 'salesforce', 'pipedrive', 'asana', 'monday', 'trello', 'basecamp', 'clickup', 'linear', 'dropbox', 'onedrive', 'icloud', 'backup'],
+    // Swedish web hosts and domain registrars charge 25 % moms: same account as
+    // it_cloud_hosting, but 2641 instead of reverse charge. No vendor the
+    // counterpart directory places abroad is here: a seller abroad charges no
+    // Swedish moms unless its invoice shows it, so it is on it_saas_eu or
+    // it_saas_non_eu by where it bills from (GitHub crm#1431, the rest
+    // crm#1498).
+    keywords: ['software', 'saas', 'programvara', 'licens', 'subscription', 'app', 'antivirus', 'vpn', 'norton', 'lastpass', 'bitwarden', 'spotify', 'crm', 'salesforce', 'asana', 'monday', 'trello', 'basecamp', 'clickup', 'linear', 'onedrive', 'icloud', 'backup', 'loopia', 'binero'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 10,
     auto_match_confidence: 0.90,
     default_private: false,
     fallback_category: 'expense_software',
-    description_sv: 'Programvarulicens eller SaaS-prenumeration (svensk leverantör med moms)',
+    description_sv: 'Programvarulicens, SaaS-prenumeration, webbhotell eller domän (svensk leverantör med moms)',
     common: false,
   },
   {
@@ -351,18 +345,55 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_treatment: 'reverse_charge',
     vat_rate: 0,
     deductibility: 'full',
-    special_rules_sv: 'Utländsk leverantör (EU/USA) med omvänd skattskyldighet',
+    special_rules_sv: 'Leverantör i annat EU-land fakturerar utan moms; du redovisar 25 % själv (ruta 21, 30 och 48). Leverantör utanför EU, till exempel i USA: välj Programvara / SaaS utanför EU (ruta 22).',
     mcc_codes: [5734, 5817, 5818],
-    keywords: ['software', 'saas', 'eu', 'ireland', 'reverse charge', 'omvänd moms', 'openai', 'chatgpt', 'anthropic', 'claude', 'ai', 'midjourney', 'copilot', 'google cloud', 'aws', 'azure'],
+    // Google Workspace is billed from Ireland. Card texts also write it
+    // "GOOGLE*WORKSPACE" and "GOOGLE *WORKSPACE". 'copilot' alone is
+    // Microsoft's, billed from Ireland like Google Workspace. GitHub Copilot
+    // is GitHub's, billed from the US: it_saas_non_eu (crm#1431). Microsoft,
+    // Adobe, Slack, Dropbox, HubSpot and Pipedrive bill from the EU too
+    // (counterpart directory) and left the 25 % template (crm#1498).
+    keywords: ['software', 'saas', 'eu', 'ireland', 'reverse charge', 'omvänd moms', 'openai', 'chatgpt', 'anthropic', 'claude', 'ai', 'midjourney', 'copilot', 'microsoft copilot', 'microsoft 365 copilot', 'm365 copilot', 'google cloud', 'aws', 'azure', 'google workspace', 'google*workspace', 'google *workspace', 'workspace', 'gsuite', 'google gsuite', 'google*gsuite', 'microsoft', 'adobe', 'slack', 'dropbox', 'hubspot', 'pipedrive'],
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 9,
     auto_match_confidence: 0.80,
     default_private: false,
     fallback_category: 'expense_software',
-    description_sv: 'Programvara från utländsk leverantör med omvänd skattskyldighet',
+    description_sv: 'Programvara från leverantör i annat EU-land med omvänd skattskyldighet',
     common: true,
     requires_vat_registration_data: true,
+  },
+  {
+    // The non-EU sibling of it_saas_eu: same cost account and MCCs, only the
+    // basis box differs (4531, ruta 22). Keywords are vendors the counterpart
+    // directory places outside the EU, never an EU-billed one. 'github copilot'
+    // is the second hit that keeps GitHub Copilot ahead of it_saas_eu's
+    // 'copilot' (crm#1431).
+    id: 'it_saas_non_eu',
+    name_sv: 'Programvara / SaaS utanför EU (omvänd moms)',
+    name_en: 'Software / SaaS from outside the EU (reverse charge)',
+    group: 'it_software',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '5420',
+    credit_account: '1930',
+    vat_treatment: 'reverse_charge',
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Leverantör utanför EU, till exempel i USA, fakturerar utan moms; du redovisar 25 % själv (ruta 22, 30 och 48). Leverantör i annat EU-land: välj Programvara / SaaS (omvänd moms), ruta 21.',
+    mcc_codes: [5734, 5817, 5818],
+    keywords: ['supabase', 'github', 'github copilot', 'notion', 'figma', 'atlassian', '1password'],
+    risk_level: 'LOW',
+    requires_review: false,
+    impact_score: 9,
+    auto_match_confidence: 0.80,
+    default_private: false,
+    fallback_category: 'expense_software',
+    description_sv: 'Programvara, SaaS eller molntjänst från leverantör utanför EU med omvänd skattskyldighet',
+    common: true,
+    requires_vat_registration_data: true,
+    reverse_charge_supplier_type: 'non_eu_business',
   },
   {
     id: 'it_cloud_hosting',
@@ -377,9 +408,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_treatment: 'reverse_charge',
     vat_rate: 0,
     deductibility: 'full',
-    special_rules_sv: 'Ofta EU/utländsk leverantör med omvänd skattskyldighet',
+    special_rules_sv: 'Bokförs som tjänst från annat EU-land med omvänd skattskyldighet (ruta 21, 30 och 48). Leverantör utanför EU: välj Programvara / SaaS utanför EU (ruta 22). Svensk leverantör som tar ut moms: välj Programvara / SaaS.',
     mcc_codes: [4816],
-    keywords: ['aws', 'azure', 'google cloud', 'gcp', 'hosting', 'server', 'cloud', 'vercel', 'heroku', 'digitalocean', 'cloudflare', 'hetzner', 'domän', 'domain', 'dns', 'loopia', 'binero', 'godaddy'],
+    keywords: ['aws', 'azure', 'google cloud', 'gcp', 'hosting', 'server', 'cloud', 'vercel', 'heroku', 'digitalocean', 'cloudflare', 'hetzner', 'domain', 'dns', 'godaddy'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 9,
@@ -454,7 +485,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     deductibility: 'full',
     special_rules_sv: 'Google/Meta fakturerar ofta från Irland → omvänd skattskyldighet',
     mcc_codes: [7311],
-    keywords: ['google ads', 'facebook ads', 'meta ads', 'instagram ads', 'linkedin ads', 'annons', 'advertising', 'adwords', 'kampanj', 'seo', 'sem', 'sökmotoroptimering', 'reklam'],
+    // Card texts write Google Ads "GOOGLE*ADS1234" and Meta's ads "FACEBK *"
+    // (crm#1498: they matched only the 25 % software template's 'google').
+    keywords: ['google ads', 'google*ads', 'google *ads', 'googleads', 'facebook ads', 'meta ads', 'instagram ads', 'linkedin ads', 'facebk', 'annons', 'advertising', 'adwords', 'kampanj', 'seo', 'sem', 'sökmotoroptimering', 'reklam'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 9,
@@ -597,15 +630,33 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'representation',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '6071',
+    // A meal (the restaurant MCCs, 12 % moms, lunch and middag below) is not
+    // deductible for income tax since 2017 (IL 16 kap. 2 §), so it books on
+    // 6072 Representation, ej avdragsgill; 6071 is for what stays deductible,
+    // such as enklare förtäring (swedish-daily-bookkeeping, B1). accounted#86.
+    debit_account: '6072',
     credit_account: '1930',
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,
     deductibility: 'conditional',
-    deductibility_note_sv: 'Momsavdrag på högst 300 kr/person (schablon 46 kr/person vid mat och alkohol); måltider inte avdragsgilla för inkomstskatt sedan 2017',
-    special_rules_sv: 'Dokumentera syfte, deltagare och företag.',
+    // 300 kr is the VAT BASE per person and occasion, not the deduction
+    // (ML 13 kap. 24-25 §§). The template has no participant count, so it
+    // books the VAT on the whole amount: right up to the cap, and the note
+    // tells the reviewer to check the moms line above it.
+    deductibility_note_sv: 'Måltider är inte avdragsgilla för inkomstskatt sedan 2017 och bokas på 6072. Momsen är avdragsgill på ett underlag om högst 300 kr exkl. moms per person och tillfälle (högst 36 kr per person för enbart mat på restaurang, schablon 46 kr vid mat och alkohol): kontrollera momsraden mot antalet deltagare. Enklare förtäring (fika, högst 60 kr per person exkl. moms) bokas på 6071.',
+    // Said where it goes: "Dokumentera" alone read as "upload a file", and
+    // a written note on the verifikat is enough (crm#1342).
+    special_rules_sv: 'Skriv syfte och deltagare (namn och företag) i verifikatets anteckning, eller bifoga ett underlag där de står.',
     mcc_codes: [5812, 5813, 5814],
-    keywords: ['representation', 'lunch', 'middag', 'restaurang', 'restaurant', 'kund', 'kundmöte', 'gåva', 'present', 'representationsgåva'],
+    // Meal words only. A gift is not a meal: within 300 kr excl. moms it is
+    // deductible (6071) and usually carries 25 % moms, so proposing this
+    // template (6072, 12 %) for one was wrong twice (accounted#86).
+    // 'representation' counts as a whole word only: a compound is what its
+    // last part names, so "representationsgåva" is a gift and
+    // "representationsmiddag" a meal through 'middag'. 'kund' is gone: it
+    // named no meal, only "kundreskontra" and "gåva till kund" (accounted#92).
+    keywords: ['=representation', 'lunch', 'middag', 'restaurang', 'restaurant', 'kundmöte'],
+    excluded_keywords: GIFT_WORDS,
     risk_level: 'HIGH',
     requires_review: true,
     impact_score: 7,
@@ -622,15 +673,21 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'representation',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '7631',
+    // The staff twin of representation_external: a teamlunch or a julbord is
+    // a meal, not income-tax deductible since 2017 (IL 16 kap. 2 §), so it
+    // books on 7632; 7631 is for enklare förtäring and the personalfest's
+    // kringkostnader (swedish-daily-bookkeeping, B2). accounted#86.
+    debit_account: '7632',
     credit_account: '1930',
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,
     deductibility: 'conditional',
-    deductibility_note_sv: 'Enklare förtäring avdragsgill upp till 60 kr/person; måltider inte avdragsgilla för inkomstskatt sedan 2017',
-    special_rules_sv: 'Personalfest, teamlunch, fika. Momsavdrag på högst 300 kr/person (schablon 46 kr/person vid mat och alkohol).',
+    deductibility_note_sv: 'Måltider är inte avdragsgilla för inkomstskatt sedan 2017 och bokas på 7632. Enklare förtäring (fika, högst 60 kr per person exkl. moms) och kringkostnader vid personalfest (högst 180 kr per person exkl. moms) bokas på 7631.',
+    special_rules_sv: 'Personalfest, teamlunch, fika. Momsen är avdragsgill på ett underlag om högst 300 kr exkl. moms per person och tillfälle (högst 36 kr per person för enbart mat på restaurang, schablon 46 kr vid mat och alkohol).',
     mcc_codes: [5812, 5813, 5814],
     keywords: ['personalfest', 'intern representation', 'teamlunch', 'personallunch', 'fika', 'julfest', 'after work', 'intern lunch'],
+    // A julgåva to staff is a personalkostnad (7690/7699), not a meal.
+    excluded_keywords: GIFT_WORDS,
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 5,
@@ -813,22 +870,27 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     common: true,
   },
   {
-    // Stripe Payments Europe Ltd (Ireland) invoices its fees without VAT and
-    // the Swedish buyer reports them under reverse charge, the same way the
-    // Stripe extension books fees inside a payout (extensions/general/stripe/
-    // lib/payouts.ts): ruta 21 basis, 25 % fictitious VAT on 2614 and 2645.
+    // Stripe's processing fee is a payment service, exempt under ML 10 kap.
+    // 33 § even from Stripe Payments Europe in Ireland: no reverse charge,
+    // nothing in rutor 21, 30 or 48 (swedish-daily-bookkeeping, payment
+    // providers §6-7), the model the single-invoice fee (crm#1364) and the
+    // split row's fee rows (issue #131) book with. Stripe's software
+    // (Billing, Radar, Tax) is a taxable service on its own invoice lines,
+    // not this template. The id stays: mapping rules and inbox suggestions
+    // store it.
     id: 'payment_fees_eu',
-    name_sv: 'Stripe-avgifter (omvänd moms)',
-    name_en: 'Stripe fees (reverse charge)',
+    name_sv: 'Stripe-avgifter',
+    name_en: 'Stripe fees',
     group: 'bank_finance',
     direction: 'expense',
     entity_applicability: 'all',
     debit_account: '6570',
     credit_account: '1930',
-    vat_treatment: 'reverse_charge',
+    vat_treatment: 'exempt',
     vat_rate: 0,
     deductibility: 'full',
-    special_rules_sv: 'Fakturerat utan moms från Irland; köparen redovisar omvänd moms (ruta 21, 30 och 48).',
+    special_rules_sv:
+      'Transaktionsavgifter är en momsfri betaltjänst (ML 10 kap. 33 §), även från Irland: ingen omvänd moms och inget i momsdeklarationen. Stripes programvara (Billing, Radar, Tax) är momspliktig och bokförs separat.',
     mcc_codes: [],
     keywords: ['stripe'],
     risk_level: 'LOW',
@@ -837,9 +899,8 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     auto_match_confidence: 0.85,
     default_private: false,
     fallback_category: 'expense_bank_fees',
-    description_sv: 'Avgifter från Stripe (EU-leverantör) med omvänd skattskyldighet',
+    description_sv: 'Transaktionsavgifter från Stripe, momsfria',
     common: true,
-    requires_vat_registration_data: true,
   },
   {
     id: 'bank_interest_income',
@@ -2301,21 +2362,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
 // ============================================================
 
 const templateById = new Map<string, BookingTemplate>()
-const templatesByGroup = new Map<TemplateGroup, BookingTemplate[]>()
-const templatesByMcc = new Map<number, BookingTemplate[]>()
 
 for (const t of BOOKING_TEMPLATES) {
   templateById.set(t.id, t)
-
-  const groupList = templatesByGroup.get(t.group) || []
-  groupList.push(t)
-  templatesByGroup.set(t.group, groupList)
-
-  for (const mcc of t.mcc_codes) {
-    const mccList = templatesByMcc.get(mcc) || []
-    mccList.push(t)
-    templatesByMcc.set(mcc, mccList)
-  }
 }
 
 // ============================================================
@@ -2325,31 +2374,6 @@ for (const t of BOOKING_TEMPLATES) {
 /** O(1) lookup by template ID */
 export function getTemplateById(id: string): BookingTemplate | undefined {
   return templateById.get(id)
-}
-
-/** Get all templates in a group */
-export function getTemplatesByGroup(group: TemplateGroup): BookingTemplate[] {
-  return templatesByGroup.get(group) || []
-}
-
-/** Get templates matching a specific MCC code */
-export function getTemplatesByMcc(mcc: number): BookingTemplate[] {
-  return templatesByMcc.get(mcc) || []
-}
-
-/** Get all groups with labels and their templates */
-export function getTemplateGroups(): TemplateGroupInfo[] {
-  const groups: TemplateGroupInfo[] = []
-  for (const [group, labels] of Object.entries(GROUP_LABELS)) {
-    const g = group as TemplateGroup
-    groups.push({
-      group: g,
-      label_sv: labels.sv,
-      label_en: labels.en,
-      templates: templatesByGroup.get(g) || [],
-    })
-  }
-  return groups
 }
 
 /**
@@ -2502,18 +2526,38 @@ export function stripBankNoise(lowerText: string): string {
   return out.replace(/\s+/g, ' ').trim()
 }
 
+/** Keywords up to this length are matched as whole words; longer ones may sit inside a word ("fjärruppvärmning"). */
+const WHOLE_WORD_KEYWORD_MAX = 3
+
+const NON_WORD = /[^\p{L}\p{N}]+/u
+
+/** The text's words, single-spaced, with a space at each end: a whole word is ` word `. */
+function paddedWordsOf(text: string): string {
+  return ` ${text.split(NON_WORD).filter(Boolean).join(' ')} `
+}
+
+/**
+ * Whether one keyword is in the text. A keyword longer than three letters may
+ * sit inside a word: a Swedish compound puts the thing it names last
+ * ("kundlunch", "fjärruppvärmning") and a card descriptor glues words
+ * together ("SKATTEVERKET", "CLOUDFLARE"), so a word boundary on every
+ * keyword would lose more right matches than wrong ones. A short keyword, or
+ * one written with a leading '=' (the convention of the Inkorg's line
+ * matcher, lib/categories/purchase-category-keywords.ts), matches whole words
+ * only: '=' is for a word that mostly opens a compound naming something else
+ * ("representationsgåva" is a gift, accounted#92).
+ */
+function keywordMatches(searchText: string, paddedWords: string, keyword: string): boolean {
+  const wholeWord = keyword.startsWith('=')
+  const text = wholeWord ? keyword.slice(1) : keyword
+  if (wholeWord || text.length <= WHOLE_WORD_KEYWORD_MAX) return paddedWords.includes(paddedWordsOf(text))
+  return searchText.includes(text)
+}
+
 /**
  * Multi-signal matching against a transaction.
  * Returns top matches sorted by confidence descending.
  */
-/** Keywords up to this length are matched as whole words; longer ones may sit inside a word ("fjärruppvärmning"). */
-const WHOLE_WORD_KEYWORD_MAX = 3
-
-function keywordMatches(searchText: string, searchWords: ReadonlySet<string>, keyword: string): boolean {
-  if (keyword.length <= WHOLE_WORD_KEYWORD_MAX) return searchWords.has(keyword)
-  return searchText.includes(keyword)
-}
-
 export function findMatchingTemplates(
   transaction: Transaction,
   entityType?: EntityType
@@ -2528,7 +2572,8 @@ export function findMatchingTemplates(
   // Strip bank-method noise so e.g. "Överföring via internet" doesn't make
   // the matcher believe the merchant is "Internet" (→ 6230 telecom).
   const searchText = stripBankNoise(rawSearchText)
-  const searchWords = new Set(searchText.split(/[^\p{L}\p{N}]+/u).filter(Boolean))
+  const paddedWords = paddedWordsOf(searchText)
+  const inText = (kw: string) => keywordMatches(searchText, paddedWords, kw.toLowerCase())
 
   for (const t of BOOKING_TEMPLATES) {
     // Filter entity applicability
@@ -2540,6 +2585,10 @@ export function findMatchingTemplates(
     if (t.direction === 'expense' && !isExpense) continue
     if (t.direction === 'income' && !isIncome) continue
     // 'transfer' templates match both directions
+
+    // A text that says it is something else (a gift is not a meal) keeps
+    // the template out, a restaurant MCC included.
+    if (t.excluded_keywords?.some(inText)) continue
 
     let score = 0
 
@@ -2554,7 +2603,7 @@ export function findMatchingTemplates(
     if (t.keywords.length > 0) {
       let matchedKeywords = 0
       for (const kw of t.keywords) {
-        if (keywordMatches(searchText, searchWords, kw.toLowerCase())) {
+        if (inText(kw)) {
           matchedKeywords++
         }
       }
@@ -2587,7 +2636,13 @@ export function buildMappingResultFromTemplate(
   template: BookingTemplate,
   transaction: Transaction,
   entityType: EntityType,
-  vatRegistered?: VatRegistration
+  vatRegistered?: VatRegistration,
+  /**
+   * The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+   * the template's 1630 books on it, 2012 for an enskild firma that runs the
+   * skattekonto there (PH 175). Callers pass it for a template that names 1630.
+   */
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): MappingResult {
   const isExpense = transaction.amount < 0
   const isBusiness = !template.default_private
@@ -2598,8 +2653,14 @@ export function buildMappingResultFromTemplate(
 
   // Resolve entity-specific accounts (EF base, AB override, förening: base
   // with owner accounts translated to the member settlement account).
-  const debitAccount = templateAccountForForm(entityType, template.debit_account, template.debit_account_ab)!
-  const creditAccount = templateAccountForForm(entityType, template.credit_account, template.credit_account_ab)!
+  const debitAccount = templateSkattekontoAccount(
+    templateAccountForForm(entityType, template.debit_account, template.debit_account_ab)!,
+    skattekontoAccount,
+  )
+  const creditAccount = templateSkattekontoAccount(
+    templateAccountForForm(entityType, template.credit_account, template.credit_account_ab)!,
+    skattekontoAccount,
+  )
 
   // Always work in SEK. For non-SEK transactions, resolve the SEK-equivalent
   // (via amount_sek or amount * exchange_rate); for SEK rows this is a no-op.
@@ -2612,63 +2673,19 @@ export function buildMappingResultFromTemplate(
     transaction.exchange_rate
   ))
 
-  // Generate VAT lines
-  const vatLines: VatJournalLine[] = []
-  if (isBusiness && vatTreatment && template.deductibility !== 'non_deductible') {
-    const vatRate = getVatRate(vatTreatment)
-
-    if (vatTreatment === 'reverse_charge' && isExpense) {
-      // EU/non-EU/domestic reverse charge: emit BOTH the fiktiv-moms pair
-      // (2645|2647 / 2614) AND the basbelopp pair (44xx|45xx / 4598). The
-      // basbelopp pair populates momsdeklaration rutor 20-24; without it
-      // Skatteverket rejects with FK004 ("ruta 30-32 utan motsvarande
-      // basbelopp i 20-24", ML 13 kap kräver båda sidor).
-      //
-      // No basbelopp pair when the template already books the expense
-      // directly to a basis account (44xx/45xx series): would double-count.
-      const rcLines = generateReverseChargePurchaseLines({
-        base: absAmount,
-        rate: 0.25, // fiktiv moms rate; current templates are 25%
-        kind: reverseChargeKindForSupplierType(template.reverse_charge_supplier_type ?? 'eu_business'),
-        basisBase: costAccountReportsRcBasis(debitAccount) ? 0 : absAmount,
+  // A reverse-charge template whose debit account reports the basis itself
+  // (4515, or an account with a reverse-charge momskod) loses the basis pair,
+  // and takes that account's momssats, when the booking door settles it with
+  // the chart (reconcileRcBasisWithChart): keeping the pair would double-count.
+  const vatLines = isBusiness && template.deductibility !== 'non_deductible'
+    ? bankRowVatLines({
+        treatment: vatTreatment,
+        absSek: absAmount,
+        nature: isExpense ? 'expense' : 'income',
+        reversal: false,
+        reverseChargeKind: reverseChargeKindForSupplierType(template.reverse_charge_supplier_type ?? 'eu_business'),
       })
-      for (const rcl of rcLines) {
-        vatLines.push({
-          account_number: rcl.account_number,
-          debit_amount: rcl.debit_amount,
-          credit_amount: rcl.credit_amount,
-          description: rcl.line_description || '',
-        })
-      }
-    } else if (vatRate > 0 && isExpense) {
-      // Input VAT deduction
-      const vatLine = generateInputVatLine(absAmount, vatRate)
-      if (vatLine) {
-        vatLines.push({
-          account_number: vatLine.account_number,
-          debit_amount: vatLine.debit_amount,
-          credit_amount: vatLine.credit_amount,
-          description: vatLine.line_description || '',
-        })
-      }
-    } else if (vatRate > 0 && !isExpense) {
-      // Output VAT (income)
-      const vatAmount = Math.round((absAmount * vatRate / (1 + vatRate)) * 100) / 100
-      let vatAccount: string
-      switch (vatTreatment) {
-        case 'standard_25': vatAccount = '2611'; break
-        case 'reduced_12': vatAccount = '2621'; break
-        case 'reduced_6': vatAccount = '2631'; break
-        default: vatAccount = '2611'
-      }
-      vatLines.push({
-        account_number: vatAccount,
-        debit_amount: 0,
-        credit_amount: vatAmount,
-        description: `Utgående moms ${vatRate * 100}%`,
-      })
-    }
-  }
+    : []
 
   // Build description
   const description = `${template.name_sv}: ${transaction.description}`
@@ -2685,4 +2702,25 @@ export function buildMappingResultFromTemplate(
     vat_lines: vatLines,
     description,
   }
+}
+
+/**
+ * The skattekonto account buildMappingResultFromTemplate takes for this
+ * company: read (resolveSkattekontoAccount, which throws when it cannot be
+ * read) only when the template names the skattekonto (1630) on either form's
+ * accounts; undefined, without a read, otherwise.
+ */
+export async function templateSkattekontoAccountFor(
+  supabase: SupabaseClient,
+  companyId: string,
+  template: Pick<BookingTemplate, 'debit_account' | 'credit_account' | 'debit_account_ab' | 'credit_account_ab'>,
+): Promise<SkattekontoLedgerAccount | undefined> {
+  return templateTouchesSkattekonto([
+    template.debit_account,
+    template.credit_account,
+    template.debit_account_ab,
+    template.credit_account_ab,
+  ])
+    ? await resolveSkattekontoAccount(supabase, companyId)
+    : undefined
 }

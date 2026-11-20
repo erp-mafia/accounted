@@ -1,7 +1,12 @@
 import { after } from 'next/server'
 import { uploadDocument } from '@/lib/core/documents/document-service'
-import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from './extract-invoice-fields'
-import { mirrorExtractionToDocument } from './mirror-extraction'
+import { INBOX_UPLOAD_TYPES } from '@/lib/documents/upload-types'
+import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
+import type { ExtractionEmailContext } from '@/lib/documents/inbox-extraction/email-date-context'
+import { mirrorExtractionToDocument } from '@/lib/documents/inbox-extraction/mirror-extraction'
+import type { ExtractionFailure } from '@/lib/documents/inbox-extraction/extraction-failure'
+import { keepStoredPersonChoices } from '@/lib/documents/person-corrections'
+import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import type { InboxKindHint } from './resend-inbound'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
@@ -10,8 +15,11 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { routeClassifiedDocument, VOUCHER_TYPES } from './route-from-arkiv'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import type { InvoiceExtractionResult } from '@/types'
-import { PDFDocument } from 'pdf-lib'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { adoptQueuedInboxItem } from '@/lib/documents/queued-inbox-item'
+import { isInboxItemTaken, itemStage, whereInboxItemFree } from '@/lib/documents/inbox-item-state'
+import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
+import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import path from 'node:path'
 
 // Verdicts decidable before touching the file. `ai_unconfigured` is the
@@ -68,6 +76,8 @@ export function maxPagesForAutoExtract(): number {
 // as "small enough": preserves today's behavior on malformed inputs.
 export async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
   try {
+    // pdf-lib loads on the first PDF, not with every route that loads extensions.
+    const { PDFDocument } = await import('pdf-lib')
     const pdf = await PDFDocument.load(buffer, { updateMetadata: false })
     return pdf.getPageCount()
   } catch {
@@ -87,6 +97,7 @@ export async function slicePdfForExtraction(
   maxPages: number
 ): Promise<ArrayBuffer | null> {
   try {
+    const { PDFDocument } = await import('pdf-lib')
     const src = await PDFDocument.load(buffer, { updateMetadata: false })
     const dst = await PDFDocument.create()
     const total = src.getPageCount()
@@ -124,14 +135,9 @@ export async function isSandboxCompany(
   return data.is_sandbox === true
 }
 
-export const UPLOAD_ALLOWED_MIME_TYPES = new Set([
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/heic',
-  'image/heif',
-  'image/webp',
-])
+// One list with the pickers that feed this route (lib/documents/upload-types),
+// so a picker never offers a format the route refuses.
+export const UPLOAD_ALLOWED_MIME_TYPES = new Set(INBOX_UPLOAD_TYPES)
 
 // The email pipeline additionally accepts HTML: many suppliers send the
 // invoice as the mail body or an attached .html file, and for those the mail
@@ -175,6 +181,16 @@ export interface EmailMeta {
   kindHint?: InboxKindHint | null
 }
 
+/**
+ * What the reading gets from the mail: its received day and subject settle
+ * numeric dates that read both ways (crm#1749). The inbox row stores the same
+ * two as email_received_at and email_subject, which is where a re-reading of
+ * the item takes them from.
+ */
+export function emailContextOf(emailMeta: EmailMeta | undefined): ExtractionEmailContext {
+  return { subject: emailMeta?.subject ?? null, receivedAt: emailMeta?.receivedAt ?? null }
+}
+
 // Chat-channel provenance (whatsapp-inbox extension). When present, the inbox
 // row links back to the delivering whatsapp_messages row and seeds
 // channel_context (kept OUT of extracted_data: retry-extraction overwrites
@@ -193,11 +209,88 @@ function sanitiseCaption(raw: string | null | undefined): string | null {
   return cleaned || null
 }
 
+// ── Concurrent email delivery ────────────────────────────────
+
+interface FiledDeliveryItem {
+  id: string
+  status: string
+  document_id: string | null
+  extracted_data: unknown
+  matched_supplier_id: string | null
+  matched_transaction_id: string | null
+}
+
+/**
+ * The inbox row another delivery of the same mail attachment already filed.
+ * Resend delivers at least once and redelivers a webhook that has not
+ * answered within its timeout while the first run is still extracting, so two
+ * runs can both pass the webhook's "already filed?" check and meet at this
+ * insert. The (company_id, resend_email_id, resend_attachment_id) unique index
+ * lets one win; for the other the violation means "already received", not a
+ * failure. Null for any other error, or when no such row is found, so the
+ * caller throws the original error.
+ */
+async function findFiledDelivery(
+  supabase: import('@supabase/supabase-js').SupabaseClient,
+  companyId: string,
+  emailMeta: EmailMeta | undefined,
+  insertError: { code?: string },
+): Promise<FiledDeliveryItem | null> {
+  if (insertError.code !== '23505' || !emailMeta?.resendEmailId || !emailMeta.resendAttachmentId) return null
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id, status, document_id, extracted_data, matched_supplier_id, matched_transaction_id')
+    .eq('company_id', companyId)
+    .eq('resend_email_id', emailMeta.resendEmailId)
+    .eq('resend_attachment_id', emailMeta.resendAttachmentId)
+    .limit(1)
+  if (error) return null
+  return (data as FiledDeliveryItem[] | null)?.[0] ?? null
+}
+
+function filedDeliveryResult(docId: string, item: FiledDeliveryItem) {
+  return {
+    document_id: item.document_id ?? docId,
+    inbox_item_id: item.id,
+    status: item.status,
+    extracted_data: item.extracted_data,
+    matched_supplier_id: item.matched_supplier_id,
+    matched_transaction_id: item.matched_transaction_id,
+    extraction_skipped: true,
+    skip_reason: 'duplicate_delivery' as const,
+    page_count: null,
+    duplicate: true as const,
+  }
+}
+
+/**
+ * Where an inbox item a duplicate upload was folded into stands: booked
+ * (a supplier invoice or a verifikat holds it), taken by Arkiv (not
+ * underlag, it lives in Dokument) or still in the inbox.
+ */
+export type DuplicateItemState = 'booked' | 'arkiv' | 'inbox'
+
+export function duplicateItemState(item: {
+  created_supplier_invoice_id: string | null
+  created_journal_entry_id: string | null
+  routed_to_arkiv_at?: string | null
+}): DuplicateItemState {
+  if (itemStage(item) === 'booked') return 'booked'
+  if (item.routed_to_arkiv_at) return 'arkiv'
+  return 'inbox'
+}
+
 // ── Shared helper: upload + extract + create inbox item ──────
 
 export interface ArchivedDocumentProcessingOptions {
   skipExtraction?: boolean
   channelMeta?: ChannelMeta
+  /**
+   * Provenance for a door that is not a chat (a partner delivery): written
+   * as the new row's channel_context when channelMeta is absent. An item
+   * adopted for duplicate content keeps its own.
+   */
+  channelContext?: InboxChannelContext
   /** Overrides the system actor id on the DocumentIngested history event.
    *  Omitted = today's behavior (resend-inbound for email, user otherwise). */
   actorId?: string
@@ -298,7 +391,7 @@ async function processArchivedDocumentInner(
     const { data: existingItem, error: itemLookupError } = await supabase
       .from('invoice_inbox_items')
       .select(
-        'id, status, extracted_data, matched_supplier_id, matched_transaction_id, kind_hint, created_supplier_invoice_id, created_journal_entry_id',
+        'id, status, created_at, extracted_data, matched_supplier_id, matched_transaction_id, kind_hint, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at',
       )
       .eq('company_id', companyId)
       .eq('document_id', doc.id)
@@ -318,6 +411,8 @@ async function processArchivedDocumentInner(
       kind_hint: InboxKindHint | null
       created_supplier_invoice_id: string | null
       created_journal_entry_id: string | null
+      created_at?: string | null
+      routed_to_arkiv_at?: string | null
     }> | null)?.[0]
     if (adopted) {
       // Dedupe keeps ONE archived copy of the bytes (7-year retention, and a
@@ -344,23 +439,17 @@ async function processArchivedDocumentInner(
       let hintAfter = hintBefore
       let hintSkipped: 'consumed' | 'write_failed' | null = null
       const incomingHint = emailMeta?.kindHint ?? null
-      const stillOpen =
-        adopted.created_supplier_invoice_id == null &&
-        adopted.created_journal_entry_id == null &&
-        adopted.matched_transaction_id == null
       if (incomingHint !== null && incomingHint !== hintBefore) {
-        if (!stillOpen) {
+        if (isInboxItemTaken(adopted)) {
           hintSkipped = 'consumed'
         } else {
-          const { data: updatedRows, error: hintError } = await supabase
-            .from('invoice_inbox_items')
-            .update({ kind_hint: incomingHint })
-            .eq('id', adopted.id)
-            .eq('company_id', companyId)
-            .is('created_supplier_invoice_id', null)
-            .is('created_journal_entry_id', null)
-            .is('matched_transaction_id', null)
-            .select('id')
+          const { data: updatedRows, error: hintError } = await whereInboxItemFree(
+            supabase
+              .from('invoice_inbox_items')
+              .update({ kind_hint: incomingHint })
+              .eq('id', adopted.id)
+              .eq('company_id', companyId),
+          ).select('id')
           const changed = ((updatedRows as Array<{ id: string }> | null) ?? []).length > 0
           if (hintError) {
             // Non-fatal: the document is already archived and visible. Losing
@@ -418,6 +507,13 @@ async function processArchivedDocumentInner(
         skip_reason: 'duplicate_content' as const,
         page_count: null,
         duplicate: true as const,
+        // Where the earlier copy is, so the door that received this one can
+        // say so instead of promising a new item (PH 225): a booked item never
+        // shows in Behöver dig, and one Arkiv took is in Dokument.
+        duplicate_of: {
+          received_at: adopted.created_at ?? null,
+          state: duplicateItemState(adopted),
+        },
       }
     }
   }
@@ -518,12 +614,16 @@ async function processArchivedDocumentInner(
         whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
         channel_context: opts.channelMeta
           ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
-          : null,
+          : (opts.channelContext ?? null),
       })
       .select('*')
       .single()
 
-    if (inboxError) throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+    if (inboxError) {
+      const filed = await findFiledDelivery(supabase, companyId, emailMeta, inboxError)
+      if (filed) return filedDeliveryResult(doc.id, filed)
+      throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+    }
 
     scheduleDeferredExtraction({
       itemId: inbox.id,
@@ -534,6 +634,7 @@ async function processArchivedDocumentInner(
       pageCount,
       gatedByPageCount,
       maxAutoExtractPages,
+      emailContext: emailContextOf(emailMeta),
     })
 
     return {
@@ -571,12 +672,13 @@ async function processArchivedDocumentInner(
   // invoice. extracted_data is never null in the DB; an empty skeleton
   // keeps downstream readers (UI, MCP) happy.
   const extraction = skipExtraction
-    ? { data: emptyResult(), rawText: null, model: null, skipped: null }
+    ? { data: emptyResult(), rawText: null, model: null, skipped: null, failure: null }
     : await extractInvoiceFields({
         buffer: Buffer.from(slicedBuffer ?? file.buffer),
         mimeType: file.type,
         fileName: file.name,
         ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
+        emailContext: emailContextOf(emailMeta),
       })
   const { data: extracted, rawText } = extraction
   if (!skipExtraction && slicedBuffer != null && pageCount != null) {
@@ -587,41 +689,80 @@ async function processArchivedDocumentInner(
   // (no AI fuzz).
   const matchedSupplierId = await matchSupplierId(supabase, companyId, extracted.supplier)
 
-  const { data: inbox, error: inboxError } = await supabase
-    .from('invoice_inbox_items')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      status: 'received',
-      source,
-      document_id: doc.id,
-      extracted_data: extracted as unknown as Record<string, unknown>,
-      extraction_skipped: skipExtraction,
-      matched_supplier_id: matchedSupplierId,
-      email_from: emailMeta?.from || null,
-      email_subject: emailMeta?.subject || null,
-      email_received_at: emailMeta?.receivedAt || null,
-      email_body_text: emailMeta?.bodyText || null,
-      resend_email_id: emailMeta?.resendEmailId || null,
-      resend_attachment_id: emailMeta?.resendAttachmentId || null,
-      kind_hint: emailMeta?.kindHint ?? null,
-      raw_email_payload: emailMeta?.messageId
-        ? { messageId: emailMeta.messageId, filename: file.name }
-        : null,
-      correlation_id: correlationId,
-      matched_transaction_id: matchedTransactionId ?? null,
-      // Chat-channel provenance. Explicit nulls (not a conditional spread)
-      // keep the payload statically checkable; a null insert is identical to
-      // omitting the column, so the email/upload behavior is unchanged.
-      whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
-      channel_context: opts.channelMeta
-        ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
-        : null,
-    })
-    .select('*')
-    .single()
+  // Chat-channel provenance. Explicit nulls (not a conditional spread) keep
+  // the payload statically checkable; a null insert is identical to omitting
+  // the column, so the email/upload behavior is unchanged.
+  const channelContext = opts.channelMeta
+    ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
+    : (opts.channelContext ?? null)
+  const rawEmailPayload = emailMeta?.messageId ? { messageId: emailMeta.messageId, filename: file.name } : null
 
-  if (inboxError) throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+  // One document, one inbox item (crm#1413): Arkiv classifies the archived
+  // document on its own clock and may have queued it while the reading above
+  // ran. That item is taken over with this delivery's reading and e-mail
+  // fields instead of filing a second one beside it.
+  const queued = await adoptQueuedInboxItem(supabase, companyId, doc.id, {
+    status: 'received',
+    source,
+    channel_context: channelContext as Record<string, unknown> | null,
+    extracted_data: extracted as unknown as Record<string, unknown>,
+    extraction_skipped: skipExtraction,
+    matched_supplier_id: matchedSupplierId,
+    kind_hint: emailMeta?.kindHint ?? null,
+    matched_transaction_id: matchedTransactionId ?? null,
+    email_from: emailMeta?.from || null,
+    email_subject: emailMeta?.subject || null,
+    email_received_at: emailMeta?.receivedAt || null,
+    email_body_text: emailMeta?.bodyText || null,
+    resend_email_id: emailMeta?.resendEmailId || null,
+    resend_attachment_id: emailMeta?.resendAttachmentId || null,
+    raw_email_payload: rawEmailPayload,
+    correlation_id: correlationId,
+    whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
+  })
+
+  const inserted = queued
+    ? null
+    : await supabase
+        .from('invoice_inbox_items')
+        .insert({
+          company_id: companyId,
+          user_id: userId,
+          status: 'received',
+          source,
+          document_id: doc.id,
+          extracted_data: extracted as unknown as Record<string, unknown>,
+          extraction_skipped: skipExtraction,
+          matched_supplier_id: matchedSupplierId,
+          email_from: emailMeta?.from || null,
+          email_subject: emailMeta?.subject || null,
+          email_received_at: emailMeta?.receivedAt || null,
+          email_body_text: emailMeta?.bodyText || null,
+          resend_email_id: emailMeta?.resendEmailId || null,
+          resend_attachment_id: emailMeta?.resendAttachmentId || null,
+          kind_hint: emailMeta?.kindHint ?? null,
+          raw_email_payload: rawEmailPayload,
+          correlation_id: correlationId,
+          matched_transaction_id: matchedTransactionId ?? null,
+          whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
+          channel_context: channelContext,
+        })
+        .select('*')
+        .single()
+
+  if (inserted?.error) {
+    const filed = await findFiledDelivery(supabase, companyId, emailMeta, inserted.error)
+    if (filed) return filedDeliveryResult(doc.id, filed)
+    throw new Error(`Failed to create inbox item: ${inserted.error.message}`)
+  }
+  const inbox = (queued ?? inserted?.data) as { id: string; status: string; matched_supplier_id: string | null; matched_transaction_id: string | null }
+  if (doc.deduplicated) {
+    // Filed for a document the company already had (no item on it yet): when a
+    // verifikat holds that document, the item is booked at birth instead of
+    // waiting in Behöver dig beside a booked underlag (the worklist badge and
+    // the MCP list already count it handled).
+    await stampNewInboxItemIfDocumentLinked(supabase, companyId, doc.id)
+  }
 
   // The extension yielded to us (extractionOwner); put the outcome where it
   // would have written it, so the document row tells the same story.
@@ -630,6 +771,7 @@ async function processArchivedDocumentInner(
     rawText,
     model: extraction.model ?? null,
     skipped: skipReason ?? extraction.skipped ?? null,
+    failure: extraction.failure ?? null,
   })
 
   try {
@@ -657,6 +799,10 @@ async function processArchivedDocumentInner(
     console.error('[invoice-inbox] Failed to append DocumentExtractionAttempted:', err)
   }
 
+  // Match on arrival: a bank row that already paid it becomes a proposal on
+  // the item, never a booking. Best effort, logged inside.
+  await proposeBankMatchForInboxItem(supabase, companyId, inbox.id)
+
   return {
     document_id: doc.id,
     inbox_item_id: inbox.id,
@@ -683,6 +829,79 @@ interface DeferredExtractionJob {
   /** Snapshot of maxPagesForAutoExtract() from the request, so the gate
    *  verdict and the slice/stamp below cannot disagree. */
   maxAutoExtractPages: number
+  /** The mail the document came with (a partner delivery's subject and received time); absent on uploads. */
+  emailContext?: ExtractionEmailContext | null
+}
+
+export interface InboxReading {
+  extracted: InvoiceExtractionResult
+  rawText: string | null
+  model: string | null
+  extractionSkipped: boolean
+  skipReason: string | null
+  /** extractInvoiceFields' failure; 'error' as well when the reading threw. */
+  failure: ExtractionFailure | null
+}
+
+/**
+ * The inbox's reading of one archived document, off the request: the page
+ * gate's slice (first pages plus the last), then extractInvoiceFields. Shared
+ * by the deferred upload worker and the sweep's provider retry, so a retried
+ * document is read exactly as its upload was. Never throws: extraction
+ * failures are swallowed into the empty skeleton (extractInvoiceFields does
+ * most of that itself), and an unsliceable long PDF becomes the
+ * too_many_pages skip.
+ */
+export async function readForInbox(
+  supabase: import('@supabase/supabase-js').SupabaseClient,
+  job: Pick<DeferredExtractionJob, 'companyId' | 'file' | 'pageCount' | 'gatedByPageCount' | 'maxAutoExtractPages' | 'emailContext'>,
+): Promise<InboxReading> {
+  const reading: InboxReading = {
+    extracted: emptyResult(),
+    rawText: null,
+    model: null,
+    extractionSkipped: false,
+    skipReason: null,
+    failure: null,
+  }
+  try {
+    const slicedBuffer = job.gatedByPageCount
+      ? await slicePdfForExtraction(job.file.buffer, job.maxAutoExtractPages)
+      : null
+    if (job.gatedByPageCount && slicedBuffer == null) {
+      reading.extractionSkipped = true
+      reading.skipReason = 'too_many_pages'
+      return reading
+    }
+    const result = await extractInvoiceFields({
+      buffer: Buffer.from(slicedBuffer ?? job.file.buffer),
+      mimeType: job.file.type,
+      fileName: job.file.name,
+      ownCompany: await fetchOwnCompanyIdentity(supabase, job.companyId),
+      emailContext: job.emailContext ?? null,
+    })
+    reading.extracted = result.data
+    reading.rawText = result.rawText
+    reading.model = result.model ?? null
+    reading.failure = result.failure ?? null
+    if (result.skipped) {
+      // No model call could be made (AI unconfigured, no vision on this
+      // backend, rasterizer missing). Same UI affordance as the other
+      // skips: the row lands with the empty skeleton and the hint.
+      reading.extractionSkipped = true
+      reading.skipReason = result.skipped
+    }
+    if (slicedBuffer != null && job.pageCount != null) {
+      reading.extracted.pages = { total: job.pageCount, analyzed: job.maxAutoExtractPages }
+    }
+  } catch (err) {
+    // The empty skeleton stands, exactly like the sync path on a swallowed
+    // failure: the row becomes a normal received item with empty fields, and
+    // the manual-edit / retry affordances take over.
+    console.error('[invoice-inbox] Reading failed:', err)
+    reading.failure = 'error'
+  }
+  return reading
 }
 
 /**
@@ -698,48 +917,7 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
     try {
       const supabase = createServiceClientNoCookies()
 
-      // Mirrors the synchronous path: extraction failures are swallowed into
-      // the empty skeleton (extractInvoiceFields does most of that itself);
-      // an unsliceable long PDF becomes the too_many_pages skip.
-      let extracted: InvoiceExtractionResult = emptyResult()
-      let rawText: string | null = null
-      let model: string | null = null
-      let extractionSkipped = false
-      let skipReason: string | null = null
-      try {
-        const slicedBuffer = job.gatedByPageCount
-          ? await slicePdfForExtraction(job.file.buffer, job.maxAutoExtractPages)
-          : null
-        if (job.gatedByPageCount && slicedBuffer == null) {
-          extractionSkipped = true
-          skipReason = 'too_many_pages'
-        } else {
-          const result = await extractInvoiceFields({
-            buffer: Buffer.from(slicedBuffer ?? job.file.buffer),
-            mimeType: job.file.type,
-            fileName: job.file.name,
-            ownCompany: await fetchOwnCompanyIdentity(supabase, job.companyId),
-          })
-          extracted = result.data
-          rawText = result.rawText
-          model = result.model ?? null
-          if (result.skipped) {
-            // No model call could be made (AI unconfigured, no vision on this
-            // backend, rasterizer missing). Same UI affordance as the other
-            // skips: the row lands with the empty skeleton and the hint.
-            extractionSkipped = true
-            skipReason = result.skipped
-          }
-          if (slicedBuffer != null && job.pageCount != null) {
-            extracted.pages = { total: job.pageCount, analyzed: job.maxAutoExtractPages }
-          }
-        }
-      } catch (err) {
-        // Persist the empty skeleton below, exactly like the sync path does
-        // on a swallowed failure: the row becomes a normal received item with
-        // empty fields, and the manual-edit / retry affordances take over.
-        console.error('[invoice-inbox] Deferred extraction failed:', err)
-      }
+      const { extracted, rawText, model, extractionSkipped, skipReason, failure } = await readForInbox(supabase, job)
 
       // Supplier match by org-nr, then VAT number, then case-insensitive name
       // (no AI fuzz).
@@ -749,13 +927,17 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
         extracted.supplier,
       )
 
+      // A person may have corrected a field and chosen a purchase category
+      // while the row waited; what they decided is final and rides along.
+      const { reading, carriedFields } = await keepStoredPersonChoices(supabase, job.itemId, job.companyId, extracted)
+
       // CAS: only the row still waiting on THIS worker flips. A user retry
       // or the sweep cron may have claimed it first; their result wins.
       const { data: claimed, error: updateError } = await supabase
         .from('invoice_inbox_items')
         .update({
           status: 'received',
-          extracted_data: extracted as unknown as Record<string, unknown>,
+          extracted_data: reading as unknown as Record<string, unknown>,
           extraction_skipped: extractionSkipped,
           matched_supplier_id: matchedSupplierId,
         })
@@ -774,7 +956,17 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
         rawText,
         model,
         skipped: skipReason,
+        failure,
       })
+      // The document holds the model's reading now; a person's carried
+      // corrections follow it there, as after an edit.
+      if (carriedFields) {
+        await mirrorCorrectedReadingToDocument({
+          documentId: job.documentId,
+          companyId: job.companyId,
+          reading: reading as unknown as Record<string, unknown>,
+        })
+      }
 
       try {
         await appendProcessingHistory({
@@ -800,6 +992,9 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
       } catch (err) {
         console.error('[invoice-inbox] Failed to append DocumentExtractionAttempted:', err)
       }
+
+      // Match on arrival, now that the item has its reading.
+      await proposeBankMatchForInboxItem(supabase, job.companyId, job.itemId)
     } catch (err) {
       console.error('[invoice-inbox] Deferred extraction worker crashed:', err)
       // Best-effort flip so the row does not sit in 'processing' until the

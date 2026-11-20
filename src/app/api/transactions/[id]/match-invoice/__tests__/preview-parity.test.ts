@@ -9,6 +9,16 @@
  * the user edits into a different booking than the one they saw.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
+// here no invoice needs its sale booked first.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+}))
 import {
   createMockRequest,
   createMockRouteParams,
@@ -34,6 +44,11 @@ vi.mock('@/lib/auth/require-write', () => ({
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 vi.mock('@/lib/invoices/match-log', () => ({ logMatchEvent: vi.fn() }))
+// Open: the gate has its own suites, and consumes no slot in the queued mock.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: vi.fn(async () => ({ outcome: 'open' })),
+}))
 vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
 }))
@@ -82,30 +97,41 @@ function asPreviewRows(lines: CreateJournalEntryInput['lines']): PreviewRow[] {
   }))
 }
 
-async function preview(): Promise<{ status: number; lines: PreviewRow[]; documentDimensions: unknown }> {
+async function preview(searchParams: Record<string, string> = {}): Promise<{
+  status: number
+  lines: PreviewRow[]
+  documentDimensions: unknown
+  overpayment: unknown
+}> {
   const response = await GET(
     createMockRequest('/api/transactions/tx-1/match-invoice/preview', {
-      searchParams: { invoice_id: INVOICE_ID },
+      searchParams: { invoice_id: INVOICE_ID, ...searchParams },
     }),
     createMockRouteParams({ id: 'tx-1' }),
   )
   const { status, body } = await parseJsonResponse<{
     lines: PreviewRow[]
     document_dimensions?: unknown
+    overpayment?: unknown
   }>(response)
-  return { status, lines: body.lines, documentDimensions: body.document_dimensions }
+  return { status, lines: body.lines, documentDimensions: body.document_dimensions, overpayment: body.overpayment }
 }
 
-async function book(): Promise<{ status: number; lines: PreviewRow[] }> {
+async function book(extra: Record<string, unknown> = {}): Promise<{
+  status: number
+  lines: PreviewRow[]
+  code: unknown
+}> {
   const response = await POST(
     createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
-      body: { invoice_id: INVOICE_ID },
+      body: { invoice_id: INVOICE_ID, ...extra },
     }),
     createMockRouteParams({ id: 'tx-1' }),
   )
+  const { body } = await parseJsonResponse<{ error?: { code?: unknown } }>(response)
   const input = mockCreateJournalEntry.mock.calls[0]?.[3] as CreateJournalEntryInput | undefined
-  return { status: response.status, lines: input ? asPreviewRows(input.lines) : [] }
+  return { status: response.status, lines: input ? asPreviewRows(input.lines) : [], code: body.error?.code }
 }
 
 beforeEach(() => {
@@ -150,8 +176,8 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: [], error: null }) // POST: hard-duplicate check
     enqueue({ data: settings, error: null }) // POST: settings
     enqueue({ data: [], error: null }) // POST: cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // POST: row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // POST: invoice update
-    enqueue({ data: null, error: null }) // POST: transaction link
     const booked = await book()
 
     expect(shown.status).toBe(200)
@@ -194,8 +220,8 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: [], error: null }) // POST: hard-duplicate check
     enqueue({ data: settings, error: null }) // POST: settings
     enqueue({ data: [], error: null }) // POST: cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // POST: row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // POST: invoice update
-    enqueue({ data: null, error: null }) // POST: transaction link
     const booked = await book()
 
     expect(shown.status).toBe(200)
@@ -232,6 +258,7 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: invoice, error: null }) // preview: invoice
     enqueue({ data: settings, error: null }) // preview: settings
     enqueue({ data: [], error: null }) // preview: cash accounts -> 1930
+    enqueue({ data: { ok: true, sek: 12500.4 }, error: null }) // preview: 1510 carries the remainder
     const shown = await preview()
 
     enqueue({ data: tx, error: null }) // POST: transaction
@@ -239,9 +266,9 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: [], error: null }) // POST: hard-duplicate check
     enqueue({ data: settings, error: null }) // POST: settings
     enqueue({ data: [], error: null }) // POST: cash accounts -> 1930
-    enqueue({ data: null, error: null }) // POST: invoice PDF lookup for the payment verifikat
+    enqueue({ data: { ok: true, sek: 12500.4 }, error: null }) // POST: 1510 carries the remainder
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // POST: row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // POST: invoice update
-    enqueue({ data: null, error: null }) // POST: transaction link
     const booked = await book()
 
     expect(shown.status).toBe(200)
@@ -286,5 +313,89 @@ describe('bank-match preview and booking are identical', () => {
     expect(shown.lines).toEqual(booked.lines)
     for (const line of shown.lines) expect('dimensions' in line).toBe(false)
     expect(shown.documentDimensions).toBeUndefined()
+  })
+})
+
+// crm#1045: a RUT invoice on kontantmetoden with 418,75 left to pay, settled
+// by a 420,00 bank row. The preview showed a bookable verifikat (1930 at
+// 418,75) and the POST refused the match it showed.
+describe('a customer who paid a krona or more too much', () => {
+  const tx = makeTransaction({ id: 'tx-1', amount: 420, currency: 'SEK', date: '2026-09-24', invoice_id: null })
+  const invoice = {
+    ...makeInvoice({
+      id: INVOICE_ID,
+      status: 'sent',
+      total: 837.5,
+      subtotal: 670,
+      vat_amount: 167.5,
+      remaining_amount: 418.75,
+      paid_amount: 0,
+      journal_entry_id: null,
+    }),
+    customer: makeCustomer({ name: 'Kund' }),
+    credit_notes: [],
+    items: [{
+      description: 'Fönsterputs',
+      quantity: 1,
+      unit_price: 670,
+      vat_rate: 25,
+      line_total: 670,
+      vat_amount: 167.5,
+      deduction_type: 'rut',
+      deduction_amount: 418.75,
+      work_type: 'STAD',
+    }],
+  }
+  const settings = { accounting_method: 'cash', entity_type: 'aktiebolag' }
+
+  function enqueuePreview() {
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: settings, error: null })
+    enqueue({ data: [], error: null }) // cash accounts -> 1930
+  }
+
+  it('without an account the preview books nothing and names the excess, as the POST refuses', async () => {
+    enqueuePreview()
+    const shown = await preview()
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    const booked = await book()
+
+    expect(shown.status).toBe(200)
+    expect(shown.lines).toEqual([])
+    expect(shown.overpayment).toEqual({ excess: 1.25, accounts: ['2420', '3740'], account: null })
+    expect(booked.status).toBe(400)
+    expect(booked.code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('with 3740 the preview is the booking: 1930 at the bank row, the excess on 3740', async () => {
+    enqueuePreview()
+    const shown = await preview({ overpayment_account: '3740' })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: settings, error: null })
+    enqueue({ data: [], error: null }) // cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+    enqueue({ data: [{ id: INVOICE_ID }], error: null }) // invoice update
+    const booked = await book({ overpayment_account: '3740', overpayment_amount: 1.25 })
+
+    expect(shown.status).toBe(200)
+    expect(booked.status).toBe(200)
+    expect(shown.overpayment).toEqual({ excess: 1.25, accounts: ['2420', '3740'], account: '3740' })
+    expect(shown.lines).toEqual(booked.lines)
+    expect(shown.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      // Kontantmetoden: the customer's share only (ML 2023:200 7 kap. 16 §);
+      // the 418,75 kr ROT-avdrag (335 + 83,75 moms) waits for the payout.
+      ['1930', 420, 0],
+      ['3001', 0, 335],
+      ['2611', 0, 83.75],
+      ['3740', 0, 1.25],
+    ])
   })
 })

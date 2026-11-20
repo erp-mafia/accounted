@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export interface Verdict {
@@ -75,7 +75,7 @@ export function Facts({ facts }: { facts: { text: string; warn?: boolean }[] }) 
 export function Wait({ text, height }: { text: string; height?: number }) {
   return (
     <div className="bank-wait" role="status" style={height ? { height } : undefined}>
-      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+      <SpinnerIcon className="h-4 w-4 animate-spin" aria-hidden="true" />
       <span>{text}</span>
     </div>
   )

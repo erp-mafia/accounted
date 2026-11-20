@@ -11,10 +11,20 @@ import {
 import { eventBus } from '@/lib/events'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
+import { CASH_ACCOUNT_BUSY_RETRY } from '@/lib/bookkeeping/cash-account-busy'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
@@ -77,7 +87,29 @@ async function useRealGuard() {
   mockAssertBookable.mockImplementation(actual.assertTransactionBookable)
 }
 
+// The company's VAT account classification, read by the importmoms guard
+// only when a line can carry importmoms (#83). BAS map only by default.
+const mockFetchDynamicVatAccounts = vi.fn()
+vi.mock('@/lib/reports/vat-revenue-accounts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/vat-revenue-accounts')>()),
+  fetchDynamicVatAccounts: (...args: unknown[]) => mockFetchDynamicVatAccounts(...args),
+}))
+const noCompanyVatClassification = () => ({
+  accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
+  rateByAccount: new Map(), staticRateByAccount: new Map(),
+  rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+  unconfiguredVatAccounts: new Map(),
+})
+
+// The blocks' booking-time warnings (the moms of a filed period): none by
+// default, so the queued reads stay the route's own.
+const mockBlockWarn = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/composition/voucher-block-warnings', () => ({
+  VOUCHER_BLOCK_WARNINGS: [{ id: 'vat-period-already-filed', module: 'vat', warn: mockBlockWarn }],
+}))
+
 import { POST } from '../route'
+import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const SIBLING_UUID = '660e8400-e29b-41d4-a716-446655440111'
@@ -105,9 +137,11 @@ describe('POST /api/transactions/[id]/book', () => {
     requireWriteMock.mockResolvedValue({ ok: true })
     // No booking-duplicate by default; guard tests override per-case.
     mockDetectDup.mockResolvedValue(null)
+    mockBlockWarn.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
     mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
     mockAssertBookable.mockResolvedValue({ ok: true })
+    mockFetchDynamicVatAccounts.mockResolvedValue(noCompanyVatClassification())
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -218,11 +252,40 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(findCalls('transactions', 'update')).toEqual([])
   })
 
+  // #203: the first booking of the row posted, but its claim and the
+  // compensating storno both failed, so the row read open and was booked again.
+  it('returns 409 and books nothing for a row no anchor names that a posted verifikat was booked from', async () => {
+    await useRealGuard()
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+    enqueue({ data: [] }) // transaction_voucher_links
+    enqueue({ data: [{ id: 'je-first', status: 'posted', source_type: 'bank_transaction', source_id: 'tx-1', voucher_series: 'A', voucher_number: 31 }] }) // booked from the row
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-first', via: 'named', voucher: 'A31' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('transactions', 'update')).toEqual([])
+    // The page names the verifikat and both ways on: link the two, or reverse it.
+    expect(getErrorMessage(body)).toContain('verifikat A31')
+    expect(getErrorMessage(body)).toContain('Matcha manuellt')
+    expect(getErrorMessage(body)).toContain('återför verifikatet')
+  })
+
   it('books a row whose pointer names a reversed verifikat, locking the UPDATE on that stale pointer', async () => {
     await useRealGuard()
     enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: 'je-reversed' }), error: null })
     enqueue({ data: [] }) // transaction_voucher_links
     enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] }) // journal_entries
+    enqueue({ data: null }) // standing_correction: none stands
+    enqueue({ data: [] }) // posted verifikat booked from the row: none
     mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // transactions update
 
@@ -285,6 +348,60 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('asks for confirmation before booking reverse-charge VAT as a lone 2614 debit, before any draft', async () => {
+    // A foreign invoice with no VAT, booked as if 20 % of it were Swedish
+    // VAT on the reverse-charge output account (2026-10-26 sweep).
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -195.3, journal_entry_id: null }), error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '6540', debit_amount: 156.24, credit_amount: 0 },
+          { account_number: '2614', debit_amount: 39.06, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 195.3 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
+    expect(body.error.details.warnings.map((w) => w.code)).toEqual(['REVERSE_CHARGE_ONE_SIDED'])
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('asks for confirmation before booking a row that changes the moms of a filed period, before any draft', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -625, journal_entry_id: null }), error: null })
+    mockBlockWarn.mockResolvedValue({
+      code: 'VAT_PERIOD_ALREADY_FILED',
+      message_sv: 'Verifikationen ändrar momsen i en period som redan är deklarerad: 2025-01 (inlämnad 2025-03-12).',
+      message_en: 'The voucher changes the VAT of a period already declared: 2025-01 (filed 2025-03-12).',
+      details: { entry_date: '2025-01-15', filed_periods: [] },
+    })
+    const lines = [
+      { account_number: '6200', debit_amount: 500, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 125, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 625 },
+    ]
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: { ...validBody, lines } })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
+    expect(body.error.details.warnings.map((w) => w.code)).toEqual(['VAT_PERIOD_ALREADY_FILED'])
+    expect(mockBlockWarn).toHaveBeenCalledWith(expect.anything(), expect.any(String), {
+      entry_date: '2025-01-15',
+      lines: expect.arrayContaining([expect.objectContaining({ account_number: '2641', debit_amount: 125 })]),
+      replaces: null,
+    })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('refuses a deposit that credits the bank ledger', async () => {
     enqueue({ data: makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null }), error: null })
 
@@ -301,6 +418,41 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('refuses a rate-less foreign row booked with its foreign amount as kronor, before any draft (accounted#58)', async () => {
+    enqueue({
+      data: makeTransaction({ id: 'tx-1', amount: -500, currency: 'EUR', amount_sek: null, exchange_rate: null, journal_entry_id: null }),
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(body.error.message).toContain('som om det vore kronor')
+    expect(body.error.details).toEqual({ currency: 'EUR', settlement_account: '1930' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('books a rate-less foreign row when the kronor were typed from the bank statement', async () => {
+    enqueue({
+      data: makeTransaction({ id: 'tx-1', amount: -50, currency: 'EUR', amount_sek: null, exchange_rate: null, journal_entry_id: null }),
+      error: null,
+    })
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { body } = await parseJsonResponse<{ error?: { code: string } }>(response)
+
+    expect(body.error?.code).not.toBe('TX_MISSING_SEK_VALUE')
+    expect(mockCreateJournalEntry).toHaveBeenCalled()
+  })
+
   it('answers a named database refusal at commit with its own code and message, not the generic conflict', async () => {
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }), error: null })
     mockCreateJournalEntry.mockRejectedValue(
@@ -314,6 +466,56 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('BANK_BOOKING_SOURCE_CHANGED')
     expect(getErrorMessage(body)).toBe('Transaktionen har ändrats sedan du öppnade den. Ladda om sidan och bokför igen.')
+  })
+
+  // Who decided: the engine stamps the actor in scope on the verifikat and,
+  // with no method passed, the method it implies (user_accept). The scope is
+  // the one withRouteContext opens for the signed-in user.
+  it('books inside the signed-in user\'s commit-actor scope', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+    let seen: CommitActor | undefined
+    mockCreateJournalEntry.mockImplementation(async () => {
+      seen = getActor()
+      return makeJournalEntry({ id: 'je-new' })
+    })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(seen).toEqual({ type: 'user', userId: 'user-1' })
+    expect(defaultCommitMethod(seen)).toBe('user_accept')
+    // No method passed: the engine derives it, so the route cannot forget it.
+    // The sixth argument is the rules version the snapshot was taken under.
+    expect(mockCreateJournalEntry.mock.calls[0]).toHaveLength(6)
+    expect(mockCreateJournalEntry.mock.calls[0][4]).toBeUndefined()
+  })
+
+  it('records the guards it ran and stamps the rules version on the voucher', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+    enqueue({ data: tx, error: null })
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+    vi.mocked(snapshotSuggestions).mockResolvedValueOnce({
+      companyId: 'company-1',
+      ruleVersion: 'bank-proposals.1+a38016f12abc',
+      byTransaction: new Map(),
+    })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry.mock.calls[0][5]).toBe('bank-proposals.1+a38016f12abc')
+    expect(vi.mocked(recordDecisions).mock.calls[0][2][0].checks).toEqual([
+      { id: 'already_booked', result: 'pass', detail: null },
+      { id: 'duplicate', result: 'pass', detail: null },
+      { id: 'counter_legs', result: 'pass', detail: null },
+      { id: 'bank_line_direction', result: 'pass', detail: null },
+    ])
   })
 
   it('creates journal entry and links to transaction (happy path)', async () => {
@@ -359,7 +561,7 @@ describe('POST /api/transactions/[id]/book', () => {
       bank_booking_context: [{ transaction_id: tx.id, cash_account_id: null, settlement_account: '1930',
         date: tx.date, amount: tx.amount, currency: tx.currency }],
       lines: validBody.lines,
-    })
+    }, undefined, undefined)
 
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'transaction.categorized' })
@@ -398,6 +600,8 @@ describe('POST /api/transactions/[id]/book', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'bank_transaction', voucher_series: 'M' }),
+      undefined,
+      undefined,
     )
   })
 
@@ -428,6 +632,8 @@ describe('POST /api/transactions/[id]/book', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ voucher_series: 'V' }),
+      undefined,
+      undefined,
     )
     // No cash_accounts series lookup: the explicit pick short-circuits it.
     const seriesLookups = findCalls('cash_accounts', 'select').filter((args) => args[0] === 'voucher_series')
@@ -479,6 +685,60 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
+  // #83: a company's own mall put the fiktiv moms on 2615 (importmoms, ruta
+  // 60) beside a cost account outside ruta 50, so the verifikat fed ruta 60
+  // with no base and Skatteverket refused the declaration (FK006).
+  it('returns 400 IMPORT_VAT_WITHOUT_BASE for importmoms with no ruta 50 line, before any draft', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -1000, journal_entry_id: null })
+    enqueue({ data: tx, error: null }) // fetch transaction
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '4548', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+          { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: { import_vat_accounts: string[] } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details.import_vat_accounts).toEqual(['2615'])
+    expect(body.error.message).toContain('4545, 4546 eller 4547')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockFetchDynamicVatAccounts).toHaveBeenCalledWith(expect.anything(), 'company-1')
+  })
+
+  it('books importmoms carried by its base on 4545', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -1000, journal_entry_id: null })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // link update
+
+    const lines = [
+      { account_number: '4545', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ]
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: { ...validBody, lines },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry.mock.calls[0][3].lines).toEqual(lines)
+  })
+
   it('re-points a stranded row onto the live sibling when its single bank line is that ledger (#1643 round 4)', async () => {
     // Nyte-shape: the transaction sits on the demoted 1931, the user books it
     // with the bank leg on the live 1940 against a P&L account. The voucher
@@ -528,6 +788,8 @@ describe('POST /api/transactions/[id]/book', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ voucher_series: 'M' }),
+      undefined,
+      undefined,
     )
   })
 
@@ -627,7 +889,56 @@ describe('POST /api/transactions/[id]/book', () => {
       'user-1',
       'je-new',
       expect.any(String),
+      expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
+  })
+
+  it('tries the link again while the bank-account lock is busy, and keeps the verifikat once it lands', async () => {
+    const realDelays = CASH_ACCOUNT_BUSY_RETRY.delaysMs
+    CASH_ACCOUNT_BUSY_RETRY.delaysMs = [0, 0, 0, 0]
+    try {
+      enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }), error: null })
+      mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+      const busy = { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY', details: null, hint: null }
+      enqueue({ data: null, error: busy }) // another booking of the company is being numbered
+      enqueue({ data: null, error: busy })
+      enqueue({ data: [makeTransaction({ id: 'tx-1', journal_entry_id: 'je-new' })], error: null })
+
+      const response = await POST(
+        createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+        createMockRouteParams({ id: 'tx-1' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(findCalls('transactions', 'update')).toHaveLength(3)
+      expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
+    } finally {
+      CASH_ACCOUNT_BUSY_RETRY.delaysMs = realDelays
+    }
+  })
+
+  it('gives the verifikat up only when the lock stays busy, answering the retryable 409', async () => {
+    const realDelays = CASH_ACCOUNT_BUSY_RETRY.delaysMs
+    CASH_ACCOUNT_BUSY_RETRY.delaysMs = [0, 0, 0, 0]
+    try {
+      enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }), error: null })
+      mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+      const busy = { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY', details: null, hint: null }
+      for (let i = 0; i < 5; i++) enqueue({ data: null, error: busy })
+
+      const response = await POST(
+        createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+        createMockRouteParams({ id: 'tx-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('CASH_ACCOUNT_OPERATION_BUSY')
+      expect(findCalls('transactions', 'update')).toHaveLength(5)
+      expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledTimes(1)
+    } finally {
+      CASH_ACCOUNT_BUSY_RETRY.delaysMs = realDelays
+    }
   })
 
   it('stornos the posted orphan when another booking wins the transaction-link race', async () => {
@@ -652,6 +963,7 @@ describe('POST /api/transactions/[id]/book', () => {
       'user-1',
       'je-new',
       expect.any(String),
+      expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
   })
 
@@ -707,7 +1019,13 @@ describe('POST /api/transactions/[id]/book', () => {
 
     expect(status).toBe(200)
     expect(findCalls('document_attachments', 'update')).toContainEqual([
-      { journal_entry_id: 'je-new', journal_entry_line_id: null },
+      {
+        journal_entry_id: 'je-new',
+        journal_entry_line_id: null,
+        // The pinned document follows the bank row onto its verifikat.
+        link_basis: 'system_derived',
+        link_evidence: { rule_id: 'bank_row_document_pin' },
+      },
     ])
   })
 
@@ -787,6 +1105,38 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     // Blocking a duplicate is not a dismissal: nothing is logged.
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
+  })
+
+  it('hands the row\'s provider identity to the duplicate detector (crm#1271)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1', amount: -500, journal_entry_id: null,
+      external_id: 'stripe_acct_A_txn_1_fee', import_source: 'stripe', bank_connection_id: null,
+    })
+    enqueue({ data: tx, error: null }) // fetch
+    mockDetectDup.mockResolvedValue({
+      transaction_id: SIBLING_UUID,
+      journal_entry_id: 'je-existing',
+      voucher_label: 'A142',
+      entry_date: '2025-01-15',
+      description: null,
+      amount: -500,
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(mockDetectDup).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({
+        id: 'tx-1',
+        external_id: 'stripe_acct_A_txn_1_fee',
+        import_source: 'stripe',
+        bank_connection_id: null,
+      }),
+      // No same-batch exclusions on a single booking.
+      undefined,
+    )
   })
 
   it('books when force=true and the expected sibling still matches', async () => {

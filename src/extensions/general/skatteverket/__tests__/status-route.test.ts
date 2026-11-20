@@ -151,3 +151,30 @@ describe('GET /status ombud', () => {
     expect(await res.json()).toMatchObject({ connected: false, ombud: false })
   })
 })
+
+describe('GET /status skattekonto unavailable (B07)', () => {
+  const liveToken = {
+    access_token: 'a',
+    refresh_token: 'r',
+    expires_at: NOW + 30 * 60 * 1000,
+    refresh_count: 1,
+    scope: 'momsdeklaration ska agd',
+  }
+
+  it('reports Skatteverket\'s last "no skattekonto yet" answer for the panel', async () => {
+    mockGetTokens.mockResolvedValue(liveToken)
+    const ctx = makeContext()
+    const state = { reason: 'no_account', since: '2026-08-30T10:00:00.000Z', checkedAt: '2026-09-01T11:00:00.000Z' }
+    ;(ctx.settings.get as ReturnType<typeof vi.fn>).mockImplementation(async (key: string) =>
+      key === 'skattekonto_unavailable' ? state : null,
+    )
+    const body = await (await findRoute().handler(request(), ctx)).json()
+    expect(body).toMatchObject({ connected: true, skattekontoUnavailable: state })
+  })
+
+  it('null when the last sync went through', async () => {
+    mockGetTokens.mockResolvedValue(liveToken)
+    const body = await (await findRoute().handler(request(), makeContext())).json()
+    expect(body.skattekontoUnavailable).toBeNull()
+  })
+})

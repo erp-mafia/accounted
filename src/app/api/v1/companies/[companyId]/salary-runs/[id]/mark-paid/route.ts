@@ -6,6 +6,10 @@
  * route is also silent; the verifikation event fires from `:book`). The rule is
  * lib/salary/mark-paid.ts, shared with the MCP tool gnubok_mark_salary_run_paid.
  *
+ * A payment date that has not come yet needs { confirm_payment_date_ahead:
+ * true } in the optional body (crm#1216), the same rule as the dashboard and
+ * MCP doors (lib/salary/payout-date.ts).
+ *
  * Idempotent at the call level: a replay with the same Idempotency-Key returns
  * the cached response. State-wise, calling :mark-paid on an already-paid run
  * returns 400 (status must be approved).
@@ -16,9 +20,15 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { readV1OptionalJsonBody } from '@/lib/api/v1/body'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { v1OutcomeResponse } from '@/lib/operations/v1'
 import { markSalaryRunPaid } from '@/lib/salary/mark-paid'
+
+// Optional body. Unknown fields are ignored: the verb took no body before.
+const MarkPaidRequest = z.object({
+  confirm_payment_date_ahead: z.boolean().optional(),
+})
 
 const SalaryRunPaid = z.object({
   id: z.string().uuid(),
@@ -40,8 +50,10 @@ registerEndpoint({
   pitfalls: [
     'Run must be in `approved`: non-`approved` runs return 400 SALARY_RUN_MARK_PAID_NOT_APPROVED.',
     'paid_at is set server-side to the current UTC timestamp; the API does not accept a body-supplied date to keep BFL audit clean.',
+    'A run that pays out with a payment_date after today (Swedish calendar day) returns 422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED (details.payment_date) unless the body has confirm_payment_date_ahead: true. Confirm only when the salaries have already gone out or the payment is scheduled in the bank: :book then posts the net pay as paid out of the bank account on payment_date.',
   ],
   example: {
+    request: { confirm_payment_date_ahead: true },
     response: {
       data: { id: 'run_a8f1…', status: 'paid', paid_at: '2026-05-25T08:00:00Z' },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -52,12 +64,13 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: true,
+  request: { body: MarkPaidRequest },
   response: { success: dataEnvelope(SalaryRunPaid) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'salary-runs.mark-paid',
-  async (_request, ctx, params) => {
+  async (request, ctx, params) => {
     const { id } = await params.params
     const idParse = z.string().uuid().safeParse(id)
     if (!idParse.success) {
@@ -68,10 +81,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const salaryRunId = idParse.data
 
+    const raw = await readV1OptionalJsonBody(request, ctx)
+    if (!raw.ok) return raw.response
+    const body = MarkPaidRequest.safeParse(raw.body)
+    if (!body.success) return v1ValidationError(ctx, body.error)
+
     const outcome = await markSalaryRunPaid(
       { supabase: ctx.supabase, companyId: ctx.companyId! },
       salaryRunId,
-      { dryRun: ctx.dryRun },
+      { dryRun: ctx.dryRun, confirmPaymentDateAhead: body.data.confirm_payment_date_ahead },
     )
     if (!outcome.ok) return v1OutcomeResponse(outcome, ctx)
 

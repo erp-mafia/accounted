@@ -16,8 +16,10 @@
  *                 never gets the bank-app or the Swish code (both need a
  *                 Swedish bank): the payment-link QR when there is a link,
  *                 else none (foreign_customer)
- *   bank_app      the UsingQR code a Swedish bank app scans (SEK, a printed
- *                 bankgiro or plusgiro with a valid check digit, org number)
+ *   bank_app      the UsingQR code a Swedish bank app scans (SEK, org number,
+ *                 a printed bankgiro or plusgiro with a valid check digit;
+ *                 never a plain bank account, which bank apps cannot pay
+ *                 from the code: lib/invoices/bank-payment-qr.ts, crm#1191)
  *   swish         the Swish code (SEK, a printed, valid Swish number)
  *   payment_link  the invoice's payment link
  *   none          no code
@@ -27,7 +29,9 @@
  *
  * Every code encodes what the invoice still asks for (lib/invoices/amount-due):
  * nothing on a paid, cancelled or credited invoice or a document that is not
- * a payment request, and the remainder on a partly paid one.
+ * a payment request, and the remainder on a partly paid one. An Autogiro
+ * invoice gets no code at all: Bankgirot debits it, and a code would invite
+ * the customer to pay it a second time.
  *
  * The company passed in must already carry the invoice's payee
  * (companyWithInvoicePaymentAccount), the same company the PDF renders with,
@@ -41,10 +45,12 @@ import {
   isInvoicePayableStatus,
   type AmountDueInvoice,
 } from '@/lib/invoices/amount-due'
-import { buildBankPaymentQrPayload, type BankPaymentQrCompany } from '@/lib/invoices/bank-payment-qr'
-import { invoicePrintsBankgiro, invoicePrintsPlusgiro } from '@/lib/invoices/ocr-reference'
-import { invoicePrintsSwish } from '@/lib/invoices/payment-rows'
-import { validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
+import {
+  bankPaymentQrPayee,
+  buildBankPaymentQrPayload,
+  type BankPaymentQrCompany,
+} from '@/lib/invoices/bank-payment-qr'
+import { invoiceAutogiroPayerNumber, invoicePrintsSwish } from '@/lib/invoices/payment-rows'
 import { buildSwishQrPayload, isValidSwish, normaliseSwish } from '@/lib/payments/swish'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 
@@ -63,12 +69,14 @@ export const INVOICE_QR_REASONS = [
   'nothing_due',
   /** Bank-app and Swish codes are SEK-only. */
   'currency_not_sek',
-  /** No bankgiro or plusgiro prints on the invoice. */
+  /** Nothing the bank-app code can pay to prints: no bankgiro or plusgiro, and no bank account. */
   'no_printed_giro',
   /** The bank-app code needs the seller's org number. */
   'no_org_number',
   /** The printed giro has a wrong check digit: a wrong machine-read account is worse than none. */
   'invalid_giro',
+  /** No giro prints, only a bank account: the bank-app code needs a giro, the account prints as text. */
+  'bank_account_only',
   /** The bank-app code needs the invoice number as its reference (an unnumbered draft has none). */
   'no_invoice_number',
   /** The bank-app code lacks another mandatory field (company name or due date). */
@@ -85,6 +93,8 @@ export const INVOICE_QR_REASONS = [
   'partly_paid',
   /** Auto mode, a customer outside Sweden and no payment link: bank-app and Swish codes need a Swedish bank. */
   'foreign_customer',
+  /** Debited by Autogiro (invoices.autogiro_payer_number): the customer is not asked to pay. */
+  'autogiro',
 ] as const
 
 export type InvoiceQrReason = (typeof INVOICE_QR_REASONS)[number]
@@ -140,6 +150,7 @@ export type InvoicePaymentQrInvoice = AmountDueInvoice & {
   invoice_date?: string | null
   due_date?: string | null
   payment_link_url?: string | null
+  autogiro_payer_number?: string | null
 }
 
 export type InvoicePaymentQrCompany = BankPaymentQrCompany & {
@@ -192,13 +203,9 @@ type Candidate = { ok: true; payload: string } | { ok: false; reason: InvoiceQrR
 function bankAppCandidate(input: ResolveInvoicePaymentQrInput, amount: number): Candidate {
   const { invoice, company, lang } = input
   if ((invoice.currency ?? 'SEK') !== 'SEK') return { ok: false, reason: 'currency_not_sek' }
-  const printsBankgiro = invoicePrintsBankgiro(company)
-  const printsPlusgiro = invoicePrintsPlusgiro(company)
-  if (!printsBankgiro && !printsPlusgiro) return { ok: false, reason: 'no_printed_giro' }
-  const validGiro =
-    (printsBankgiro && validateBankgiroNumber(company.bankgiro!.trim())) ||
-    (printsPlusgiro && validatePlusgiroNumber(company.plusgiro!.trim()))
-  if (!validGiro) return { ok: false, reason: 'invalid_giro' }
+  // The same account choice the payload makes: bankgiro, else plusgiro.
+  const payee = bankPaymentQrPayee(company)
+  if (!payee.ok) return { ok: false, reason: payee.reason }
   if (!company.org_number?.trim()) return { ok: false, reason: 'no_org_number' }
   if (!invoice.invoice_number?.trim()) return { ok: false, reason: 'no_invoice_number' }
   const payload = buildBankPaymentQrPayload({ company, invoice, amountDue: amount, lang })
@@ -228,6 +235,7 @@ export function resolveInvoicePaymentQr(input: ResolveInvoicePaymentQrInput): Re
   const mode = resolveInvoiceQrMode(input.invoice, input.company)
   if (mode === 'none') return { kind: null, mode, reason: 'mode_none' }
   if (!isInvoicePayableStatus(input.invoice)) return { kind: null, mode, reason: 'not_payable' }
+  if (invoiceAutogiroPayerNumber(input.invoice)) return { kind: null, mode, reason: 'autogiro' }
   // Rounding on unless the company turned it off: the same default
   // getAmountToPay applies to a company row without the flag.
   const amount = invoiceAmountDue(input.invoice, { ore_rounding: input.company.ore_rounding ?? true })

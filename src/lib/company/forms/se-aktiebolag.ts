@@ -12,6 +12,7 @@ export const SE_AKTIEBOLAG: LegalFormProfile = {
     // BFNAR 2016:10 (K2) is the simplified ruleset an AB prepares under.
     simplifiedRegelverk: 'K2',
     templateColumn: 'ab',
+    skattekontoAccounts: ['1630'],
   },
   equity: {
     closing: '2099',
@@ -21,6 +22,9 @@ export const SE_AKTIEBOLAG: LegalFormProfile = {
     hasOwners: true,
     settlement: { withdrawal: '2893', contribution: '2893' },
     memberCapital: false,
+    developmentFund: true,
+    maintenanceFund: null,
+    shareRegister: true,
   },
   filings: {
     incomeReturn: 'INK2',
@@ -29,7 +33,12 @@ export const SE_AKTIEBOLAG: LegalFormProfile = {
     arsredovisning: true,
     frameworks: ['K2', 'K3'],
     ixbrl: true,
+    k3Document: true,
     auditorAlwaysRequired: false,
+    forenklatArsbokslut: null,
+    revisorspateckningLagrum: 'ABL 9 kap. 28 §',
+    cashFlowStatement: 'larger',
+    housingKeyRatios: false,
   },
   glossary: { entity: 'bolaget', owner: 'Ägare', meeting: 'årsstämma' },
 }

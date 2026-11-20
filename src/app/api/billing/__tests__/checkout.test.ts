@@ -9,6 +9,13 @@ import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 const { supabase: serviceSupabase, enqueue, reset } = createQueuedMockSupabase()
+// The user-scoped client: the company identity is read under RLS. Left empty,
+// every read resolves to no row and nothing is prefilled.
+const {
+  supabase: userSupabase,
+  enqueue: enqueueUser,
+  reset: resetUser,
+} = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -33,11 +40,16 @@ vi.mock('@/lib/sandbox/guard', async (importOriginal) => {
 })
 
 const customersCreate = vi.fn()
+const customersUpdate = vi.fn()
+const listTaxIds = vi.fn()
+const createTaxId = vi.fn()
 const sessionsCreate = vi.fn()
+const subscriptionsList = vi.fn()
 vi.mock('@/lib/stripe/client', () => ({
   getStripe: () => ({
-    customers: { create: customersCreate },
+    customers: { create: customersCreate, update: customersUpdate, listTaxIds, createTaxId },
     checkout: { sessions: { create: sessionsCreate } },
+    subscriptions: { list: subscriptionsList },
   }),
   priceIdForPlan: vi.fn().mockReturnValue('price_123'),
 }))
@@ -58,6 +70,11 @@ const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  resetUser()
+  customersUpdate.mockResolvedValue({})
+  listTaxIds.mockResolvedValue({ data: [] })
+  createTaxId.mockResolvedValue({})
+  subscriptionsList.mockResolvedValue({ data: [] })
   process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
   resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
     brand: host === 'portal.brand.test' ? { domain: host } : null,
@@ -66,7 +83,7 @@ beforeEach(() => {
   guardSandboxMock.mockResolvedValue(null)
   requireAuthMock.mockResolvedValue({
     user: { id: 'user-1', email: 'u@example.com', is_anonymous: false },
-    supabase: {},
+    supabase: userSupabase,
     error: null,
   })
 })
@@ -160,6 +177,98 @@ describe('POST /api/billing/checkout', () => {
     )
     // No trial grant → billing starts immediately, no Stripe trial.
     expect(sessionsCreate.mock.calls[0][0].subscription_data.trial_end).toBeUndefined()
+  })
+
+  // crm#1373: Stripe lets a customer hold any number of subscriptions, so a
+  // second checkout started a second subscription that charged alongside the
+  // first. One subscription per company, asked of Stripe itself.
+  describe('one subscription per company', () => {
+    it('refuses (409) a checkout for a company that already pays, and opens no session', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing', stripe_subscription_id: 'sub_monthly' } })
+      enqueue({ data: null }) // no trial grant
+      subscriptionsList.mockResolvedValue({
+        data: [{ id: 'sub_monthly', status: 'active', metadata: { company_id: 'company-1' } }],
+      })
+
+      const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: { plan: 'yearly' } })
+      const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+        await POST(req, routeParams),
+      )
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('SUBSCRIPTION_EXISTS')
+      expect(body.error.message).toContain('Hantera abonnemang')
+      expect(subscriptionsList).toHaveBeenCalledWith({ customer: 'cus_existing', limit: 100 })
+      expect(sessionsCreate).not.toHaveBeenCalled()
+      expect(customersUpdate).not.toHaveBeenCalled()
+    })
+
+    it('refuses while the webhook has not mirrored a subscription paid a moment ago', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing', stripe_subscription_id: null } })
+      enqueue({ data: null }) // no trial grant
+      subscriptionsList.mockResolvedValue({
+        data: [{ id: 'sub_just_paid', status: 'trialing', metadata: { company_id: 'company-1' } }],
+      })
+
+      const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: { plan: 'monthly' } })
+      const { status } = await parseJsonResponse(await POST(req, routeParams))
+
+      expect(status).toBe(409)
+      expect(sessionsCreate).not.toHaveBeenCalled()
+    })
+
+    it('lets a company whose subscription ended subscribe again', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing', stripe_subscription_id: 'sub_old' } })
+      enqueue({ data: null }) // no trial grant
+      subscriptionsList.mockResolvedValue({ data: [] }) // Stripe lists no live subscription
+      sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+      const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: { plan: 'monthly' } })
+      const { status } = await parseJsonResponse(await POST(req, routeParams))
+
+      expect(status).toBe(200)
+      expect(sessionsCreate).toHaveBeenCalledTimes(1)
+    })
+
+    it('lets an owner retry after an unpaid first attempt', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing', stripe_subscription_id: 'sub_3ds' } })
+      enqueue({ data: null }) // no trial grant
+      subscriptionsList.mockResolvedValue({
+        data: [{ id: 'sub_3ds', status: 'incomplete', metadata: { company_id: 'company-1' } }],
+      })
+      sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+      const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: {} })
+      const { status } = await parseJsonResponse(await POST(req, routeParams))
+
+      expect(status).toBe(200)
+    })
+
+    it('asks Stripe nothing extra for a company without a customer yet', async () => {
+      enqueue({ data: null }) // no subscription row
+      enqueue({ data: null }) // no trial grant
+      enqueue({ data: null }) // upsert result
+      customersCreate.mockResolvedValue({ id: 'cus_new' })
+      sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+      const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: {} })
+      const { status } = await parseJsonResponse(await POST(req, routeParams))
+
+      expect(status).toBe(200)
+      expect(subscriptionsList).not.toHaveBeenCalled()
+    })
+
+    it('fails (500) without a session when the customer lookup errors', async () => {
+      enqueue({ data: null, error: { message: 'boom' } }) // subscription row read fails
+      enqueue({ data: null }) // no trial grant
+
+      const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: {} })
+      const res = await POST(req, routeParams)
+
+      expect(res.status).toBe(500)
+      expect(customersCreate).not.toHaveBeenCalled()
+      expect(sessionsCreate).not.toHaveBeenCalled()
+    })
   })
 
   it('enables automatic VAT, tax-id collection and address capture on the session', async () => {
@@ -349,6 +458,209 @@ describe('POST /api/billing/checkout', () => {
 
       expect(sessionsCreate).toHaveBeenNthCalledWith(1, expect.objectContaining({ locale: 'sv' }))
       expect(sessionsCreate).toHaveBeenNthCalledWith(2, expect.objectContaining({ locale: 'sv' }))
+    })
+  })
+
+  // PH 191: the logged-in company's identity goes onto the Stripe customer, so
+  // Checkout does not ask for it again and the receipt carries it.
+  describe('company identity prefill', () => {
+    const ADDRESS = { line1: 'Storgatan 1', postal_code: '111 22', city: 'Stockholm', country: 'SE' }
+
+    function companyRows(kind: 'ab' | 'ef') {
+      if (kind === 'ab') {
+        enqueueUser({ data: { name: 'Bolaget AB', org_number: '5566778899', entity_type: 'aktiebolag' } })
+        enqueueUser({
+          data: {
+            entity_type: 'aktiebolag',
+            company_name: 'Bolaget AB',
+            org_number: '5566778899',
+            address_line1: 'Storgatan 1',
+            address_line2: null,
+            postal_code: '111 22',
+            city: 'Stockholm',
+            country: 'SE',
+            vat_registered: true,
+            vat_number: 'SE556677889901',
+          },
+        })
+      } else {
+        enqueueUser({ data: { name: 'Firma Test', org_number: '198001019994', entity_type: 'enskild_firma' } })
+        enqueueUser({
+          data: {
+            entity_type: 'enskild_firma',
+            company_name: 'Firma Test',
+            org_number: '198001019994',
+            address_line1: 'Storgatan 1',
+            address_line2: null,
+            postal_code: '111 22',
+            city: 'Stockholm',
+            country: 'SE',
+            vat_registered: false,
+            vat_number: null,
+          },
+        })
+      }
+    }
+
+    function checkout() {
+      sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+      return POST(createMockRequest('/api/billing/checkout', { method: 'POST', body: {} }), routeParams)
+    }
+
+    it('creates the customer with the payer email, then adds name, address, org number and VAT id of a momsregistrerat AB', async () => {
+      enqueue({ data: null }) // no subscription row
+      enqueue({ data: null }) // no trial grant
+      enqueue({ data: null }) // upsert result
+      customersCreate.mockResolvedValue({ id: 'cus_new' })
+      companyRows('ab')
+
+      const { status } = await parseJsonResponse(await checkout())
+
+      expect(status).toBe(200)
+      expect(customersCreate).toHaveBeenCalledWith({ email: 'u@example.com', metadata: { company_id: 'company-1' } })
+      expect(customersUpdate).toHaveBeenCalledWith('cus_new', {
+        name: 'Bolaget AB',
+        business_name: 'Bolaget AB',
+        address: ADDRESS,
+        tax: { validate_location: 'immediately' },
+        invoice_settings: { custom_fields: [{ name: 'Org.nr', value: '556677-8899' }] },
+      })
+      // A just-created customer has no tax IDs to look up.
+      expect(listTaxIds).not.toHaveBeenCalled()
+      expect(createTaxId).toHaveBeenCalledWith(
+        'cus_new',
+        { type: 'eu_vat', value: 'SE556677889901' },
+        { idempotencyKey: 'customer-tax-id:cus_new:SE556677889901' },
+      )
+
+      const session = sessionsCreate.mock.calls[0][0]
+      expect(session.customer).toBe('cus_new')
+      // Nothing to tick or type: no tax ID form, address taken from the customer.
+      expect(session.tax_id_collection).toBeUndefined()
+      expect(session.billing_address_collection).toBe('auto')
+      expect(session.customer_update).toEqual({ name: 'never', address: 'never' })
+      expect(session.automatic_tax).toEqual({ enabled: true })
+      // Agent feedback 2026-11-02: the page itself shows the prefilled identity.
+      expect(session.custom_text).toEqual({
+        submit: {
+          message:
+            'Fakturan ställs ut på Bolaget AB, org.nr 556677-8899, momsreg.nr SE556677889901, Storgatan 1, 111 22 Stockholm. ' +
+            'Stämmer något inte? Ändra under Inställningar > Företaget > Företagsuppgifter och starta betalningen igen.',
+        },
+      })
+    })
+
+    it('shows the identity notice in English when the app is in English', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      companyRows('ab')
+      sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+      await POST(
+        createMockRequest('/api/billing/checkout', {
+          method: 'POST',
+          body: {},
+          headers: { cookie: 'gnubok-locale=en' },
+        }),
+        routeParams,
+      )
+
+      const session = sessionsCreate.mock.calls[0][0]
+      expect(session.locale).toBe('en')
+      expect(session.custom_text.submit.message).toMatch(/^The invoice is issued to Bolaget AB, org\. no\. 556677-8899, VAT no\. SE556677889901/)
+    })
+
+    it('updates a reused customer instead of creating one, and adds the VAT id only when it has none', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      companyRows('ab')
+
+      const { status } = await parseJsonResponse(await checkout())
+
+      expect(status).toBe(200)
+      expect(customersCreate).not.toHaveBeenCalled()
+      expect(customersUpdate).toHaveBeenCalledWith('cus_existing', expect.objectContaining({ name: 'Bolaget AB' }))
+      expect(listTaxIds).toHaveBeenCalledWith('cus_existing', { limit: 1 })
+      expect(createTaxId).toHaveBeenCalledWith(
+        'cus_existing',
+        { type: 'eu_vat', value: 'SE556677889901' },
+        { idempotencyKey: 'customer-tax-id:cus_existing:SE556677889901' },
+      )
+      expect(sessionsCreate.mock.calls[0][0].customer).toBe('cus_existing')
+    })
+
+    it('keeps a tax ID the reused customer already has', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      companyRows('ab')
+      listTaxIds.mockResolvedValue({ data: [{ id: 'txi_1', type: 'eu_vat', value: 'SE556677889901' }] })
+
+      await checkout()
+
+      expect(createTaxId).not.toHaveBeenCalled()
+      expect(sessionsCreate.mock.calls[0][0].tax_id_collection).toBeUndefined()
+    })
+
+    it('adds no tax ID for an enskild firma without a VAT number and still lets Checkout collect one', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      companyRows('ef')
+
+      await checkout()
+
+      expect(listTaxIds).not.toHaveBeenCalled()
+      expect(createTaxId).not.toHaveBeenCalled()
+      // The owner's personnummer never goes on the invoice.
+      expect(customersUpdate).toHaveBeenCalledWith('cus_existing', {
+        name: 'Firma Test',
+        business_name: 'Firma Test',
+        address: ADDRESS,
+        tax: { validate_location: 'immediately' },
+      })
+      const session = sessionsCreate.mock.calls[0][0]
+      expect(session.tax_id_collection).toEqual({ enabled: true })
+      expect(session.billing_address_collection).toBe('auto')
+      expect(session.customer_update).toEqual({ name: 'auto', address: 'never' })
+    })
+
+    it('opens Checkout as before when the Stripe prefill fails', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      companyRows('ab')
+      customersUpdate.mockRejectedValue(new Error('customer_tax_location_invalid'))
+
+      const { status } = await parseJsonResponse(await checkout())
+
+      expect(status).toBe(200)
+      expect(createTaxId).not.toHaveBeenCalled()
+      expect(sessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tax_id_collection: { enabled: true },
+          billing_address_collection: 'required',
+          customer_update: { name: 'auto', address: 'auto' },
+        }),
+      )
+      // Nothing was written, so nothing is claimed: Checkout collects it.
+      expect(sessionsCreate.mock.calls[0][0].custom_text).toBeUndefined()
+    })
+
+    it('opens Checkout as before, touching no customer, when the company read fails', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      enqueueUser({ data: null, error: { message: 'boom' } })
+      enqueueUser({ data: null })
+
+      const { status } = await parseJsonResponse(await checkout())
+
+      expect(status).toBe(200)
+      expect(customersUpdate).not.toHaveBeenCalled()
+      expect(sessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tax_id_collection: { enabled: true },
+          billing_address_collection: 'required',
+          customer_update: { name: 'auto', address: 'auto' },
+        }),
+      )
     })
   })
 })

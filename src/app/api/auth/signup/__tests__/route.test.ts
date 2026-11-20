@@ -2,8 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { parseJsonResponse } from '@/tests/helpers'
 
 const signUpMock = vi.hoisted(() => vi.fn())
+// The signup acceptance rows go through the service client (no session yet).
+const acceptanceUpsertMock = vi.hoisted(() => vi.fn())
+const serviceFromMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => ({ auth: { signUp: signUpMock } })),
+  createServiceClient: vi.fn(() => ({ from: serviceFromMock })),
 }))
 
 const gateMock = vi.hoisted(() => vi.fn())
@@ -22,6 +26,7 @@ vi.mock('@/lib/branding/resolve', () => ({
 }))
 
 import { POST } from '../route'
+import { ACCEPTED_DOCUMENTS, LEGAL_DOCUMENTS } from '@/lib/legal/documents'
 
 function makeRequest(
   body: unknown,
@@ -50,6 +55,8 @@ beforeEach(() => {
     data: { user: { identities: [{ id: 'i1' }] }, session: null },
     error: null,
   })
+  acceptanceUpsertMock.mockResolvedValue({ error: null })
+  serviceFromMock.mockImplementation(() => ({ upsert: acceptanceUpsertMock }))
 })
 
 describe('POST /api/auth/signup', () => {
@@ -187,5 +194,63 @@ describe('POST /api/auth/signup', () => {
     const { body: json } = await parseJsonResponse<{ data: { status: string } }>(res)
 
     expect(json.data.status).toBe('session')
+  })
+})
+
+describe('POST /api/auth/signup: acceptance of the terms at signup', () => {
+  const newAccount = { user: { id: 'new-user', identities: [{ id: 'i1' }] }, session: null }
+
+  it('records every accepted document at its current version for a new account', async () => {
+    signUpMock.mockResolvedValue({ data: newAccount, error: null })
+
+    const res = await POST(makeRequest(validBody, { host: 'app.accounted.se' }))
+
+    expect(res.status).toBe(200)
+    expect(serviceFromMock).toHaveBeenCalledWith('legal_acceptances')
+    expect(acceptanceUpsertMock.mock.calls.map(([row]) => row)).toEqual(
+      ACCEPTED_DOCUMENTS.map((key) => ({
+        user_id: 'new-user',
+        company_id: null,
+        document_key: key,
+        version: LEGAL_DOCUMENTS[key].acceptanceVersion,
+        method: 'signup',
+      })),
+    )
+  })
+
+  it('records nothing for the obfuscated duplicate, which created no account', async () => {
+    signUpMock.mockResolvedValue({
+      data: { user: { id: 'fake-id', identities: [] }, session: null },
+      error: null,
+    })
+
+    const res = await POST(makeRequest(validBody, { host: 'app.accounted.se' }))
+    const { body: json } = await parseJsonResponse<{ data: { status: string } }>(res)
+
+    expect(json.data.status).toBe('duplicate')
+    expect(acceptanceUpsertMock).not.toHaveBeenCalled()
+  })
+
+  it('records nothing when GoTrue refuses the signup', async () => {
+    signUpMock.mockResolvedValue({
+      data: { user: null, session: null },
+      error: { status: 422, code: 'weak_password', message: 'weak' },
+    })
+
+    const res = await POST(makeRequest(validBody, { host: 'app.accounted.se' }))
+
+    expect(res.status).toBe(422)
+    expect(acceptanceUpsertMock).not.toHaveBeenCalled()
+  })
+
+  it('still answers the signup when the acceptance cannot be stored', async () => {
+    signUpMock.mockResolvedValue({ data: newAccount, error: null })
+    acceptanceUpsertMock.mockResolvedValue({ error: { message: 'down' } })
+
+    const res = await POST(makeRequest(validBody, { host: 'app.accounted.se' }))
+    const { body: json } = await parseJsonResponse<{ data: { status: string } }>(res)
+
+    expect(res.status).toBe(200)
+    expect(json.data.status).toBe('confirmation_sent')
   })
 })

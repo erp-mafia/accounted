@@ -5,9 +5,11 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import InvoiceEditor, { type InvoiceForEdit } from '@/components/invoices/InvoiceEditor'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import type { InvoiceItem } from '@/types'
+import { useViewerRedirect } from '@/components/ui/viewer-lock'
 import { InvoiceEditorShellSkeleton } from '@/components/invoices/editor/InvoiceEditorShellSkeleton'
 
 /**
@@ -24,9 +26,16 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
+  const tCommon = useTranslations('common')
+  const canWrite = useViewerRedirect(`/invoices/${id}`)
 
   const [invoice, setInvoice] = useState<InvoiceForEdit | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  // The read failed: the page says so with "Försök igen" (bumps reloadKey).
+  const [loadFailed, setLoadFailed] = useState(false)
+  // No invoice under this id: not a failure to retry.
+  const [notFound, setNotFound] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -40,12 +49,9 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
       if (cancelled) return
 
       if (error || !data) {
-        toast({
-          title: t('load_failed_title'),
-          description: t('load_failed_description'),
-          variant: 'destructive',
-        })
-        router.replace('/invoices')
+        // .single() answers PGRST116 when no row matched.
+        if ((!error && !data) || error?.code === 'PGRST116') setNotFound(true)
+        else setLoadFailed(true)
         return
       }
 
@@ -75,7 +81,33 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id])
+  }, [id, reloadKey])
+
+  // A read-only member gets the invoice, never its edit form.
+  if (!canWrite) return null
+
+  if (notFound) {
+    return (
+      <div className="px-4 pt-4 md:px-6">
+        <NotFoundState title={t('not_found')} backHref="/invoices" backLabel={tCommon('back_to_list')} />
+      </div>
+    )
+  }
+
+  if (loadFailed) {
+    // Full-bleed route: the editor owns its padding, so the state brings the gutter.
+    return (
+      <div className="px-4 pt-4 md:px-6">
+        <LoadError
+          title={t('load_failed_title')}
+          onRetry={() => {
+            setLoadFailed(false)
+            setReloadKey((key) => key + 1)
+          }}
+        />
+      </div>
+    )
+  }
 
   if (isLoading || !invoice) {
     return <InvoiceEditorShellSkeleton />

@@ -298,12 +298,15 @@ describe('the concurrent-PATCH race (#2256)', () => {
       // Blocks on A's row lock; READ COMMITTED re-reads the row after A
       // commits, so the constraint is checked against A's beslut with
       // valid_to nulled.
-      const bUpdate = b.query(`UPDATE public.employees SET jamkning_valid_to = NULL WHERE id = $1`, [id])
+      // The rejection is caught from the start: B can fail while A's COMMIT
+      // is still being awaited, and a rejection with no handler yet fails
+      // the whole run as an unhandled error.
+      const bRejection = captureError(b.query(`UPDATE public.employees SET jamkning_valid_to = NULL WHERE id = $1`, [id]))
       // Give B a moment to actually queue behind the lock before A commits.
       await new Promise((resolve) => setTimeout(resolve, 100))
       await a.query('COMMIT')
 
-      const err = await captureError(bUpdate)
+      const err = await bRejection
       expectConstraintRejection(err)
       await b.query('ROLLBACK')
     } finally {

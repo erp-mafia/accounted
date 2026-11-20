@@ -1,17 +1,19 @@
 'use client'
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { Fragment, useState, useEffect, useRef, useMemo, useId } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller, type FieldErrors } from 'react-hook-form'
-import { Reorder } from 'framer-motion'
+import { Reorder } from 'motion/react'
 import { SortableRow } from '@/components/ui/sortable-row'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { addDays, format } from 'date-fns'
+import { format } from 'date-fns'
 import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { Input } from '@/components/ui/input'
 import { TagInput } from '@/components/ui/tag-input'
@@ -21,6 +23,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge, badgeVariants } from '@/components/ui/badge'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
+import { Button } from '@/components/ui/button'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
@@ -28,14 +31,19 @@ import {
   explainVatTreatment,
   getVatRules,
   requiresSwedishVatAcknowledgement,
+  resolveInvoiceVatRules,
+  type InvoiceVatOverride,
 } from '@/lib/invoices/vat-rules'
 import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
   resolveLineVatRates,
   planCustomerSwitchVatSnap,
+  planVatPlanSnap,
   FALLBACK_VAT_RATE,
 } from '@/components/invoices/line-vat-rates'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
+import { AttnLine } from '@/components/ui/attn-line'
+import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   defaultGronTeknikWorkType,
@@ -51,11 +59,24 @@ import {
   type NextStep,
 } from '@/components/invoices/invoice-editor-flow'
 import { sortArticles } from '@/lib/articles/sort'
+import { articleLineName, documentLanguageOf, planArticleNameSwap, type DocumentLanguage } from '@/lib/articles/line-name'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
-import { getAmountToPay } from '@/lib/invoices/rounding'
-import { computeLineNet, hasLineDiscount } from '@/lib/invoices/line-amounts'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { computeLineNet, computeLineVat, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { ChevronDown, Loader2, X, Landmark, MoreVertical, CalendarClock, Tags, Package, Percent, Plus, Trash2 } from 'lucide-react'
+import {
+  BuildingLibraryIcon,
+  CalendarDaysIcon,
+  ChevronDownIcon,
+  CubeIcon,
+  EllipsisVerticalIcon,
+  HashtagIcon,
+  PercentBadgeIcon,
+  PlusIcon,
+  SpinnerIcon,
+  TrashIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -67,6 +88,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useFiledVatPeriod } from '@/lib/hooks/use-filed-vat-period'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
@@ -74,7 +96,8 @@ import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { BankDetailsSetupForm } from '@/components/invoices/BankDetailsSetupForm'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
-import { useAccounts, useArticles, useCompanySettings, useCustomers, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { useAccounts, useArticles, useCompanySettings, useCustomers, useFiscalPeriods, usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { isInvoiceTypeEnabled } from '@/lib/invoices/invoice-type-toggles'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -85,7 +108,7 @@ import {
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
   articleDeductionPrefill,
-  computeDeduction,
+  computeLineDeductions,
   deductionCapWarnings,
   deductionLineIssues,
   deductionTypeForWorkType,
@@ -93,23 +116,38 @@ import {
   SCHABLON_WORK_TYPES,
   type DeductionType,
   type PriorYearDeductions,
-} from '@/lib/invoices/rot-rut-rules'
+} from '@/lib/bookkeeping/rot-rut-rules'
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
 import { roundOre } from '@/lib/money'
-import { isFiscalYear } from '@/lib/invariants'
+import { selfBilledSaleAmounts } from '@/lib/invoices/self-billed-amounts'
+import { isFiscalYear, normalizeOrgNumber } from '@/lib/invariants'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
-import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
-import { cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee'
+import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
+import {
+  cashAccountPayee,
+  invoicePayeeAccountLabel as payeeAccountLabel,
+  isUsableInvoicePayee,
+} from '@/lib/cash-accounts/invoice-payee-rules'
+import { chooseForeignInvoicePayee } from '@/lib/invoices/choose-foreign-payee'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
-import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import {
+  DELIVERY_ADDRESS_MAX_LENGTH,
+  EMPTY_DELIVERY_ADDRESS_FORM,
+  deliveryAddressFormValues,
+  normalizeDeliveryAddress,
+} from '@/lib/invoices/delivery-address'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
+import { getCountryOptions } from '@/lib/vat/country-codes'
+import { isInvoiceLinePostingAccount } from '@/lib/invoices/posting-account'
 import UnitPicker from '@/components/invoices/UnitPicker'
 import {
   buildInvoiceWritePayload,
   buildSelfBilledPayload,
+  domesticReverseChargeStatement,
   hasDimensionValues,
 } from '@/lib/invoices/editor-payload'
 import { InvoiceEditorShell, type EditorPane } from '@/components/invoices/editor/InvoiceEditorShell'
@@ -118,15 +156,26 @@ import { EditorPreviewPane } from '@/components/invoices/editor/EditorPreviewPan
 import { EditorEmailPreview, type EmailTextOverride } from '@/components/invoices/editor/EditorEmailPreview'
 import { EditorStatusLine } from '@/components/invoices/editor/EditorStatusLine'
 import { SendConfirmDialog, type ConfirmVoucher } from '@/components/invoices/editor/SendConfirmDialog'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
+import type { InvoiceAttachmentFile, InvoiceAttachmentsTarget } from '@/components/invoices/InvoiceAttachmentsSection'
+import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { useInvoicePdfPreview } from '@/components/invoices/editor/use-editor-previews'
 import {
+  CHANNEL_BLOCK_KEYS,
   emailPreviewBlock,
+  isMailboxChannel,
   resolveChannelOptions,
   resolveEffectiveChannel,
+  resolveMailboxReady,
+  resolvePeppolChannel,
   type ChannelContext,
   type EditorChannel,
-  type EmailBlockReason,
+  type MailboxChannel,
+  type PeppolSending,
 } from '@/lib/invoices/editor/channel'
+import { fetchPeppolSending } from '@/lib/invoices/editor/peppol-sending'
+import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES, fetchActiveSendingProviders } from '@/lib/digital-mailboxes/sending-status'
 import {
   booksOnIssue as resolveBooksOnIssue,
   resolveEditorMenu,
@@ -137,10 +186,26 @@ import {
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { resolveTopBarMeta } from '@/lib/invoices/editor/top-bar-meta'
 import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
-import { proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
+import {
+  draftAccrualEntryDates,
+  proposeDraftCashLines,
+  proposeDraftSendLines,
+  type DraftVoucherInput,
+} from '@/lib/invoices/editor/voucher-preview'
+import { isPaidAtIssueAccount, paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
+import {
+  continueInvoiceSeries,
+  readNextNumberPreview,
+  type SeriesContinuation,
+} from '@/lib/invoices/next-number-preview'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
-import { customerChangedForReference, planYourReferencePrefill } from '@/lib/invoices/editor/customer-reference'
+import {
+  customerCardReference,
+  customerChangedForReference,
+  planMarkingPrefill,
+  planYourReferencePrefill,
+} from '@/lib/invoices/editor/customer-reference'
 import {
   invoiceDateLock,
   resolveDetailsChips,
@@ -161,11 +226,12 @@ import {
 import {
   buildEditorPaymentSummary,
   describeEditorPaymentSummary,
+  foreignPayeeChoice,
   paymentReason,
   paymentTermsTexts,
   type EditorPaymentSummaryInput,
 } from '@/lib/invoices/editor/payment-summary'
-import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { companyWithInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { formatSwishForDisplay } from '@/lib/invoices/payment-rows'
 import { EditorSection } from '@/components/invoices/editor/EditorSection'
 import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
@@ -190,6 +256,8 @@ import {
   type InvoicePayeeDefault,
   type InvoiceQrMode,
 } from '@/types'
+import { addDaysIso, todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
 
 const currencies: readonly Currency[] = CURRENCIES
 
@@ -221,12 +289,8 @@ export type InvoiceEditorProps = (
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
   Article,
-  'id' | 'article_number' | 'name' | 'type' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
+  'id' | 'article_number' | 'name' | 'name_en' | 'type' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
 >
-
-function RequiredMark() {
-  return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
-}
 
 // Borderless in-table cell input: quiet at rest, beige on hover, ringed on
 // focus. rounded-sm: nested leaf inside the rows surface (radius ladder).
@@ -236,7 +300,7 @@ const CELL_INPUT_CLASS =
 // Ghost cell in the entry row: previews the append default in the italic
 // muted tone, hovers like a cell input so it reads as clickable.
 const ENTRY_GHOST_CLASS =
-  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground/50 tabular-nums transition-colors duration-150 hover:bg-secondary/60 cursor-text'
+  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground tabular-nums transition-colors duration-150 hover:bg-secondary/60 cursor-text'
 
 // The add-row links under the table. Quiet links on desktop, inflated to a
 // 40px touch target on coarse pointers: on Android they are the only way into
@@ -272,7 +336,7 @@ const ROW_GRID_TWO_EXTRA = 'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_4rem_
 
 // The quiet field look of the one-line note and the claim fields.
 const FIELD_LABEL_CLASS = 'text-[13px] font-normal'
-const FIELD_HINT_CLASS = 'text-[12.5px] text-muted-foreground'
+const FIELD_HINT_CLASS = 'text-xs text-muted-foreground'
 
 // The Avdrag cell: a quiet picker in the row, like the Moms cell.
 const DEDUCTION_CELL_CLASS =
@@ -280,29 +344,22 @@ const DEDUCTION_CELL_CLASS =
 
 // Anteckning: one line that grows with the text, in the field look.
 const NOTE_INPUT_CLASS =
-  'w-full rounded-lg border border-input bg-card px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20'
+  'w-full rounded-lg px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 bg-control shadow-raised'
 
 // Sentinel for "the company default" in the payee select: an empty option
 // value renders as the placeholder in Radix Select.
 const PAYEE_DEFAULT = '__default__'
+// The Land picker's "Kundens land": the delivery address states no country of
+// its own ('' in the form, null stored).
+const DELIVERY_COUNTRY_CUSTOMER = '__customer__'
 
-/** "Företagskonto (1930)" or the bare ledger account when the row has no name. */
-function payeeAccountLabel(account: CashAccount): string {
-  const name = account.name?.trim()
-  return name ? `${name} (${account.ledger_account})` : account.ledger_account
-}
+// The intents that go through the confirm dialog: a send, a create without
+// sending, or a kontantfaktura issued already paid (all lock a number).
+type ConfirmIntent = Extract<EditorIntent, { kind: 'send' } | { kind: 'create' } | { kind: 'issue_paid' }>
 
-// The intents that go through the confirm dialog: a send, or a create
-// without sending (both lock a number).
-type ConfirmIntent = Extract<EditorIntent, { kind: 'send' } | { kind: 'create' }>
-
-// Why email is not possible, as keys of the invoice_editor_shell namespace.
-const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
-  not_emailable: 'email_block_not_emailable',
-  sandbox: 'email_block_sandbox',
-  no_email_plan: 'email_block_no_email_plan',
-  no_customer_email: 'email_block_no_customer_email',
-}
+// The one VAT treatment the editor states for the invoice itself (crm#1007):
+// omvänd betalningsskyldighet for construction services (ML 16 kap. 13 §).
+const DOMESTIC_REVERSE_CHARGE: InvoiceVatOverride = { vat_treatment: 'reverse_charge_domestic', delivery_country: null }
 
 export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'create' }) {
   // Edit mode pre-fills the form from an existing draft and saves via PATCH.
@@ -316,6 +373,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { company, role, isSandbox } = useCompany()
+  // The invoicing-only role reaches the invoice routes and nothing around
+  // them (lib/auth/invoicer-role.ts): the reads below that the server
+  // refuses for it (payee accounts, mailbox and Peppol status, the payment
+  // link status, bilagor) are left out, and the editor behaves as it does
+  // when such a read fails (for #206).
+  const isInvoicer = isInvoicerRole(role)
   const hasEmailSend = useCapability(CAPABILITY.email_send)
   const supabase = createClient()
   const locale = useLocale() as ErrorLocale
@@ -328,13 +391,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const tVat = useTranslations('vat_treatment_notice')
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
+  const tCommon = useTranslations('common')
   // Owner/admin: extra email copies (as in SendInvoiceDialog) and payment
   // details set up from the status line.
   const isCompanyAdmin = role === 'owner' || role === 'admin'
   // Normal customer invoice (default) or a received self-billing invoice
   // (mottagen självfaktura, ML 17 kap 15§). The mode is chosen upstream in
   // the Ny faktura split button (?self=1) and is fixed for the editor's
-  // lifetime: the two flows are separate views, not tabs (founder call
+  // lifetime: the two flows are separate views, not tabs (product call
   // 2026-08-17). Self-billing is never available when editing a draft.
   const mode: 'invoice' | 'self_billed' =
     props.initialSelfBilled && !isEditMode ? 'self_billed' : 'invoice'
@@ -354,7 +418,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // payment link section. Absent extension or no connection → toggle hidden.
   const [stripeConnected, setStripeConnected] = useState(false)
   useEffect(() => {
-    if (!paymentLinksEnabled) return
+    if (!paymentLinksEnabled || isInvoicer) return
     if (!ENABLED_EXTENSION_IDS.has('stripe')) return
     let cancelled = false
     fetch('/api/extensions/ext/stripe/status')
@@ -366,7 +430,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => {
       cancelled = true
     }
-  }, [paymentLinksEnabled])
+  }, [paymentLinksEnabled, isInvoicer])
   // Edit mode: the draft's stored ROT/RUT personnummer, in display form
   // (YYYYMMDD-XXXX). The row only carries ciphertext + last four digits, and
   // the mask must come from the server so the browser never holds both
@@ -419,7 +483,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       sales_order_item_id: z.string().nullable().optional(),
       revenue_account: z
         .string()
-        .regex(INVOICE_POSTING_ACCOUNT_REGEX, t('posting_account_invalid'))
+        .refine(isInvoiceLinePostingAccount, t('posting_account_invalid'))
         .nullable()
         .optional(),
       // Skattereduktion per line (ROT, RUT, grön teknik). Optional: null means
@@ -446,7 +510,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         let invalid = !start || !end || end < start
         if (!invalid) {
           try {
-            invalid = countCalendarMonths(start as string, end as string) < 2
+            // Throws on a malformed date; any whole month is a valid span.
+            countCalendarMonths(start as string, end as string)
           } catch {
             invalid = true
           }
@@ -516,6 +581,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
       invoice_marking: z.string().optional(),
+      // Leveransadress (crm#1547): sent as the fields are; the server reads
+      // '' as not set and an address with nothing in it as none.
+      delivery_address: z
+        .object({
+          name: z.string(),
+          address_line1: z.string(),
+          address_line2: z.string(),
+          postal_code: z.string(),
+          city: z.string(),
+          country: z.string(),
+        })
+        .optional(),
       notes: z.string().optional(),
       // Optional online payment link (pasted from e.g. the Stripe dashboard).
       // https-only: mirrors the server-side CreateInvoiceSchema gate.
@@ -557,6 +634,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           message: t('validation_valid_until_required'),
         })
       }
+      // A periodisering period lying only in the invoice month moves nothing
+      // (the API refuses it); the row refine cannot see the invoice date.
+      if (data.invoice_date) {
+        // Same rows the row refine treats as periodiserade (an open strip).
+        for (const index of invoiceMonthOnlyAccrualRows(
+          data.invoice_date,
+          data.items.map((item) => (item.accrual_balance_account != null ? item : {})),
+        )) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['items', index, 'accrual_period_end'],
+            message: ta('invoice_month_only'),
+          })
+        }
+      }
       // Grön teknik rules that span rows, from the same helper the API
       // validates with: hours on at least one row per installation type, and
       // no grön teknik next to ROT/RUT. The per-row checks run on the item.
@@ -588,34 +680,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // field populated on the first paint and reopening the dialog costs no
   // requests. Customers come through /api/customers, which masks the
   // personnummer column; nothing here rendered it.
-  const { customers: cachedCustomers, isLoading: customersLoading, error: customersError } = useCustomers()
   // Archived customers (v1 API soft-delete) are not offered in the picker
   // (/api/customers filters archived_at IS NULL). An existing draft or copied
   // invoice may still point at one (archiving only refuses when open invoices
-  // exist, drafts do not count), so that single row is fetched on its own and
-  // kept in the list, or the select would render blank.
+  // exist, drafts do not count), so useCustomers keeps that one in the list,
+  // or the select would render blank.
   const keepCustomerId = initial?.customer_id ?? copyInitial?.customer_id ?? null
-  const [keptCustomer, setKeptCustomer] = useState<Customer | null>(null)
-  useEffect(() => {
-    if (!keepCustomerId || customersLoading) return
-    if (cachedCustomers.some((c) => c.id === keepCustomerId)) return
-    let cancelled = false
-    fetch(`/api/customers/${encodeURIComponent(keepCustomerId)}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json: { data?: Customer } | null) => {
-        if (!cancelled && json?.data) setKeptCustomer(json.data)
-      })
-      .catch(() => {
-        // The picker simply shows no selection for a customer that no longer resolves.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [keepCustomerId, customersLoading, cachedCustomers])
-  const customers = useMemo(() => {
-    if (!keptCustomer || cachedCustomers.some((c) => c.id === keptCustomer.id)) return cachedCustomers
-    return [...cachedCustomers, keptCustomer].sort((a, b) => a.name.localeCompare(b.name))
-  }, [cachedCustomers, keptCustomer])
+  const {
+    customers,
+    isLoading: customersLoading,
+    error: customersError,
+    refresh: refreshCustomers,
+  } = useCustomers({ keepId: keepCustomerId })
   const {
     settings: companySettings,
     updateSettings: patchCompanySettings,
@@ -625,6 +701,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
+  // Omvänd betalningsskyldighet for construction services (crm#1007): a
+  // statement about this invoice, ticked by hand, never derived from the
+  // customer. A draft that states it, or a copy of one, starts ticked.
+  const storedDomesticReverseCharge = initial?.vat_treatment_override === 'reverse_charge_domestic'
+  const [domesticReverseCharge, setDomesticReverseCharge] = useState<boolean>(
+    storedDomesticReverseCharge || copyInitial?.domestic_reverse_charge === true,
+  )
+  // The tick where it can apply (VAT-registered seller, a document that
+  // carries VAT, not a received självfaktura), as of the last render: the
+  // customer sync effect reads it without re-running on every toggle.
+  const domesticReverseChargeArmedRef = useRef(false)
+  const [isSavingBuyerVatNumber, setIsSavingBuyerVatNumber] = useState(false)
   // The confirm dialog's intent (a send on a channel, or create without
   // sending), opened from the top bar, its caret menu or Cmd/Ctrl+Enter.
   const [confirmIntent, setConfirmIntent] = useState<ConfirmIntent | null>(null)
@@ -635,6 +723,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Explicit confirm for Swedish VAT to an EU customer whose reverse charge
   // is blocked (#2749). Reset every time the confirm dialog closes.
   const [swedishVatAcknowledged, setSwedishVatAcknowledged] = useState(false)
+  // Kontantfaktura confirm (crm#1281): the 19xx account the customer paid to
+  // ('' = the default for this invoice) and whether the receipt is mailed.
+  const [paidAccountChoice, setPaidAccountChoice] = useState('')
+  const [paidEmailReceipt, setPaidEmailReceipt] = useState(true)
   const [pendingData, setPendingData] = useState<FormData | null>(null)
   // The channel the user picked in the caret menu; null = the default
   // (lib/invoices/editor/channel.ts).
@@ -643,6 +735,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // or the stock texts) and its extra copies.
   const [emailOverride, setEmailOverride] = useState<EmailTextOverride | null>(null)
   const [extraCcText, setExtraCcText] = useState('')
+  // Bilagor picked in the confirm before the document exists (#79): already
+  // in the archive, linked by the send once the document is saved. Held
+  // here so closing and reopening the confirm keeps them.
+  const [stagedAttachments, setStagedAttachments] = useState<InvoiceAttachmentFile[]>([])
   // Bumped when something the PDF prints changed outside the form (a logo
   // upload, new bank details): re-renders the preview.
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0)
@@ -654,6 +750,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
   // The inline "Lägg till betalningsuppgifter" form in the Betalning section.
   const [addingPayee, setAddingPayee] = useState(false)
+  // A foreign-currency invoice's account being chosen (chooseForeignPayee).
+  const [choosingForeignPayee, setChoosingForeignPayee] = useState(false)
   // "Betalning och utseende": the panel that replaces the form column, and
   // its scope (company defaults or this invoice only).
   const [paymentPanelOpen, setPaymentPanelOpen] = useState(false)
@@ -666,18 +764,29 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   )
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
+  // Set when the series already has a higher number (an import): the confirm
+  // continues the series on this number instead.
+  const [seriesContinuation, setSeriesContinuation] = useState<SeriesContinuation | null>(null)
+  const [isContinuingSeries, setIsContinuingSeries] = useState(false)
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   // Artikelregister: active articles for the line picker + which line is mid quick-create.
   const { articles: articleRows } = useArticles()
   // Numeric-aware order by article number ('2' before '10', unnumbered last):
   // the picker should follow the user's own numbering, not the alphabet.
   const articles = useMemo(() => sortArticles(articleRows as ArticleOption[]), [articleRows])
+  // Read by the customer-switch effect without making it re-run (and re-fill
+  // the due date) every time the article list refreshes.
+  const articlesRef = useRef<ArticleOption[]>(articles)
+  useEffect(() => {
+    articlesRef.current = articles
+  }, [articles])
   const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
-  // Active balance-sheet and revenue accounts for the optional per-line
-  // posting override, plus which rows currently show that picker.
+  // Active balance-sheet, revenue and interest-income accounts (PH 246) for
+  // the optional per-line posting override, plus which rows show that picker.
   const { accounts: activeAccounts } = useAccounts()
+  const paymentLedger = usePaymentBankLedger()
   const postingAccounts = useMemo(
-    () => activeAccounts.filter((account) => account.account_class >= 1 && account.account_class <= 3),
+    () => activeAccounts.filter((account) => isInvoiceLinePostingAccount(account.account_number)),
     [activeAccounts],
   )
   const [accountOverrideRows, setAccountOverrideRows] = useState<Set<number>>(new Set())
@@ -702,9 +811,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Detaljer opened by hand (a chip click); it also opens by itself for an
   // unusual value (lib/invoices/editor/details.ts).
   const [detailsOpen, setDetailsOpen] = useState(false)
-  // "+ Märkning" and "+ Leveransdatum": the field shows once asked for.
+  // "+ Märkning", "+ Leveransadress" and "+ Leveransdatum": the field shows
+  // once asked for.
   const [markingOpen, setMarkingOpen] = useState(false)
+  const [deliveryAddressOpen, setDeliveryAddressOpen] = useState(false)
   const [deliveryOpen, setDeliveryOpen] = useState(false)
+  // "+ Omvänd betalningsskyldighet": the checkbox shows once asked for, and
+  // stays open after any toggle so it never vanishes under the pointer.
+  const [reverseChargeOpen, setReverseChargeOpen] = useState(false)
   const [defaultDimsOpen, setDefaultDimsOpen] = useState(false)
   // Periodisering strips opened from the row menu or the row's badge.
   const [accrualRows, setAccrualRows] = useState<Set<number>>(new Set())
@@ -751,9 +865,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // correct, so the first resolution must only RECORD the baseline, never snap.
   // A fresh form has no such baseline, so there the first pick does snap.
   const didSeedVatSnapBaseline = useRef(!(isEditMode || isCopyMode))
+  // The document language of the customer currently selected (crm#1084). A
+  // customer switch moves the article lines still carrying the article's name
+  // in this language to the new one. A fresh form's lines are filled in
+  // Swedish until a customer is picked; edit and copy record the saved
+  // invoice's language on the first resolution (didSeedVatSnapBaseline).
+  const previousLanguageRef = useRef<DocumentLanguage>('sv')
   // The Er referens the editor filled in from the customer card itself
   // (lib/invoices/editor/customer-reference.ts); null once it is the user's.
   const prefilledReferenceRef = useRef<string | null>(null)
+  // The same for Märkning from the card's Märkning (crm#1477).
+  const prefilledMarkingRef = useRef<string | null>(null)
   // The customer Er referens last followed. A saved draft starts on its own
   // customer, so its value stands until another one is picked; a new or
   // copied invoice starts on none.
@@ -798,6 +920,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           your_reference: initial.your_reference ?? '',
           our_reference: initial.our_reference ?? '',
           invoice_marking: initial.invoice_marking ?? '',
+          delivery_address: deliveryAddressFormValues(initial.delivery_address),
           notes: initial.notes ?? '',
           payment_link_url: initial.payment_link_url ?? '',
           payment_link_auto: initial.payment_link_auto ?? true,
@@ -843,6 +966,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             your_reference: '',
             our_reference: copyInitial.our_reference,
             invoice_marking: '',
+            delivery_address: { ...EMPTY_DELIVERY_ADDRESS_FORM },
             notes: copyInitial.notes,
             payment_link_url: '',
             payment_link_auto: true,
@@ -862,6 +986,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           payment_cash_account_id: '',
           qr_mode: null,
           document_type: createDocumentType,
+          delivery_address: { ...EMPTY_DELIVERY_ADDRESS_FORM },
           payment_link_url: '',
           payment_link_auto: true,
           external_invoice_number: '',
@@ -880,10 +1005,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // editing: the draft's own dates are already loaded into the form.
   useEffect(() => {
     if (isEditMode) return
-    setValue('invoice_date', format(new Date(), 'yyyy-MM-dd'))
-    setValue('received_date', format(new Date(), 'yyyy-MM-dd'))
-    setValue('due_date', format(addDays(new Date(), DEFAULT_PAYMENT_TERM_DAYS), 'yyyy-MM-dd'))
-    setValue('valid_until', format(addDays(new Date(), 30), 'yyyy-MM-dd'))
+    const today = todayIsoStockholm()
+    setValue('invoice_date', today)
+    setValue('received_date', today)
+    setValue('due_date', invoiceDueDate(today, DEFAULT_PAYMENT_TERM_DAYS))
+    setValue('valid_until', addDaysIso(today, 30))
   }, [])
 
   const { fields, append, remove, move } = useFieldArray({
@@ -891,7 +1017,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     name: 'items',
   })
 
-  // Drag-to-reorder (grip handle left of each row). framer-motion hands back
+  // Drag-to-reorder (grip handle left of each row). Motion hands back
   // the fully reordered array; we translate the single displacement into a
   // react-hook-form move() so the registered inputs follow. The persisted
   // sort_order is the array index at create time, so reordering here is all
@@ -911,6 +1037,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // choice (two or more usable accounts for the invoice currency).
   const [payeeState, setPayeeState] = useState<{ accounts: CashAccount[]; defaults: InvoicePayeeDefault[] } | null>(null)
   useEffect(() => {
+    if (isInvoicer) return
     let cancelled = false
     fetch('/api/cash-accounts/payee-defaults')
       .then((res) => (res.ok ? res.json() : null))
@@ -923,7 +1050,35 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [isInvoicer])
+  // The digital mailboxes this company sends through (Kivra, Billo), read
+  // once: the caret menu offers one only where its send can go. A failed
+  // read offers none; email stays the channel.
+  const [mailboxProviders, setMailboxProviders] = useState<MailboxChannel[]>([])
+  useEffect(() => {
+    if (isInvoicer) return
+    let cancelled = false
+    void fetchActiveSendingProviders().then((providers) => {
+      if (!cancelled) setMailboxProviders(providers)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isInvoicer])
+  // Whether the company sends e-fakturor (Peppol access and a transport),
+  // read once: the caret menu lists Peppol only then. A failed read lists
+  // none, as before.
+  const [peppolSending, setPeppolSending] = useState<PeppolSending | null>(null)
+  useEffect(() => {
+    if (isInvoicer) return
+    let cancelled = false
+    void fetchPeppolSending().then((sending) => {
+      if (!cancelled) setPeppolSending(sending)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isInvoicer])
   const payeeOptions = useMemo(
     () => (payeeState ? payeeState.accounts.filter((a) => isUsableInvoicePayee(a, watchCurrency as Currency)) : []),
     [payeeState, watchCurrency],
@@ -993,15 +1148,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }, [customers, setValue])
 
-  useEffect(() => {
-    if (!customersError) return
-    toast({
-      title: t('load_customers_failed_title'),
-      description: t('load_customers_failed_description'),
-      variant: 'destructive',
-    })
-  }, [customersError, toast, t])
-
   // Apply a chosen article's defaults onto a line. Selecting "none" detaches the
   // article link (and its account override) but keeps the typed text/price so the
   // row becomes an editable free-text line.
@@ -1014,7 +1160,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const a = articles.find((x) => x.id === articleId)
     if (!a) return
     setValue(`items.${index}.article_id`, a.id, { shouldDirty: true })
-    setValue(`items.${index}.description`, a.name, { shouldValidate: true, shouldDirty: true })
+    // The English benämning on an invoice to an English-language customer.
+    setValue(`items.${index}.description`, articleLineName(a, documentLanguageOf(selectedCustomer)), {
+      shouldValidate: true,
+      shouldDirty: true,
+    })
     if (a.unit) setValue(`items.${index}.unit`, a.unit, { shouldDirty: true })
     setValue(`items.${index}.unit_price`, Number(a.price_excl_vat) || 0, { shouldValidate: true, shouldDirty: true })
     // Only adopt the article's VAT rate when it belongs to the customer's
@@ -1139,12 +1289,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (id) autoHoursRef.current.add(id)
   }
 
-  // A row whose hours were taken from its quantity keeps following it.
+  // A row whose hours were taken from its quantity keeps following it. A
+  // deduction row whose hours are still empty takes them now: the avdrag
+  // may be chosen before the unit is switched to tim.
   function followQuantity(index: number) {
     const id = fields[index]?.id
-    if (!id || !autoHoursRef.current.has(id)) return
+    if (!id) return
     const item = getValues(`items.${index}`)
     if (!item?.deduction_type) return
+    if (item.labor_hours == null) {
+      seedLaborHours(index)
+      return
+    }
+    if (!autoHoursRef.current.has(id)) return
     const hours = defaultLaborHours(item)
     if (hours !== null) setValue(`items.${index}.labor_hours`, hours, { shouldDirty: true })
   }
@@ -1520,16 +1677,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // preview. An unnumbered draft (Spara som utkast) gets one at send.
     if ((isEditMode && initial?.invoice_number) || watchDocumentType === 'delivery_note') {
       setNumberPreview(null)
+      setSeriesContinuation(null)
       return
     }
     let cancelled = false
     fetch(`/api/invoices/next-number?document_type=${encodeURIComponent(watchDocumentType)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((res) => {
-        if (!cancelled) setNumberPreview(res?.data?.preview ?? null)
+        if (cancelled) return
+        const read = readNextNumberPreview(res)
+        setNumberPreview(read.preview)
+        setSeriesContinuation(read.continuation)
       })
       .catch(() => {
-        if (!cancelled) setNumberPreview(null)
+        if (cancelled) return
+        setNumberPreview(null)
+        setSeriesContinuation(null)
       })
     return () => {
       cancelled = true
@@ -1546,7 +1709,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       // the saved draft and must not be overwritten. Applied normally on every
       // subsequent (user-initiated) customer change, and always in create mode.
       if (customer) {
-        const nextDefaultRate = resolveLineVatRates(customer).defaultRate
+        // Omvänd betalningsskyldighet needs a Swedish business as buyer: any
+        // other customer unticks it. Under it the rate plan is the invoice's
+        // own (0 % only) once the buyer's Swedish VAT number is on the card.
+        const isSwedishBusiness = customer.customer_type === 'swedish_business'
+        if (!isSwedishBusiness) setDomesticReverseCharge(false)
+        const nextPlan = resolveLineVatRates(
+          customer,
+          isSwedishBusiness && domesticReverseChargeArmedRef.current ? DOMESTIC_REVERSE_CHARGE : null,
+        )
+        const nextDefaultRate = nextPlan.defaultRate
         if (didInitialCustomerSync.current) {
           // Update due date based on customer payment terms, counted from the
           // invoice date the form is actually on: picking a customer after
@@ -1554,11 +1726,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // today + terms. This fill is the second writer of due_date, and the
           // only one that knows a term the date pair cannot show (fakturadatum
           // may be empty here), so it hands that term to the sync baseline.
-          if (customer.default_payment_terms) {
+          if (customer.default_payment_terms != null) {
             const fill = planCustomerTermsFill({
               invoiceDate: getValues('invoice_date') || '',
-              terms: customer.default_payment_terms,
-              today: format(new Date(), 'yyyy-MM-dd'),
+              // A private person's invoice is due within 50 days
+              // (konsumentkreditlagen): a longer term on the card is held there.
+              terms: consumerInvoiceTerms(
+                customer.default_payment_terms,
+                customer.customer_type,
+                getValues('invoice_date') || todayIsoStockholm(),
+              ),
+              today: todayIsoStockholm(),
             })
             setValue('due_date', fill.dueDate)
             dueDateSyncRef.current = { ...dueDateSyncRef.current, terms: fill.terms }
@@ -1570,24 +1748,38 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // the user moved off that default stays put: 12% on a Stockholm
           // hotel night sold to a German company is lawful (taxed where
           // performed, ML 6 kap.) and snapping it to 0% would destroy it.
+          // A plan locked to 0 % (omvänd betalningsskyldighet) takes every
+          // line: no other rate is lawful under it (planVatPlanSnap).
           if (didSeedVatSnapBaseline.current) {
-            for (const snap of planCustomerSwitchVatSnap({
+            for (const snap of planVatPlanSnap({
               items: watchItems ?? [],
               previousDefaultRate: previousDefaultRateRef.current,
-              nextDefaultRate,
+              next: nextPlan,
             })) {
               setValue(`items.${snap.index}.vat_rate`, snap.rate)
             }
+            // Article lines follow the new customer's language, unless the
+            // user changed their text (planArticleNameSwap).
+            for (const swap of planArticleNameSwap({
+              items: getValues('items') ?? [],
+              articles: articlesRef.current,
+              from: previousLanguageRef.current,
+              to: documentLanguageOf(customer),
+            })) {
+              setValue(`items.${swap.index}.description`, swap.description, { shouldDirty: true })
+            }
           }
         }
+        previousLanguageRef.current = documentLanguageOf(customer)
         previousDefaultRateRef.current = nextDefaultRate
         didSeedVatSnapBaseline.current = true
         didInitialCustomerSync.current = true
       }
     }
-    // Er referens from the customer card's contact person: into an empty
-    // field, replacing only what the editor itself put there, never what the
-    // user typed. Only when the customer changes: this effect also re-runs
+    // Er referens from the customer card (its Fakturareferens, else its
+    // contact person): into an empty field, replacing only what the editor
+    // itself put there, never what the user typed. Only when the customer
+    // changes: this effect also re-runs
     // on a refreshed customer list, which must not refill a field the user
     // emptied, and a saved draft's own customer never replaces its value.
     // Never for a received självfaktura (no references).
@@ -1600,10 +1792,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const plan = planYourReferencePrefill({
       current,
       prefilled: prefilledReferenceRef.current,
-      contactPerson: customer?.contact_person ?? null,
+      customerReference: customerCardReference(customer),
     })
     prefilledReferenceRef.current = plan.prefilled
     if (plan.value !== current) setValue('your_reference', plan.value, { shouldDirty: true })
+    // Märkning from the card's Märkning (crm#1477), by the same rule.
+    const currentMarking = getValues('invoice_marking') ?? ''
+    const markingPlan = planMarkingPrefill({
+      current: currentMarking,
+      prefilled: prefilledMarkingRef.current,
+      customer,
+    })
+    prefilledMarkingRef.current = markingPlan.prefilled
+    if (markingPlan.value !== currentMarking) setValue('invoice_marking', markingPlan.value, { shouldDirty: true })
   }, [watchCustomerId, customers, setValue, getValues, mode])
 
   // One-click VIES check from the draft (#2749). /api/vat/validate has
@@ -1686,15 +1887,97 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return sum + computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
   }, 0)
 
-  const vatRules = selectedCustomer
-    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, selectedCustomer.country)
-    : null
+  // Omvänd betalningsskyldighet (crm#1007) applies where a VAT-registered
+  // seller issues a document that carries VAT to a Swedish business. Once the
+  // buyer's Swedish VAT number is on the customer card the rules are the
+  // invoice's own (0 %, 3231, ruta 41); until then they stay the customer's,
+  // as the server would book them, and the checkbox says what is missing.
+  domesticReverseChargeArmedRef.current =
+    domesticReverseCharge && vatRegistered && mode !== 'self_billed' && watchDocumentType !== 'delivery_note'
+  const domesticReverseChargeAvailable = selectedCustomer?.customer_type === 'swedish_business' &&
+    vatRegistered && mode !== 'self_billed' && watchDocumentType !== 'delivery_note'
+  const domesticReverseChargeOn = domesticReverseCharge && domesticReverseChargeAvailable
+  const domesticReverseChargeRules =
+    domesticReverseChargeOn && selectedCustomer ? resolveInvoiceVatRules(selectedCustomer, DOMESTIC_REVERSE_CHARGE) : null
+  const buyerVatNumberMissing = domesticReverseChargeRules?.ok === false
+  // Organisationsnummer + 01; null for a masked personnummer (enskild firma).
+  const derivedBuyerVatNumber = buyerVatNumberMissing ? deriveSwedishVatNumber(selectedCustomer?.org_number) : null
+  // The invoice's own VAT treatment on the wire: ticked states it, unticked on
+  // a draft that had it clears it, anything else leaves a stored one alone.
+  const vatStatement = domesticReverseChargeStatement({
+    checked: domesticReverseChargeOn,
+    stored: storedDomesticReverseCharge,
+  })
+
+  const vatRules = domesticReverseChargeRules?.ok
+    ? domesticReverseChargeRules.rules
+    : selectedCustomer
+      ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, selectedCustomer.country)
+      : null
 
   // Rendered options and the default are deliberately two different sets:
   // `options` is what may LAWFULLY appear on a line (getPermittedVatRates),
   // `defaultRates` / `defaultRate` is what the form OFFERS by itself
   // (getAvailableVatRates). See components/invoices/line-vat-rates.ts.
-  const vatRatePlan = resolveLineVatRates(selectedCustomer)
+  const vatRatePlan = resolveLineVatRates(selectedCustomer, domesticReverseChargeOn ? DOMESTIC_REVERSE_CHARGE : null)
+
+  // Ticking moves every priced line to 0 % (the only lawful rate under
+  // omvänd betalningsskyldighet); unticking moves them back to the
+  // customer's default, like a customer switch (line-vat-rates.ts).
+  function handleDomesticReverseChargeChange(next: boolean) {
+    setDomesticReverseCharge(next)
+    if (!selectedCustomer) return
+    const nextPlan = resolveLineVatRates(selectedCustomer, next ? DOMESTIC_REVERSE_CHARGE : null)
+    for (const snap of planVatPlanSnap({
+      items: watchItems ?? [],
+      previousDefaultRate: previousDefaultRateRef.current,
+      next: nextPlan,
+    })) {
+      setValue(`items.${snap.index}.vat_rate`, snap.rate, { shouldDirty: true })
+    }
+    previousDefaultRateRef.current = nextPlan.defaultRate
+  }
+
+  // One click from the checkbox's notice: the buyer's Swedish VAT number,
+  // derived from its organisationsnummer, saved on the customer card. Mirrored
+  // on the local copy like a VIES check (handleCustomerVatValidated), so the
+  // lines move to 0 % at once; the session cache catches up on its own.
+  async function handleUseBuyerVatNumber(vatNumber: string) {
+    if (!selectedCustomer || isSavingBuyerVatNumber) return
+    setIsSavingBuyerVatNumber(true)
+    try {
+      const response = await fetch(`/api/customers/${encodeURIComponent(selectedCustomer.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vat_number: vatNumber }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(result, { locale, context: 'customer', statusCode: response.status }))
+      }
+      const savedVatNumber: string = result?.data?.vat_number ?? vatNumber
+      const updatedCustomer: Customer = { ...selectedCustomer, vat_number: savedVatNumber }
+      const nextPlan = resolveLineVatRates(updatedCustomer, DOMESTIC_REVERSE_CHARGE)
+      for (const snap of planVatPlanSnap({
+        items: watchItems ?? [],
+        previousDefaultRate: previousDefaultRateRef.current,
+        next: nextPlan,
+      })) {
+        setValue(`items.${snap.index}.vat_rate`, snap.rate, { shouldDirty: true })
+      }
+      previousDefaultRateRef.current = nextPlan.defaultRate
+      setSelectedCustomer(updatedCustomer)
+      toast({ title: tForm('domestic_reverse_charge_vat_saved', { number: savedVatNumber }) })
+    } catch (error) {
+      toast({
+        title: tForm('domestic_reverse_charge_vat_save_failed'),
+        description: getErrorMessage(error, { locale, context: 'customer' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSavingBuyerVatNumber(false)
+    }
+  }
   // Effective rates of the priced lines, as the server will store them: an
   // absent rate falls back to the customer default (build-invoice-write).
   // Empty for a non-momsregistrerad seller, who charges nothing.
@@ -1724,23 +2007,43 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     rates: (watchItems ?? []).filter((item) => item?.line_type !== 'text').map((item) => item?.vat_rate),
   })
 
+  // A received self-bill books the customer's document VAT per rate, on the
+  // summed base and spread over the lines, from the five fields the
+  // self-billed endpoint takes (crm#1367): Summering shows those figures, so
+  // the screen is what registering it books.
+  const selfBilledFigures = mode === 'self_billed'
+    ? selfBilledSaleAmounts(
+        watchItems.map((item) => ({
+          quantity: item.quantity || 0,
+          unit_price: item.unit_price || 0,
+          vat_rate: item.vat_rate,
+        })),
+        vatRules?.rate ?? 25,
+      )
+    : null
+
   // Calculate per-item VAT. When not VAT-registered every rate is forced to 0
   // so vatAmount stays 0 and total === subtotal.
   const vatByRate = new Map<number, { base: number; vat: number }>()
   let vatAmount = 0
-  for (const item of watchItems) {
-    const rate = vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0
-    const lineTotal = computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
-    const lineVat = Math.round(lineTotal * rate / 100 * 100) / 100
-    vatAmount += lineVat
-    // Summering groups the priced lines; a text row has no rate of its own.
-    if (item.line_type === 'text') continue
-    const existing = vatByRate.get(rate) || { base: 0, vat: 0 }
-    existing.base = Math.round((existing.base + lineTotal) * 100) / 100
-    existing.vat = Math.round((existing.vat + lineVat) * 100) / 100
-    vatByRate.set(rate, existing)
+  if (selfBilledFigures?.ok) {
+    vatAmount = selfBilledFigures.vatAmount
+    for (const group of selfBilledFigures.byRate) vatByRate.set(group.rate, { base: group.base, vat: group.vat })
+  } else {
+    for (const item of watchItems) {
+      const rate = vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0
+      const lineTotal = computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
+      const lineVat = computeLineVat(lineTotal, rate)
+      vatAmount += lineVat
+      // Summering groups the priced lines; a text row has no rate of its own.
+      if (item.line_type === 'text') continue
+      const existing = vatByRate.get(rate) || { base: 0, vat: 0 }
+      existing.base = roundOre(existing.base + lineTotal)
+      existing.vat = roundOre(existing.vat + lineVat)
+      vatByRate.set(rate, existing)
+    }
   }
-  const total = subtotal + vatAmount
+  const total = selfBilledFigures?.ok ? selfBilledFigures.total : subtotal + vatAmount
   // Summering's VAT lines: a 0 % rate says why (omvänd skattskyldighet,
   // export, momsfri) with the treatment the write path derives; a seller
   // that is not VAT registered shows none (lib/invoices/editor/summary-vat).
@@ -1825,9 +2128,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           if (!isSek && !(typeof rate === 'number' && rate > 0)) continue
           for (const it of inv.invoice_items ?? []) {
             if (!it.deduction_type || !it.deduction_amount) continue
-            const sek = isSek ? it.deduction_amount : it.deduction_amount * (rate as number)
+            const sek = isSek ? roundOre(it.deduction_amount) : sekOfForeign(it.deduction_amount, rate as number)
             if (!(it.deduction_type in totals)) continue
-            totals[it.deduction_type] += roundOre(sek)
+            totals[it.deduction_type] += sek
           }
         }
         setPriorYearDeductions(totals)
@@ -1843,25 +2146,34 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // supabase client is stable; initial?.id only changes with the invoice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isInvoiceDoc, company?.id, watchCustomerId, invoiceYear, initial?.id])
+  // What saving stores per row (computeLineDeductions, the write path's
+  // rule): whole kronor per claim on a SEK invoice, so the deduction and
+  // "Att betala" shown here are the ones the invoice gets.
+  const lineDeductions = isInvoiceDoc
+    ? computeLineDeductions(
+        watchItems.map((item) => ({
+          unit_price: item.unit_price || 0,
+          quantity: item.quantity || 0,
+          discount_percent: item.discount_percent,
+          deduction_type: item.deduction_type,
+          // Grön teknik's rate follows the installation type.
+          work_type: item.work_type,
+          // Same rate resolution as the VAT totals loop above: the deduction
+          // base is the line total inkl. moms (HUSFL 6-9 §§).
+          vat_rate: vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0,
+        })),
+        { currency: watchCurrency },
+      )
+    : []
   const deductionByKind = { rot: 0, rut: 0, gron_teknik: 0 }
   if (isInvoiceDoc) {
-    for (const item of watchItems) {
-      if (!item.deduction_type) continue
-      const amount = computeDeduction({
-        unit_price: item.unit_price || 0,
-        quantity: item.quantity || 0,
-        discount_percent: item.discount_percent,
-        deduction_type: item.deduction_type,
-        // Grön teknik's rate follows the installation type.
-        work_type: item.work_type,
-        // Same rate resolution as the VAT totals loop above: the deduction
-        // base is the line total inkl. moms (HUSFL 6-9 §§).
-        vat_rate: vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0,
-      })
+    watchItems.forEach((item, index) => {
+      if (!item.deduction_type) return
+      const amount = lineDeductions[index] ?? 0
       if (item.deduction_type === 'rot') deductionByKind.rot += amount
       else if (item.deduction_type === 'gron_teknik') deductionByKind.gron_teknik += amount
       else deductionByKind.rut += amount
-    }
+    })
   }
   // (x + 0 is exact, so a ROT/RUT-only form sums exactly as before.)
   const deductionTotal =
@@ -2090,21 +2402,37 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       case 'create':
         void handleSubmit((data) => prepareConfirm(data, intent), onInvalidSubmit)()
         return
+      case 'issue_paid': {
+        // A periodiserad line cannot ride a cash verifikat (lib/invoices/paid-at-issue.ts).
+        if (paidAtIssueBlockReason({ items: watchItems }) === 'periodisering') {
+          toast({
+            title: tShell('issue_paid_blocked_title'),
+            description: tShell('issue_paid_block_periodisering'),
+            variant: 'destructive',
+          })
+          return
+        }
+        setPaidAccountChoice('')
+        setPaidEmailReceipt(true)
+        void handleSubmit((data) => prepareConfirm(data, intent), onInvalidSubmit)()
+        return
+      }
     }
   }
 
   async function prepareConfirm(data: FormData, intent: ConfirmIntent) {
     // A send books on the invoice date: one in a locked or closed period is
     // refused by the database, so the date is the thing to fix first (the
-    // status line says why).
-    if (intent.kind === 'send' && dateLock && data.document_type === 'invoice') {
+    // status line says why). A kontantfaktura books its payment on that date.
+    const issues = intent.kind === 'send' || intent.kind === 'issue_paid'
+    if (issues && dateLock && data.document_type === 'invoice') {
       focusSettingsField('invoice_date')
       return
     }
     // The send refuses a faktura without the seller's VAT number, and the
     // create before it would already have numbered it: stop here and say why
     // (the status line carries the fix).
-    if (intent.kind === 'send' && sellerVatMissing) {
+    if (issues && sellerVatMissing) {
       toast({
         title: tShell('toast_cannot_send_title'),
         description: getErrorMessage({ error: { code: 'INVOICE_SEND_VAT_NUMBER_MISSING' } }, { locale, context: 'invoice' }),
@@ -2135,8 +2463,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           { signal: AbortSignal.timeout(5000) },
         )
         if (r.ok) {
-          const json = await r.json()
-          setNumberPreview(json?.data?.preview ?? null)
+          const read = readNextNumberPreview(await r.json())
+          setNumberPreview(read.preview)
+          setSeriesContinuation(read.continuation)
         }
       } catch {
         // Preview is best-effort; the allocator at create time is the source of truth.
@@ -2170,7 +2499,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   // Missing payment details are fixed where they show, in the Betalning
   // section: the inline form when there are none, the panel when they exist
-  // but are hidden. Members are told to ask an administrator there.
+  // but are hidden. Members are told to ask an administrator there. A
+  // foreign-currency invoice is fixed by choosing an account for its
+  // currency, which the section offers instead: the inline form saves SEK
+  // details only, so the send it let through failed again (crm#1273).
   function openPayeeFix() {
     setPane('form')
     if (paymentSummary?.storedAccountUsable && isCompanyAdmin && canWrite) {
@@ -2178,10 +2510,45 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       setPaymentPanelOpen(true)
       return
     }
-    if (isCompanyAdmin && canWrite) setAddingPayee(true)
+    if (isCompanyAdmin && canWrite && !foreignChoice) setAddingPayee(true)
     window.setTimeout(() => {
       document.getElementById('invoice-editor-payment')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 0)
+  }
+
+  // A foreign-currency invoice with no account chosen for its currency
+  // (crm#1273). An administrator makes the picked account the currency's
+  // default, printing the IBAN its bank connection knows when it prints none
+  // yet, so later invoices in that currency have it too. Anyone else picks
+  // an account that already prints an IBAN for this invoice alone.
+  async function chooseForeignPayee(cashAccountId: string) {
+    const currency = watchCurrency as Currency
+    const candidate = foreignChoice?.options.find((option) => option.id === cashAccountId)
+    if (!candidate) return
+    setChoosingForeignPayee(true)
+    try {
+      if (isCompanyAdmin && canWrite) {
+        await chooseForeignInvoicePayee({ currency, cashAccountId, bankIban: candidate.bankIban, locale })
+        const fresh = await fetch('/api/cash-accounts/payee-defaults').then((res) => (res.ok ? res.json() : null))
+        if (fresh?.data) setPayeeState(fresh.data)
+        await refetchCompanySettings()
+        await invalidateReferenceData(['ref:cash-accounts', 'company_settings'])
+        setPreviewRefreshKey((key) => key + 1)
+        toast({
+          title: tPay('foreign_chosen_title', { currency }),
+          description: tPay('foreign_chosen_description', { account: candidate.label, currency }),
+        })
+      } else {
+        setValue('payment_cash_account_id', cashAccountId, { shouldDirty: true })
+      }
+      if (queuedIntent && pendingData) {
+        continueToConfirm(queuedIntent, pendingData.document_type, { bank: true })
+      }
+    } catch (err) {
+      toast({ title: tPay('foreign_choose_failed'), description: getErrorMessage(err, { locale }), variant: 'destructive' })
+    } finally {
+      setChoosingForeignPayee(false)
+    }
   }
 
   async function handleBankSetupComplete() {
@@ -2228,6 +2595,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const sanitizedPayload = buildInvoiceWritePayload(withQuoteValidity(pendingData), {
       oreRounding,
       defaultDims,
+      vatStatement,
     })
 
     try {
@@ -2267,17 +2635,24 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // (lib/invoices/editor/send-sequence.ts). "Jag skickar själv" lands on the
   // detail page with ?download=1, which downloads the archived, numbered PDF
   // the customer is to get.
-  async function sendFromEditor(channel: EditorChannel) {
+  async function sendFromEditor(channel: EditorChannel, paidAtIssue: { account_number: string } | null = null) {
     if (!pendingData) return
     setIsSubmitting(true)
     try {
       const result = await persistAndSend({
+        paidAtIssue,
         mode: isEditMode ? 'edit' : 'create',
         invoiceId: initial?.id ?? null,
         invoiceNumber: initial?.invoice_number ?? null,
         documentType: pendingData.document_type,
-        payload: buildInvoiceWritePayload(withQuoteValidity(pendingData), { oreRounding, defaultDims }),
+        payload: buildInvoiceWritePayload(withQuoteValidity(pendingData), { oreRounding, defaultDims, vatStatement }),
         channel,
+        // A saved draft attaches its files at once (the confirm's section
+        // targets it); only a new document's files wait for the save.
+        attachmentDocumentIds:
+          (channel === 'email' || channel === 'peppol') && !paidAtIssue && !isEditMode
+            ? stagedAttachments.map((file) => file.document_id)
+            : undefined,
         email:
           channel === 'email'
             ? {
@@ -2315,6 +2690,29 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         return
       }
 
+      if (paidAtIssue) {
+        // Kontantfaktura: issued paid and booked; the receipt was mailed or
+        // is downloaded on the detail page.
+        toast({
+          title: tShell('toast_paid_title'),
+          description: result.receiptFailed
+            ? tShell('toast_paid_receipt_failed')
+            : result.partial
+              ? tSend('mark_partial_success')
+              : channel === 'email'
+                ? tShell('toast_paid_emailed')
+                : undefined,
+          ...(result.receiptFailed || result.partial ? { variant: 'destructive' as const } : {}),
+        })
+        setConfirmIntent(null)
+        router.replace(
+          channel === 'manual' && !result.partial
+            ? `/invoices/${result.invoiceId}?download=1`
+            : `/invoices/${result.invoiceId}`,
+        )
+        return
+      }
+
       const booked = booksOnIssue && !result.partial
       const marked = channel === 'manual'
       toast({
@@ -2329,7 +2727,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             : tSend('partial_success', { message: result.message ?? tShell('toast_sent_title') })
           : channel === 'email'
             ? result.message ?? undefined
-            : undefined,
+            : isMailboxChannel(channel)
+              ? tShell('toast_sent_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[channel] })
+              : undefined,
         ...(result.partial ? { variant: 'destructive' as const } : {}),
       })
       setConfirmIntent(null)
@@ -2516,6 +2916,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       saveAsDraft: true,
       oreRounding,
       defaultDims,
+      vatStatement,
     })
 
     try {
@@ -2558,6 +2959,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const payload = buildInvoiceWritePayload(withQuoteValidity(data), {
       oreRounding,
       defaultDims,
+      vatStatement,
     })
 
     try {
@@ -2680,9 +3082,24 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     isSandbox,
     customerSelected: Boolean(selectedCustomer),
     customerEmail: selectedCustomer?.email ?? null,
-    // No company-access or customer-participant signal exists before the
-    // invoice does; e-fakturor are sent from the detail page.
-    peppolReady: false,
+    // Peppol: a SEK faktura to a customer with a Peppol id (0007 and the
+    // organisationsnummer), where the company sends e-fakturor.
+    peppol: resolvePeppolChannel({
+      sending: peppolSending,
+      documentType: watchDocumentType,
+      isCreditNote: isCreditNoteDocument(initial ?? {}),
+      currency: watchCurrency,
+      customer: selectedCustomer,
+    }),
+    // Kivra, Billo: a plain SEK faktura to a customer the mailbox can be
+    // addressed to, where the company sends through the provider.
+    mailboxReady: resolveMailboxReady({
+      activeProviders: mailboxProviders,
+      documentType: watchDocumentType,
+      isCreditNote: isCreditNoteDocument(initial ?? {}),
+      currency: watchCurrency,
+      customer: selectedCustomer,
+    }),
   }
   const channelOptions = resolveChannelOptions(channelContext)
   const channel = resolveEffectiveChannel(channelChoice, channelContext)
@@ -2695,7 +3112,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         ? tShell('email_unavailable_manual')
         : emailTabBlock === 'peppol'
           ? tShell('email_unavailable_peppol')
-          : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
+          : emailTabBlock === 'kivra' || emailTabBlock === 'billo'
+            ? tShell('email_unavailable_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[emailTabBlock] })
+            : tShell(CHANNEL_BLOCK_KEYS[emailTabBlock])
   const editorMode = isEditMode ? 'edit' : 'create'
   const primaryContext = { mode: editorMode, isSelfBilled, documentType: watchDocumentType, channel, booksOnIssue } as const
   const primaryAction = resolvePrimaryAction(primaryContext)
@@ -2711,9 +3130,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // values through the same body builder (lib/invoices/editor/preview-request).
   const formValues = watch()
   const printedNumber = (isEditMode ? initial?.invoice_number : null) ?? numberPreview
+  // The preview states omvänd betalningsskyldighet only once the server would
+  // accept it (the buyer's VAT number is on the card), so a missing number
+  // shows as the checkbox's notice, not as a failed preview.
   const previewRequest = isSelfBilled
     ? null
-    : buildEditorPreviewRequest(formValues, { oreRounding, defaultDims, invoiceNumber: printedNumber ?? null })
+    : buildEditorPreviewRequest(formValues, {
+        oreRounding,
+        defaultDims,
+        invoiceNumber: printedNumber ?? null,
+        vatStatement: domesticReverseChargeRules?.ok ? vatStatement : undefined,
+      })
   const previewBody = previewRequest ? JSON.stringify(previewRequest) : null
   const emailRequestBody = previewRequest
     ? JSON.stringify({
@@ -2729,10 +3156,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       : null
 
   // ===== Form sections (lib/invoices/editor/details, rows, payment-summary) =
-  const todayIso = format(new Date(), 'yyyy-MM-dd')
+  const todayIso = todayIsoStockholm()
   // The document's language follows the customer card (there is no
   // per-invoice language): English drops the OCR row and relabels the PDF.
-  const documentLanguage: 'sv' | 'en' = selectedCustomer?.language === 'en' ? 'en' : 'sv'
+  const documentLanguage: DocumentLanguage = documentLanguageOf(selectedCustomer)
   // The invoice date against the lock date and the fiscal periods, only where
   // sending books on it (a faktura under faktureringsmetoden).
   const dateLock =
@@ -2743,6 +3170,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           periods: fiscalPeriods,
         })
       : null
+  // The same date against the filed momsdeklarationer: an open date in a
+  // filed period books, and the declaration then needs correcting. Said
+  // beside the date, where it can still be changed.
+  const filedVatAsked = useFiledVatPeriod(watchInvoiceDate, !isSelfBilled && booksOnIssue)
+  const dateFiledVat = dateLock ? null : filedVatAsked
   // A momsregistrerad company without its VAT number cannot send a faktura
   // (ML 17 kap. 24 §; the send route refuses it after the create has numbered
   // it), so the editor says so before the confirm instead.
@@ -2760,6 +3192,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     deliveryDate: watchDeliveryDate || '',
     validUntil: watchValidUntil || '',
     dateLock,
+    dateFiledVat: !!dateFiledVat,
   })
   const detailsExpanded = detailsOpen || detailsReasons.length > 0
   const detailsChips = resolveDetailsChips({
@@ -2799,9 +3232,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const customerLine = selectedCustomer
     ? [
         selectedCustomer.customer_type === 'individual' ? '' : selectedCustomer.org_number ?? '',
-        [selectedCustomer.address_line1, [selectedCustomer.postal_code, selectedCustomer.city].filter(Boolean).join(' ')]
-          .filter(Boolean)
-          .join(', '),
+        [selectedCustomer.address_line1, postalPlaceLine(selectedCustomer)].filter(Boolean).join(', '),
         selectedCustomer.email ?? '',
       ]
         .filter(Boolean)
@@ -2819,6 +3250,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         : tForm('vies_valid', { number: selectedCustomer.vat_number })
       : null
   const watchInvoiceMarking = watch('invoice_marking')
+  const markingShown = markingOpen || !!watchInvoiceMarking
+  const deliveryAddressShown = deliveryAddressOpen || normalizeDeliveryAddress(watch('delivery_address')) !== null
+  const deliveryCountryOptions = useMemo(() => getCountryOptions(locale === 'en' ? 'en' : 'sv'), [locale])
 
   // Skattereduktion: the rows that claim one, and what the section says.
   const deductionRowIndexes = (watchItems ?? [])
@@ -2889,6 +3323,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         }
       : null
   const paymentSummary = paymentSummaryInput ? buildEditorPaymentSummary(paymentSummaryInput) : null
+  // A foreign-currency invoice with nothing to pay to: the accounts that can
+  // carry it once chosen, instead of the SEK details form (crm#1273).
+  const foreignChoice = foreignPayeeChoice({
+    summary: paymentSummary,
+    currency: watchCurrency as Currency,
+    accounts: payeeState?.accounts ?? null,
+    canEditCompany: isCompanyAdmin && canWrite,
+    label: payeeAccountLabel,
+  })
   const paymentOverridden = Boolean(watchQrMode) || Boolean(watchPayeeAccount)
   const qrReasonFor = (mode: InvoiceQrMode): string | null => {
     if (!paymentSummaryInput) return null
@@ -3053,35 +3496,88 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // ===== Confirm dialog ====================================================
   const confirmData = pendingData
   const confirmDocType = confirmData?.document_type ?? watchDocumentType
-  const confirmChannel = confirmIntent?.kind === 'send' ? confirmIntent.channel : null
+  // Kontantfaktura (crm#1281): issued paid at once to a 19xx account active
+  // in the chart (kassa, bank, Swish). The default is the account the invoice
+  // asks to be paid to, else the primary bank account. The receipt is mailed when email can go.
+  const isPaidConfirm = confirmIntent?.kind === 'issue_paid'
+  const paidAccountOptions = activeAccounts.filter((account) => isPaidAtIssueAccount(account.account_number))
+  const payeeLedgerAccount = (
+    watchPayeeAccount ? payeeState?.accounts.find((account) => account.id === watchPayeeAccount) : defaultPayee
+  )?.ledger_account
+  const defaultPaidAccount =
+    [payeeLedgerAccount, paymentLedger].find(
+      (candidate) => candidate && paidAccountOptions.some((option) => option.account_number === candidate),
+    ) ??
+    paidAccountOptions[0]?.account_number ??
+    ''
+  const paidAccount = paidAccountChoice || defaultPaidAccount
+  const paidEmailAvailable = channelOptions.some((option) => option.channel === 'email' && option.available)
+  const paidChannel: EditorChannel = paidEmailAvailable && paidEmailReceipt ? 'email' : 'manual'
+  const confirmChannel = confirmIntent?.kind === 'send' ? confirmIntent.channel : isPaidConfirm ? paidChannel : null
+  // Only a faktura continues the company's series through the settings; a
+  // numbered draft keeps its number.
+  const confirmContinuation =
+    confirmDocType === 'invoice' && !(isEditMode && initial?.invoice_number) ? seriesContinuation : null
   const confirmNumber =
     confirmDocType === 'delivery_note' && !isEditMode
       ? null
-      : (isEditMode ? initial?.invoice_number : null) ?? numberPreview
+      : (isEditMode ? initial?.invoice_number : null) ?? confirmContinuation?.number ?? numberPreview
   const confirmDoc = tShell(`doc_${confirmDocType}`)
   const confirmCustomer = selectedCustomer?.name ?? ''
+  // A mailbox send names its provider in the title and the Utskick row.
+  const confirmMailbox = confirmChannel && isMailboxChannel(confirmChannel) ? confirmChannel : null
+  const confirmProvider = confirmMailbox ? DIGITAL_MAILBOX_PROVIDER_NAMES[confirmMailbox] : ''
   const confirmTitleKey =
     confirmIntent?.kind === 'create'
       ? 'confirm_title_create'
-      : confirmChannel === 'email'
+      : isPaidConfirm
+        ? 'confirm_title_paid'
+        : confirmChannel === 'email'
         ? 'confirm_title_email'
-        : 'confirm_title_manual'
+        : confirmChannel === 'peppol'
+          ? 'confirm_title_peppol'
+          : confirmMailbox
+            ? 'confirm_title_mailbox'
+            : 'confirm_title_manual'
   const confirmTitle = confirmNumber
-    ? tShell(confirmTitleKey, { doc: confirmDoc, number: confirmNumber, customer: confirmCustomer })
-    : tShell(`${confirmTitleKey}_no_number`, { doc: confirmDoc, customer: confirmCustomer })
+    ? tShell(confirmTitleKey, { doc: confirmDoc, number: confirmNumber, customer: confirmCustomer, provider: confirmProvider })
+    : tShell(`${confirmTitleKey}_no_number`, { doc: confirmDoc, customer: confirmCustomer, provider: confirmProvider })
   const confirmCurrency = (confirmData?.currency ?? watchCurrency) as Currency
   const confirmRows: Array<{ label: string; value: string }> = []
+  // An e-faktura carries the product rows only: say so before the send, as
+  // the invoice page's Peppol confirm does.
+  const confirmPeppolTextRowsLeftOut =
+    confirmChannel === 'peppol' ? countTextRowsLeftOutOfPeppol(confirmData?.items ?? []) : 0
   if (confirmChannel === 'email') {
     confirmRows.push({
       label: tShell('confirm_row_to'),
       value: [tShell('confirm_to_with_pdf', { email: selectedCustomer?.email ?? '' }), ...(isCompanyAdmin ? extraCc : [])].join(', '),
     })
+  } else if (confirmChannel === 'peppol') {
+    confirmRows.push({
+      label: tShell('confirm_row_channel'),
+      value: tShell('confirm_channel_peppol', {
+        recipient: `0007:${normalizeOrgNumber(selectedCustomer?.org_number) ?? ''}`,
+      }),
+    })
+  } else if (confirmMailbox) {
+    confirmRows.push({
+      label: tShell('confirm_row_channel'),
+      value: tShell('confirm_channel_mailbox', { provider: confirmProvider }),
+    })
   } else if (confirmChannel) {
-    confirmRows.push({ label: tShell('confirm_row_channel'), value: tShell('confirm_channel_manual') })
+    confirmRows.push({
+      label: tShell('confirm_row_channel'),
+      value: tShell(isPaidConfirm ? 'confirm_paid_channel_manual' : 'confirm_channel_manual'),
+    })
   }
   confirmRows.push({
     label: tShell('confirm_row_number'),
-    value: confirmNumber ? tShell('confirm_number_locks', { number: confirmNumber }) : tShell('confirm_number_next'),
+    value: confirmContinuation
+      ? tShell('confirm_number_continues', { number: confirmContinuation.number, highest: confirmContinuation.highest })
+      : confirmNumber
+        ? tShell('confirm_number_locks', { number: confirmNumber })
+        : tShell('confirm_number_next'),
   })
   if (confirmDocType === 'quote') {
     confirmRows.push({
@@ -3089,6 +3585,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       value: tShell('confirm_amount_valid', {
         amount: formatCurrency(displayedToPay, confirmCurrency),
         date: withQuoteValidity({ document_type: 'quote', due_date: confirmData?.due_date ?? '', valid_until: confirmData?.valid_until }).due_date,
+      }),
+    })
+  } else if (isPaidConfirm) {
+    confirmRows.push({
+      label: tShell('confirm_row_paid'),
+      value: tShell('confirm_paid_value', {
+        amount: formatCurrency(displayedToPay, confirmCurrency),
+        date: confirmData?.invoice_date ?? '',
       }),
     })
   } else if (confirmDocType !== 'delivery_note') {
@@ -3102,21 +3606,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
   const entityType: EntityType =
     (companySettings?.entity_type as EntityType | null | undefined) ?? company?.entity_type ?? 'enskild_firma'
-  const accountNames = new Map(activeAccounts.map((account) => [account.account_number, account.account_name]))
-  let confirmVoucher: ConfirmVoucher | null = null
-  if (confirmIntent?.kind === 'create') {
-    confirmVoucher = { kind: 'note', text: tShell('confirm_create_note') }
-  } else if (confirmChannel && confirmDocType === 'invoice' && confirmData) {
-    if (!booksOnIssue) {
-      confirmVoucher = {
-        kind: 'note',
-        text: accountingMethod === 'cash' ? tShell('confirm_voucher_cash') : tShell('confirm_voucher_deferred'),
-      }
-    } else if (confirmCurrency !== 'SEK') {
-      confirmVoucher = { kind: 'note', text: tShell('confirm_voucher_foreign') }
-    } else {
-      const lines = proposeDraftSendLines({
+  // The voucher is stated in kronor only for a SEK invoice (the rate is the send's).
+  const confirmInForeignCurrency = confirmCurrency !== 'SEK'
+  // The form as the confirm's voucher previews read it.
+  const confirmDraft: DraftVoucherInput | null = confirmData
+    ? {
         invoiceNumber: confirmNumber ?? null,
+        invoiceDate: confirmData.invoice_date,
         currency: confirmCurrency,
         vatTreatment: vatRules?.treatment ?? 'standard_25',
         vatRegistered,
@@ -3124,17 +3620,55 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         items: confirmData.items,
         defaultDimensions: defaultDims,
         entityType,
-      })
+      }
+    : null
+  let confirmVoucher: ConfirmVoucher | null = null
+  if (confirmIntent?.kind === 'create') {
+    confirmVoucher = { kind: 'note', text: tShell('confirm_create_note') }
+  } else if (isPaidConfirm && confirmData && confirmDraft) {
+    // One verifikat in either accounting method: the payment account against
+    // revenue and VAT, the generator the payment at issue books with.
+    const lines = paidAccount
+      ? proposeDraftCashLines(confirmDraft, paidAccount, { deferDeductionShare: accountingMethod === 'cash' })
+      : []
+    confirmVoucher =
+      lines.length > 0
+        ? {
+            kind: 'lines',
+            date: confirmData.invoice_date,
+            lines: voucherLineViews(lines),
+          }
+        : {
+            kind: 'note',
+            text: tShell(
+              !paidAccount
+                ? 'confirm_paid_no_account'
+                : confirmInForeignCurrency
+                  ? 'confirm_voucher_paid_foreign'
+                  : 'confirm_voucher_paid',
+            ),
+          }
+  } else if (confirmChannel && confirmDocType === 'invoice' && confirmData && confirmDraft) {
+    if (!booksOnIssue) {
+      confirmVoucher = {
+        kind: 'note',
+        text: accountingMethod === 'cash' ? tShell('confirm_voucher_cash') : tShell('confirm_voucher_deferred'),
+      }
+    } else if (confirmInForeignCurrency) {
+      confirmVoucher = { kind: 'note', text: tShell('confirm_voucher_foreign') }
+    } else {
+      const lines = proposeDraftSendLines(confirmDraft)
       if (lines.length > 0) {
+        // The periodisering entries the send books besides this verifikat.
+        const accrualDates = draftAccrualEntryDates(confirmDraft)
         confirmVoucher = {
           kind: 'lines',
           date: confirmData.invoice_date,
-          lines: lines.map((line) => ({
-            account: line.account_number,
-            name: accountNames.get(line.account_number) ?? line.line_description,
-            debit: parseFloat(line.debit_amount) || 0,
-            credit: parseFloat(line.credit_amount) || 0,
-          })),
+          lines: voucherLineViews(lines),
+          note:
+            accrualDates.length > 0
+              ? tShell('confirm_voucher_accruals', { count: accrualDates.length, first: accrualDates[0] })
+              : undefined,
         }
       }
     }
@@ -3142,9 +3676,28 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const confirmLabel =
     confirmIntent?.kind === 'create'
       ? tShell('action_create_without_sending')
-      : tShell(resolveSendLabel({ documentType: confirmDocType, channel: confirmChannel ?? channel, booksOnIssue }))
+      : isPaidConfirm
+        ? tShell('action_issue_paid_confirm')
+        : tShell(resolveSendLabel({ documentType: confirmDocType, channel: confirmChannel ?? channel, booksOnIssue }))
+  // Bilagor in the confirm (#79, crm#1315): the same rule and section as the
+  // invoice page's send dialog. A saved draft attaches each file at once; a
+  // new document holds them until the send saves it (send-sequence step 2).
+  const confirmAttachments: InvoiceAttachmentsTarget | null =
+    canWrite &&
+    offersInvoiceAttachments({
+      channel: confirmIntent?.kind === 'send' ? confirmIntent.channel : null,
+      status: isEditMode ? (initial?.status ?? null) : null,
+      isSandbox,
+      canEmail: hasEmailSend,
+      invoicer: isInvoicer,
+    })
+      ? isEditMode && initial?.id
+        ? { kind: 'invoice', invoiceId: initial.id }
+        : { kind: 'staged', files: stagedAttachments, onChange: setStagedAttachments }
+      : null
   const confirmDisabled =
     !canWrite ||
+    (isPaidConfirm && !isPaidAtIssueAccount(paidAccount)) ||
     (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) ||
     (confirmChannel === 'email' && isCompanyAdmin && extraCcError !== null)
 
@@ -3175,7 +3728,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     copyOf: isCopyMode && copyInitial ? copyInitial.source_invoice_number : null,
     savedAt:
       isEditMode && updatedAt && !Number.isNaN(updatedAt.getTime())
-        ? format(updatedAt, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
+        ? todayIsoStockholm(updatedAt) === todayIsoStockholm()
           ? format(updatedAt, 'HH:mm')
           : format(updatedAt, 'yyyy-MM-dd HH:mm')
         : null,
@@ -3191,13 +3744,20 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           label: tShell(entry.label),
           selected: entry.selected,
           disabled: !entry.available || !canWrite,
-          reason: entry.reason ? tShell(EMAIL_BLOCK_KEYS[entry.reason]) : null,
+          // A mailbox says where the faktura lands ("Till kundens Kivra").
+          reason: entry.reason
+            ? tShell(CHANNEL_BLOCK_KEYS[entry.reason])
+            : isMailboxChannel(entry.channel)
+              ? tShell('channel_mailbox_hint', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[entry.channel] })
+              : null,
           onSelect: () => requestIntent(entry.intent),
         })),
         actions: editorMenu.actions.map((entry) => ({
           key: entry.intent.kind,
           label: tShell(entry.label),
           disabled: !canWrite,
+          // Says when to pick it: the Fortnox "kontantfaktura" (crm#1281).
+          reason: entry.intent.kind === 'issue_paid' ? tShell('action_issue_paid_hint') : null,
           onSelect: () => requestIntent(entry.intent),
         })),
       }
@@ -3297,7 +3857,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             label={
               <>
                 {isSelfBilled ? ts('customer_label') : t('customer_card_title')}
-                <RequiredMark />
               </>
             }
             aside={
@@ -3340,9 +3899,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 />
               )}
             />
+            {/* The customer list could not be read: said under the picker it
+                feeds, muted (the page's one ochre line is the status line). */}
+            {customersError ? (
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground" role="alert">
+                <span>{t('load_customers_failed_title')}</span>
+                <Button variant="link" onClick={() => void refreshCustomers()}>
+                  {tCommon('retry')}
+                </Button>
+              </div>
+            ) : null}
             {selectedCustomer && (
               <div
-                className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] leading-5 text-muted-foreground"
+                className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground"
                 data-ph-mask=""
               >
                 {customerTypeLabel && <Badge variant="secondary">{customerTypeLabel}</Badge>}
@@ -3361,12 +3930,71 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 onValidated={handleCustomerVatValidated}
               />
             ) : viesLine ? (
-              <p className="mt-2 text-[12.5px] leading-5 text-muted-foreground" data-ph-mask="">
+              <p className="mt-2 text-xs leading-5 text-muted-foreground" data-ph-mask="">
                 {viesLine}
               </p>
             ) : null}
             {errors.customer_id && (
               <p className="mt-2 text-sm text-destructive">{errors.customer_id.message}</p>
+            )}
+
+            {/* Omvänd betalningsskyldighet for construction services
+                (crm#1007): the seller states it per invoice, so it sits with
+                the buyer it depends on, only for a Swedish business. Most
+                invoices to a Swedish business are not construction services,
+                so it waits behind an add-link like Märkning; it shows open
+                when asked for, ticked, or stored on the invoice. The buyer's
+                Swedish VAT number must print on the invoice: when the card
+                lacks it, one click saves the one the org number gives. */}
+            {domesticReverseChargeAvailable && !reverseChargeOpen && !domesticReverseCharge && (
+              <button
+                type="button"
+                className={cn(ADD_ROW_LINK_CLASS, 'mt-3')}
+                onClick={() => {
+                  setReverseChargeOpen(true)
+                  window.setTimeout(() => document.getElementById('domestic-reverse-charge')?.focus(), 0)
+                }}
+              >
+                + {tForm('domestic_reverse_charge_add')}
+              </button>
+            )}
+            {domesticReverseChargeAvailable && (reverseChargeOpen || domesticReverseCharge) && (
+              <div className="mt-3 space-y-1">
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="domestic-reverse-charge"
+                    checked={domesticReverseCharge}
+                    onCheckedChange={(checked) => {
+                      setReverseChargeOpen(true)
+                      handleDomesticReverseChargeChange(checked === true)
+                    }}
+                    className="mt-0.5"
+                  />
+                  <Label htmlFor="domestic-reverse-charge" className="text-[13px] font-normal leading-5">
+                    {tForm('domestic_reverse_charge_label')}
+                  </Label>
+                  <HelpPopover className="mt-0.5 shrink-0">
+                    {tForm('domestic_reverse_charge_hint')}
+                  </HelpPopover>
+                </div>
+                {buyerVatNumberMissing && selectedCustomer && (
+                  <AttnLine
+                    className="pl-6 text-muted-foreground"
+                    action={
+                      derivedBuyerVatNumber && canWrite
+                        ? {
+                            label: isSavingBuyerVatNumber
+                              ? tForm('domestic_reverse_charge_vat_saving')
+                              : tForm('domestic_reverse_charge_use_vat', { number: derivedBuyerVatNumber }),
+                            onClick: () => void handleUseBuyerVatNumber(derivedBuyerVatNumber),
+                          }
+                        : { label: tVat('open_customer_action'), href: `/customers/${selectedCustomer.id}` }
+                    }
+                  >
+                    {tForm('domestic_reverse_charge_vat_missing')}
+                  </AttnLine>
+                )}
+              </div>
             )}
 
             {/* References are per-invoice data, not defaults: always visible
@@ -3409,7 +4037,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 {/* Fakturamärkning: one buyer-required marking string
                     (kostnadsställe/projekt/PO), separate from Er referens.
                     Plain input, never comma-split. */}
-                {markingOpen || watchInvoiceMarking ? (
+                {markingShown && (
                   <div className="mt-4 space-y-2">
                     <Label htmlFor="invoice_marking" className={FIELD_LABEL_CLASS}>
                       {t('invoice_marking_label')}
@@ -3422,17 +4050,139 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       {...register('invoice_marking')}
                     />
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    className={cn(ADD_ROW_LINK_CLASS, 'mt-3')}
-                    onClick={() => {
-                      setMarkingOpen(true)
-                      window.setTimeout(() => setFocus('invoice_marking'), 0)
-                    }}
-                  >
-                    + {t('invoice_marking_label')}
-                  </button>
+                )}
+                {/* Leveransadress (crm#1547): where the goods go when that is
+                    not the customer's address. Printed under the buyer on the
+                    PDF and carried to Peppol; most invoices have none, so it
+                    waits behind an add-link like Märkning. */}
+                {deliveryAddressShown && (
+                  <div role="group" aria-labelledby="delivery-address-title" className="mt-4" data-ph-mask="">
+                    <p id="delivery-address-title" className="mb-2 text-xs text-muted-foreground">
+                      {tForm('delivery_address_label')}
+                    </p>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="delivery_address_name" className={FIELD_LABEL_CLASS}>
+                          {tForm('delivery_address_name')}
+                        </Label>
+                        <Input
+                          id="delivery_address_name"
+                          maxLength={DELIVERY_ADDRESS_MAX_LENGTH.name}
+                          className="text-[13px]"
+                          {...register('delivery_address.name')}
+                        />
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_line1" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_line1')}
+                          </Label>
+                          <Input
+                            id="delivery_address_line1"
+                            maxLength={DELIVERY_ADDRESS_MAX_LENGTH.address_line1}
+                            className="text-[13px]"
+                            {...register('delivery_address.address_line1')}
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_line2" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_line2')}
+                          </Label>
+                          <Input
+                            id="delivery_address_line2"
+                            maxLength={DELIVERY_ADDRESS_MAX_LENGTH.address_line2}
+                            className="text-[13px]"
+                            {...register('delivery_address.address_line2')}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_postal_code" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_postal_code')}
+                          </Label>
+                          <Input
+                            id="delivery_address_postal_code"
+                            maxLength={DELIVERY_ADDRESS_MAX_LENGTH.postal_code}
+                            className="text-[13px] tabular-nums"
+                            {...register('delivery_address.postal_code')}
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_city" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_city')}
+                          </Label>
+                          <Input
+                            id="delivery_address_city"
+                            maxLength={DELIVERY_ADDRESS_MAX_LENGTH.city}
+                            className="text-[13px]"
+                            {...register('delivery_address.city')}
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_country" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_country')}
+                          </Label>
+                          <Controller
+                            name="delivery_address.country"
+                            control={control}
+                            render={({ field }) => (
+                              <Select
+                                value={field.value || DELIVERY_COUNTRY_CUSTOMER}
+                                onValueChange={(value) => field.onChange(value === DELIVERY_COUNTRY_CUSTOMER ? '' : value)}
+                              >
+                                <SelectTrigger id="delivery_address_country" className="text-[13px]">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value={DELIVERY_COUNTRY_CUSTOMER}>
+                                    {tForm('delivery_address_country_customer')}
+                                  </SelectItem>
+                                  {/* A code the API stored that the picker does not list. */}
+                                  {field.value && !deliveryCountryOptions.some((option) => option.code === field.value) && (
+                                    <SelectItem value={field.value}>{field.value}</SelectItem>
+                                  )}
+                                  {deliveryCountryOptions.map((option) => (
+                                    <SelectItem key={option.code} value={option.code}>
+                                      {locale === 'en' ? option.nameEn : option.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {(!markingShown || !deliveryAddressShown) && (
+                  <div className="mt-3 flex flex-wrap gap-4">
+                    {!markingShown && (
+                      <button
+                        type="button"
+                        className={ADD_ROW_LINK_CLASS}
+                        onClick={() => {
+                          setMarkingOpen(true)
+                          window.setTimeout(() => setFocus('invoice_marking'), 0)
+                        }}
+                      >
+                        + {t('invoice_marking_label')}
+                      </button>
+                    )}
+                    {!deliveryAddressShown && (
+                      <button
+                        type="button"
+                        className={ADD_ROW_LINK_CLASS}
+                        onClick={() => {
+                          setDeliveryAddressOpen(true)
+                          window.setTimeout(() => setFocus('delivery_address.name'), 0)
+                        }}
+                      >
+                        + {tForm('delivery_address_label')}
+                      </button>
+                    )}
+                  </div>
                 )}
               </>
             )}
@@ -3440,7 +4190,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             {isSelfBilled && (
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>{ts('external_number_label')}<RequiredMark /></Label>
+                  <Label>{ts('external_number_label')}</Label>
                   <Input placeholder={ts('external_number_placeholder')} {...register('external_invoice_number')} />
                   {errors.external_invoice_number && (
                     <p className="text-sm text-destructive">{errors.external_invoice_number.message}</p>
@@ -3456,7 +4206,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     silent today-default registered wrong dates on immutable
                     self-billed invoices (issue #1820). */}
                 <div className="space-y-2">
-                  <Label>{ts('invoice_date_label')}<RequiredMark /></Label>
+                  <Label>{ts('invoice_date_label')}</Label>
                   <Input
                     type="date"
                     {...register('invoice_date')}
@@ -3468,7 +4218,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   )}
                 </div>
                 <div className="space-y-2">
-                  <Label>{ts('received_date_label')}<RequiredMark /></Label>
+                  <Label>{ts('received_date_label')}</Label>
                   <Input
                     type="date"
                     {...register('received_date')}
@@ -3492,7 +4242,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div className="space-y-2">
                     <Label htmlFor="invoice_date" className={FIELD_LABEL_CLASS}>
                       {isQuoteDoc ? tForm('quote_date_label') : t('invoice_date_label')}
-                      <RequiredMark />
                     </Label>
                     <Input
                       id="invoice_date"
@@ -3505,6 +4254,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       <p className="text-xs text-destructive">{errors.invoice_date.message}</p>
                     ) : dateLock ? (
                       <p className={FIELD_HINT_CLASS}>{tForm(`date_lock_${dateLock}`)}</p>
+                    ) : dateFiledVat ? (
+                      <p className={FIELD_HINT_CLASS}>
+                        {tForm('date_filed_vat', { period: dateFiledVat.tax_period, date: formatDate(dateFiledVat.filed_on) })}
+                      </p>
                     ) : null}
                   </div>
                 )}
@@ -3512,7 +4265,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div className="space-y-2">
                     <Label htmlFor="valid_until" className={FIELD_LABEL_CLASS}>
                       {t('valid_until_label')}
-                      <RequiredMark />
                     </Label>
                     <Input
                       id="valid_until"
@@ -3531,7 +4283,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div className="space-y-2">
                     <Label htmlFor="due_date" className={FIELD_LABEL_CLASS}>
                       {t('due_date_label')}
-                      <RequiredMark />
                     </Label>
                     <Input
                       id="due_date"
@@ -3658,11 +4409,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             aside={productRowCount > 0 ? t('rows_count', { count: productRowCount }) : null}
           >
             <div ref={entryRootRef} className="relative">
-              <div className="overflow-x-auto">
+              {/* relative: the rows' absolutely placed helpers stay inside the
+                  scroller instead of widening the page on a phone. */}
+              <div className="relative overflow-x-auto">
                 <div>
                   {/* Header row: offset by the drag-grip gutter (w-8). */}
                   <div className="pl-8">
-                    <div className={cn(rowGridClass, 'border-b border-border pb-2 text-[11px] uppercase tracking-[0.08em] text-muted-foreground')}>
+                    <div className={cn(rowGridClass, 'border-b-hairline pb-2 text-xs text-muted-foreground')}>
                       <div className="px-2">{t('description_label')}</div>
                       <div className="px-2 text-right">{t('quantity_label')}</div>
                       <div className="px-2 text-right">{t('unit_price_label')}</div>
@@ -3691,7 +4444,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           >
                             <div
                               id={`invoice-editor-row-${index}`}
-                              className={cn('group border-b border-border', settleIndex === index && 'row-settle')}
+                              className={cn('group border-b-hairline', settleIndex === index && 'row-settle')}
                             >
                               <div className="flex items-center gap-1 py-1">
                                 <AutoGrowTextarea
@@ -3707,7 +4460,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                     onClick={() => remove(index)}
                                     aria-label={removeLabel}
                                   >
-                                    <X className="h-4 w-4" />
+                                    <XMarkIcon className="h-4 w-4" />
                                   </button>
                                 </span>
                               </div>
@@ -3797,7 +4550,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         >
                           <div
                             id={`invoice-editor-row-${index}`}
-                            className={cn('group border-b border-border', settleIndex === index && 'row-settle')}
+                            className={cn('group border-b-hairline', settleIndex === index && 'row-settle')}
                           >
                             <div className={cn(rowGridClass, 'py-1')}>
                               <div className="min-w-0">
@@ -3939,7 +4692,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                           : item?.deduction_type === 'gron_teknik'
                                             ? tForm('deduction_short_gron')
                                             : tForm('deduction_short_none')}
-                                      <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                      <ChevronDownIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                                     </button>
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end">
@@ -3970,12 +4723,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
                                     <button type="button" className={ROW_ICON_BUTTON_CLASS} aria-label={t('row_actions_aria')}>
-                                      <MoreVertical className="h-4 w-4" />
+                                      <EllipsisVerticalIcon className="h-4 w-4" />
                                     </button>
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end" className="min-w-56">
                                     <DropdownMenuItem onSelect={() => toggleArticlePicker(index)} className="py-2">
-                                      <Package className="h-4 w-4" />
+                                      <CubeIcon className="h-4 w-4" />
                                       {t('row_menu_pick_article')}
                                     </DropdownMenuItem>
                                     {canSaveAsArticle && (
@@ -3984,7 +4737,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                         disabled={savingArticleIndex === index}
                                         className="py-2"
                                       >
-                                        <Plus className="h-4 w-4" />
+                                        <PlusIcon className="h-4 w-4" />
                                         {t('save_as_article')}
                                       </DropdownMenuItem>
                                     )}
@@ -3992,7 +4745,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onSelect={() => toggleDiscount(index)} className="py-2">
-                                          <Percent className="h-4 w-4" />
+                                          <PercentBadgeIcon className="h-4 w-4" />
                                           {discountRows.has(index) || hasLineDiscount(item?.discount_percent)
                                             ? t('row_menu_remove_discount')
                                             : t('row_menu_add_discount')}
@@ -4025,7 +4778,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onSelect={() => toggleAccrual(index)} className="py-2">
-                                          <CalendarClock className="h-4 w-4" />
+                                          <CalendarDaysIcon className="h-4 w-4" />
                                           {item?.accrual_balance_account != null
                                             ? ta('row_menu_remove')
                                             : ta('row_menu_add')}
@@ -4036,7 +4789,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onSelect={() => toggleAccountOverride(index)} className="py-2">
-                                          <Landmark className="h-4 w-4" />
+                                          <BuildingLibraryIcon className="h-4 w-4" />
                                           {(accountOverrideRows.has(index) || item?.revenue_account)
                                             ? t('row_menu_remove_account')
                                             : t('row_menu_set_account')}
@@ -4047,7 +4800,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onSelect={() => toggleItemDimensions(index)} className="py-2">
-                                          <Tags className="h-4 w-4" />
+                                          <HashtagIcon className="h-4 w-4" />
                                           {(dimensionOverrideRows.has(index) || hasDimensionValues(item?.dimensions))
                                             ? t('row_menu_remove_dimensions')
                                             : t('row_menu_set_dimensions')}
@@ -4060,7 +4813,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       className="py-2 text-destructive focus:text-destructive"
                                       aria-label={removeLabel}
                                     >
-                                      <Trash2 className="h-4 w-4" />
+                                      <TrashIcon className="h-4 w-4" />
                                       {tForm('row_menu_remove_row')}
                                     </DropdownMenuItem>
                                   </DropdownMenuContent>
@@ -4070,10 +4823,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
                             {rowErrorMsg && <p className="px-2 pb-2 text-xs text-destructive">{rowErrorMsg}</p>}
                             {savingArticleIndex === index && (
-                              <p className="flex items-center gap-1 px-2 pb-2 text-xs text-muted-foreground">
-                                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                              <div className="flex items-center gap-1 px-2 pb-2 text-xs text-muted-foreground">
+                                <SpinnerIcon className="h-3 w-3 animate-spin" aria-hidden="true" />
                                 {t('save_as_article')}
-                              </p>
+                              </div>
                             )}
 
                             {/* Article re-link strip (row ⋮ menu): article
@@ -4156,8 +4909,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               </div>
                             )}
 
-                            {/* Periodisering (förutbetald intäkt): activated via
-                                the row's ⋮ menu. */}
+                            {/* Periodisering (förutbetald intäkt 29xx, upplupen
+                                intäkt 17xx): activated via the row's ⋮ menu. */}
                             {accrualStripOpen && (
                               <div className="px-2 pb-3">
                                 <AccrualPeriodControl
@@ -4173,6 +4926,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                      honest and suppresses the SEK-only K2 hint on
                                      foreign-currency lines. */
                                   currency={watchCurrency}
+                                  invoiceDate={watchInvoiceDate}
                                   idPrefix={`accrual-invoice-${index}`}
                                   value={{
                                     start: item?.accrual_period_start ?? '',
@@ -4249,7 +5003,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       stay stable). Ghost cells preview the append defaults. */}
                   <div className="flex">
                     <div className="w-8 shrink-0" aria-hidden="true" />
-                    <div className={cn(rowGridClass, 'flex-1 border-b border-border py-1')}>
+                    <div className={cn(rowGridClass, 'flex-1 border-b-hairline py-1')}>
                       <input
                         ref={entryInputRef}
                         value={entryQuery}
@@ -4327,7 +5081,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           }}
                         >
                           st
-                          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          <ChevronDownIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
                         </button>
                       </div>
                       <button
@@ -4408,10 +5162,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div
                     id={`${entryListId}-hint`}
                     className={cn(
-                      'px-3 py-2 text-[11px] text-muted-foreground',
+                      'px-3 py-2 text-xs text-muted-foreground',
                       // Border only when a list renders above; alone it reads
                       // as a stray hairline at the top of the popover.
-                      entryMatches.length > 0 && 'border-t border-border',
+                      entryMatches.length > 0 && 'border-t-hairline',
                     )}
                   >
                     {entryMatches.length > 0 ? t('entry_hint_matches') : t('entry_hint_free')}
@@ -4489,7 +5243,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 )}
                 {/* One row spanning both columns, so the rule above the total
                     is one unbroken line instead of two split by the gap. */}
-                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t border-border pt-2 font-display text-xl">
+                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t-hairline pt-2 font-display text-xl">
                   <dt>
                     {isInvoiceDoc || hasAnyDeduction ? t('to_pay_label') : isQuoteDoc ? tForm('sum_label') : t('total_label')}
                   </dt>
@@ -4520,7 +5274,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <div className="space-y-2">
                   <Label htmlFor="deduction_personnummer" className={FIELD_LABEL_CLASS}>
                     {t('deduction_personnummer_label')}
-                    {!(initial?.deduction_personnummer_last4 || customerHasPersonalNumber) && <RequiredMark />}
                   </Label>
                   <Input
                     id="deduction_personnummer"
@@ -4546,7 +5299,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div className="space-y-2">
                     <Label htmlFor="deduction_housing_designation" className={FIELD_LABEL_CLASS}>
                       {t('deduction_housing_label')}
-                      <RequiredMark />
                     </Label>
                     <Input
                       id="deduction_housing_designation"
@@ -4568,14 +5320,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 const workPlaceholder = isGronTeknik
                   ? t('deduction_gron_teknik_work_type_placeholder')
                   : t('deduction_work_type_placeholder')
-                const amount = computeDeduction({
-                  unit_price: item?.unit_price || 0,
-                  quantity: item?.quantity || 0,
-                  discount_percent: item?.discount_percent,
-                  deduction_type: item?.deduction_type,
-                  work_type: item?.work_type,
-                  vat_rate: vatRegistered ? (item?.vat_rate ?? (vatRules?.rate || 25)) : 0,
-                })
+                const amount = lineDeductions[index] ?? 0
                 const hoursFromQuantity =
                   item?.labor_hours != null && defaultLaborHours(item) === item.labor_hours
                 const rowErr = errors.items?.[index]
@@ -4583,10 +5328,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div
                     key={fields[index]?.id ?? index}
                     id={`invoice-editor-deduction-${index}`}
-                    className="mt-4 border-t border-border pt-4"
+                    className="mt-4 border-t-hairline pt-4"
                   >
                     {deductionRowIndexes.length > 1 && (
-                      <p className="mb-2 truncate text-[12.5px] text-muted-foreground" data-ph-mask="">
+                      <p className="mb-2 truncate text-xs text-muted-foreground" data-ph-mask="">
                         {item?.description?.trim() || t('row_label', { index: index + 1 })}
                       </p>
                     )}
@@ -4594,7 +5339,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       <div className="min-w-0 space-y-2">
                         <Label className={FIELD_LABEL_CLASS}>
                           {isGronTeknik ? tForm('deduction_installation_label') : tForm('deduction_work_label')}
-                          <RequiredMark />
                         </Label>
                         <Controller
                           name={`items.${index}.work_type`}
@@ -4663,7 +5407,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               })}
 
               {capWarnings.length > 0 && (
-                <div className="mt-4 space-y-1 rounded-lg border border-border px-3 py-2 text-[12.5px] text-muted-foreground">
+                <div className="mt-4 space-y-1 rounded-lg px-3 py-2 text-xs text-muted-foreground bg-control shadow-raised">
                   {capWarnings.map((w) => (
                     <p key={w}>{w}</p>
                   ))}
@@ -4699,7 +5443,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   lang: documentLanguage,
                   showOcr: companySettings?.invoice_show_ocr ?? true,
                 })}
-                terms={paymentTermsTexts(companySettings)}
+                terms={paymentTermsTexts(companySettings, documentLanguage)}
                 canEditCompany={isCompanyAdmin && canWrite}
                 addForm={
                   addingPayee ? (
@@ -4713,6 +5457,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   ) : null
                 }
                 onAddDetails={() => setAddingPayee(true)}
+                foreignChoice={foreignChoice ? { ...foreignChoice, busy: choosingForeignPayee } : null}
+                onChooseAccount={(id) => void chooseForeignPayee(id)}
                 onOpenPanel={() => {
                   setPaymentPanelScope(isCompanyAdmin && canWrite ? 'all' : 'this')
                   setPaymentPanelOpen(true)
@@ -4740,45 +5486,106 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         title={confirmTitle}
         rows={confirmRows}
         voucher={confirmVoucher}
+        attachments={confirmAttachments}
+        attachmentsChannel={confirmChannel === 'peppol' ? 'peppol' : 'email'}
         extra={
-          // Swedish VAT to an EU customer whose reverse charge is blocked
-          // needs the explicit tick before the invoice exists (#2749).
-          selectedCustomer && vatWarnings.length > 0 ? (
-            <div className="space-y-3">
-              <VatTreatmentNotice
-                tone="muted"
-                customer={selectedCustomer}
-                lineVatRates={effectiveLineVatRates}
-                onValidated={handleCustomerVatValidated}
-              />
-              {needsSwedishVatAcknowledgement && (
-                <div className="flex items-start gap-2">
-                  <Checkbox
-                    id="swedish-vat-acknowledged"
-                    checked={swedishVatAcknowledged}
-                    onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
-                    className="mt-0.5"
-                  />
-                  <Label htmlFor="swedish-vat-acknowledged" className="text-[13px] font-normal leading-5">
-                    {tVat('acknowledge_swedish_vat')}
+          <>
+            {confirmPeppolTextRowsLeftOut > 0 && (
+              <AttnLine>{tShell('confirm_peppol_text_rows_left_out', { count: confirmPeppolTextRowsLeftOut })}</AttnLine>
+            )}
+            {isPaidConfirm && (
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="paid-at-issue-account" className="text-[13px] font-normal">
+                    {tShell('confirm_paid_account_label')}
                   </Label>
+                  <Select value={paidAccount} onValueChange={setPaidAccountChoice}>
+                    <SelectTrigger id="paid-at-issue-account" className="h-9">
+                      <SelectValue placeholder={tShell('confirm_paid_account_placeholder')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {paidAccountOptions.map((account) => (
+                        <SelectItem key={account.account_number} value={account.account_number}>
+                          {account.account_number} {account.account_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
-            </div>
-          ) : null
+                {paidEmailAvailable && (
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="paid-at-issue-email"
+                      checked={paidEmailReceipt}
+                      onCheckedChange={(checked) => setPaidEmailReceipt(checked === true)}
+                      className="mt-0.5"
+                    />
+                    <Label htmlFor="paid-at-issue-email" className="text-[13px] font-normal leading-5" data-ph-mask="">
+                      {tShell('confirm_paid_email_receipt', { email: selectedCustomer?.email ?? '' })}
+                    </Label>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Swedish VAT to an EU customer whose reverse charge is blocked
+                needs the explicit tick before the invoice exists (#2749). */}
+            {selectedCustomer && vatWarnings.length > 0 ? (
+              <div className="space-y-3">
+                <VatTreatmentNotice
+                  tone="muted"
+                  customer={selectedCustomer}
+                  lineVatRates={effectiveLineVatRates}
+                  onValidated={handleCustomerVatValidated}
+                />
+                {needsSwedishVatAcknowledgement && (
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="swedish-vat-acknowledged"
+                      checked={swedishVatAcknowledged}
+                      onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
+                      className="mt-0.5"
+                    />
+                    <Label htmlFor="swedish-vat-acknowledged" className="text-[13px] font-normal leading-5">
+                      {tVat('acknowledge_swedish_vat')}
+                    </Label>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </>
         }
         confirmLabel={confirmLabel}
         confirmDisabled={confirmDisabled}
-        busy={isSubmitting}
+        busy={isSubmitting || isContinuingSeries}
         onConfirm={() => {
-          if (confirmIntent?.kind === 'create') void createWithoutSending()
-          else if (confirmIntent?.kind === 'send') void sendFromEditor(confirmIntent.channel)
+          void (async () => {
+            // The confirm said where the series continues: save it first, so
+            // the document gets the number the dialog showed.
+            if (confirmContinuation) {
+              setIsContinuingSeries(true)
+              const continued = await continueInvoiceSeries(confirmContinuation)
+              setIsContinuingSeries(false)
+              if (!continued.ok) {
+                toast({
+                  title: tShell('series_continue_failed_title'),
+                  description: getErrorMessage(continued.error, { locale }),
+                  variant: 'destructive',
+                })
+                return
+              }
+            }
+            if (confirmIntent?.kind === 'create') void createWithoutSending()
+            else if (confirmIntent?.kind === 'send') void sendFromEditor(confirmIntent.channel)
+            else if (confirmIntent?.kind === 'issue_paid') {
+              void sendFromEditor(paidChannel, { account_number: paidAccount })
+            }
+          })()
         }}
       />
 
       {/* Create customer dialog */}
       <Dialog open={isCreateCustomerOpen} onOpenChange={setIsCreateCustomerOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('create_customer_dialog_title')}</DialogTitle>
           </DialogHeader>
@@ -4796,6 +5603,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         onClose={handleLogoPromptClose}
         logoUrl={logoUrl}
         onLogoUpdate={(url) => setLogoUrl(url)}
+        documentLabel={getDocLabel(pendingData?.document_type ?? watchDocumentType).toLowerCase()}
       />
 
     </>

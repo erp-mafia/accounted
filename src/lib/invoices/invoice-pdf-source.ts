@@ -50,6 +50,7 @@ const POSSIBLY_DELIVERED_STATUSES = [
   'partially_paid',
   'overdue',
   'credited',
+  'written_off',
 ] as const
 
 export interface InvoicePdfDelivery {
@@ -114,6 +115,16 @@ export function invoiceRerenderUrl(
 }
 
 /**
+ * The archived file of one delivery, read through the invoice
+ * (GET /api/invoices/[id]/archived-pdf). The invoicing-only role reads the
+ * sent invoice this way: it never reaches /api/documents, which opens any
+ * document of the company (lib/auth/invoicer-role.ts).
+ */
+export function invoiceArchivedPdfUrl(invoiceId: string, deliveryId: string): string {
+  return `/api/invoices/${encodeURIComponent(invoiceId)}/archived-pdf?delivery=${encodeURIComponent(deliveryId)}`
+}
+
+/**
  * The betalningsbekräftelse endpoint: the same re-render route in its paid
  * variant. The route refuses anything but a paid faktura and names the file
  * accordingly; the archived original is not involved at any point.
@@ -138,6 +149,28 @@ export function paymentConfirmationPdfSource(
   }
 }
 
+function latestCompletedDelivery<T extends InvoicePdfDelivery>(deliveries: T[]): T | undefined {
+  return deliveries.find((delivery) =>
+    (COMPLETED_DELIVERY_STATUSES as readonly string[]).includes(delivery.status),
+  )
+}
+
+/**
+ * The delivery whose archived file is the document the customer holds: the
+ * newest completed delivery, when Accounted emailed it and kept the file.
+ * Null when that delivery was a manual mark or there is none. The download
+ * serves this file and "Skicka igen" emails it again (crm#1339), so both
+ * read the same rule. `deliveries` is newest first, as listed by
+ * `list_invoice_delivery_summaries`.
+ */
+export function findArchivedInvoiceDelivery<T extends InvoicePdfDelivery>(
+  deliveries: T[],
+): (T & { status: 'sent'; document_attachment_id: string }) | null {
+  const latest = latestCompletedDelivery(deliveries)
+  if (latest?.status !== 'sent' || !latest.document_attachment_id) return null
+  return latest as T & { status: 'sent'; document_attachment_id: string }
+}
+
 /**
  * Decide which file the download button may fetch.
  *
@@ -153,6 +186,8 @@ export function resolveInvoicePdfSource(input: {
   invoiceStatus: string
   deliveriesLoaded: boolean
   deliveries: InvoicePdfDelivery[]
+  /** Serve the archived copy through the invoice (invoiceArchivedPdfUrl): the invoicing-only role. */
+  archivedThroughInvoice?: boolean
 }): InvoicePdfSource {
   const rerenderUrl = invoiceRerenderUrl(input.invoiceId)
   const couldHaveBeenDelivered = (POSSIBLY_DELIVERED_STATUSES as readonly string[]).includes(
@@ -168,16 +203,17 @@ export function resolveInvoicePdfSource(input: {
       : { kind: 'rerender', url: rerenderUrl, reason: 'not_sent_yet' }
   }
 
-  const latestCompleted = input.deliveries.find((delivery) =>
-    (COMPLETED_DELIVERY_STATUSES as readonly string[]).includes(delivery.status),
-  )
+  const latestCompleted = latestCompletedDelivery(input.deliveries)
+  const archived = findArchivedInvoiceDelivery(input.deliveries)
 
-  if (latestCompleted?.status === 'sent' && latestCompleted.document_attachment_id) {
+  if (archived) {
     return {
       kind: 'archived',
-      url: `/api/documents/${encodeURIComponent(latestCompleted.document_attachment_id)}/inline`,
-      deliveryId: latestCompleted.id,
-      sentAt: latestCompleted.sent_at,
+      url: input.archivedThroughInvoice
+        ? invoiceArchivedPdfUrl(input.invoiceId, archived.id)
+        : `/api/documents/${encodeURIComponent(archived.document_attachment_id)}/inline`,
+      deliveryId: archived.id,
+      sentAt: archived.sent_at,
     }
   }
 

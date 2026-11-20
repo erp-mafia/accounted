@@ -5,7 +5,7 @@
  * this module must never import from either of them.
  *
  * The `multi_user` capability gates PEOPLE, not a feature surface, so its
- * lapse is softened by a grace window (founder decision 2026-09-01):
+ * lapse is softened by a grace window (product decision 2026-09-01):
  *
  *   entitled : an active multi_user grant (trial/stripe/team/manual/comp).
  *              Everyone in the company works normally.
@@ -66,7 +66,7 @@ export function computeMultiUserState(
  * The dormancy rule, in one place. Owners always keep access (a company must
  * never lock out the person who can pay); everyone else needs the company to
  * be entitled or in grace. Membership `source` is deliberately NOT consulted
- * (founder decision 2026-09-01, superseding the earlier byrå exemption):
+ * (product decision 2026-09-01, superseding the earlier byrå exemption):
  * byrå consultants stay in through the company's or their team's grant, not
  * through a role carve-out.
  */

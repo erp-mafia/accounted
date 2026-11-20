@@ -19,13 +19,9 @@ beforeEach(() => {
 /**
  * MCP tools that invoke a paid capability directly (no stage→commit round-trip),
  * so they are gated at DISPATCH only and have no commit-time (operation-map)
- * counterpart. The document upload tools run Bedrock OCR inline via
- * extractInvoiceFields: they never stage a pending_operation.
+ * counterpart.
  */
 const DISPATCH_ONLY_MCP_TOOLS = new Set<string>([
-  'gnubok_upload_document',
-  'gnubok_create_document_upload',
-  'gnubok_complete_document_upload',
   // Onboarding connect-link tools: read status + hand out a browser link; no commit counterpart.
   'gnubok_connect_bank',
   'gnubok_connect_skatteverket',
@@ -34,7 +30,7 @@ const DISPATCH_ONLY_MCP_TOOLS = new Set<string>([
 ])
 
 describe('MCP_TOOL_CAPABILITY_MAP', () => {
-  it('gates exactly the paid MCP tools (the external-service staging tools + the AI OCR tools)', () => {
+  it('gates exactly the paid MCP tools (the external-service tools; the document uploads gate only their OCR call)', () => {
     expect(MCP_TOOL_CAPABILITY_MAP).toEqual({
       gnubok_send_invoice: CAPABILITY.email_send,
       // salary-runs.send-payslips emails employees: the same paid chokepoint.
@@ -44,12 +40,9 @@ describe('MCP_TOOL_CAPABILITY_MAP', () => {
       gnubok_connect_bank: CAPABILITY.bank_sync,
       gnubok_sync_bank: CAPABILITY.bank_sync,
       gnubok_connect_skatteverket: CAPABILITY.skatteverket,
-      // Dispatch-only AI tools: inline Bedrock OCR, no staged operation. The
-      // signed-URL pair is gated at create AND complete so a free-tier key can
-      // neither reserve nor finalize a paid extraction.
-      gnubok_upload_document: CAPABILITY.ai,
-      gnubok_create_document_upload: CAPABILITY.ai,
-      gnubok_complete_document_upload: CAPABILITY.ai,
+      // Sending a document (or a locked årsredovisning) for BankID signing.
+      gnubok_request_signature: CAPABILITY.signing,
+      gnubok_request_arsredovisning_signatures: CAPABILITY.signing,
     })
   })
 
@@ -65,8 +58,11 @@ describe('PAID_OPERATION_CAPABILITY_MAP', () => {
     expect(PAID_OPERATION_CAPABILITY_MAP).toEqual({
       send_invoice: CAPABILITY.email_send,
       send_payslips: CAPABILITY.email_send,
+      reminder_daily_batch: CAPABILITY.email_send,
       submit_vat_declaration: CAPABILITY.skatteverket,
       submit_agi: CAPABILITY.skatteverket,
+      request_signature: CAPABILITY.signing,
+      request_arsredovisning_signatures: CAPABILITY.signing,
     })
   })
 
@@ -94,12 +90,27 @@ describe('CONNECTOR_CAPABILITIES', () => {
     const { CAPABILITY, CONNECTOR_CAPABILITIES, PAID_CAPABILITIES, isConnectorCapability } = await import('../keys')
     const all = new Set(Object.values(CAPABILITY))
     for (const key of CONNECTOR_CAPABILITIES) expect(all.has(key), key).toBe(true)
-    expect(CONNECTOR_CAPABILITIES).toEqual(['bank_sync', 'skatteverket', 'org_lookup', 'migration', 'peppol'])
+    expect(CONNECTOR_CAPABILITIES).toEqual(['bank_sync', 'skatteverket', 'org_lookup', 'migration', 'peppol', 'collections'])
     // org_lookup and migration stay free on hosted (not PAID) but still need
     // Accounted's services, hence connector-gated on a self-host.
     expect(PAID_CAPABILITIES).not.toContain('org_lookup')
     expect(PAID_CAPABILITIES).not.toContain('migration')
     expect(isConnectorCapability('ai')).toBe(false)
     expect(isConnectorCapability('bank_sync')).toBe(true)
+  })
+})
+
+describe('PAID_PLAN_ONLY_CAPABILITIES and TRIAL_CAPABILITIES', () => {
+  it('puts collections in the trial like every other paid key (product decision 2026-10-22)', async () => {
+    const { PAID_CAPABILITIES, PAID_PLAN_ONLY_CAPABILITIES, TRIAL_CAPABILITIES } = await import('../keys')
+    expect(PAID_PLAN_ONLY_CAPABILITIES).toEqual([])
+    expect(PAID_CAPABILITIES).toContain('collections')
+    expect(TRIAL_CAPABILITIES).toContain('collections')
+  })
+
+  it('makes the trial set exactly the paid set minus the paid-plan-only keys, in order', async () => {
+    const { PAID_CAPABILITIES, PAID_PLAN_ONLY_CAPABILITIES, TRIAL_CAPABILITIES } = await import('../keys')
+    expect(TRIAL_CAPABILITIES).toEqual(PAID_CAPABILITIES.filter((k) => !PAID_PLAN_ONLY_CAPABILITIES.includes(k)))
+    expect(TRIAL_CAPABILITIES.length + PAID_PLAN_ONLY_CAPABILITIES.length).toBe(PAID_CAPABILITIES.length)
   })
 })

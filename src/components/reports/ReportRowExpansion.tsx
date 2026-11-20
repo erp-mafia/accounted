@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, ExclamationCircleIcon } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatAmount, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -67,9 +67,9 @@ export function useSourceLines(fetcher: ReportSourceFetcher): UseSourceLinesResu
  * the aggregated row and `<ReportRowExpansion.Panel>` immediately below.
  *
  * Usage:
- *   const expansion = useReportRowExpansion(fetcher)
- *   <tr><td><expansion.Toggle /></td>...</tr>
- *   {expansion.expanded && <expansion.Panel colSpan={6} />}
+ *   const expansion = useReportRowExpansion(fetcher, rowId)
+ *   <tr><td>{expansion.toggle}</td>...</tr>
+ *   {expansion.panel(6)}
  *
  * Or use the all-in-one component below where the caller owns the
  * surrounding `<tr>` and just plugs the expansion in.
@@ -100,9 +100,9 @@ export function ReportRowExpansion({
           className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
         >
           {expanded ? (
-            <ChevronDown className="h-4 w-4" />
+            <ChevronDownIcon className="h-4 w-4" />
           ) : (
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRightIcon className="h-4 w-4" />
           )}
         </button>
       </td>
@@ -121,38 +121,28 @@ export function ReportRowExpansion({
 
 /**
  * Variant where the toggle and the expansion are placed by the caller. The
- * caller renders `<Toggle />` inside the aggregated `<tr>`, then below
- * conditionally renders `<Panel />` as a sibling `<tr>` so its `<td
- * colSpan={n}>` lines up with the rest of the table.
+ * caller renders `toggle` inside the aggregated `<tr>`, then below renders
+ * `panel(n)` as a sibling `<tr>` so its `<td colSpan={n}>` lines up with the
+ * rest of the table.
+ *
+ * Both are elements of module-level components, not components defined in
+ * the hook: a component defined during render is a new type on every render,
+ * so React remounted the button on each toggle and keyboard focus dropped to
+ * the page after Enter or Space.
  */
 export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: string) {
   const [expanded, setExpanded] = useState(false)
   const { lines, loading, error, load } = useSourceLines(fetcher)
 
-  const toggle = useCallback(() => {
+  const onToggle = useCallback(() => {
     const next = !expanded
     setExpanded(next)
     if (next) load()
   }, [expanded, load])
 
-  const Toggle = () => (
-    <button
-      type="button"
-      onClick={toggle}
-      aria-expanded={expanded}
-      aria-controls={`expansion-${rowId}`}
-      aria-label={expanded ? 'Dölj verifikat' : 'Visa verifikat'}
-      className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
-    >
-      {expanded ? (
-        <ChevronDown className="h-4 w-4" />
-      ) : (
-        <ChevronRight className="h-4 w-4" />
-      )}
-    </button>
-  )
+  const toggle = <RowExpansionToggle expanded={expanded} onToggle={onToggle} rowId={rowId} />
 
-  const Panel = ({ colSpan }: { colSpan: number }) =>
+  const panel = (colSpan: number) =>
     expanded ? (
       <ExpansionPanelRow
         colSpan={colSpan}
@@ -163,7 +153,34 @@ export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: strin
       />
     ) : null
 
-  return { expanded, Toggle, Panel }
+  return { expanded, toggle, panel }
+}
+
+function RowExpansionToggle({
+  expanded,
+  onToggle,
+  rowId,
+}: {
+  expanded: boolean
+  onToggle: () => void
+  rowId: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      aria-controls={`expansion-${rowId}`}
+      aria-label={expanded ? 'Dölj verifikat' : 'Visa verifikat'}
+      className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+    >
+      {expanded ? (
+        <ChevronDownIcon className="h-4 w-4" />
+      ) : (
+        <ChevronRightIcon className="h-4 w-4" />
+      )}
+    </button>
+  )
 }
 
 /**
@@ -238,7 +255,7 @@ function ExpansionContent({
   if (error) {
     return (
       <div className="px-4 py-3 flex items-center gap-2 text-sm text-destructive">
-        <AlertCircle className="h-4 w-4" />
+        <ExclamationCircleIcon className="h-4 w-4" />
         {error}
       </div>
     )
@@ -255,7 +272,7 @@ function ExpansionContent({
   return (
     <div className="px-4 py-2">
       <table className="w-full text-xs">
-        <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+        <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
           <tr className="text-left">
             <th className="py-1 w-24">Verifikat</th>
             <th className="py-1 w-24">Datum</th>
@@ -266,7 +283,7 @@ function ExpansionContent({
         </thead>
         <tbody>
           {lines.map((line) => (
-            <tr key={`${line.voucher_series}-${line.voucher_number}-${line.journal_entry_id}`} className="border-t border-border">
+            <tr key={`${line.voucher_series}-${line.voucher_number}-${line.journal_entry_id}`} className="border-t-hairline">
               <td className="py-1.5">
                 {line.journal_entry_id ? (
                   <Link
@@ -279,7 +296,7 @@ function ExpansionContent({
                   <span className="font-mono text-muted-foreground">-</span>
                 )}
               </td>
-              <td className="py-1.5 tabular-nums text-muted-foreground">
+              <td className="py-1.5 date-figures text-muted-foreground">
                 {line.date ? formatDate(line.date) : ''}
               </td>
               <td className="py-1.5 truncate max-w-md" title={line.description}>

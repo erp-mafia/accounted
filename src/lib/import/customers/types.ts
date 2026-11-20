@@ -37,7 +37,8 @@ export interface ParsedCustomerRow {
   city: string | null
   country: string
   vat_number: string | null
-  default_payment_terms: number
+  /** Null when the file gives none. */
+  default_payment_terms: number | null
   notes: string | null
   is_valid: boolean
   validation_errors: string[]

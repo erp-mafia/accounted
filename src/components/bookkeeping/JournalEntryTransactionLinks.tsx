@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Banknote, Landmark } from 'lucide-react'
+import { BanknotesIcon, BuildingLibraryIcon } from '@/components/icons'
 import { DefRow } from '@/components/ui/detail-section'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -80,7 +80,7 @@ export default function JournalEntryTransactionLinks({
       <DefRow label={t('label')} className="items-baseline">
         <ul className="divide-y divide-border">
           {links.map((ref) => {
-            const Icon = ref.kind === 'skattekonto' ? Landmark : Banknote
+            const Icon = ref.kind === 'skattekonto' ? BuildingLibraryIcon : BanknotesIcon
             return (
               <li key={`${ref.kind}-${ref.id}`} className="py-1 first:pt-0 last:pb-0">
                 <Link

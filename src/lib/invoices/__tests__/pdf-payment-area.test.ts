@@ -171,3 +171,74 @@ describe('buildPdfPaymentArea', () => {
     expect(area.detail?.label).toBe('Due date')
   })
 })
+
+describe('buildPdfPaymentArea: Autogiro', () => {
+  const autogiro = { autogiro_payer_number: '556677' }
+
+  it('unpaid: Att betala and the due date, the Autogiro heading and sentence over the payer number, no code', () => {
+    const area = buildPdfPaymentArea(input({}, autogiro))!
+    expect(area).toMatchObject({
+      kicker: 'Betalning',
+      amountLabel: 'Att betala',
+      amount: 12500,
+      detail: { label: 'Förfallodatum', value: '2026-11-01' },
+      status: { headline: 'Autogiro', text: 'Beloppet dras från ditt konto via Autogiro på förfallodagen.' },
+      // A QR code was passed in; it must still not print.
+      slot: null,
+    })
+    expect(area.rows).toEqual([{ key: 'autogiro', label: 'Betalarnummer', value: '556677', emphasis: true }])
+  })
+
+  it('partly paid: the remainder and what was paid, the same block, no code', () => {
+    const area = buildPdfPaymentArea(
+      input({ paidState: { kind: 'partially_paid', paidAmount: 5000, remainingAmount: 7500, paidDate: null } }, autogiro),
+    )!
+    expect(area).toMatchObject({
+      amountLabel: 'Kvar att betala',
+      amount: 7500,
+      amountNote: 'Betalt: 5 000,00 SEK',
+      status: { headline: 'Autogiro' },
+      slot: null,
+    })
+    expect(area.rows.map((r) => r.key)).toEqual(['autogiro'])
+  })
+
+  it('paid: the heading without the "will be debited" sentence, the payer number and the paid marker', () => {
+    const area = buildPdfPaymentArea(
+      input({ paidState: { kind: 'paid', paidAmount: 12500, remainingAmount: 0, paidDate: '2026-11-03' } }, autogiro),
+    )!
+    expect(area).toMatchObject({
+      amount: 0,
+      status: { headline: 'Autogiro', text: null },
+      slot: { kind: 'paid', title: 'Betald', date: '2026-11-03' },
+    })
+    expect(area.rows.map((r) => r.key)).toEqual(['autogiro'])
+  })
+
+  it('cancelled and credited say they must not be paid, as for any invoice', () => {
+    expect(buildPdfPaymentArea(input({}, { ...autogiro, status: 'cancelled' }))).toMatchObject({
+      rows: [],
+      slot: null,
+      status: { headline: 'Makulerad, ska inte betalas.' },
+    })
+    expect(buildPdfPaymentArea(input({}, { ...autogiro, status: 'credited' }))).toMatchObject({
+      rows: [],
+      status: { headline: 'Krediterad, ska inte betalas.' },
+    })
+  })
+
+  it('speaks English on an English invoice', () => {
+    const area = buildPdfPaymentArea(input({ lang: 'en' }, autogiro))!
+    expect(area.status).toEqual({
+      headline: 'Autogiro',
+      text: 'The amount is debited from your account by Autogiro on the due date.',
+    })
+    expect(area.rows).toEqual([{ key: 'autogiro', label: 'Payer number', value: '556677', emphasis: true }])
+  })
+
+  it('an invoice without a payer number keeps its rows, its code and no status', () => {
+    const area = buildPdfPaymentArea(input({}, { autogiro_payer_number: null }))!
+    expect(area).toMatchObject({ status: null, slot: { kind: 'qr', qr } })
+    expect(area.rows.map((r) => r.key)).toEqual(['bankgiro', 'ocr'])
+  })
+})

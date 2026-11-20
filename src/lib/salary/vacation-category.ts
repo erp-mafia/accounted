@@ -16,6 +16,7 @@
  */
 
 import { roundOre } from '@/lib/money'
+import { roundPaidDays, storedPaidDaysPerDayOff } from './vacation-net-days'
 
 export const VACATION_CATEGORIES = ['paid', 'extra_paid', 'saved', 'unpaid', 'advance'] as const
 export type VacationCategory = (typeof VACATION_CATEGORIES)[number]
@@ -80,14 +81,20 @@ export interface VacationLineLike {
 }
 
 export interface BookedVacationSource {
-  /** The run's stored vacation_days_taken: the sum of every vacation line. */
+  /** The run's stored vacation_days_taken: the days off on every vacation line. */
   vacation_days_taken: number
+  /**
+   * Paid days each day off on this run used (vacation-net-days.ts): 1.25 at
+   * four days a week. Absent or null (rows calculated before the column
+   * existed) counts one for one.
+   */
+  vacation_paid_days_per_day_off?: number | null
   /** Embedded payslip lines; absent on rows selected without the embed. */
   line_items?: VacationLineLike[] | null
 }
 
 export interface VacationTakenSplit {
-  /** Days from the paid pool (paid + extra_paid + uncategorized). */
+  /** Paid days from the paid pool (paid + extra_paid + uncategorized). */
   paid: number
   unpaid: number
   advance: number
@@ -97,16 +104,22 @@ export interface VacationTakenSplit {
 
 /**
  * Split the vacation days of booked runs (given in chronological order) by
- * category. The paid share is derived as vacation_days_taken minus the
- * categorized non-paid lines, so a run without categorized lines (or without
- * the line embed at all) contributes exactly its stored vacation_days_taken,
- * byte for byte what the ledger summed before categories existed.
+ * category, in paid days: each run's days off count at the factor that run
+ * was calculated with (1.25 paid days per day off at four days a week, one
+ * for one at five; Semesterlagen 12 a §). The paid share is derived as
+ * vacation_days_taken minus the categorized non-paid lines, so a run without
+ * categorized lines (or without the line embed at all) contributes exactly
+ * its stored vacation_days_taken at its factor, which one for one is what the
+ * ledger summed before categories existed.
  *
  * Saved lines that name an origin year consume that year. Lines without a
  * year take the oldest seeded year first (the one that expires first), then
  * the next; anything beyond the seeded years lands on the oldest seeded year,
  * or on `fallbackYear` when nothing is seeded, so the consumption is never
  * silently dropped.
+ *
+ * Sums keep four decimals (roundPaidDays): a day off at 3.5 days a week is
+ * 25/18 paid days, and two decimals per run would drift off the 25.
  */
 export function splitVacationTaken(
   runs: BookedVacationSource[],
@@ -119,22 +132,24 @@ export function splitVacationTaken(
     .sort()
 
   const consumeSaved = (year: string, days: number) => {
-    split.savedByYear[year] = roundOre((split.savedByYear[year] ?? 0) + days)
+    split.savedByYear[year] = roundPaidDays((split.savedByYear[year] ?? 0) + days)
   }
   const allocateOldestFirst = (days: number) => {
     let left = days
     for (const year of seedYears) {
       if (left <= 0) break
-      const available = roundOre((Number(seedSaved[year]) || 0) - (split.savedByYear[year] ?? 0))
+      const available = roundPaidDays((Number(seedSaved[year]) || 0) - (split.savedByYear[year] ?? 0))
       if (available <= 0) continue
       const take = Math.min(available, left)
       consumeSaved(year, take)
-      left = roundOre(left - take)
+      left = roundPaidDays(left - take)
     }
     if (left > 0) consumeSaved(seedYears[0] ?? fallbackYear, left)
   }
 
   for (const run of runs) {
+    const factor = storedPaidDaysPerDayOff(run.vacation_paid_days_per_day_off)
+    const paidDays = (daysOff: number) => roundPaidDays(daysOff * factor)
     let nonPaid = 0
     const lines = (run.line_items ?? []).filter(
       (li) => li.item_type === 'vacation' && (li.quantity ?? 0) > 0,
@@ -145,20 +160,20 @@ export function splitVacationTaken(
     // embed has no stable order).
     let unnamedSaved = 0
     for (const li of lines) {
-      const days = li.quantity ?? 0
+      const days = paidDays(li.quantity ?? 0)
       switch (li.vacation_category) {
         case 'saved':
-          nonPaid = roundOre(nonPaid + days)
+          nonPaid = roundPaidDays(nonPaid + days)
           if (li.vacation_saved_year) consumeSaved(li.vacation_saved_year, days)
-          else unnamedSaved = roundOre(unnamedSaved + days)
+          else unnamedSaved = roundPaidDays(unnamedSaved + days)
           break
         case 'unpaid':
-          nonPaid = roundOre(nonPaid + days)
-          split.unpaid = roundOre(split.unpaid + days)
+          nonPaid = roundPaidDays(nonPaid + days)
+          split.unpaid = roundPaidDays(split.unpaid + days)
           break
         case 'advance':
-          nonPaid = roundOre(nonPaid + days)
-          split.advance = roundOre(split.advance + days)
+          nonPaid = roundPaidDays(nonPaid + days)
+          split.advance = roundPaidDays(split.advance + days)
           break
         default:
           // paid, extra_paid and NULL all draw from the paid pool.
@@ -166,7 +181,9 @@ export function splitVacationTaken(
       }
     }
     if (unnamedSaved > 0) allocateOldestFirst(unnamedSaved)
-    split.paid = roundOre(split.paid + Math.max(0, roundOre((run.vacation_days_taken || 0) - nonPaid)))
+    split.paid = roundPaidDays(
+      split.paid + Math.max(0, roundPaidDays(paidDays(run.vacation_days_taken || 0) - nonPaid)),
+    )
   }
   return split
 }

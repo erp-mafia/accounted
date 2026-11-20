@@ -6,7 +6,13 @@
  * it up and replays every migration.
  */
 import { beforeAll } from 'vitest'
+import { registerInitLoader } from '@/lib/initialized'
 import { TOOL_PG_REST_URL, TOOL_PG_DATABASE_URL, signServiceRoleJwt } from './client'
+
+// No instrumentation hook outside Next.js: register the loader it registers,
+// so a tool that emits or reads a registry loads the real lib/init as it does
+// in the app.
+registerInitLoader(() => import('@/lib/init').then((m) => m.ensureInitialized()))
 
 // tests/pg/fixtures.ts builds its rows through a `pg` Pool keyed on
 // DATABASE_URL. Pointing that at the same database lets this project reuse

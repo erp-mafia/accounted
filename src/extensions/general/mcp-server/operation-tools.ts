@@ -2,9 +2,12 @@
  * MCP door for operations (see src/lib/operations/types.ts): every operation
  * with an `mcp` binding becomes a tool, with its inputSchema generated from
  * the operation's Zod input, so the tool and the v1 endpoint accept exactly
- * the same request.
+ * the same request (once a stringified top-level scalar is read back as the
+ * number or null it stands for: coerceStringifiedScalars).
  *
- * Reads run directly. Writes stage: the tool validates the input, asks the
+ * Reads run directly, and so does a write marked `direct` (data that never
+ * reaches the books, DIRECT_WRITE_SCOPES): it commits on the call and replays
+ * idempotency_key. Every other write stages: the tool validates the input, asks the
  * operation for a dry-run preview (which runs every check the commit will
  * run), and stages a pending operation of `mcp.stage.pendingType` with the
  * input as params. Approval (gnubok_approve_pending_operation) reaches
@@ -14,18 +17,68 @@
  * Generated tools are search-only unless the binding says otherwise, so a
  * new operation costs nothing in the tools/list budget and is reachable
  * through gnubok_search_tools, gnubok_call_tool and gnubok_stage_tool.
+ *
+ * Pinned previews (lib/operations/preview-token.ts): a write's dry run
+ * answers `preview_token`; staging with it recomputes the dry run and, when
+ * the fingerprint differs, refuses with PREVIEW_STALE (the fresh preview and
+ * its token in error.details) and stages nothing. The argument is accepted
+ * but not declared in inputSchema (McpTool.undeclaredArgs): declaring it on
+ * the eight generated writes in tools/list costs ~70 tokens against a budget
+ * with ~15 left, and the dry-run answer that hands the token out says how to
+ * send it back.
  */
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fieldValidationError, zodFieldIssues } from '@/lib/errors/refusal'
+import { badArgument, codedRefusal, fieldValidationError, zodFieldIssues } from '@/lib/errors/refusal'
 import { throwOutcomeFailure } from '@/lib/operations/errors'
+import {
+  isPreviewToken,
+  MALFORMED_PREVIEW_TOKEN_MESSAGE,
+  operationPreviewToken,
+  previewStaleFailure,
+} from '@/lib/operations/preview-token'
+import { planStagedOperation } from '@/lib/operations/stage'
 import type { AnyOperation } from '@/lib/operations/types'
+import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import { DIRECT_WRITE_SCOPES } from '@/lib/auth/scope-catalog'
 import { createLogger } from '@/lib/logger'
 import type { ActorContext, McpTool, McpToolAnnotations } from './server'
+import { annotationsForEffect, withToolEffect } from './tool-effects'
+import type { NextActionHint } from './tool-result'
+import { withRetryKey } from './retry-key'
 
 const log = createLogger('mcp-operation-tools')
 
+/** The staging argument every generated write accepts without declaring it. */
+const PREVIEW_TOKEN_ARG = 'preview_token'
+const UNDECLARED_STAGING_ARGS = [PREVIEW_TOKEN_ARG] as const
+
+/** The pin a staging call sent, or null; a malformed one is refused. */
+function sentPreviewToken(value: unknown): string | null {
+  if (value === undefined || value === null) return null
+  if (typeof value === 'string' && isPreviewToken(value.trim())) return value.trim()
+  throw badArgument(
+    PREVIEW_TOKEN_ARG,
+    `${PREVIEW_TOKEN_ARG}: ${MALFORMED_PREVIEW_TOKEN_MESSAGE}`,
+    'Ogiltig preview_token: skicka tillbaka den som förhandsgranskningen (dry_run) av samma anrop gav.',
+  )
+}
+
+/**
+ * MCP-only input preparation for one operation, run on the raw arguments
+ * before they are validated: what agents may send that the operation's own
+ * contract does not take (a dimension value given by its name). It rewrites
+ * the arguments into the operation's input and may name what it resolved,
+ * which the staged preview then carries. It may read; it never writes.
+ */
+export type PrepareOperationInput = (
+  args: Record<string, unknown>,
+  context: { supabase: SupabaseClient; companyId: string },
+) => Promise<{ args: Record<string, unknown>; preview?: Record<string, unknown> }>
+
 interface Deps {
+  /** By operation id: see PrepareOperationInput. */
+  prepareInput?: Record<string, PrepareOperationInput>
   readOnly: McpToolAnnotations
   stagedWrite: McpToolAnnotations
   stagedSchema: Record<string, unknown>
@@ -39,8 +92,8 @@ interface Deps {
     params: Record<string, unknown>,
     previewData: Record<string, unknown>,
     actor?: ActorContext,
-    next?: undefined,
-    options?: { dryRun?: boolean; idempotencyKey?: string },
+    next?: NextActionHint,
+    options?: { dryRun?: boolean; idempotencyKey?: string; dateForPeriodCheck?: string; complianceNote?: string },
   ) => Promise<unknown>
 }
 
@@ -49,8 +102,9 @@ type JsonSchema = Record<string, unknown>
 /**
  * Zod's JSON Schema, trimmed for a tool definition: no $schema header, no
  * regex spelled out next to a `format` that already says it (uuid), no
- * MAX_SAFE_INTEGER bounds, and closed objects so an agent's stray key is
- * refused rather than ignored.
+ * MAX_SAFE_INTEGER bounds, a nullable scalar as one node, no `type: string`
+ * on propertyNames (a key is always a string), and closed objects so an
+ * agent's stray key is refused rather than ignored.
  */
 export function toolInputSchema(input: z.ZodTypeAny): JsonSchema {
   const raw = z.toJSONSchema(input, { io: 'input', unrepresentable: 'any' }) as JsonSchema
@@ -58,13 +112,56 @@ export function toolInputSchema(input: z.ZodTypeAny): JsonSchema {
   return compact(raw) as JsonSchema
 }
 
+const COMPOSITE_KEYWORDS = ['enum', 'const', 'anyOf', 'oneOf', 'allOf'] as const
+
+/**
+ * `.nullable()` on a plain scalar comes out as anyOf [X, {type: 'null'}];
+ * the same schema is X with type [X.type, 'null'], a node shorter in every
+ * tools/list. Left alone when X lists values (an enum's values would then
+ * refuse the null) or composes further.
+ */
+function foldNullable(obj: Record<string, unknown>): Record<string, unknown> {
+  const options = obj.anyOf
+  if (!Array.isArray(options) || options.length !== 2) return obj
+  const isNull = (o: unknown) =>
+    typeof o === 'object' && o !== null && (o as Record<string, unknown>).type === 'null' && Object.keys(o).length === 1
+  const other = (isNull(options[0]) ? options[1] : isNull(options[1]) ? options[0] : null) as Record<string, unknown> | null
+  if (!other || typeof other.type !== 'string' || COMPOSITE_KEYWORDS.some((k) => k in other)) return obj
+  const { anyOf: _anyOf, ...rest } = obj
+  return { ...other, ...rest, type: [other.type, 'null'] }
+}
+
+const jsonType = (value: unknown) => (value === null ? 'null' : typeof value)
+
+/**
+ * A multi-value literal (`z.literal([0, 0.06, null])`) comes out as a bare
+ * `enum` with no `type`, and MCP clients send a parameter whose type they
+ * cannot read as a string: default_vat_rate 0 arrived as "0" and was refused
+ * (agent feedback seq 1088767). An enum listing a number or boolean therefore
+ * names its types. An enum of strings (plus null) stays bare: its values
+ * already arrive as the strings they are, and every byte of it ships in
+ * tools/list (coerceStringifiedScalars takes a stringified null back).
+ */
+function typeEnum(obj: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(obj.enum) || obj.type !== undefined) return obj
+  const types = [...new Set(obj.enum.map(jsonType))]
+  if (!types.every((t) => ['number', 'boolean', 'string', 'null'].includes(t))) return obj
+  if (types.every((t) => t === 'string' || t === 'null')) return obj
+  return { type: types.length === 1 ? types[0] : types, ...obj }
+}
+
 function compact(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(compact)
   if (typeof node !== 'object' || node === null) return node
-  const obj = { ...(node as Record<string, unknown>) }
+  const obj = typeEnum(foldNullable({ ...(node as Record<string, unknown>) }))
   if (typeof obj.format === 'string' && typeof obj.pattern === 'string') delete obj.pattern
   if (obj.maximum === Number.MAX_SAFE_INTEGER) delete obj.maximum
   if (obj.minimum === Number.MIN_SAFE_INTEGER) delete obj.minimum
+  const names = obj.propertyNames as Record<string, unknown> | undefined
+  if (names && typeof names === 'object' && names.type === 'string') {
+    const { type: _string, ...rest } = names
+    obj.propertyNames = rest
+  }
   if (obj.type === 'object' && obj.properties && obj.additionalProperties === undefined) {
     obj.additionalProperties = false
   }
@@ -112,7 +209,7 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
         catalogVisibility: binding.visibility ?? 'search',
         keywords: binding.keywords,
         async execute(args, companyId, userId, supabase) {
-          const input = parseOrThrow(op, args)
+          const input = parseOrThrow(op, inputSchema, args)
           const outcome = await op.run(
             { supabase, companyId, userId, log: log.child({ operation: op.id }) },
             input,
@@ -126,10 +223,18 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       continue
     }
 
+    if (binding.direct) {
+      tools.push(directWriteTool(op, inputSchema, description))
+      continue
+    }
+
     const stage = binding.stage
     if (!stage) {
-      throw new Error(`operation ${op.id} is a write without mcp.stage: MCP writes always stage`)
+      throw new Error(`operation ${op.id} is a write without mcp.stage: MCP writes stage unless they are direct`)
     }
+    // Every operation input is listed, including one only a refusal asks for
+    // (DOC_ROW_MISMATCH's mismatch_reason): a client that validates against
+    // the listed schema cannot send a key it was not given (crm#1742).
     const properties = { ...((inputSchema.properties as JsonSchema) ?? {}), ...deps.stagingArgs }
     tools.push({
       name: binding.name,
@@ -137,12 +242,21 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       description,
       inputSchema: { ...inputSchema, type: 'object', additionalProperties: false, properties },
       outputSchema: deps.stagedSchema,
-      annotations: deps.stagedWrite,
+      annotations: {
+        ...withToolEffect(deps.stagedWrite, binding.hints?.destructive ? 'destructive' : 'additive'),
+        ...(binding.hints?.idempotent ? { idempotentHint: true } : {}),
+      },
       catalogVisibility: binding.visibility ?? 'search',
       keywords: binding.keywords,
+      undeclaredArgs: UNDECLARED_STAGING_ARGS,
       async execute(args, companyId, userId, supabase, actor) {
-        const { dry_run, idempotency_key, ...rest } = args
-        const input = parseOrThrow(op, rest)
+        // __keyScopes: the calling key's grant, injected by the dispatcher
+        // for the tools whose refusal names a follow-up call.
+        const { dry_run, idempotency_key, __keyScopes, [PREVIEW_TOKEN_ARG]: rawPreviewToken, ...rest } = args
+        const previewTokenSent = sentPreviewToken(rawPreviewToken)
+        const prepare = deps.prepareInput?.[op.id]
+        const prepared = prepare ? await prepare(rest, { supabase, companyId }) : { args: rest }
+        const input = parseOrThrow(op, inputSchema, prepared.args)
         // The preview runs every check the commit will run, so a staged
         // operation that could never commit is refused here, not at approval.
         const preview = await op.run(
@@ -150,32 +264,111 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
           input,
           { dryRun: true },
         )
-        if (!preview.ok) throwOutcomeFailure(preview)
+        if (!preview.ok) {
+          const refusal = preview.error
+            ? undefined
+            : stage.refusal?.(
+                { code: preview.code, details: preview.details },
+                input as Record<string, unknown>,
+                Array.isArray(__keyScopes) ? (__keyScopes as ApiKeyScope[]) : undefined,
+              )
+          if (refusal) throw refusal
+          throwOutcomeFailure(preview)
+        }
+        // The same plan the v1 stage mode stages (lib/operations/stage.ts):
+        // pinned params (e.g. the payee each payment goes to) make the commit
+        // refuse when what the approver saw no longer holds.
         const previewData = preview.dryRun ? preview.preview : {}
-        // Pinned params (e.g. the payee each payment goes to) make the
-        // commit refuse when what the approver saw no longer holds.
-        const params = stage.pinParams
-          ? stage.pinParams(input as Record<string, unknown>, previewData)
-          : (input as Record<string, unknown>)
-        return deps.stagePendingOperation(
+        const plan = planStagedOperation(stage, input as Record<string, unknown>, previewData)
+        const extras = plan.extras
+        const stagedPreview = { ...plan.preview, ...(prepared.preview ?? {}) }
+        // The same fingerprint every door computes for this input, so a token
+        // from a v1 dry run pins an MCP staging too, and the other way round.
+        const previewToken = operationPreviewToken(op, companyId, input, previewData)
+        if (previewTokenSent && previewTokenSent !== previewToken) {
+          throwOutcomeFailure(previewStaleFailure(stagedPreview, previewToken))
+        }
+        const staged = await deps.stagePendingOperation(
           supabase,
           companyId,
           userId,
-          stage.pendingType,
-          stage.title(input as Record<string, unknown>),
-          params,
-          previewData,
+          plan.pendingType,
+          plan.title,
+          plan.params,
+          stagedPreview,
           actor,
-          undefined,
+          extras.next,
           {
             dryRun: Boolean(dry_run),
             idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+            ...(extras.periodDate ? { dateForPeriodCheck: extras.periodDate } : {}),
+            ...(extras.complianceNote ? { complianceNote: extras.complianceNote } : {}),
           },
         )
+        return dry_run ? withPreviewToken(staged, previewToken) : staged
       },
     })
   }
   return tools
+}
+
+/** A direct write: it reaches no ledger, and a repeat with the same key and input replays the first answer. */
+const DIRECT_WRITE_ANNOTATIONS: McpToolAnnotations = annotationsForEffect('additive', {
+  idempotentHint: true,
+  openWorldHint: false,
+})
+
+/**
+ * The tool of a write that commits on the call (OperationMcpBinding.direct):
+ * only for a scope in DIRECT_WRITE_SCOPES, data that never reaches the books.
+ * It runs the operation as its v1 endpoint does, answers the operation's
+ * output, and replays idempotency_key (withRetryKey). No dry_run: the v1
+ * endpoint previews, and an answer of two shapes would break outputSchema.
+ */
+function directWriteTool(op: AnyOperation, inputSchema: JsonSchema, description: string): McpTool {
+  const binding = op.mcp!
+  if (op.kind !== 'write' || binding.stage || !DIRECT_WRITE_SCOPES.includes(op.scope)) {
+    throw codedRefusal('INTERNAL_ERROR', `operation ${op.id}: mcp.direct is only for a write under ${DIRECT_WRITE_SCOPES.join(', ')} that does not stage`)
+  }
+  return withRetryKey({
+    name: binding.name,
+    title: binding.title,
+    description,
+    inputSchema,
+    outputSchema: toolOutputSchema(op.output as unknown as z.ZodTypeAny),
+    annotations: DIRECT_WRITE_ANNOTATIONS,
+    catalogVisibility: binding.visibility ?? 'search',
+    keywords: binding.keywords,
+    async execute(args, companyId, userId, supabase) {
+      // Private dispatcher fields (__keyScopes, ...) are not the caller's input.
+      const rest = Object.fromEntries(Object.entries(args).filter(([name]) => !name.startsWith('__')))
+      const input = parseOrThrow(op, inputSchema, rest)
+      const outcome = await op.run(
+        { supabase, companyId, userId, log: log.child({ operation: op.id }), door: 'mcp' },
+        input,
+        { dryRun: false },
+      )
+      if (!outcome.ok) throwOutcomeFailure(outcome)
+      if (outcome.dryRun) return outcome.preview
+      return outcome.data
+    },
+  })
+}
+
+/**
+ * A dry run's staging answer with the token that pins it, and the sentence
+ * that says how to use it: the argument is not in inputSchema, so this
+ * answer is where an agent learns it exists.
+ */
+function withPreviewToken(staged: unknown, previewToken: string): unknown {
+  if (typeof staged !== 'object' || staged === null) return staged
+  const answer = staged as Record<string, unknown>
+  const pin = `To stage exactly this preview once the person confirms it, repeat the call without dry_run and with preview_token="${previewToken}": if anything changed meanwhile, nothing is staged and PREVIEW_STALE returns the fresh preview.`
+  return {
+    ...answer,
+    preview_token: previewToken,
+    message: typeof answer.message === 'string' ? `${answer.message} ${pin}` : pin,
+  }
 }
 
 /**
@@ -183,8 +376,51 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
  * code v1 answers for the same body). A plain Error here reached the agent as
  * UNKNOWN_ERROR, "Något gick fel. Försök igen.", from every generated tool.
  */
-function parseOrThrow(op: AnyOperation, args: Record<string, unknown>): unknown {
+function parseOrThrow(op: AnyOperation, inputSchema: JsonSchema, rawArgs: Record<string, unknown>): unknown {
+  const args = coerceStringifiedScalars(inputSchema, rawArgs)
   const parsed = (op.input as unknown as z.ZodTypeAny).safeParse(args)
   if (parsed.success) return parsed.data
   throw fieldValidationError('Invalid arguments', zodFieldIssues(parsed.error, args))
+}
+
+const NUMERIC_LITERAL = /^-?\d+(\.\d+)?$/
+
+/**
+ * Top-level arguments a client sent as strings although the schema takes no
+ * string there: "0" where a number is expected, "null" where null is allowed
+ * but the string "null" is not. Clients that serialize scalar parameters
+ * without reading their JSON type do this (agent feedback seq 1088767), and
+ * a client keeps the tools/list it cached before the schema named its types.
+ * Only those two unambiguous cases are converted; anything else passes
+ * through unchanged for the operation's own validation to refuse. Nested
+ * values travel inside JSON and keep their types.
+ */
+export function coerceStringifiedScalars(
+  inputSchema: JsonSchema,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const properties = inputSchema.properties as Record<string, JsonSchema> | undefined
+  if (!properties) return args
+  let out: Record<string, unknown> | null = null
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value !== 'string') continue
+    const property = properties[key]
+    if (!property) continue
+    const values = Array.isArray(property.enum) ? (property.enum as unknown[]) : null
+    const types = Array.isArray(property.type) ? (property.type as unknown[]) : [property.type]
+    const admits = (type: string) =>
+      values
+        ? values.some((v) => jsonType(v) === type)
+        : types.includes(type) || (type === 'number' && types.includes('integer'))
+    let coerced: unknown = value
+    if (admits('number') && !admits('string') && NUMERIC_LITERAL.test(value)) {
+      coerced = Number(value)
+    } else if (value === 'null' && admits('null') && !(values ? values.includes('null') : admits('string'))) {
+      coerced = null
+    }
+    if (coerced === value) continue
+    out ??= { ...args }
+    out[key] = coerced
+  }
+  return out ?? args
 }

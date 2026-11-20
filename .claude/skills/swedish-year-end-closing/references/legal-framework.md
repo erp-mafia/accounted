@@ -41,7 +41,7 @@ Exceeds more than one of three thresholds for each of the two most recent fiscal
 
 Större företag must use K3, prepare kassaflödesanalys, and meet additional disclosure requirements.
 
-These thresholds (and the revisionsplikt limits in ABL 9:1) are unchanged for 2026. The inquiry on company categories in ÅRL (Ju 2025:11, dir. 2025:49) is due to report by 2026-09-29.
+These thresholds (and the revisionsplikt limits in ABL 9:1) are unchanged for 2026. The inquiry on company categories in ÅRL (Ju 2025:11) reported in SOU 2026:59 (2026-09-30): it proposes a new category mikroföretag (medelantal anställda 3, balansomslutning 1.5 MSEK, nettoomsättning 3 MSEK) from the FY beginning after 2027-12-31. A proposal, not law.
 
 ## Decision tree for developers
 

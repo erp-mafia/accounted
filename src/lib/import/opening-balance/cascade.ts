@@ -1,9 +1,14 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import type { CreateJournalEntryLineInput } from '@/types'
 import { roundOre } from '@/lib/money'
-import { replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import { openingBalanceBusinessEvent, openingBalanceStornoBusinessEvent } from '../import-business-events'
 import {
   validateOpeningBalanceLines,
   type OpeningBalanceLine,
@@ -17,7 +22,8 @@ import {
  * therefore leaves every later year's linked IB verifikat carrying the stale
  * figures. This module applies the same per-account delta (corrected minus
  * original) to each subsequent period's IB the BFL-compliant way, via the
- * atomic replaceOpeningBalanceEntry engine primitive (one DB transaction owns
+ * atomic replaceOpeningBalanceEntry engine primitive, through the posting
+ * port's commitSqlPosting (one DB transaction owns
  * the storno, the corrected voucher, and the period pointer swap, with a CAS
  * on the expected old entry id), so a failure leaves the period untouched.
  *
@@ -308,7 +314,7 @@ export async function cascadeOpeningBalanceCorrection(
       // storno, no new verifikat. The RPC transaction enforces the whole
       // envelope (posted, current linked IB, no bokslut, class 1-2, balance
       // to the öre, rättelse log) and rolls the period back on any failure.
-      const { error: inlineError } = await supabase.rpc('correct_entry_lines_inline', {
+      const { error: inlineError } = await rpcWithActor(supabase, 'correct_entry_lines_inline', {
         p_company_id: companyId,
         p_entry_id: oldEntryId,
         p_strike_line_ids: [],
@@ -366,7 +372,7 @@ export async function cascadeOpeningBalanceCorrection(
     // the base correction.
     const voucherLabel =
       period.opening_balance_entry?.voucher_series && period.opening_balance_entry?.voucher_number
-        ? `${period.opening_balance_entry.voucher_series}${period.opening_balance_entry.voucher_number}`
+        ? formatVoucher(period.opening_balance_entry)
         : null
     const description = voucherLabel
       ? `Ingående balanser (korrigerade, rättelse av ${voucherLabel})`
@@ -376,14 +382,39 @@ export async function cascadeOpeningBalanceCorrection(
     // fiscal_periods.opening_balance_entry_id, CAS-guarded on oldEntryId. Any
     // failure (including a period locked between our pre-check and the write)
     // rolls the whole period back: no compensation pass, no half states.
+    // The posting port (its SQL step) records the year's two events first,
+    // as the base correction records its own: the corrected IB's
+    // ledger.opening_balance and the storno's ledger.storno, by position;
+    // the RPC links them to its two drafts before either number is drawn.
+    // Under strict an event that could not be recorded skips the year here,
+    // before any number. Off: nothing is built and the RPC is called as
+    // before.
     try {
-      const replacement = await replaceOpeningBalanceEntry(supabase, companyId, userId, oldEntryId, {
+      const businessEvents = await postingPort.recordEventsForSql({
+        supabase,
+        companyId,
+        events: () => {
+          const linkBasis = linkBasisColumns('user_created')
+          return [
+            openingBalanceBusinessEvent(period.id, period.period_start, linkBasis),
+            openingBalanceStornoBusinessEvent(period.id, todayIsoStockholm(), linkBasis),
+          ]
+        },
+      })
+      const replacementInput = {
         fiscal_period_id: period.id,
         entry_date: period.period_start,
         description,
-        source_type: 'opening_balance',
+        source_type: 'opening_balance' as const,
         voucher_series: 'A',
         lines,
+      }
+      const replacement = await postingPort.commitSqlPosting({
+        supabase,
+        companyId,
+        userId,
+        fn: 'commit_opening_balance_replacement',
+        args: businessEvents ? [oldEntryId, replacementInput, { businessEvents }] : [oldEntryId, replacementInput],
       })
 
       result.corrected.push({

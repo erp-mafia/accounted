@@ -39,6 +39,7 @@ function skillFormTag(entityType: EntityType): SkillFormTag | null {
     enskild_firma: 'EF',
     ideell_forening: null,
     ekonomisk_forening: null,
+    bostadsrattsforening: null,
   })
 }
 

@@ -16,6 +16,7 @@ import {
   fetchUserEmail,
   getOAuthEnv,
   isGoogleOAuthConfigured,
+  lacksDriveScope,
   refreshAccessToken,
   revokeToken,
 } from './google-oauth'
@@ -26,12 +27,13 @@ import {
   updateFile,
   uploadFile,
 } from './google-drive'
-import type {
-  CloudStorageProvider,
-  PreparedTarget,
-  PrepareTargetParams,
-  PutFileParams,
-  PutFileResult,
+import {
+  CloudScopeMissingError,
+  type CloudStorageProvider,
+  type PreparedTarget,
+  type PrepareTargetParams,
+  type PutFileParams,
+  type PutFileResult,
 } from './cloud-provider'
 import type { CloudConnection } from '../types'
 
@@ -62,6 +64,14 @@ export const googleDriveProvider: CloudStorageProvider = {
 
   async exchangeCode(origin, code) {
     const tokens = await exchangeCodeForTokens(getOAuthEnv(origin), code)
+    // What Google granted decides, not what was asked for: a grant without
+    // the Drive box ticked can never write a backup, so nothing is stored.
+    // The grant is deliberately not revoked: it carries only sign-in scopes,
+    // and revoking ends this Google account's grant for the whole client,
+    // which could take down a working backup of another company on it.
+    if (lacksDriveScope(tokens.scope)) {
+      throw new CloudScopeMissingError('Google Drive', `granted: ${tokens.scope}`)
+    }
     const email = await fetchUserEmail(tokens.access_token)
     return { refreshToken: tokens.refresh_token, accountLabel: email }
   },

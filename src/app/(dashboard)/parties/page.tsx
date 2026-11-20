@@ -9,13 +9,13 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Input } from '@/components/ui/input'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { ToastAction } from '@/components/ui/toast'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { useToast } from '@/components/ui/use-toast'
 import { CounterpartList } from '@/components/parties/CounterpartList'
 import { MergeDialog, type MergeCandidate } from '@/components/parties/MergeDialog'
@@ -264,35 +264,53 @@ function CounterpartsPage() {
         }
       />
 
+      {/* Toolbar: the period filter first, search at the right end (V7 list toolbars). */}
       <div className="flex flex-wrap items-center gap-2">
-        <ToolbarSearch value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('cp_search')} aria-label={t('cp_search')} />
-        <div className="ml-auto">
-          <ContextPicker
-            ariaLabel={t('period_label')}
-            triggerLabel={period === '12m' ? t('period_12m') : t('period_all')}
-            items={[
-              { id: '12m', label: t('period_12m') },
-              { id: 'all', label: t('period_all') },
-            ]}
-            value={period}
-            onChange={(id) => setPeriod(id as RegisterPeriod)}
-          />
-        </div>
+        <ContextPicker
+          ariaLabel={t('period_label')}
+          triggerLabel={period === '12m' ? t('period_12m') : t('period_all')}
+          items={[
+            { id: '12m', label: t('period_12m') },
+            { id: 'all', label: t('period_all') },
+          ]}
+          value={period}
+          onChange={(id) => setPeriod(id as RegisterPeriod)}
+        />
+        <ToolbarSearch
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t('cp_search')}
+          aria-label={t('cp_search')}
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
+        />
       </div>
 
-      {failed ? (
-        <AttnLine action={{ label: t('cp_retry'), onClick: reload }}>{t('cp_load_failed')}</AttnLine>
+      {/* A failed reload keeps the rows on screen, with one line above them. */}
+      {failed && list && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: reload }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+
+      {failed && !list ? (
+        <LoadError title={t('cp_load_failed')} onRetry={reload} />
       ) : loading && !list ? (
-        <div className="space-y-2" aria-busy>
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto h-3.5 w-24" />
+              <Skeleton className="h-3.5 w-20" />
+            </div>
+          ))}
+        </LateReveal>
+      ) : rows.length === 0 && debounced ? (
+        <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+          <span>{t('cp_empty_search')}</span>
+          <Button variant="link" onClick={() => setQuery('')}>
+            {tCommon('clear_search')}
+          </Button>
         </div>
       ) : rows.length === 0 ? (
-        <EmptyState
-          title={debounced ? t('cp_empty_search') : t('cp_empty_title')}
-          description={debounced ? t('empty_search_description') : t('cp_empty')}
-        />
+        <EmptyState title={t('cp_empty_title')} description={t('cp_empty')} />
       ) : (
         <CounterpartList
           rows={rows}
@@ -310,7 +328,7 @@ function CounterpartsPage() {
       )}
 
       {list && list.counts.unnamedTransactions > 0 ? (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {t('cp_unnamed', { count: list.counts.unnamedTransactions })}
           {' · '}
           <Link href="/transactions" className={QUIET_LINK_CLASS}>

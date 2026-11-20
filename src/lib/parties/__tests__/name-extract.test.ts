@@ -51,8 +51,8 @@ describe('extractNameCandidates', () => {
   it('drops lead words and counters before the name', () => {
     expect(extractNameCandidates('Delbetalning till 2 Fortnox Aktiebolag, faktura 4711')[0]).toMatchObject({ name: 'Fortnox AB', foreign: false })
     expect(extractNameCandidates('Kundbet Acme Konsult AB')[0]).toMatchObject({ name: 'Acme Konsult AB', foreign: false })
-    expect(extractNameCandidates('Rättelse: Leverantörsfaktura 18299, RosholmDell Advokatbyrå AB (ankomst 2)')[0]).toMatchObject({
-      name: 'RosholmDell Advokatbyrå AB',
+    expect(extractNameCandidates('Rättelse: Leverantörsfaktura 18299, Nordljus Advokatbyrå AB (ankomst 2)')[0]).toMatchObject({
+      name: 'Nordljus Advokatbyrå AB',
       foreign: false,
     })
     expect(extractNameCandidates('Rättelse: Google oktober · Google Cloud EMEA Limited (Irland, EU). Faktura 2025-09-30')[0]).toMatchObject({

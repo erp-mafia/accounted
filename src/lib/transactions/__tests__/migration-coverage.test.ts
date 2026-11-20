@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
+import {
+  fetchMigrationCoverageEnd,
+  fetchOpenPreMigrationRows,
+  preMigrationScanAccount,
+} from '@/lib/transactions/migration-coverage'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 /**
  * Recording chain mock: remembers every chained call so the test can assert
@@ -20,7 +25,7 @@ function createRecordingSupabase(results: Array<{ data: unknown; error: unknown 
         calls.push({ method, args })
         return chain
       }
-    for (const method of ['select', 'eq', 'neq', 'not', 'order', 'limit']) {
+    for (const method of ['select', 'eq', 'neq', 'not', 'or', 'order', 'limit']) {
       chain[method] = record(method)
     }
     chain.maybeSingle = vi.fn().mockImplementation(() => {
@@ -76,6 +81,8 @@ describe('fetchMigrationCoverageEnd', () => {
       'journal_entries',
     ])
     expect(calls).toContainEqual({ method: 'eq', args: ['status', 'completed'] })
+    // Armed only by an import in place: not one being undone, not a repair row.
+    expect(calls).toContainEqual({ method: 'or', args: ['job_state.is.null,and(job_state.eq.completed,job_kind.eq.import)'] })
     expect(calls).toContainEqual({ method: 'eq', args: ['company_id', 'company-1'] })
     expect(calls).toContainEqual({ method: 'eq', args: ['status', 'posted'] })
     expect(calls).toContainEqual({ method: 'eq', args: ['source_type', 'import'] })
@@ -104,5 +111,114 @@ describe('fetchMigrationCoverageEnd', () => {
     await fetchMigrationCoverageEnd(supabase, 'company-1')
     const selects = calls.filter((c) => c.method === 'select').map((c) => c.args[0])
     expect(selects).toEqual(['id', 'entry_date'])
+  })
+})
+
+describe('preMigrationScanAccount', () => {
+  it('widens every bank account (1910-1949) and a missing ledger to the whole bank range', () => {
+    // crm#1239: the cash account's ledger mapping is set up after the old
+    // system booked, so the movement may sit on another bank account.
+    expect(preMigrationScanAccount('1930')).toBeNull()
+    expect(preMigrationScanAccount('1940')).toBeNull()
+    expect(preMigrationScanAccount('1910')).toBeNull()
+    expect(preMigrationScanAccount('1949')).toBeNull()
+    expect(preMigrationScanAccount(null)).toBeNull()
+    expect(preMigrationScanAccount(undefined)).toBeNull()
+    expect(preMigrationScanAccount('  ')).toBeNull()
+  })
+
+  it('keeps any other settlement account exactly itself', () => {
+    expect(preMigrationScanAccount('1686')).toBe('1686')
+    expect(preMigrationScanAccount('2890')).toBe('2890')
+    expect(preMigrationScanAccount('1950')).toBe('1950')
+    expect(preMigrationScanAccount('19300')).toBe('19300')
+  })
+})
+
+describe('fetchOpenPreMigrationRows', () => {
+  const openRow = (id: string, date: string, amount: number | string, cashAccountId: string | null) => ({
+    id,
+    date,
+    amount,
+    currency: 'SEK',
+    amount_sek: null,
+    exchange_rate: null,
+    cash_account_id: cashAccountId,
+  })
+
+  it('reads the open inbox rows on or before the coverage end, in a stable paging order', async () => {
+    const { supabase, setTable, findCall, findCalls, tables } = createTableMockSupabase()
+    setTable('open_bank_rows', { data: [openRow('tx-1', '2026-09-18', -27500, null)] })
+
+    await fetchOpenPreMigrationRows(supabase as unknown as SupabaseClient, 'company-1', '2026-10-16')
+
+    expect(findCall('open_bank_rows', 'select')).toEqual([
+      'id, date, amount, currency, amount_sek, exchange_rate, cash_account_id',
+    ])
+    expect(findCalls('open_bank_rows', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(findCalls('open_bank_rows', 'is')).toEqual([['is_business', null]])
+    expect(findCall('open_bank_rows', 'lte')).toEqual(['date', '2026-10-16'])
+    expect(findCalls('open_bank_rows', 'order')).toEqual([
+      ['date', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+    // No row names a cash account: no lookup.
+    expect(tables()).toEqual(['open_bank_rows'])
+  })
+
+  it('groups the rows per cash account with the ledger scope each one is searched in', async () => {
+    const { supabase, setTable, findCall } = createTableMockSupabase()
+    setTable('open_bank_rows', {
+      data: [
+        openRow('tx-bank-1', '2026-09-18', '-27500', 'ca-bank'),
+        openRow('tx-card', '2026-09-20', -199, 'ca-card'),
+        openRow('tx-bank-2', '2026-09-30', -7874, 'ca-bank'),
+        openRow('tx-loose', '2026-10-01', -292.95, null),
+      ],
+    })
+    setTable('cash_accounts', {
+      data: [
+        { id: 'ca-bank', ledger_account: '1940' },
+        { id: 'ca-card', ledger_account: '2890' },
+      ],
+    })
+
+    const groups = await fetchOpenPreMigrationRows(supabase as unknown as SupabaseClient, 'company-1', '2026-10-16')
+
+    expect(findCall('cash_accounts', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(groups.map((g) => ({ scan: g.scanAccount, ids: g.rows.map((r) => r.id) }))).toEqual([
+      { scan: null, ids: ['tx-bank-1', 'tx-bank-2'] },
+      { scan: '2890', ids: ['tx-card'] },
+      { scan: null, ids: ['tx-loose'] },
+    ])
+    // PostgREST hands numerics over as strings; the detector sums numbers.
+    expect(groups[0].rows[0]).toEqual({
+      id: 'tx-bank-1',
+      date: '2026-09-18',
+      amount: -27500,
+      currency: 'SEK',
+      amount_sek: null,
+      exchange_rate: null,
+    })
+  })
+
+  it('returns no groups without open rows and reads no cash accounts', async () => {
+    const { supabase, setTable, tables } = createTableMockSupabase()
+    setTable('open_bank_rows', { data: [] })
+
+    await expect(
+      fetchOpenPreMigrationRows(supabase as unknown as SupabaseClient, 'company-1', '2026-10-16'),
+    ).resolves.toEqual([])
+    expect(tables()).toEqual(['open_bank_rows'])
+  })
+
+  it('throws when the cash account lookup fails: a row scope would be a guess', async () => {
+    const { supabase, setTable } = createTableMockSupabase()
+    setTable('open_bank_rows', { data: [openRow('tx-1', '2026-09-18', -27500, 'ca-1')] })
+    setTable('cash_accounts', { error: { message: 'boom' } })
+
+    await expect(
+      fetchOpenPreMigrationRows(supabase as unknown as SupabaseClient, 'company-1', '2026-10-16'),
+    ).rejects.toThrow('cash account lookup failed')
   })
 })

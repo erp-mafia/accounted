@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, ChevronDownIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
+import { PdfCanvasPreview, useDrawsPdfInPage } from '@/components/invoices/PdfCanvasPreview'
 import type { PdfPreviewState } from './use-editor-previews'
 
 type PreviewTab = 'document' | 'email'
@@ -76,6 +77,9 @@ export function EditorPreviewPane({
   // the pane back to the document.
   const tab: PreviewTab = emailDisabledReason ? 'document' : chosenTab
   const [zoom, setZoom] = useState<Zoom>('page')
+  // Safari and every iOS browser leave the <object> below blank for a blob:
+  // PDF (crm#1689): there the page draws the PDF itself.
+  const drawsInPage = useDrawsPdfInPage()
 
   // Double-buffered: a new render loads in a hidden <object> over the shown
   // one and swaps in once it has painted, so an edit never blanks the page.
@@ -110,9 +114,9 @@ export function EditorPreviewPane({
             {visible && (
               // The way out when the browser shows no PDF: a link here, never
               // fallback content inside the <object> (see below).
-              <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground">
+              <Button asChild variant="ghost" size="icon-toolbar" className="text-muted-foreground">
                 <a href={visible} target="_blank" rel="noreferrer" aria-label={t('preview_open')} title={t('preview_open')}>
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 </a>
               </Button>
             )}
@@ -120,10 +124,10 @@ export function EditorPreviewPane({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex h-8 items-center gap-1 rounded-full px-3 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-8 items-center gap-1 rounded-md px-3 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {zoom === 'page' ? t('zoom_page') : t('zoom_width')}
-                  <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                  <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -146,7 +150,26 @@ export function EditorPreviewPane({
             )}
             aria-busy={pdf.loading}
           >
-            {visible ? (
+            {visible && drawsInPage && pdf.blob ? (
+              // Draws the newest render and keeps the last drawing until it
+              // is done, so it needs no second buffer. It is handed the Blob,
+              // not the blob: URL (accounted#178); when pdf.js cannot draw the
+              // file it says so and links the PDF instead of a blank box.
+              <PdfCanvasPreview
+                file={pdf.blob}
+                fit={zoom}
+                title={t('preview_title')}
+                className={PDF_BOX.width}
+                fallback={
+                  <p className="p-4 text-sm text-muted-foreground">
+                    {t('preview_not_drawn')}{' '}
+                    <a href={target ?? visible} target="_blank" rel="noreferrer" className="underline">
+                      {t('preview_open')}
+                    </a>
+                  </p>
+                }
+              />
+            ) : visible ? (
               // <object type="application/pdf">, not an <iframe>: Chrome's
               // frame pipeline intermittently blocked the PDF (see
               // InvoicePreviewCard).
@@ -172,7 +195,7 @@ export function EditorPreviewPane({
                     onLoad={() => setShown(url)}
                     className={cn(
                       PDF_BOX[zoomOf(url)],
-                      'rounded-lg border border-border bg-background',
+                      'rounded-lg bg-control shadow-raised',
                       !isShown && 'pointer-events-none opacity-0',
                     )}
                   />

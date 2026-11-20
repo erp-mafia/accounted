@@ -1,5 +1,5 @@
 /**
- * Tests for POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner —
+ * Tests for POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner:
  * input-bound validation. The schablonintäkt rate feeds the avsättning cap
  * base (IL 30 kap 25 % limit), so an unbounded rate would let a caller
  * inflate the legal ceiling; these tests lock the bounds in.
@@ -8,11 +8,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-vi.mock('@/lib/bokslut/dispositions-proposal-builder', () => ({
+// Partial: the POST computes each item with the builder's real per-kind
+// functions (the ones the GET preview uses) on the mocked calculators below.
+vi.mock('@/lib/bokslut/dispositions-proposal-builder', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bokslut/dispositions-proposal-builder')>()),
   buildDispositionsProposal: vi.fn(),
 }))
 
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
+  // INK2S 4.9 (lib/bokslut/assets/building-tax-service): no buildings here.
+  loadBuildingTaxAdjustment: vi.fn(async () => ({ net: 0, lines: [], warnings: [] })),
   loadTaxAdjustmentSnapshot: vi.fn(),
   saveTaxAdjustments: vi.fn(),
 }))
@@ -20,11 +25,10 @@ vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
 vi.mock('@/lib/bokslut/tax-provision/bolagsskatt-calculator', () => ({
   calculateBolagsskatt: vi.fn(),
   getBookedBolagsskatt: vi.fn(),
-  sumPostedYearEndDispositions: vi.fn(),
 }))
 
-vi.mock('@/lib/reports/income-statement', () => ({
-  generateIncomeStatement: vi.fn(),
+vi.mock('@/lib/bokslut/tax-provision/result-before-tax', () => ({
+  readYearResult: vi.fn(),
 }))
 
 vi.mock('@/lib/bokslut/reserves/periodiseringsfond-service', async (importOriginal) => {
@@ -40,6 +44,11 @@ vi.mock('@/lib/bokslut/reserves/overavskrivningar-calculator', () => ({
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(),
+}))
+
+vi.mock('@/lib/bokslut/tax-provision/deferred-tax-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bokslut/tax-provision/deferred-tax-service')>()),
+  postDeferredTax: vi.fn(),
 }))
 
 const requireAuthMock = vi.fn()
@@ -62,18 +71,15 @@ import {
   loadTaxAdjustmentSnapshot,
   saveTaxAdjustments,
 } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
-import {
-  calculateBolagsskatt,
-  getBookedBolagsskatt,
-  sumPostedYearEndDispositions,
-} from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
-import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { calculateBolagsskatt, getBookedBolagsskatt } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
+import { readYearResult } from '@/lib/bokslut/tax-provision/result-before-tax'
 import {
   listExistingPeriodiseringsfonder,
   SchablonintaktRateNotConfiguredError,
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { postDeferredTax } from '@/lib/bokslut/tax-provision/deferred-tax-service'
 import { GET, POST, PUT } from '../route'
 
 const idParams = { params: Promise.resolve({ id: 'period-1' }) }
@@ -190,14 +196,7 @@ beforeEach(() => {
     nonTaxableIncome: 0,
     deficitCarryforward: 0,
   })
-  vi.mocked(generateIncomeStatement).mockResolvedValue({
-    net_result: 592_722.21,
-  } as Awaited<ReturnType<typeof generateIncomeStatement>>)
-  vi.mocked(sumPostedYearEndDispositions).mockResolvedValue({
-    total: 0,
-    slpPortion: 0,
-    taxProvisionPortion: 0,
-  })
+  vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 592_722.21, beforeTax: 592_722.21 })
   vi.mocked(getBookedBolagsskatt).mockResolvedValue(0)
   vi.mocked(listExistingPeriodiseringsfonder).mockResolvedValue([])
   vi.mocked(calculateOveravskrivningar).mockResolvedValue({
@@ -209,7 +208,7 @@ beforeEach(() => {
     targetReserve: 0,
     maximumSignedChange: 0,
   })
-  vi.mocked(calculateBolagsskatt).mockResolvedValue({
+  vi.mocked(calculateBolagsskatt).mockReturnValue({
     kind: 'bolagsskatt',
     label: 'Bolagsskatt 20,6 %',
     description: 'Skatt på årets skattemässiga resultat.',
@@ -488,12 +487,17 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
 
     expect(status).toBe(200)
     expect(body.data.created).toHaveLength(1)
+    // The tax the door books rests on the year's result, read once for every door.
+    expect(calculateBolagsskatt).toHaveBeenCalledWith(expect.objectContaining({ resultBeforeTax: 592_722.21 }))
     expect(createJournalEntry).toHaveBeenCalledOnce()
     expect(createJournalEntry).toHaveBeenCalledWith(
       supabase,
       'company-1',
       'user-1',
       expect.objectContaining({ source_id: 'period-1' }),
+      // The posting port's ledger adapter passes commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
   })
 
@@ -606,6 +610,9 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
           },
         ],
       }),
+      // The posting port's ledger adapter passes commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
   })
 
@@ -732,6 +739,9 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
           },
         ],
       }),
+      // The posting port's ledger adapter passes commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
   })
 
@@ -839,6 +849,37 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
       expect(supabase.from).toHaveBeenCalledWith('companies')
       expect(createJournalEntry).toHaveBeenCalledOnce()
     })
+  })
+
+  it('posts the K3 deferred tax on temporary differences last, from the bolagsskatt computation\'s underskott', async () => {
+    // Not the removed kind below: uppskjuten_skatt_kap29 is deferred tax on
+    // temporary differences and a recognised loss (K3 29.19), never on
+    // obeskattade reserver (29.37).
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: periodClient(openPeriod), error: null })
+    vi.mocked(calculateBolagsskatt).mockReturnValue({
+      kind: 'bolagsskatt',
+      label: 'Bolagsskatt 20,6 %',
+      description: 'Ingen skatt.',
+      amount: 0,
+      lines: [],
+      warnings: [],
+      computation: { taxableResult: -100_000 },
+    })
+    vi.mocked(postDeferredTax).mockResolvedValue({ id: 'entry-deferred' } as Awaited<ReturnType<typeof postDeferredTax>>)
+
+    const { status, body } = await parseJsonResponse<{ data: { created: Array<{ kind: string }> } }>(
+      await post({ items: [{ kind: 'uppskjuten_skatt_kap29' }, { kind: 'bolagsskatt' }] }),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.created).toEqual([{ kind: 'uppskjuten_skatt_kap29', entry: { id: 'entry-deferred' } }])
+    expect(postDeferredTax).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ id: 'period-1', period_end: '2025-12-31' }),
+      { closingDeficit: 100_000 },
+    )
   })
 
   it('rejects the removed uppskjuten_skatt kind as a validation error (K3 29.37)', async () => {

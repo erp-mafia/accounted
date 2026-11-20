@@ -1,16 +1,42 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   createMockRequest,
   parseJsonResponse,
   createMockRouteParams,
   createQueuedMockSupabase,
+  makeCategorizationTemplate,
   makeTransaction,
 } from '@/tests/helpers'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { eventBus } from '@/lib/events'
-import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
+import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import {
+  BookkeepingDatabaseError,
+  JournalEntryNotBalancedError,
+  TransactionLinesNotBalancedError,
+} from '@/lib/bookkeeping/errors'
+import { CASH_ACCOUNT_BUSY_RETRY } from '@/lib/bookkeeping/cash-account-busy'
+import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
+import { buildCounterpartySuggestion } from '@/lib/transactions/category-suggestions'
+import type { BookingProposal } from '@/lib/bookkeeping/proposal'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
+// The company's skattekonto account (PH 175): read only for a template that
+// names 1630; no queued read is spent on it.
+const resolveSkattekontoMock = vi.fn(async () => '1630')
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: () => resolveSkattekontoMock(),
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -60,21 +86,11 @@ vi.mock('@/lib/processing-history/append', () => ({
 }))
 
 const mockSaveUserMappingRule = vi.fn()
-vi.mock('@/lib/bookkeeping/mapping-engine', () => ({
+// The real applySettlementAccount: it is the pure bank-leg rewrite these tests
+// exercise (crm#1046). Only the learning write is stubbed.
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
   saveUserMappingRule: (...args: unknown[]) => mockSaveUserMappingRule(...args),
-  // Mirror the real implementation: rewrite a 1930 bank leg to the settlement
-  // account, no-op when the settlement account is 1930.
-  applySettlementAccount: (
-    result: { debit_account?: string; credit_account?: string },
-    bankAccount: string,
-  ) =>
-    bankAccount === '1930'
-      ? result
-      : {
-          ...result,
-          debit_account: result.debit_account === '1930' ? bankAccount : result.debit_account,
-          credit_account: result.credit_account === '1930' ? bankAccount : result.credit_account,
-        },
 }))
 
 // Spread the real module so buildMappingResultFromCounterpartyTemplate (pure)
@@ -123,6 +139,14 @@ async function useRealGuard() {
   mockAssertBookable.mockImplementation(actual.assertTransactionBookable)
 }
 
+// The question about a filed momsperiod (lib/transactions/filed-vat-categorize.ts)
+// reads the row and the filing record: none by default, so the queued reads
+// stay the booking's own. Its own test pins what it asks.
+const mockFiledVatWarning = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/transactions/filed-vat-categorize', () => ({
+  filedPeriodCategorizeWarning: mockFiledVatWarning,
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/transactions/[id]/categorize', () => {
@@ -151,16 +175,145 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Default: no booking-time duplicate. The dedicated guard test overrides this.
     mockDetectDup.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
+    mockFiledVatWarning.mockResolvedValue(null)
     mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
     // Default: no covering period at all. The closed-period test overrides this.
     mockCheckPeriodLock.mockResolvedValue({ locked: false, reason: 'no_fiscal_period' })
     mockAssertBookable.mockResolvedValue({ ok: true })
   })
 
+  // accounted#130: the row's one click (review_shown false) books only what
+  // the direct-booking policy lets through without a review, judged on what
+  // is on offer now and the company's switch read with it.
+  describe('one click (review_shown false)', () => {
+    const settled = {
+      ...buildCounterpartySuggestion(
+        makeCategorizationTemplate({ id: 't-settled', counterparty_name: 'github', occurrence_count: 9, source: 'user_approved' }),
+        0.95,
+      ),
+    }
+    const imported = buildCounterpartySuggestion(
+      makeCategorizationTemplate({ id: 't-imported', counterparty_name: 'github', occurrence_count: 140, source: 'sie_import' }),
+      0.95,
+    )
+    const offer = (proposals: BookingProposal[], enabled = true) =>
+      vi.mocked(snapshotSuggestions).mockResolvedValueOnce({
+        companyId: 'company-1',
+        directBooking: { enabled },
+        byTransaction: new Map([['tx-1', { proposals, read: null, documentId: null, inputHash: null }]]),
+      })
+    const oneClick = (proposalId: string, reviewShown: boolean | string = false) =>
+      POST(
+        createMockRequest('/api/transactions/tx-1/categorize', {
+          method: 'POST',
+          body: { is_business: true, category: 'expense_software', proposal_id: proposalId, review_shown: reviewShown },
+        }),
+        createMockRouteParams({ id: 'tx-1' }),
+      )
+    const queueBooking = () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null }), error: null })
+      enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+      enqueue({ data: [], error: null }) // resolveSettlementAccount
+      enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+      mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+      mockSaveUserMappingRule.mockResolvedValue(undefined)
+      enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+    }
+
+    it('rejects a review_shown that is not a boolean with 400', async () => {
+      const response = await oneClick(settled.template_id, 'no')
+      expect((await parseJsonResponse(response)).status).toBe(400)
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses an imported rule nobody has confirmed here, before any guard runs, and books nothing', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([imported])
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(
+        await oneClick(imported.template_id),
+      )
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_REVIEW_REQUIRED')
+      expect(body.error.details).toEqual({ proposal_id: imported.template_id, reason: 'rule_import_unconfirmed' })
+      expect(mockDetectDup).not.toHaveBeenCalled()
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+      expect(recordDecisions).not.toHaveBeenCalled()
+      expect(findCalls('transactions', 'update')).toEqual([])
+    })
+
+    it("refuses even a settled habit when the company switched one click off", async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([settled], false)
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(
+        await oneClick(settled.template_id),
+      )
+      expect(status).toBe(409)
+      expect(body.error.details.reason).toBe('company_off')
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses a rule a person set to always ask', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([{ ...settled, rule_always_review: true }])
+      const { body } = await parseJsonResponse<{ error: { details: Record<string, unknown> } }>(await oneClick(settled.template_id))
+      expect(body.error.details.reason).toBe('rule_always_review')
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses a proposal a booking review rule matches, whatever its evidence (accounted#130 step 2)', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([{ ...settled, review_blocked: true }])
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(
+        await oneClick(settled.template_id),
+      )
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_REVIEW_REQUIRED')
+      expect(body.error.details).toEqual({ proposal_id: settled.template_id, reason: 'booking_blocked' })
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses a proposal that is not on offer now: the review opens, nothing is skipped on a guess', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([settled])
+      const { status, body } = await parseJsonResponse<{ error: { details: Record<string, unknown> } }>(await oneClick('cp:gone'))
+      expect(status).toBe(409)
+      expect(body.error.details).toEqual({ proposal_id: 'cp:gone', reason: 'proposal_not_on_offer' })
+    })
+
+    it('books a settled habit, on the one snapshot it was judged on, and records that no review was shown', async () => {
+      queueBooking()
+      offer([settled])
+      const response = await oneClick(settled.template_id)
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(response)
+      expect(status, JSON.stringify(body)).toBe(200)
+      expect(body.journal_entry_id).toBe('je-1')
+      expect(snapshotSuggestions).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(recordDecisions).mock.calls[0][2]).toEqual([
+        expect.objectContaining({ actedOn: settled.template_id, reviewShown: false }),
+      ])
+    })
+
+    it('books an imported rule from its review, and records that the review was shown', async () => {
+      queueBooking()
+      const response = await oneClick(imported.template_id, true)
+      const { status, body } = await parseJsonResponse<unknown>(response)
+      expect(status, JSON.stringify(body)).toBe(200)
+      expect(vi.mocked(recordDecisions).mock.calls[0][2]).toEqual([
+        expect.objectContaining({ actedOn: imported.template_id, reviewShown: true }),
+      ])
+    })
+  })
+
   it('returns 409 and books nothing for a row anchored only by a bank_line link (bulk-book, NULL pointer)', async () => {
     await useRealGuard()
-    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
-    enqueue({ data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }] }) // transaction_voucher_links
+    // The junction rows ride along on the transaction read.
+    enqueue({
+      data: {
+        ...makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }),
+        transaction_voucher_links: [{ journal_entry_id: 'je-samling', role: 'bank_line' }],
+      },
+      error: null,
+    })
     enqueue({ data: [{ id: 'je-samling', status: 'posted' }] }) // journal_entries
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
@@ -182,9 +335,11 @@ describe('POST /api/transactions/[id]/categorize', () => {
   it('books a row whose only link names a reversed verifikat (storno released it)', async () => {
     await useRealGuard()
     const tx = makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null })
-    enqueue({ data: tx, error: null }) // fetch transaction
-    enqueue({ data: [{ journal_entry_id: 'je-old', role: 'bank_line' }] }) // transaction_voucher_links
+    // The junction rows ride along on the transaction read.
+    enqueue({ data: { ...tx, transaction_voucher_links: [{ journal_entry_id: 'je-old', role: 'bank_line' }] }, error: null })
     enqueue({ data: [{ id: 'je-old', status: 'reversed' }] }) // journal_entries
+    enqueue({ data: null, error: null }) // standing_correction: none
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
@@ -277,6 +432,13 @@ describe('POST /api/transactions/[id]/categorize', () => {
       journal_entry_id: 'je-existing',
       category: 'uncategorized',
     })
+    // A posted verifikat books the row through its pointer.
+    mockAssertBookable.mockResolvedValue({
+      ok: false,
+      code: 'TRANSACTION_ALREADY_CATEGORIZED',
+      journalEntryId: 'je-existing',
+      via: 'pointer',
+    })
     // Fetch transaction
     enqueue({ data: tx, error: null })
     // Update transaction
@@ -344,11 +506,150 @@ describe('POST /api/transactions/[id]/categorize', () => {
         true,
         'ideell_forening',
         undefined,
-        null,
+        undefined,
         vatRegistered,
+        undefined,
       )
     },
   )
+
+  // Who decided: createTransactionJournalEntry commits through the engine
+  // with no method, so the verifikat records the actor in scope and the
+  // method it implies (user_accept). The scope is the one withRouteContext
+  // opens for the signed-in user.
+  it('books inside the signed-in user\'s commit-actor scope', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null }), error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    let seen: CommitActor | undefined
+    mockCreateTransactionJournalEntry.mockImplementation(async () => {
+      seen = getActor()
+      return { id: 'je-1' }
+    })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(seen).toEqual({ type: 'user', userId: 'user-1' })
+    expect(defaultCommitMethod(seen)).toBe('user_accept')
+  })
+
+  describe('a row dated in a filed momsperiod', () => {
+    const FILED = {
+      code: 'VAT_PERIOD_ALREADY_FILED',
+      message_sv:
+        'Bokningen ändrar underlaget för en momsdeklaration som redan är inlämnad: 2026-Q3 (inlämnad 2026-11-11). Bokförs raden kan deklarationen behöva rättas.',
+      message_en:
+        'The booking changes the figures behind a VAT return already filed: 2026-Q3 (filed 2026-11-11). If the row is booked, the return may need correcting.',
+      details: { entry_date: '2026-09-27', filed_periods: [] },
+    }
+    const post = (body: Record<string, unknown>) =>
+      POST(createMockRequest('/api/transactions/tx-1/categorize', { method: 'POST', body }), createMockRouteParams({ id: 'tx-1' }))
+    /** The reads of a plain booking of tx-1, as in the happy path below. */
+    const queueBooking = () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'Loopia', journal_entry_id: null }), error: null })
+      enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: [{ id: 'period-1' }], error: null })
+      mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+      mockSaveUserMappingRule.mockResolvedValue(undefined)
+      enqueue({ data: [{ id: 'tx-1' }], error: null })
+    }
+
+    it('asks before booking when the booking changes the underlag for the filed declaration, and books nothing', async () => {
+      mockFiledVatWarning.mockResolvedValue(FILED)
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(
+        await post({ is_business: true, category: 'expense_software' }),
+      )
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_VAT_PERIOD_FILED')
+      expect(body.error.details.warnings).toEqual([FILED])
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+      expect(mockFiledVatWarning).toHaveBeenCalledWith(
+        expect.anything(),
+        'user-1',
+        'company-1',
+        'tx-1',
+        expect.objectContaining({ is_business: true, category: 'expense_software' }),
+        expect.objectContaining({ onBooked: 'update_flags' }),
+      )
+    })
+
+    it('books once the person has confirmed, and records the booking as made past the warning', async () => {
+      mockFiledVatWarning.mockResolvedValue(FILED)
+      queueBooking()
+
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(
+        await post({ is_business: true, category: 'expense_software', confirm_filed_vat_period: true }),
+      )
+
+      expect(status).toBe(200)
+      expect(body.journal_entry_id).toBe('je-1')
+      expect(mockAppendProcessingHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'VoucherWarningsAcknowledged',
+          aggregateId: 'je-1',
+          payload: expect.objectContaining({ door: 'dashboard_categorize', codes: ['VAT_PERIOD_ALREADY_FILED'] }),
+        }),
+      )
+    })
+
+    it('records nothing when the confirmed booking posts no verifikat', async () => {
+      mockFiledVatWarning.mockResolvedValue(FILED)
+      // A row a posted verifikat already books: its flags are updated, nothing is posted.
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: 'je-old' }), error: null })
+      mockAssertBookable.mockResolvedValue({ ok: false, via: 'pointer', journalEntryId: 'je-old' })
+
+      const { status, body } = await parseJsonResponse<{ journal_entry_created: boolean }>(
+        await post({ is_business: true, category: 'expense_software', confirm_filed_vat_period: true }),
+      )
+
+      expect(status).toBe(200)
+      expect(body.journal_entry_created).toBe(false)
+      expect(mockAppendProcessingHistory).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'VoucherWarningsAcknowledged' }))
+    })
+
+    it('refuses one of a selection, to be asked about once with the rest', async () => {
+      mockFiledVatWarning.mockResolvedValue(FILED)
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+        await post({ is_business: true, category: 'expense_software', in_bulk: true }),
+      )
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_VAT_PERIOD_FILED')
+      expect(mockFiledVatWarning).toHaveBeenCalledWith(
+        expect.anything(), 'user-1', 'company-1', 'tx-1', expect.anything(),
+        expect.objectContaining({ withoutReview: true }),
+      )
+    })
+
+    it('books as before, with nothing recorded, when there is nothing to ask', async () => {
+      queueBooking()
+
+      const { status } = await parseJsonResponse(await post({ is_business: true, category: 'expense_software' }))
+
+      expect(status).toBe(200)
+      expect(mockAppendProcessingHistory).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'VoucherWarningsAcknowledged' }))
+    })
+
+    it('never asks about a private marking: it carries no moms', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+
+      await post({ is_business: false })
+
+      expect(mockFiledVatWarning).not.toHaveBeenCalled()
+    })
+  })
 
   it('creates journal entry for business expense', async () => {
     const tx = makeTransaction({
@@ -406,6 +707,106 @@ describe('POST /api/transactions/[id]/categorize', () => {
     )
   })
 
+  it('records the decision with the suggestion it started from, the snapshot taken before booking', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software', proposal_id: 'assistant:tx-1' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    const snapshotOrder = vi.mocked(snapshotSuggestions).mock.invocationCallOrder[0]
+    expect(snapshotOrder).toBeLessThan(mockCreateTransactionJournalEntry.mock.invocationCallOrder[0])
+    expect(vi.mocked(recordDecisions)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ companyId: 'company-1' }),
+      [{
+        transactionId: 'tx-1',
+        actedOn: 'assistant:tx-1',
+        final: expect.objectContaining({ journal_entry_id: 'je-1', account: '6200' }),
+        // A 6200 booking has no open invoice to match, so the intercept is not recorded.
+        checks: [
+          { id: 'already_booked', result: 'pass', detail: null },
+          { id: 'duplicate', result: 'pass', detail: null },
+          { id: 'counter_legs', result: 'pass', detail: null },
+          { id: 'chart', result: 'pass', detail: null },
+          { id: 'period_lock', result: 'pass', detail: null },
+        ],
+      }],
+      'user-1',
+    )
+  })
+
+  it('records nothing when the verifikat could not be created', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockRejectedValue(new Error('boom'))
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software', proposal_id: 'assistant:tx-1' },
+    })
+    await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(vi.mocked(recordDecisions)).not.toHaveBeenCalled()
+  })
+
+  // crm#1136: a refund (a category booked against its direction) is a mirrored
+  // pair. Saved as a "Learned: <merchant>" rule it would propose every later
+  // sale to the same counterparty with revenue on the debit side.
+  it('books a refund to a customer without learning a mapping rule from it', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -125,
+      merchant_name: 'Kund AB',
+      journal_entry_id: null,
+    })
+    const refundMapping = {
+      ...defaultMappingResult,
+      debit_account: '3001',
+      credit_account: '1930',
+      vat_lines: [{ account_number: '2611', debit_amount: 25, credit_amount: 0, description: 'Återföring utgående moms 25%' }],
+      direction_mismatch: true,
+    }
+    mockBuildMappingResultFromCategory.mockReturnValue(refundMapping)
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'income_services' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.journal_entry_id).toBe('je-1')
+    // The verifikat is built from the mirrored pair as the mapping returned it.
+    expect(mockCreateTransactionJournalEntry.mock.calls[0][4]).toMatchObject({
+      debit_account: '3001',
+      credit_account: '1930',
+      direction_mismatch: true,
+    })
+    expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
+  })
+
   it('books a standardmall bank leg on the single enabled cash account when cash_account_id is NULL (#1722)', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
@@ -461,6 +862,38 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(eqArgs).toContainEqual(['currency', 'SEK'])
   })
 
+  it('books "Insättning skattekonto" on 2012 for an enskild firma that runs its skattekonto there (PH 175)', async () => {
+    resolveSkattekontoMock.mockResolvedValueOnce('2012')
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -3000,
+      merchant_name: 'Skatteverket',
+      journal_entry_id: null,
+      cash_account_id: null,
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [{ ledger_account: '1930' }], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, template_id: 'financial_tax_account' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    expect(response.status).toBe(200)
+    const mappingArg = mockCreateTransactionJournalEntry.mock.calls[0][4] as {
+      debit_account: string
+      credit_account: string
+    }
+    expect([mappingArg.debit_account, mappingArg.credit_account]).toEqual(['2012', '1930'])
+    expect(resolveSkattekontoMock).toHaveBeenCalledTimes(1)
+  })
+
   it('books a transaction dated before the first fiscal year without minting a period (pre-FY, issue #1825)', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
@@ -477,6 +910,10 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: [], error: null }) // ensureFiscalPeriod: no covering open period
     enqueue({ data: [{ period_start: '2026-05-12' }], error: null }) // ensureFiscalPeriod: earliest period
 
+    // A deposit books the bank in debet (the default fixture is an expense).
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult, debit_account: '1930', credit_account: '2081', vat_lines: [],
+    })
     // The clamp inside createTransactionJournalEntry (unit-tested in
     // lib/bookkeeping/__tests__/transaction-entries.test.ts) books into the
     // first open period; here it is mocked to the successful outcome.
@@ -501,6 +938,36 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.journal_entry_id).toBe('je-1')
     // The pre-FY guard must not upsert a calendar-year (pre-registration) period.
     expect(findCalls('fiscal_periods', 'upsert')).toHaveLength(0)
+  })
+  it('refuses a booking that puts another account on the bank side before any draft (O17)', async () => {
+    // A mall for a payment TO the skattekonto (D 1630 / K 1930) picked for a
+    // refund FROM it: commit_journal_entry used to refuse the draft with a
+    // bare BANK_BOOKING_SETTLEMENT_CHANGED, logged as an error.
+    const tx = makeTransaction({ id: 'tx-1', amount: 900, merchant_name: null, journal_entry_id: null })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult, debit_account: '1630', credit_account: '1930', vat_lines: [],
+    })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_other' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TRANSACTION_BOOK_BANK_LINE_DIRECTION')
+    expect(body.error.message).toContain('konto 1930 ska stå i debet')
+    expect(body.error.message).toContain('konto 1630')
+    expect(body.error.details).toMatchObject({ settlement_account: '1930', required_side: 'debit', booked_account: '1630' })
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
   })
   it('atomically unignores an ignored transaction when categorizing it', async () => {
     const tx = makeTransaction({
@@ -579,6 +1046,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
       'user-1',
       expect.objectContaining({ id: 'tx-1' }),
       expect.objectContaining({ dimensions: { '1': 'KS1', '6': 'P001' } }),
+      undefined,
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 
@@ -618,10 +1088,10 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: [{ id: 'period-1' }], error: null }) // fiscal period check
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // tx update (CAS matched)
-    // Inbox propagation: one matched item with a document
+    // Underlag propagation (propagateUnderlagForBookedTransaction): the row's
+    // own pin (none), then one matched item with a document.
+    enqueue({ data: { document_id: null }, error: null })
     enqueue({ data: [{ id: 'inbox-1', document_id: 'doc-1' }], error: null })
-    enqueue({ data: null, error: null }) // document_attachments update
-    enqueue({ data: null, error: null }) // invoice_inbox_items update
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
@@ -743,6 +1213,27 @@ describe('POST /api/transactions/[id]/categorize', () => {
       expect(findCalls('transactions', 'update')).toEqual([])
     })
 
+    it('answers lines that do not balance as a 400 that names both totals, before any draft', async () => {
+      enqueueUpToEngine()
+      // Thrown where the lines are built (buildTransactionEntryLines), so the
+      // engine is never handed them.
+      mockCreateTransactionJournalEntry.mockRejectedValue(
+        new TransactionLinesNotBalancedError('tx-1', 800, 1200, true),
+      )
+
+      const { status, body } = await categorize()
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('TX_LINES_NOT_BALANCED')
+      expect(body.error.message).toContain('Den inlärda konteringen för motparten passar inte')
+      expect(body.error.message).toContain('800,00 kr i debet')
+      expect(body.error.message).toContain('1\u00a0200,00 kr i kredit')
+      expect(body.error.message_en).toContain('do not balance')
+      expect(body.error.details).toMatchObject({ total_debit: 800, total_credit: 1200, from_line_pattern: true })
+      expect(findCalls('transactions', 'update')).toEqual([])
+      expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
+    })
+
     it('maps untyped errors to the Swedish transaction fallback without leaking the raw text', async () => {
       enqueueUpToEngine()
       mockCreateTransactionJournalEntry.mockRejectedValue(new Error('boom'))
@@ -859,6 +1350,64 @@ describe('POST /api/transactions/[id]/categorize', () => {
       'je-1',
       expect.any(String),
     )
+  })
+
+  describe('the bank-row link refused by a busy bank-account lock (CASH_ACCOUNT_OPERATION_BUSY)', () => {
+    // Live 2026-10-29: a batch of five parallel bookings had the link refused
+    // whenever another booking of the company was being numbered; each such
+    // row answered 500 and its verifikat was stornoed (or, when the storno
+    // hit the same lock, left posted beside a row booked again later).
+    const realDelays = CASH_ACCOUNT_BUSY_RETRY.delaysMs
+    beforeEach(() => {
+      CASH_ACCOUNT_BUSY_RETRY.delaysMs = [0, 0, 0, 0]
+    })
+    afterEach(() => {
+      CASH_ACCOUNT_BUSY_RETRY.delaysMs = realDelays
+    })
+    const busy = { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY', details: null, hint: null }
+    const enqueueUpToLink = () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, merchant_name: null }), error: null })
+      enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+      enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      enqueue({ data: [{ id: 'period-1' }], error: null })
+      mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    }
+
+    it('links the row on a retry and keeps the verifikat', async () => {
+      enqueueUpToLink()
+      enqueue({ data: null, error: busy }) // link refused: another booking is being numbered
+      enqueue({ data: [makeTransaction({ id: 'tx-1', journal_entry_id: 'je-1' })], error: null }) // link retried
+
+      const request = createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(response)
+
+      expect(status, JSON.stringify(body)).toBe(200)
+      expect(body.journal_entry_id).toBe('je-1')
+      expect(findCalls('transactions', 'update')).toHaveLength(2)
+      expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('answers the retryable 409 in Swedish, not a 500, when the lock outlasts the retries, and stornos the verifikat', async () => {
+      enqueueUpToLink()
+      for (let i = 0; i < 5; i++) enqueue({ data: null, error: busy })
+
+      const request = createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('CASH_ACCOUNT_OPERATION_BUSY')
+      expect(body.error.message).toMatch(/försök igen/)
+      expect(findCalls('transactions', 'update')).toHaveLength(5)
+      expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-1', expect.any(String))
+    })
   })
 
   it('maps an ignored-row constraint to a typed conflict and stornos the posted orphan', async () => {
@@ -1862,14 +2411,8 @@ describe('POST /api/transactions/[id]/categorize', () => {
       error: null,
     })
     enqueue({ data: { ledger_account: '1940', currency: 'SEK' }, error: null }) // resolveSettlementAccount
-    enqueue({
-      data: [
-        { id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-new', iban: 'SE455', enabled: true, currency: 'SEK' },
-        { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: null, iban: 'SE455', enabled: true, currency: 'SEK' },
-      ],
-      error: null,
-    })
-    enqueue({ data: [{ id: 'conn-new', status: 'active' }], error: null })
+    // No topology lookup: applySettlementAccount already put the stale 1931
+    // bank leg on 1940, so guardCounterLegs sees no foreign 19xx leg (crm#1046).
     // ensureFiscalPeriod: existing period
     enqueue({ data: [{ id: 'period-1' }], error: null })
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -1892,6 +2435,120 @@ describe('POST /api/transactions/[id]/categorize', () => {
     }
     expect(mapping.debit_account).toBe('5010')
     expect(mapping.credit_account).toBe('1940')
+  })
+
+  // crm#1046: a user with several currency accounts learned a card-fee
+  // template on the GBP ledger (6570 / 1934). Replayed on the EUR ledger it
+  // must credit 1932: commit_journal_entry refuses a verifikat that does not
+  // move the transaction's own ledger on the bank side.
+  const cardFeeLearnedOnGbp = (overrides: Record<string, unknown> = {}) => ({
+    id: '11111111-1111-4111-8111-111111111111',
+    company_id: 'company-1',
+    counterparty_name: 'wise card fee',
+    counterparty_aliases: [],
+    debit_account: '6570',
+    credit_account: '1934',
+    vat_treatment: null,
+    vat_account: null,
+    category: 'expense_bank_fees',
+    line_pattern: null,
+    occurrence_count: 6,
+    confidence: 0.9,
+    source: 'user_approved',
+    is_active: true,
+    ...overrides,
+  })
+
+  it('books a learned template on the transaction\'s own currency account, not the one it was learned on (crm#1046)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -0.5,
+      currency: 'EUR',
+      amount_sek: -5.48,
+      exchange_rate: 10.96,
+      merchant_name: 'Wise',
+      journal_entry_id: null,
+      cash_account_id: 'ca-eur',
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: cardFeeLearnedOnGbp(), error: null }) // categorization_templates
+    enqueue({ data: { ledger_account: '1932', currency: 'EUR' }, error: null }) // resolveSettlementAccount
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, counterparty_template_id: '11111111-1111-4111-8111-111111111111' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(mockCreateTransactionJournalEntry).toHaveBeenCalledTimes(1)
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as {
+      debit_account: string
+      credit_account: string
+    }
+    expect(mapping.debit_account).toBe('6570')
+    expect(mapping.credit_account).toBe('1932')
+  })
+
+  it('keeps the counter leg of a learned transfer between two own accounts (crm#1046)', async () => {
+    // Learned on the EUR ledger: money moved from 1932 to the GBP ledger 1934.
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -200,
+      currency: 'EUR',
+      amount_sek: -2192,
+      exchange_rate: 10.96,
+      merchant_name: 'Wise',
+      journal_entry_id: null,
+      cash_account_id: 'ca-eur',
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({
+      data: cardFeeLearnedOnGbp({ counterparty_name: 'wise transfer', debit_account: '1934', credit_account: '1932', category: null }),
+      error: null,
+    })
+    enqueue({ data: { ledger_account: '1932', currency: 'EUR' }, error: null }) // resolveSettlementAccount
+    // guardCounterLegs: 1934 is a live account of its own (another IBAN, another currency)
+    enqueue({
+      data: [
+        { id: 'ca-eur', ledger_account: '1932', bank_connection_id: 'conn-1', iban: 'BE001', enabled: true, currency: 'EUR' },
+        { id: 'ca-gbp', ledger_account: '1934', bank_connection_id: 'conn-1', iban: 'GB002', enabled: true, currency: 'GBP' },
+      ],
+      error: null,
+    })
+    enqueue({ data: [{ id: 'conn-1', status: 'active' }], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, counterparty_template_id: '11111111-1111-4111-8111-111111111111' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+
+    expect(status, JSON.stringify(body)).toBe(200)
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as {
+      debit_account: string
+      credit_account: string
+    }
+    expect(mapping.debit_account).toBe('1934')
+    expect(mapping.credit_account).toBe('1932')
   })
 
   // Learned dimension bags (D5): a learned code whose value was archived since
@@ -2006,7 +2663,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // account_override chart lookup: 1940 exists and is active
-    enqueue({ data: { account_number: '1940', account_class: 1 }, error: null })
+    enqueue({ data: { account_number: '1940', account_class: 1, is_active: true }, error: null })
     // Guard: 1940 is held by an ACTIVE connection, so it is a genuine transfer target
     enqueue({
       data: [{ id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-live', iban: 'SE455', enabled: true }],
@@ -2037,7 +2694,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
   // #2919: the category path now adds the 45xx/4598 basis pair for a
   // reverse-charge purchase. An account_override onto a basis account (the
-  // cost line reports ruta 22 itself) must drop it, or ruta 22 doubles.
+  // cost line reports ruta 22 itself) must drop it, or ruta 22 doubles. The
+  // route settles it on the final account with the company's momskoder
+  // (crm#1096), read once the mapping carries a pair.
   it.each([
     ['4531', null, ['2645', '2614']],
     ['6540', null, ['2645', '2614', '4535', '4598']],
@@ -2059,7 +2718,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: { account_number: account, account_class: Number(account[0]), default_vat_treatment: treatment }, error: null })
+    enqueue({ data: { account_number: account, account_class: Number(account[0]), is_active: true }, error: null })
+    // reconcileRcBasisWithChart: the company's momskoder on class 4-6 accounts
+    enqueue({ data: treatment ? [{ account_number: account, default_vat_treatment: treatment }] : [], error: null })
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
     mockSaveUserMappingRule.mockResolvedValue(undefined)
@@ -2080,5 +2741,125 @@ describe('POST /api/transactions/[id]/categorize', () => {
     }
     expect(mapping.debit_account).toBe(account)
     expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(expected)
+  })
+
+  it('posts no basis pair when the category account itself has a reverse-charge momskod (crm#1096)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Google Play', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 62.5, credit_amount: 0, description: '' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 62.5, description: '' },
+        { account_number: '4535', debit_amount: 250, credit_amount: 0, description: '' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 250, description: '' },
+      ],
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    // reconcileRcBasisWithChart: 5420 reports ruta 21 itself
+    enqueue({ data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status, JSON.stringify(body)).toBe(200)
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+    expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    expect(findCalls('chart_of_accounts', 'not')).toEqual([['default_vat_treatment', 'is', null]])
+  })
+
+  // crm#1028: the proposal names the basis box of a reverse charge (a service
+  // from outside the EU is ruta 22), and the route hands it to the mapping
+  // instead of letting every such purchase book as an EU service.
+  it('hands the reverse-charge kind of the body to the category mapping', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Vercel', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 62.5, credit_amount: 0, description: '' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 62.5, description: '' },
+        { account_number: '4531', debit_amount: 250, credit_amount: 0, description: '' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 250, description: '' },
+      ],
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // reconcileRcBasisWithChart: no momskoder
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(mockBuildMappingResultFromCategory.mock.calls[0][4]).toBe('reverse_charge')
+    expect(mockBuildMappingResultFromCategory.mock.calls[0][7]).toBe('non_eu_services')
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+    expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4531', '4598'])
+  })
+
+  // accounted#35: the review books the box the person picked, on the account
+  // they set, in the body categorizeBodyFor sends.
+  it.each(['eu_goods', 'eu_services', 'non_eu_services'] as const)('hands the review\'s box %s to the category mapping on an overridden account', async (kind) => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Vercel', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({ ...defaultMappingResult, debit_account: '5420', credit_account: '1930', vat_lines: [] })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { account_number: '6540', account_class: 6, is_active: true }, error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', account_override: '6540', vat_treatment: 'reverse_charge', reverse_charge_kind: kind },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(mockBuildMappingResultFromCategory.mock.calls[0][4]).toBe('reverse_charge')
+    expect(mockBuildMappingResultFromCategory.mock.calls[0][7]).toBe(kind)
+    expect((mockCreateTransactionJournalEntry.mock.calls[0][4] as { debit_account: string }).debit_account).toBe('6540')
+  })
+
+  it('rejects a reverse-charge kind on a treatment that is not reverse charge with 400', async () => {
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', vat_treatment: 'standard_25', reverse_charge_kind: 'non_eu_services' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    expect((await parseJsonResponse(response)).status).toBe(400)
+    expect(mockBuildMappingResultFromCategory).not.toHaveBeenCalled()
   })
 })

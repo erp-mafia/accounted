@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 
 vi.mock('../lib/bankid-client', () => ({
   startBankIdAuth: vi.fn(),
@@ -62,7 +62,7 @@ async function flowCookie(
 }
 
 function findRoute(method: string, path: string) {
-  const route = ticExtension.apiRoutes!.find((r) => r.method === method && r.path === path)
+  const route = testRoutes(ticExtension).find((r) => r.method === method && r.path === path)
   if (!route) throw new Error(`${method} ${path} route not found in ticExtension.apiRoutes`)
   return route
 }

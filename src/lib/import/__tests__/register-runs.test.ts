@@ -3,7 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { Logger } from '@/lib/logger'
 
 const rpcMock = vi.fn()
-vi.mock('@/lib/import/sie-import', () => ({
+vi.mock('@/lib/supabase/bulk-delete-client', () => ({
   rpcClientForBulkDelete: vi.fn(async () => ({ rpc: (...a: unknown[]) => rpcMock(...a) })),
 }))
 
@@ -175,6 +175,23 @@ describe('snapshotRowsForUndo', () => {
 
     expect([...snapshot.keys()]).toEqual(['c1', 'c2'])
     expect(snapshot.get('c2')).toEqual({ id: 'c2', name: 'B' })
+  })
+
+  it('reads only the given ids, 200 to a read, when the import names them (crm#1383)', async () => {
+    fetchAllRowsMock.mockImplementation(async () => [{ id: 'a1', name: 'A' }])
+    const ids = Array.from({ length: 450 }, (_, i) => `id-${i}`)
+
+    const snapshot = await snapshotRowsForUndo(supabase as never, 'company-1', 'articles', true, ids)
+
+    // 450 ids in slices of 200: three reads, not one read of the whole register.
+    expect(fetchAllRowsMock).toHaveBeenCalledTimes(3)
+    expect(snapshot.get('a1')).toEqual({ id: 'a1', name: 'A' })
+  })
+
+  it('reads nothing for an empty id list', async () => {
+    const snapshot = await snapshotRowsForUndo(supabase as never, 'company-1', 'articles', true, [])
+    expect(snapshot.size).toBe(0)
+    expect(fetchAllRowsMock).not.toHaveBeenCalled()
   })
 })
 

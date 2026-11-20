@@ -43,6 +43,10 @@ const READABLE_NOT_CREDENTIALS: Record<string, string> = {
   'invoices.deduction_personnummer_encrypted': 'PII ciphertext, not a credential',
   'whatsapp_phone_links.phone_enc': 'PII ciphertext, not a credential',
   'fiscal_periods.opening_balance_review_token': 'SIE review-hold marker the holds route reads, grants nothing',
+  'company_grants.credential_scope':
+    'which kind of key a rule for automatic booking applies to (any, api_key, service_account): a label that grants nothing',
+  'collection_payment_forwards.lease_token':
+    'the forwarding drain\'s lease marker; finish_collection_forward runs on the service role only, so it grants a member nothing',
 }
 
 const TABLES = Object.keys(WITHHELD)

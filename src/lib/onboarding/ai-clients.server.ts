@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
-import { aiConnection, NO_AI_CONNECTION, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
+import { aiConnection, firstTaskClient, NO_AI_CONNECTION, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 
 const log = createLogger('onboarding-ai-clients')
 
@@ -49,4 +49,42 @@ export async function loadAiConnection(supabase: SupabaseClient, userId: string)
 /** The verified clients from loadAiConnection, for handoff buttons. Never throws. */
 export async function loadConnectedAiClients(supabase: SupabaseClient, userId: string): Promise<AiClient[]> {
   return (await loadAiConnection(supabase, userId)).clients
+}
+
+/**
+ * Whether any agent of this person has had a working tool call: the fact
+ * `connected` does not answer. A live key only proves the sign-in, and a
+ * connector lists its tools by itself in every new chat, so last_used_at
+ * moves for a person who never asked it anything. mcp.tool_called is the
+ * first row that means work (kept 180 days, so someone idle longer than that
+ * reads as not yet worked and gets the same harmless offer). The read walks
+ * this person's event_log rows through idx_event_log_user_seq. A failed read
+ * answers true: this only decides whether to offer a prompt, and a broken
+ * read must not start asking people who already work.
+ */
+export async function hasAgentWorked(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('event_log')
+    .select('sequence')
+    .eq('user_id', userId)
+    .eq('event_type', 'mcp.tool_called')
+    .eq('data->>actorType', 'api_key')
+    .eq('data->>success', 'true')
+    .eq('data->>isError', 'false')
+    .limit(1)
+  if (error) {
+    log.warn('agent work read failed, offering no first task', { userId, error })
+    return true
+  }
+  return (data ?? []).length > 0
+}
+
+/** The client Hem asks for a first task (firstTaskClient); reads nothing without a client to name. */
+export async function readFirstTaskClient(
+  supabase: SupabaseClient,
+  userId: string,
+  connection: AiConnection,
+): Promise<AiClient | null> {
+  if (connection.clients.length === 0) return null
+  return firstTaskClient(connection, await hasAgentWorked(supabase, userId))
 }

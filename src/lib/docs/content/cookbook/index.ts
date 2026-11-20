@@ -61,7 +61,7 @@ export const COOKBOOK: CookbookEntry[] = [
     slug: 'ingest-bank-transactions',
     title: 'Ingest and categorise bank transactions',
     markdown: COOKBOOK_INGEST_BANK_MD,
-    description: 'Push CSV/CAMT into the engine, get AI suggestions, commit, match payments.',
+    description: 'Push CSV/CAMT into the engine, categorise, match payments.',
   },
   {
     slug: 'file-vat-declaration',
@@ -85,7 +85,7 @@ export const COOKBOOK: CookbookEntry[] = [
     slug: 'year-end-closing',
     title: 'Year-end closing',
     markdown: COOKBOOK_YEAR_END_MD,
-    description: 'Lock periods, run year-end procedures, set opening balances. IB/UB continuity per BFL 5 kap.',
+    description: 'Run the pre-flight checks, then one year-end call that closes the year and opens the next. IB/UB continuity per BFL 5 kap.',
   },
 ]
 

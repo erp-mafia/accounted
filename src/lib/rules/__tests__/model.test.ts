@@ -5,6 +5,7 @@ import {
   hitsUntilAuto,
   ruleCategoryAccount,
   ruleDirection,
+  ruleOneClick,
   ruleOrigin,
   ruleStep,
   ruleThen,
@@ -83,3 +84,30 @@ describe('postgrestFilterValue', () => {
   })
 })
 
+describe('ruleOneClick: the Ett klick column (accounted#130)', () => {
+  const ON = { enabled: true }
+  const rule = { mode: 'propose' as const, occurrence_count: 5, source: 'user_approved' as const, always_review: false }
+
+  it('says yes for a confirmed rule booked the same way three times or more', () => {
+    expect(ruleOneClick(rule, ON)).toEqual({ kind: 'yes' })
+    expect(ruleOneClick({ ...rule, occurrence_count: 3 }, ON)).toEqual({ kind: 'yes' })
+  })
+
+  it('counts the hits still needed, never zero', () => {
+    expect(ruleOneClick({ ...rule, occurrence_count: 1 }, ON)).toEqual({ kind: 'hits', remaining: 2 })
+    expect(ruleOneClick({ ...rule, occurrence_count: 2 }, ON)).toEqual({ kind: 'hits', remaining: 1 })
+  })
+
+  it('says why not, in the order the decision asks: company, rule, import, ladder', () => {
+    expect(ruleOneClick({ ...rule, always_review: true }, { enabled: false })).toEqual({ kind: 'company_off' })
+    expect(ruleOneClick({ ...rule, always_review: true, source: 'sie_import' }, ON)).toEqual({ kind: 'always_review' })
+    expect(ruleOneClick({ ...rule, occurrence_count: 140, source: 'sie_import' }, ON)).toEqual({ kind: 'import' })
+    expect(ruleOneClick({ ...rule, mode: 'paused' }, ON)).toEqual({ kind: 'paused' })
+    expect(ruleOneClick({ ...rule, mode: 'proposed' }, ON)).toEqual({ kind: 'proposed' })
+  })
+
+  it('agrees with the 3 the transactions page books after, not the 5 the old help text said', () => {
+    // A confirmed rule seen three times books with one click; the autopilot's five is another step.
+    expect(ruleOneClick({ ...rule, occurrence_count: 3 }, ON).kind).toBe('yes')
+  })
+})

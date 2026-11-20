@@ -30,57 +30,62 @@ function patchRequest(body: unknown): Request {
 /**
  * Mocks the chain of supabase calls the PATCH route makes:
  *   1. from('fiscal_periods').select('*').eq.eq.single()        → existing period (null = 404)
- *   2. from('journal_entries').select(count, head).eq.eq.in()   → posted entry count
- *   3. from('fiscal_periods').select(count, head).eq.neq.lt()   → earlier-period count
- *   4. from('companies').select('entity_type').eq.single()      → entity type
- *   5. from('fiscal_periods').select('id, name').eq.neq.lte.gte.limit() → overlap
- *   6. from('fiscal_periods').update().eq.eq.select.single()    → updated row
+ *   2. from('fiscal_periods').select(count, head).eq.neq.lt()   → earlier-period count
+ *   3. from('companies').select('entity_type').eq.single()      → entity type
+ *   4. from('fiscal_periods').select('id, name').eq.neq.lte.gte.limit() → overlap
+ *   5. rpc('redate_fiscal_period', …)                           → the guarded re-date
+ *   6. from('fiscal_periods').update().eq.eq.select.single()    → renamed row (name only)
  */
+type MockPeriod = {
+  id: string
+  period_start: string
+  period_end: string
+  locked_at: string | null
+  is_closed: boolean
+  name?: string
+  previous_period_id?: string | null
+}
+
 function buildMockSupabase(options: {
   user?: { id: string } | null
-  period?: { id: string; period_start: string; period_end: string; locked_at: string | null; is_closed: boolean } | null
+  period?: MockPeriod | null
   entityType?: 'aktiebolag' | 'enskild_firma'
-  postedEntryCount?: number
   earlierPeriodCount?: number
   overlapping?: Array<{ id: string; name: string }>
   /** The company's other years, for the contiguity check on re-dating. */
-  neighbours?: Array<{ id: string; period_start: string; period_end: string }>
+  neighbours?: Array<{ id: string; period_start: string; period_end: string; previous_period_id?: string | null }>
+  /** What redate_fiscal_period answers; defaults to a successful move. */
+  rpcResult?: { data: unknown; error: unknown }
+  /** What a previous_period_id write answers; defaults to success. */
+  linkError?: { message: string } | null
 }) {
   const {
     user = { id: 'user-1' },
     period = { id: 'p1', period_start: '2020-01-01', period_end: '2020-12-31', locked_at: null, is_closed: false },
     entityType = 'enskild_firma',
-    postedEntryCount = 0,
     earlierPeriodCount = 0,
     overlapping = [],
     neighbours = [],
+    rpcResult = { data: { ok: true, changed: true, period }, error: null },
+    linkError = null,
   } = options
 
   let fiscalPeriodsCall = 0
+  /** Every fiscal_periods update, by the id it was written to. */
+  const updates: Array<{ id: string; values: unknown }> = []
 
   const supabase = {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user } }),
       mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) },
     },
+    rpc: vi.fn().mockResolvedValue(rpcResult),
     from: vi.fn().mockImplementation((table: string) => {
-      if (table === 'journal_entries') {
-        return {
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                in: vi.fn().mockResolvedValue({ count: postedEntryCount, error: null }),
-              }),
-            }),
-          }),
-        }
-      }
-
       if (table === 'companies') {
         return {
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
-              single: vi.fn().mockResolvedValue({ data: { entity_type: entityType }, error: null }),
+              maybeSingle: vi.fn().mockResolvedValue({ data: { entity_type: entityType }, error: null }),
             }),
           }),
         }
@@ -91,7 +96,7 @@ function buildMockSupabase(options: {
         const callNum = fiscalPeriodsCall
 
         return {
-          select: vi.fn().mockImplementation((_sel: string, opts?: { count?: string; head?: boolean }) => {
+          select: vi.fn().mockImplementation((sel: string) => {
             if (callNum === 1) {
               return {
                 eq: vi.fn().mockReturnValue({
@@ -104,11 +109,12 @@ function buildMockSupabase(options: {
                 }),
               }
             }
-            if (opts?.head) {
+            if (sel === 'period_start') {
               return {
                 eq: vi.fn().mockReturnValue({
-                  neq: vi.fn().mockReturnValue({
-                    lt: vi.fn().mockResolvedValue({ count: earlierPeriodCount, error: null }),
+                  neq: vi.fn().mockResolvedValue({
+                    data: Array.from({ length: earlierPeriodCount }, () => ({ period_start: '1900-01-01' })),
+                    error: null,
                   }),
                 }),
               }
@@ -126,15 +132,20 @@ function buildMockSupabase(options: {
               }),
             }
           }),
-          update: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                select: vi.fn().mockReturnValue({
-                  single: vi.fn().mockResolvedValue({ data: period, error: null }),
+          update: vi.fn().mockImplementation((values: unknown) => ({
+            eq: vi.fn().mockImplementation((_column: string, id: string) => {
+              updates.push({ id, values })
+              return {
+                // Awaited as is by a link write; a rename reads the row back.
+                eq: vi.fn().mockReturnValue({
+                  error: linkError,
+                  select: vi.fn().mockReturnValue({
+                    single: vi.fn().mockResolvedValue({ data: period, error: null }),
+                  }),
                 }),
-              }),
+              }
             }),
-          }),
+          })),
         }
       }
 
@@ -143,7 +154,7 @@ function buildMockSupabase(options: {
   }
 
   ;(createClient as ReturnType<typeof vi.fn>).mockResolvedValue(supabase)
-  return supabase
+  return Object.assign(supabase, { updates })
 }
 
 beforeEach(() => {
@@ -292,6 +303,406 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       expect((await res.json()).error.details.expected_end).toBe('2025-12-31')
+    })
+  })
+
+  // redate_fiscal_period moves the dates only. A year that had no link because
+  // a hole lay before it kept none after it was moved down next to the older
+  // year (crm#1982): the links are made to say what the dates say.
+  describe('continuity links after a re-date (crm#1982)', () => {
+    const OLD = { id: 'old', period_start: '2022-10-01', period_end: '2023-09-30', previous_period_id: null }
+    const LATER: MockPeriod = {
+      id: 'later',
+      period_start: '2026-10-01',
+      period_end: '2027-09-30',
+      locked_at: null,
+      is_closed: false,
+      previous_period_id: null,
+    }
+
+    it('a year moved down next to an older year gets it as its previous year', async () => {
+      const moved = { ...LATER, period_start: '2023-10-01', period_end: '2024-09-30' }
+      const supabase = buildMockSupabase({
+        period: LATER,
+        entityType: 'aktiebolag',
+        earlierPeriodCount: 1,
+        neighbours: [OLD],
+        rpcResult: { data: { ok: true, changed: true, period: moved }, error: null },
+      })
+
+      const res = await PATCH(
+        patchRequest({ period_start: '2023-10-01', period_end: '2024-09-30' }),
+        createMockRouteParams({ id: 'later' }),
+      )
+
+      expect(res.status).toBe(200)
+      expect(supabase.updates).toEqual([{ id: 'later', values: { previous_period_id: 'old' } }])
+      expect((await res.json()).data).toMatchObject({ period_start: '2023-10-01', previous_period_id: 'old' })
+    })
+
+    it('writes nothing when the links already say what the dates say', async () => {
+      const supabase = buildMockSupabase({
+        period: { ...LATER, period_start: '2023-10-01', period_end: '2024-09-30', previous_period_id: 'old' },
+        entityType: 'aktiebolag',
+        earlierPeriodCount: 1,
+        neighbours: [OLD],
+      })
+
+      const res = await PATCH(
+        patchRequest({ period_start: '2023-10-01', period_end: '2025-03-31' }),
+        createMockRouteParams({ id: 'later' }),
+      )
+
+      expect(res.status).toBe(200)
+      expect(supabase.updates).toEqual([])
+    })
+
+    it('the year after a re-dated year follows it', async () => {
+      // The earliest year is moved up to end the day before the next one.
+      const supabase = buildMockSupabase({
+        period: { id: 'first', period_start: '2022-01-01', period_end: '2022-12-31', locked_at: null, is_closed: false, previous_period_id: null },
+        entityType: 'aktiebolag',
+        neighbours: [{ id: 'next', period_start: '2025-01-01', period_end: '2025-12-31', previous_period_id: null }],
+      })
+
+      const res = await PATCH(
+        patchRequest({ period_start: '2024-01-01', period_end: '2024-12-31' }),
+        createMockRouteParams({ id: 'first' }),
+      )
+
+      expect(res.status).toBe(200)
+      expect(supabase.updates).toEqual([{ id: 'next', values: { previous_period_id: 'first' } }])
+    })
+
+    it('a year left behind by a moved year no longer points at it', async () => {
+      // An empty middle year moved past the year after it: that year has no
+      // year ending the day before it any more, and the two must not point
+      // at each other.
+      const supabase = buildMockSupabase({
+        period: { id: 'middle', period_start: '2025-01-01', period_end: '2025-12-31', locked_at: null, is_closed: false, previous_period_id: 'a' },
+        entityType: 'aktiebolag',
+        earlierPeriodCount: 1,
+        neighbours: [
+          { id: 'a', period_start: '2024-01-01', period_end: '2024-12-31', previous_period_id: null },
+          { id: 'c', period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: 'middle' },
+        ],
+      })
+
+      const res = await PATCH(
+        patchRequest({ period_start: '2027-01-01', period_end: '2027-12-31' }),
+        createMockRouteParams({ id: 'middle' }),
+      )
+
+      expect(res.status).toBe(200)
+      expect(supabase.updates).toEqual([
+        { id: 'middle', values: { previous_period_id: 'c' } },
+        { id: 'c', values: { previous_period_id: null } },
+      ])
+    })
+
+    it('a failed link write does not fail the re-date: the dates have moved', async () => {
+      const moved = { ...LATER, period_start: '2023-10-01', period_end: '2024-09-30' }
+      buildMockSupabase({
+        period: LATER,
+        entityType: 'aktiebolag',
+        earlierPeriodCount: 1,
+        neighbours: [OLD],
+        rpcResult: { data: { ok: true, changed: true, period: moved }, error: null },
+        linkError: { message: 'connection reset' },
+      })
+
+      const res = await PATCH(
+        patchRequest({ period_start: '2023-10-01', period_end: '2024-09-30' }),
+        createMockRouteParams({ id: 'later' }),
+      )
+
+      expect(res.status).toBe(200)
+      expect((await res.json()).data).toMatchObject({ period_start: '2023-10-01', previous_period_id: null })
+    })
+
+    it('a refused re-date writes no link', async () => {
+      const supabase = buildMockSupabase({
+        period: LATER,
+        entityType: 'aktiebolag',
+        earlierPeriodCount: 1,
+        neighbours: [OLD],
+        rpcResult: {
+          data: {
+            ok: false,
+            code: 'FISCAL_PERIOD_DATES_BLOCKED',
+            blockers: [{ code: 'period_locked', message_sv: 'Räkenskapsåret är låst.' }],
+          },
+          error: null,
+        },
+      })
+
+      const res = await PATCH(
+        patchRequest({ period_start: '2023-10-01', period_end: '2024-09-30' }),
+        createMockRouteParams({ id: 'later' }),
+      )
+
+      expect(res.status).toBe(409)
+      expect(supabase.updates).toEqual([])
+    })
+  })
+
+  // crm#1010: a first year recorded from 2025-04-24 while Bolagsverket
+  // registered the company on 2025-04-23, with verifikat already posted.
+  // What the year holds is decided by redate_fiscal_period (pg-real tests in
+  // tests/pg/redate-fiscal-period.pg.test.ts); the route maps its verdict.
+  describe('a year that holds verifikat (crm#1010)', () => {
+    const FIRST_YEAR: MockPeriod = {
+      id: 'p1',
+      period_start: '2025-04-24',
+      period_end: '2026-08-31',
+      locked_at: null,
+      is_closed: false,
+      name: 'Räkenskapsår 2025/2026',
+    }
+
+    it('moves the start one day earlier through redate_fiscal_period', async () => {
+      const moved = { ...FIRST_YEAR, period_start: '2025-04-23' }
+      const supabase = buildMockSupabase({
+        period: FIRST_YEAR,
+        entityType: 'aktiebolag',
+        rpcResult: { data: { ok: true, changed: true, period: moved }, error: null },
+      })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-04-23' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.period_start).toBe('2025-04-23')
+      expect(supabase.rpc).toHaveBeenCalledWith('redate_fiscal_period', {
+        p_company_id: 'company-1',
+        p_period_id: 'p1',
+        p_period_start: '2025-04-23',
+        p_period_end: '2026-08-31',
+        p_name: null,
+        p_dry_run: false,
+        p_user_id: 'user-1',
+      })
+    })
+
+    it('answers 409 FISCAL_PERIOD_DATES_BLOCKED, naming every blocker in Swedish', async () => {
+      buildMockSupabase({
+        period: FIRST_YEAR,
+        entityType: 'aktiebolag',
+        rpcResult: {
+          data: {
+            ok: false,
+            code: 'FISCAL_PERIOD_DATES_BLOCKED',
+            blockers: [
+              {
+                code: 'entries_outside',
+                message_sv: 'En bokförd verifikation ligger utanför de nya datumen: A1 (2025-04-24).',
+                count: 1,
+              },
+              {
+                code: 'company_lock_date',
+                message_sv:
+                  'Bokföringen är låst t.o.m. 2025-06-30 och ändringen rör dagar i den låsta delen. Flytta låsdatumet först.',
+              },
+            ],
+          },
+          error: null,
+        },
+      })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-05-01' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('FISCAL_PERIOD_DATES_BLOCKED')
+      expect(body.error.message).toBe(
+        'Datumen kan inte ändras. En bokförd verifikation ligger utanför de nya datumen: A1 (2025-04-24). ' +
+          'Bokföringen är låst t.o.m. 2025-06-30 och ändringen rör dagar i den låsta delen. Flytta låsdatumet först.',
+      )
+      expect(body.error.details.blockers.map((b: { code: string }) => b.code)).toEqual([
+        'entries_outside',
+        'company_lock_date',
+      ])
+    })
+
+    it('answers 403 when the RPC does not recognise the caller as a writing member', async () => {
+      buildMockSupabase({
+        period: FIRST_YEAR,
+        entityType: 'aktiebolag',
+        rpcResult: { data: { ok: false, code: 'FORBIDDEN' }, error: null },
+      })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-04-23' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(403)
+      expect((await res.json()).error.code).toBe('FORBIDDEN')
+    })
+
+    it('answers 500 FISCAL_PERIOD_UPDATE_FAILED when the RPC itself fails', async () => {
+      buildMockSupabase({
+        period: FIRST_YEAR,
+        entityType: 'aktiebolag',
+        rpcResult: { data: null, error: { message: 'connection reset' } },
+      })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-04-23' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(500)
+      expect((await res.json()).error.code).toBe('FISCAL_PERIOD_UPDATE_FAILED')
+    })
+
+    it('a rename that sends the unchanged dates never runs the re-date', async () => {
+      const supabase = buildMockSupabase({ period: FIRST_YEAR, entityType: 'aktiebolag' })
+
+      const res = await PATCH(
+        patchRequest({ name: 'Första räkenskapsåret', period_start: '2025-04-24', period_end: '2026-08-31' }),
+        createMockRouteParams({ id: 'p1' }),
+      )
+
+      expect(res.status).toBe(200)
+      expect(supabase.rpc).not.toHaveBeenCalled()
+    })
+  })
+
+  // crm#1140: a first year recorded from the 1st of the registration month,
+  // closed and locked by its bokslut, gets its start moved to the
+  // registration day. The service lets exactly that shape through to
+  // redate_fiscal_period, which re-checks it under the row lock and still
+  // refuses on whatever depends on the exact start.
+  describe('correcting the first year start after the bokslut (crm#1140)', () => {
+    const CLOSED_FIRST_YEAR: MockPeriod = {
+      id: 'p1',
+      period_start: '2025-03-01',
+      period_end: '2026-02-28',
+      locked_at: '2026-03-20T10:00:00Z',
+      is_closed: true,
+      name: 'Räkenskapsår 2025/2026',
+    }
+
+    it('moves the start within its month through redate_fiscal_period', async () => {
+      const moved = { ...CLOSED_FIRST_YEAR, period_start: '2025-03-17' }
+      const supabase = buildMockSupabase({
+        period: CLOSED_FIRST_YEAR,
+        entityType: 'aktiebolag',
+        rpcResult: { data: { ok: true, changed: true, period: moved }, error: null },
+      })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-03-17' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.period_start).toBe('2025-03-17')
+      expect(supabase.rpc).toHaveBeenCalledWith(
+        'redate_fiscal_period',
+        expect.objectContaining({ p_period_start: '2025-03-17', p_period_end: '2026-02-28', p_name: null }),
+      )
+    })
+
+    it('a locked, not closed, first year takes the same path', async () => {
+      const supabase = buildMockSupabase({
+        period: { ...CLOSED_FIRST_YEAR, is_closed: false },
+        entityType: 'aktiebolag',
+      })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-03-17' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(200)
+      expect(supabase.rpc).toHaveBeenCalledWith('redate_fiscal_period', expect.anything())
+    })
+
+    it('passes on the RPC refusal when something depends on the start', async () => {
+      buildMockSupabase({
+        period: CLOSED_FIRST_YEAR,
+        entityType: 'aktiebolag',
+        rpcResult: {
+          data: {
+            ok: false,
+            code: 'FISCAL_PERIOD_DATES_BLOCKED',
+            blockers: [
+              {
+                code: 'annual_report',
+                message_sv:
+                  'Årsredovisningen för räkenskapsåret är färdigställd, signerad eller inskickad med de nuvarande datumen.',
+              },
+            ],
+          },
+          error: null,
+        },
+      })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-03-17' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('FISCAL_PERIOD_DATES_BLOCKED')
+      expect(body.error.message).toContain('Årsredovisningen för räkenskapsåret är färdigställd')
+    })
+
+    it('refuses a start in another month, naming the month that is allowed', async () => {
+      const supabase = buildMockSupabase({ period: CLOSED_FIRST_YEAR, entityType: 'aktiebolag' })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-04-01' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('FISCAL_PERIOD_UPDATE_CLOSED')
+      expect(body.error.details).toMatchObject({
+        rule: 'start_correction_same_month',
+        allowed_from: '2025-03-01',
+        allowed_to: '2025-03-31',
+      })
+      expect(body.error.message).toBe(
+        'Startdatumet för ett stängt räkenskapsår kan bara rättas inom samma månad (2025-03-01 till 2025-03-31): ' +
+          'bokslutet är gjort på årets nuvarande antal månader.',
+      )
+      expect(supabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('a locked year in another month is told to unlock first', async () => {
+      buildMockSupabase({ period: { ...CLOSED_FIRST_YEAR, is_closed: false }, entityType: 'aktiebolag' })
+
+      const res = await PATCH(patchRequest({ period_start: '2025-02-14' }), createMockRouteParams({ id: 'p1' }))
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('FISCAL_PERIOD_UPDATE_LOCKED')
+      expect(body.error.message).toContain('Lås upp året först')
+    })
+
+    it('refuses an end move, a rename and a later year as before', async () => {
+      const endMove = buildMockSupabase({ period: CLOSED_FIRST_YEAR, entityType: 'aktiebolag' })
+      const end = await PATCH(
+        patchRequest({ period_start: '2025-03-17', period_end: '2026-01-31' }),
+        createMockRouteParams({ id: 'p1' }),
+      )
+      expect(end.status).toBe(409)
+      expect((await end.json()).error.code).toBe('FISCAL_PERIOD_UPDATE_CLOSED')
+      expect(endMove.rpc).not.toHaveBeenCalled()
+
+      buildMockSupabase({ period: CLOSED_FIRST_YEAR, entityType: 'aktiebolag' })
+      const rename = await PATCH(
+        patchRequest({ name: 'Första räkenskapsåret', period_start: '2025-03-17' }),
+        createMockRouteParams({ id: 'p1' }),
+      )
+      expect(rename.status).toBe(409)
+      expect((await rename.json()).error.code).toBe('FISCAL_PERIOD_UPDATE_CLOSED')
+
+      const later = buildMockSupabase({
+        period: { ...CLOSED_FIRST_YEAR, period_start: '2025-03-01' },
+        entityType: 'aktiebolag',
+        earlierPeriodCount: 1,
+      })
+      const laterRes = await PATCH(patchRequest({ period_start: '2025-03-17' }), createMockRouteParams({ id: 'p1' }))
+      expect(laterRes.status).toBe(409)
+      const laterBody = await laterRes.json()
+      expect(laterBody.error.code).toBe('FISCAL_PERIOD_UPDATE_CLOSED')
+      expect(laterBody.error.details).toBeUndefined()
+      expect(later.rpc).not.toHaveBeenCalled()
+    })
+
+    it('a name-only edit of a closed year is still refused', async () => {
+      const supabase = buildMockSupabase({ period: CLOSED_FIRST_YEAR, entityType: 'aktiebolag' })
+      const res = await PATCH(patchRequest({ name: 'Nytt namn' }), createMockRouteParams({ id: 'p1' }))
+      expect(res.status).toBe(409)
+      expect((await res.json()).error.code).toBe('FISCAL_PERIOD_UPDATE_CLOSED')
+      expect(supabase.from).toHaveBeenCalledTimes(1)
     })
   })
 })

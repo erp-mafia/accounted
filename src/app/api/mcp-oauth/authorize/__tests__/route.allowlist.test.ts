@@ -68,21 +68,28 @@ import { GET, POST } from '../route'
 type Row = Record<string, unknown>
 
 /**
- * Minimal PostgREST-shaped fake over in-memory tables: eq/is filters are
+ * Minimal PostgREST-shaped fake over in-memory tables: eq/is/in filters are
  * applied, everything else is a no-op, and the chain resolves to the filtered
  * rows (all rows when awaited, first row via maybeSingle).
  */
 function fakeServiceClient(tables: Record<string, Row[]>) {
   const from = vi.fn((table: string) => {
     const filters: [string, unknown][] = []
+    const inFilters: [string, unknown[]][] = []
     const run = () =>
-      (tables[table] ?? []).filter((row) =>
-        filters.every(([col, val]) => (val === null ? row[col] == null : row[col] === val)),
+      (tables[table] ?? []).filter(
+        (row) =>
+          filters.every(([col, val]) => (val === null ? row[col] == null : row[col] === val)) &&
+          inFilters.every(([col, vals]) => vals.includes(row[col])),
       )
     const chain: Record<string, unknown> = {}
     for (const method of ['select', 'order', 'range', 'limit']) chain[method] = () => chain
     chain.eq = (col: string, val: unknown) => {
       filters.push([col, val])
+      return chain
+    }
+    chain.in = (col: string, vals: unknown[]) => {
+      inFilters.push([col, vals])
       return chain
     }
     chain.is = (col: string, val: unknown) => {
@@ -170,7 +177,7 @@ describe('/api/mcp-oauth/authorize with the real redirect-URI allowlist', () => 
     mocks.serviceClient.mockReturnValue(service)
     mocks.createClient.mockResolvedValue(userClient('user-1'))
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it('GET rejects a redirect URI registered by an unrelated user, even one named like Claude', async () => {

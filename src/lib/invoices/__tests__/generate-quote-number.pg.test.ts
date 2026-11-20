@@ -255,7 +255,10 @@ describe('invoices_quote_defaults trigger and one-live-conversion index (2026090
     expect(rows[0]).toEqual({ quote_status: null, valid_until: null })
   })
 
-  it('allows one live invoice per converted source, and another once the first is cancelled', async () => {
+  // The unique index was replaced by invoices_converted_source_guard in
+  // 20261015120000 (crm#1196: a quote may be invoiced in parts up to its
+  // net); a second whole invoice of the same quote is still refused.
+  it('allows one whole live invoice per converted quote, and another once the first is cancelled', async () => {
     const { userId, companyId } = await seedCompany()
     const customerId = await insertCustomer(userId, companyId)
     const quoteId = await insertInvoiceRow({
@@ -280,7 +283,7 @@ describe('invoices_quote_defaults trigger and one-live-conversion index (2026090
 
     const first = randomUUID()
     await insertConverted(first, 'F-901')
-    await expect(insertConverted(randomUUID(), 'F-902')).rejects.toThrow(/idx_invoices_one_live_conversion/)
+    await expect(insertConverted(randomUUID(), 'F-902')).rejects.toThrow(/INVOICE_QUOTE_ALREADY_INVOICED/)
 
     await getPool().query(`UPDATE public.invoices SET status = 'cancelled' WHERE id = $1`, [first])
     await expect(insertConverted(randomUUID(), 'F-903')).resolves.toBeDefined()

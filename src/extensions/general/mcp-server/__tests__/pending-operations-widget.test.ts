@@ -109,6 +109,19 @@ describe('Pending operations widget', () => {
       expect(widget.html).toContain('clearTimeout(timer)')
     })
 
+    it('names a proposal by its number as Accounted does, and says nothing for a row without one', () => {
+      const widget = findUiWidget('ui://pending-operations/app.html')!
+      const source = widget.html.match(/function numberLabel\(op\) \{[\s\S]*?\n {2}\}/)?.[0]
+      expect(source).toBeDefined()
+      const numberLabel = new Function(`${source}; return numberLabel`)() as (op: unknown) => string
+      expect(numberLabel({ operation_number: 128 })).toBe('Förslag 128 · ')
+      expect(numberLabel({})).toBe('')
+      expect(numberLabel({ operation_number: null })).toBe('')
+      expect(numberLabel({ operation_number: '128' })).toBe('')
+      // In the row's second line, before the type and who proposed it.
+      expect(widget.html).toContain(`'<div class="op-type">' + numberLabel(op) + esc(op.operation_type || '')`)
+    })
+
     it('the widget calls the approve and reject tools and arms confirmed=true for high risk', () => {
       const widget = findUiWidget('ui://pending-operations/app.html')!
       expect(widget.html).toContain('gnubok_approve_pending_operation')
@@ -160,7 +173,7 @@ describe('Pending operations widget', () => {
     })
   })
 
-  // Issue #3408, founder decision 2026-10-03: approve is never pre-ticked on
+  // Issue #3408, product decision 2026-10-03: approve is never pre-ticked on
   // the consent page, so the default one-click connection cannot approve or
   // reject. Neither the widget nor the instructions may promise it can.
   describe('a key without pending_operations:approve', () => {
@@ -200,10 +213,10 @@ describe('Pending operations widget', () => {
       expect(html).toContain('Att g\\u00f6ra \\u203a Agentf\\u00f6rslag')
     })
 
-    it('the instructions send the user to Att göra › Agentförslag instead of promising chat approval', async () => {
+    it('the instructions send the user to Att göra › Rutin instead of promising chat approval', async () => {
       const text = await instructions()
       expect(text).toContain('APPROVAL ON THIS CONNECTION')
-      expect(text).toContain('Att göra › Agentförslag')
+      expect(text).toContain('Att göra › Rutin')
       expect(text).toContain('connect again with Godkänn ticked')
       expect(text).not.toContain('APPROVAL IS A FIRST-CLASS AGENT ACTION')
       expect(text).not.toContain('approves/rejects with a click')

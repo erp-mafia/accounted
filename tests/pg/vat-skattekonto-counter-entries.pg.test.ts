@@ -278,10 +278,11 @@ describe('VAT functions: verifikat booked straight against the skattekonto', () 
     await expectDrillDownAgrees(companyId, [classicId, withCostId])
   }, 60_000)
 
-  it('keeps the exemptions: opening balances count, and 2650 paid from 1630 is not shaped', async () => {
+  it('keeps the exemptions: an opening balance dated inside the period counts, and 2650 paid from 1630 is not shaped', async () => {
     const { companyId, post } = await seed()
-    // A carried-in VAT balance parked against the skattekonto in an opening
-    // balance is unsettled VAT for the next declaration, as under shape 1.
+    // An opening balance dated inside the period (a mid-year migration)
+    // carries the period's own days before it, so it counts and is no
+    // momsredovisning, even parked against the skattekonto (crm#1333).
     const openingId = await post([['1630', 300, 0], ['2611', 0, 300]], 'opening_balance')
     // Paying the declared VAT from the skattekonto touches no declaration account.
     await post([['2650', 150, 0], ['1630', 0, 150]])

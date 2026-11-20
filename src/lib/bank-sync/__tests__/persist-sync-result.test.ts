@@ -37,6 +37,18 @@ describe('persistBankSyncResult', () => {
     ])
   })
 
+  it('passes the bank\'s day and type with the balance, and an explicit null that clears it', async () => {
+    const { rpc, db } = client({ data: { applied: true }, error: null })
+    const reference = { date: '2026-09-20', type: 'closingBooked' }
+    await persistBankSyncResult(db, {
+      ...input, accounts: [{ ...input.accounts[0], balance_reference: reference }, { uid: 'other', balance: 5, balance_updated_at: input.completedAt, balance_reference: null }],
+    })
+    expect(rpc.mock.calls[0][1].p_accounts).toEqual([
+      { ...input.accounts[0], balance_reference: reference },
+      { uid: 'other', balance: 5, balance_updated_at: input.completedAt, balance_reference: null },
+    ])
+  })
+
   it('passes initial backfill evidence without accepting arbitrary connection fields', async () => {
     const { rpc, db } = client({ data: { applied: true }, error: null })
     await persistBankSyncResult(db, { ...input, initialSync: {

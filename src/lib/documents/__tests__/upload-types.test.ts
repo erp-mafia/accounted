@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   ALLOWED_DOCUMENT_TYPES,
   DOCUMENT_UPLOAD_ACCEPT,
+  INBOX_UPLOAD_ACCEPT,
+  INBOX_UPLOAD_TYPES,
   declaredDocumentType,
   isAllowedDocumentFile,
+  isAllowedInboxFile,
 } from '../upload-types'
 
 describe('declaredDocumentType', () => {
@@ -52,10 +55,33 @@ describe('DOCUMENT_UPLOAD_ACCEPT', () => {
   it('offers exactly the extensions whose type the allowlist accepts', () => {
     const extensions = DOCUMENT_UPLOAD_ACCEPT.split(',')
     expect(extensions).toContain('.csv')
-    expect(extensions).toContain('.heic')
+    expect(extensions).toContain('.docx')
     for (const ext of extensions) {
       expect(ext.startsWith('.')).toBe(true)
       expect(ALLOWED_DOCUMENT_TYPES).toContain(declaredDocumentType({ name: `f${ext}`, type: '' }))
     }
+  })
+
+  it('leaves HEIC out so iOS transcodes a library pick to JPEG, while the allowlist still takes a dropped one', () => {
+    expect(DOCUMENT_UPLOAD_ACCEPT.split(',')).not.toContain('.heic')
+    expect(DOCUMENT_UPLOAD_ACCEPT.split(',')).not.toContain('.heif')
+    expect(isAllowedDocumentFile({ name: 'IMG_7484.heic', type: 'image/heic' })).toBe(true)
+  })
+})
+
+describe('INBOX_UPLOAD_ACCEPT', () => {
+  it('offers only what the inbox route takes: no office files', () => {
+    const extensions = INBOX_UPLOAD_ACCEPT.split(',')
+    expect(extensions).toEqual(['.pdf', '.jpg', '.jpeg', '.png', '.webp'])
+    for (const ext of extensions) {
+      expect(INBOX_UPLOAD_TYPES).toContain(declaredDocumentType({ name: `f${ext}`, type: '' }))
+    }
+  })
+
+  it('reads a file the way the inbox route does: by its declared type', () => {
+    expect(isAllowedInboxFile({ type: 'image/heic' })).toBe(true)
+    expect(isAllowedInboxFile({ type: 'application/pdf' })).toBe(true)
+    expect(isAllowedInboxFile({ type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })).toBe(false)
+    expect(isAllowedInboxFile({ type: '' })).toBe(false)
   })
 })

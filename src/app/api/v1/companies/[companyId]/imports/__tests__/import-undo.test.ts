@@ -39,6 +39,7 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { POST as undoBank } from '../bank/[id]/undo/route'
 import { POST as undoSie } from '../sie/[id]/undo/route'
 import { POST as resumeSie } from '../sie/[id]/resume/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -80,8 +81,11 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['transactions', 'bank_file_imports', 'sie_imports', 'journal_entries', 'fiscal_periods'])
+// The database's read-only lock answer, which a dry run may ask.
+const READ_ONLY_RPCS = new Set(['sie_undo_lock_refusal'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) ||
+    (c.method === 'rpc' && !READ_ONLY_RPCS.has(String(c.args[0])) && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const IMPORT_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -253,17 +257,70 @@ describe('POST /imports/sie/:id/undo and /resume', () => {
     expect(wrote(client)).toBe(false)
   })
 
-  it('409 SIE_IMPORT_ACTION_CONFLICT on a dry run into a locked period', async () => {
+  // crm#1022: the dry run asks the database the same lock question the undo
+  // RPC asks (sie_undo_lock_refusal), so a lock date that covers the stornos
+  // refuses the preview exactly like the undo.
+  const LOCK_SENTENCE =
+    'Bokföringen är låst t.o.m. 2025-12-31, och ångringen bokför storno med de importerade verifikationernas datum, ' +
+    '2024-03-04 till 2024-12-31. Lås upp till och med 2024-03-04 först: sätt Bokföring låst t.o.m. till 2024-03-03 ' +
+    'eller tidigare, eller töm fältet, under Inställningar > Bokföring och försök igen. Lås bokföringen igen när ångringen är klar.'
+
+  it('409 SIE_IMPORT_PERIOD_LOCKED on a dry run into a locked range, naming it', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      sie_imports: [job(), { data: [], error: null }],
+      'rpc:sie_undo_lock_refusal': { data: LOCK_SENTENCE, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await undo('?dry_run=true')
+    expect(res.status).toBe(409)
+    const { error } = await res.json()
+    expect(error.code).toBe('SIE_IMPORT_PERIOD_LOCKED')
+    expect(error.details.reason).toBe(LOCK_SENTENCE)
+    expect(client.rpc).toHaveBeenCalledWith('sie_undo_lock_refusal', { p_company_id: COMPANY_ID, p_import_id: IMPORT_ID })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('409 SIE_IMPORT_ACTION_CONFLICT on a dry run into a period another run holds', async () => {
     mockServiceClient.mockReturnValue(
       makeClient({
         company_members: OWNER,
         sie_imports: [job(), { data: [], error: null }],
-        fiscal_periods: { data: { id: PERIOD_ID, is_closed: false, locked_at: '2026-01-01T00:00:00Z', import_hold: null }, error: null },
+        fiscal_periods: { data: { id: PERIOD_ID, import_hold: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }, error: null },
       }),
     )
     const res = await undo('?dry_run=true')
     expect(res.status).toBe(409)
     expect((await res.json()).error.code).toBe('SIE_IMPORT_ACTION_CONFLICT')
+  })
+
+  it('maps the undo RPC\'s lock refusal to 409 SIE_IMPORT_PERIOD_LOCKED with the database sentence', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: OWNER,
+        sie_imports: job(),
+        'rpc:request_sie_import_undo': { data: null, error: { code: '55000', message: `SIE_IMPORT_PERIOD_LOCKED: ${LOCK_SENTENCE}` } },
+      }),
+    )
+    const res = await undo()
+    expect(res.status).toBe(409)
+    const { error } = await res.json()
+    expect(error.code).toBe('SIE_IMPORT_PERIOD_LOCKED')
+    expect(error.details.reason).toBe(LOCK_SENTENCE)
+    expect(runWorkerMock).not.toHaveBeenCalled()
+  })
+
+  it('resume dry run of an undo refuses the locked range too', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      sie_imports: job({ job_state: 'paused', job_phase: 'undo' }),
+      'rpc:sie_undo_lock_refusal': { data: LOCK_SENTENCE, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await resume('?dry_run=true')
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatchObject({ code: 'SIE_IMPORT_PERIOD_LOCKED', details: { reason: LOCK_SENTENCE } })
+    expect(wrote(client)).toBe(false)
   })
 
   it('dry run counts the entries a storno would reverse, deletes nothing, writes nothing', async () => {
@@ -295,7 +352,14 @@ describe('POST /imports/sie/:id/undo and /resume', () => {
     const res = await undo()
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ import_id: IMPORT_ID, action: 'undo', state: 'undoing', phase: 'undo', accepted: true })
-    expect(client.rpc).toHaveBeenCalledWith('request_sie_import_undo', { p_company_id: COMPANY_ID, p_import_id: IMPORT_ID, p_actor: 'user-1' })
+    // The stornos will name the API key that asked for the undo (20261016005200).
+    expect(client.rpc).toHaveBeenCalledWith('request_sie_import_undo', {
+      p_company_id: COMPANY_ID,
+      p_import_id: IMPORT_ID,
+      p_actor: 'user-1',
+      p_actor_type: 'api_key',
+      p_actor_label: 'SIE undo: CI key',
+    })
   })
 
   it('maps an RPC refusal (55000) to 409 SIE_IMPORT_ACTION_CONFLICT', async () => {

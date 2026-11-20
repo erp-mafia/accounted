@@ -6,9 +6,11 @@ import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   hitsUntilAuto,
@@ -21,12 +23,16 @@ import {
   type RuleRow,
 } from '@/lib/rules/model'
 import type { RuleMatch } from '@/lib/rules/service'
-import { ModeChip } from './RulesList'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { ModeChip, OneClickControl, saveAlwaysReview } from './RulesList'
 import { accountLabel, counterpartyTitle, ruleTitle, vatLabelKey } from './rule-text'
 
 interface Payload {
   rule: RuleRow
   matches: RuleMatch[]
+  direct_booking?: DirectBookingSettings
 }
 
 async function fetchRule(url: string): Promise<Payload> {
@@ -37,7 +43,7 @@ async function fetchRule(url: string): Promise<Payload> {
 }
 
 function Pill({ children }: { children: React.ReactNode }) {
-  return <span className="rounded-full border border-border px-2.5 py-0.5 text-xs">{children}</span>
+  return <span className="rounded-md border border-border px-2.5 py-0.5 text-xs">{children}</span>
 }
 
 /**
@@ -48,9 +54,12 @@ function Pill({ children }: { children: React.ReactNode }) {
  */
 export default function RuleDetail({ id }: { id: string }) {
   const t = useTranslations('rules')
+  const tNav = useTranslations('nav')
   const { toast } = useToast()
   const { data, isLoading, error, mutate } = useSWR<Payload>(`/api/rules/${id}`, fetchRule)
   const [busy, setBusy] = useState(false)
+  const { canWrite } = useCanWrite()
+  const { lockedTitle } = useViewerLock()
 
   async function setMode(mode: RuleMode) {
     setBusy(true)
@@ -72,8 +81,35 @@ export default function RuleDetail({ id }: { id: string }) {
     }
   }
 
-  if (isLoading) return <p className="text-[13px] text-muted-foreground">{t('loading')}</p>
-  if (error || !data) return <p className="text-[13px] text-muted-foreground">{t('not_found')}</p>
+  async function setAlwaysReview(alwaysReview: boolean) {
+    setBusy(true)
+    try {
+      const saved = await saveAlwaysReview(id, alwaysReview)
+      if (!saved.ok) {
+        toast({ title: t('toast_failed'), description: getErrorMessage(saved.body, { statusCode: saved.status }), variant: 'destructive' })
+        return
+      }
+      toast({ title: alwaysReview ? t('toast_always_review_on') : t('toast_always_review_off') })
+      await mutate()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <LateReveal className="space-y-3" aria-label={t('loading')}>
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-4 w-2/3" />
+      </LateReveal>
+    )
+  }
+  // fetchRule throws "<url> <status>": a 404 is a rule that does not exist,
+  // anything else a load that failed and can be tried again.
+  const notFound = error instanceof Error && / 404$/.test(error.message)
+  if (error && !notFound) return <LoadError title={t('detail_load_failed')} onRetry={() => void mutate()} />
+  if (!data) return <EmptyState title={t('not_found')} />
 
   const { rule, matches } = data
   const step = ruleStep(rule.mode)
@@ -104,39 +140,40 @@ export default function RuleDetail({ id }: { id: string }) {
     <>
       <PageHeader
         title={<span data-ph-mask>{ruleTitle(rule)}</span>}
+        parent={{ label: tNav('v2_rules'), href: '/rules' }}
         action={
           rule.mode === 'paused' ? (
-            <Button size="sm" disabled={busy} onClick={() => void setMode('propose')}>
+            <Button size="toolbar" disabled={!canWrite || busy} title={lockedTitle} onClick={() => void setMode('propose')}>
               {t('resume')}
             </Button>
           ) : (
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => void setMode('paused')}>
+            <Button size="toolbar" variant="outline" disabled={!canWrite || busy} title={lockedTitle} onClick={() => void setMode('paused')}>
               {t('pause')}
             </Button>
           )
         }
       />
 
-      <div className="mb-5 flex overflow-hidden rounded-lg border border-border">
+      <div className="mb-5 flex overflow-hidden">
         {RULE_LADDER.map((m, i) => (
           <div
             key={m}
             className={cn(
-              'flex min-w-0 flex-1 flex-col justify-center gap-0.5 border-r border-border px-3 py-2 last:border-r-0',
+              'flex min-w-0 flex-1 flex-col justify-center gap-0.5 border-r-hairline px-3 py-2 last:border-r-0',
               i === step && 'bg-secondary shadow-[inset_0_-2px_0_hsl(var(--foreground))]',
               i === step && rule.mode === 'paused' && 'shadow-[inset_0_-2px_0_hsl(var(--destructive))]',
             )}
           >
             <span
               className={cn(
-                'truncate text-[11px] font-semibold uppercase tracking-[0.06em]',
+                'truncate text-xs font-semibold',
                 i < step ? 'text-success' : i === step ? 'text-foreground' : 'text-muted-foreground',
               )}
             >
               {t(`mode_${m}`)}
               {i === step && rule.mode === 'paused' ? ` · ${t('mode_paused').toLowerCase()}` : ''}
             </span>
-            <span className={cn('truncate text-[12.5px]', i > step ? 'text-muted-foreground/70' : 'text-foreground/80')}>
+            <span className={cn('truncate text-xs', i > step ? 'text-muted-foreground' : 'text-foreground/80')}>
               {stepText[i]}
             </span>
           </div>
@@ -145,7 +182,7 @@ export default function RuleDetail({ id }: { id: string }) {
 
       <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
-          <div className="rounded-lg border border-border px-4 py-3 text-[13px]">
+          <div className="rounded-lg px-4 py-3 text-[13px] bg-control shadow-raised">
             <div className="flex flex-wrap items-center gap-2 py-1">
               <span className="w-10 text-muted-foreground">{t('om')}</span>
               {when.map((w) => (
@@ -172,7 +209,7 @@ export default function RuleDetail({ id }: { id: string }) {
             <span className="text-muted-foreground">{t('read_lead')}</span> {read}
           </p>
 
-          <h2 className="mb-2 mt-6 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          <h2 className="mb-2 mt-6 text-xs font-semibold text-muted-foreground">
             {t('matches_title')}
           </h2>
           <table className="w-full border-collapse text-[13px]">
@@ -194,12 +231,12 @@ export default function RuleDetail({ id }: { id: string }) {
               ) : (
                 matches.map((m) => (
                   <tr key={m.id}>
-                    <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>{formatDate(m.date)}</td>
+                    <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap date-figures text-muted-foreground')}>{formatDate(m.date)}</td>
                     <td className={cn(TD_CLASS, 'max-w-0 truncate')} data-ph-mask>
                       {m.description}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums', m.amount > 0 && 'text-success')}>
-                      {formatCurrency(m.amount, m.currency)}
+                      {formatRowAmount(m.amount, m.currency)}
                     </td>
                     <td className={cn(TD_CLASS, '!pr-0 whitespace-nowrap')}>
                       {m.journal_entry_id ? (
@@ -227,6 +264,17 @@ export default function RuleDetail({ id }: { id: string }) {
             <Kv k={t('mode_label')} v={<ModeChip mode={rule.mode} />} />
             <Kv k={t('hits_label')} v={t('hits_line', { hits: rule.occurrence_count, corrections: rule.corrections })} />
             <Kv
+              k={t('th_one_click')}
+              v={
+                <OneClickControl
+                  rule={rule}
+                  directBooking={data.direct_booking ?? DIRECT_BOOKING_ON}
+                  disabled={!canWrite || busy}
+                  onChange={(alwaysReview) => void setAlwaysReview(alwaysReview)}
+                />
+              }
+            />
+            <Kv
               k={t('next_label')}
               v={
                 rule.mode === 'paused'
@@ -253,7 +301,7 @@ export default function RuleDetail({ id }: { id: string }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mb-5">
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{title}</h2>
+      <h2 className="mb-2 text-xs font-semibold text-muted-foreground">{title}</h2>
       <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5">{children}</dl>
     </div>
   )

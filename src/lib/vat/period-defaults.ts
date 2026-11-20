@@ -22,6 +22,7 @@
 import { getVatDeadlineForPeriod } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import type { VatPeriodType } from '@/types'
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface VatPeriodDefault {
   year: number
@@ -39,7 +40,8 @@ export interface VatPeriodCalendarOptions {
  * ending in June runs from July, so from July on it is next year's.
  */
 function runningFiscalYear(today: Date, fiscalYearEndMonth: number): number {
-  return today.getMonth() + 1 > fiscalYearEndMonth ? today.getFullYear() + 1 : today.getFullYear()
+  const { year, month } = stockholmYearMonth(today)
+  return month > fiscalYearEndMonth ? year + 1 : year
 }
 
 /** Return the monthly VAT period a fixed number of months before a month. */
@@ -54,8 +56,7 @@ export function mostRecentEndedVatPeriod(
   today: Date = new Date(),
   opts: { over40m?: boolean } & VatPeriodCalendarOptions = {},
 ): VatPeriodDefault {
-  const year = today.getFullYear()
-  const month = today.getMonth() + 1
+  const { year, month } = stockholmYearMonth(today)
 
   if (periodType === 'yearly') {
     return { year: runningFiscalYear(today, opts.fiscalYearEndMonth ?? 12) - 1, period: 1 }
@@ -75,7 +76,7 @@ export function mostRecentEndedVatPeriod(
     const adjustedDeadline = deadline
       ? adjustDeadlineToNextBankingDay(new Date(deadline.year, deadline.month, deadline.day))
       : null
-    const currentDate = new Date(year, month - 1, today.getDate())
+    const currentDate = new Date(year, month - 1, Number(todayIsoStockholm(today).slice(8, 10)))
     return adjustedDeadline && currentDate <= adjustedDeadline
       ? periodDueThisMonth
       : mostRecentEnded
@@ -91,8 +92,7 @@ export function currentVatPeriod(
   today: Date = new Date(),
   opts: VatPeriodCalendarOptions = {},
 ): VatPeriodDefault {
-  const year = today.getFullYear()
-  const month = today.getMonth() + 1
+  const { year, month } = stockholmYearMonth(today)
   if (periodType === 'yearly') {
     return { year: runningFiscalYear(today, opts.fiscalYearEndMonth ?? 12), period: 1 }
   }

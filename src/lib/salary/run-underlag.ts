@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getCompanyDisplayName } from '@/lib/company/context'
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { roundOre } from '@/lib/money'
 import {
   salaryJournalTotals,
@@ -9,6 +10,7 @@ import {
   type SalaryJournalRow,
 } from '@/lib/reports/salary-journal'
 import { loadPostedSalaryRunEntries, type PostedSalaryEntry } from '@/lib/salary/posted-run-entries'
+import { declaredAvgifterNote } from '@/lib/salary/effective-figures'
 
 /**
  * Bokföringsunderlag for one salary run (Lönesammanställning): the document
@@ -50,6 +52,12 @@ export interface SalaryRunUnderlagData {
   generatedAt: string
   rows: SalaryJournalRow[]
   totals: SalaryJournalReport['totals']
+  /**
+   * Whole kronor: the arbetsgivaravgifter the run's AGI declares and
+   * Skatteverket draws (declaredAvgifterForRun, the AGI generator's own
+   * computation), printed under the öre-exact total. null when the two agree.
+   */
+  declaredAvgifter: number | null
   entries: SalaryRunUnderlagEntry[]
 }
 
@@ -79,10 +87,11 @@ export async function buildSalaryRunUnderlag(
 
   const { data: company, error: companyError } = await supabase
     .from('companies')
-    .select('name, org_number')
+    .select('name')
     .eq('id', companyId)
     .maybeSingle()
   if (companyError) throw companyError
+  const companyOrgNumber = await readCompanyOrgNumber(supabase, companyId)
   // Employer name follows the current company name, as on the payslip.
   const displayName = await getCompanyDisplayName(supabase, companyId)
 
@@ -90,7 +99,7 @@ export async function buildSalaryRunUnderlag(
   const employees: any[] = await fetchAllRows(({ from, to }) =>
     supabase
       .from('salary_run_employees')
-      .select('*, employee:employees(first_name, last_name, personnummer_last4, employment_type)')
+      .select('*, employee:employees(first_name, last_name, personnummer_last4, employment_type, personnel_category, f_skatt_status)')
       .eq('company_id', companyId)
       .eq('salary_run_id', runId)
       .order('id', { ascending: true })
@@ -143,7 +152,7 @@ export async function buildSalaryRunUnderlag(
     ok: true,
     data: {
       companyName: displayName ?? company?.name ?? '',
-      companyOrgNumber: company?.org_number ?? '',
+      companyOrgNumber: companyOrgNumber ?? '',
       periodYear: run.period_year,
       periodMonth: run.period_month,
       paymentDate: run.payment_date,
@@ -152,6 +161,7 @@ export async function buildSalaryRunUnderlag(
       generatedAt: now.toISOString(),
       rows,
       totals: salaryJournalTotals(rows),
+      declaredAvgifter: declaredAvgifterNote(employees, run.calculation_params)?.declared ?? null,
       entries,
     },
   }

@@ -1,6 +1,7 @@
 import {
   buildInvoiceWritePayload,
   type DeductionItemFields,
+  type EditorVatStatement,
   type SelfBillingCarrierFields,
 } from '@/lib/invoices/editor-payload'
 
@@ -9,7 +10,8 @@ import {
  * /api/invoices/preview-pdf and preview-email), built from the same form
  * values and through the same body builder as the write path, so what the
  * preview prints is what the saved invoice prints. The preview schemas strip
- * the keys they do not render (article links, accounts, dimensions).
+ * the keys they do not render (accounts, dimensions); the article link stays
+ * for the article number column.
  */
 
 export interface QuoteValidityFields {
@@ -36,6 +38,8 @@ export interface EditorPreviewOptions {
   defaultDims: Record<string, string>
   /** The number to print: the predicted next number, or the draft's own. */
   invoiceNumber: string | null
+  /** The invoice's own VAT treatment, so the preview prints its notice. */
+  vatStatement?: EditorVatStatement
 }
 
 export function buildEditorPreviewRequest<
@@ -49,6 +53,7 @@ export function buildEditorPreviewRequest<
     ...buildInvoiceWritePayload(withQuoteValidity(values), {
       oreRounding: options.oreRounding,
       defaultDims: options.defaultDims,
+      vatStatement: options.vatStatement,
     }),
     // '' is "the company default" in the form; the preview reads null so.
     payment_cash_account_id: values.payment_cash_account_id || null,

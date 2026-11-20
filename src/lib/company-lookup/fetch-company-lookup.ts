@@ -29,7 +29,9 @@ export type CompanyLookupOutcome =
 
 /**
  * Shared client-side TIC lookup for the onboarding surfaces (wizard Step 2
- * and the journey flow). One GET to the extension dispatcher; never throws.
+ * and the journey flow). One POST to the extension dispatcher, the org number
+ * in the body: a sole trader's is the owner's personnummer, and a URL is
+ * copied into request logs and error telemetry. Never throws.
  *
  * Fixes the historical 403/404 conflation: the dispatcher returns 404 for a
  * missing extension and 503 (`EXTENSION_DISABLED`) for a feature-flagged one,
@@ -51,10 +53,12 @@ export async function fetchCompanyLookup(
 
   let res: Response
   try {
-    res = await fetch(
-      `/api/extensions/ext/tic/lookup?org_number=${encodeURIComponent(orgNumber)}`,
-      { signal: opts.signal },
-    )
+    res = await fetch('/api/extensions/ext/tic/lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ org_number: orgNumber }),
+      signal: opts.signal,
+    })
   } catch (err) {
     if ((err as Error).name === 'AbortError') return { status: 'aborted' }
     return { status: 'error' }

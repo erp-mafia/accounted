@@ -19,10 +19,10 @@ import {
 } from '../rates-calendar'
 
 describe('rates calendar', () => {
-  it('asks for next year only once the due date has passed (UTC)', () => {
+  it('asks for next year only once the Swedish due date has passed', () => {
     const due = { month: 12, day: 10 }
-    expect(requiredYears(due, new Date('2026-12-09T23:59:59Z'))).toEqual([2026])
-    expect(requiredYears(due, new Date('2026-12-10T00:00:00Z'))).toEqual([2026, 2027])
+    expect(requiredYears(due, new Date('2026-12-09T22:59:59Z'))).toEqual([2026])
+    expect(requiredYears(due, new Date('2026-12-09T23:00:00Z'))).toEqual([2026, 2027])
     expect(requiredYears(due, new Date('2027-01-02T08:00:00Z'))).toEqual([2027])
     expect(isDue(due, new Date('2026-06-01T00:00:00Z'))).toBe(false)
   })

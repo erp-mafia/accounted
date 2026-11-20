@@ -1,11 +1,10 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { listTrips } from '@/lib/mileage/mileage-service'
 import { mileageTripsToCsv } from '@/lib/mileage/csv-export'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
 
 /** Körjournal CSV export (Skatteverket audit underlag). */
 export const GET = withRouteContext('mileage.export', async (request, { supabase, companyId }) => {
@@ -33,7 +32,7 @@ export const GET = withRouteContext('mileage.export', async (request, { supabase
       .eq('company_id', companyId)
       .in('id', entryIds)
     for (const entry of entries || []) {
-      voucherLabels.set(entry.id, `${entry.voucher_series}${entry.voucher_number}`)
+      voucherLabels.set(entry.id, formatVoucher(entry))
     }
   }
 
@@ -54,10 +53,8 @@ export const GET = withRouteContext('mileage.export', async (request, { supabase
 
   const csv = mileageTripsToCsv(trips, voucherLabels, driverLabels)
   const suffix = [from, to].filter(Boolean).join('_')
-  return new NextResponse(csv, {
-    headers: {
-      'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="korjournal${suffix ? `_${suffix}` : ''}.csv"`,
-    },
+  return fileResponse(csv, {
+    filename: `korjournal${suffix ? `_${suffix}` : ''}.csv`,
+    contentType: 'text/csv; charset=utf-8',
   })
 })

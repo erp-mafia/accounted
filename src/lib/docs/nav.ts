@@ -6,7 +6,14 @@
  * the DocsLayout sidebar AND by the landing page resource grid AND by the
  * /llms-full.txt aggregator so additions land in every surface from one
  * edit.
+ *
+ * The reference pages are not listed here by hand: one sidebar section per
+ * group in RESOURCE_NAV_GROUPS, holding every page of RESOURCES
+ * (content/reference-resources.ts), so a new reference page cannot be left
+ * out of the sidebar.
  */
+
+import { RESOURCES, RESOURCE_NAV_GROUPS } from './content/reference-resources'
 
 export interface DocsNavLink {
   label: string
@@ -19,6 +26,26 @@ export interface DocsNavSection {
   label: string
   links: DocsNavLink[]
 }
+
+/** One sidebar section per reference group, its pages in alphabetical order. */
+const REFERENCE_NAV_SECTIONS: DocsNavSection[] = RESOURCE_NAV_GROUPS.map((group) => ({
+  label: group,
+  links: RESOURCES.filter((r) => r.group === group)
+    .map((r) => ({ label: r.label, href: `/docs/api/reference/${r.slug}`, summary: r.description }))
+    .sort((a, b) => a.label.localeCompare(b.label)),
+}))
+
+/**
+ * The reference pages the landing page shows as cards, before "See all":
+ * the resources a first integration reaches for.
+ */
+const FEATURED_REFERENCE_SLUGS = ['companies', 'customers', 'invoices', 'suppliers', 'supplier-invoices', 'transactions', 'journal-entries', 'reports']
+
+export const FEATURED_REFERENCE_LINKS: DocsNavLink[] = FEATURED_REFERENCE_SLUGS.map((slug) => {
+  const resource = RESOURCES.find((r) => r.slug === slug)
+  if (!resource) throw new Error(`featured reference page ${slug} is not in RESOURCES`)
+  return { label: resource.label, href: `/docs/api/reference/${resource.slug}`, summary: resource.description }
+})
 
 export const DOCS_NAV: DocsNavSection[] = [
   {
@@ -37,12 +64,12 @@ export const DOCS_NAV: DocsNavSection[] = [
     label: 'Cookbooks',
     links: [
       { label: 'Send your first invoice', href: '/docs/api/cookbook/send-first-invoice', summary: 'Create a customer, draft an invoice, send it, mark it paid.' },
-      { label: 'Ingest and categorise bank transactions', href: '/docs/api/cookbook/ingest-bank-transactions', summary: 'Push CSV/CAMT into the engine, get AI suggestions, commit.' },
+      { label: 'Ingest and categorise bank transactions', href: '/docs/api/cookbook/ingest-bank-transactions', summary: 'Push CSV/CAMT into the engine, categorise, match payments.' },
       { label: 'Compute and review a VAT declaration', href: '/docs/api/cookbook/file-vat-declaration', summary: 'Compute momsdeklaration rutor 05-62 and reconcile before manual Skatteverket submission.' },
       { label: 'Run payroll and generate AGI', href: '/docs/api/cookbook/run-payroll-and-agi', summary: 'Calculate, approve, mark paid, book, generate AGI XML for manual Skatteverket upload.' },
       { label: 'Onboard a payroll customer', href: '/docs/api/cookbook/onboard-payroll-customer', summary: 'Provision a company, settings, employees, cutover balances, monthly inputs, payment file.' },
       { label: 'Set up webhooks and verify signatures', href: '/docs/api/cookbook/webhooks', summary: 'Subscribe to events, verify HMAC, handle retries idempotently.' },
-      { label: 'Year-end closing', href: '/docs/api/cookbook/year-end-closing', summary: 'Lock periods, run year-end, set opening balances.' },
+      { label: 'Year-end closing', href: '/docs/api/cookbook/year-end-closing', summary: 'Run the pre-flight checks, then one year-end call that closes the year and opens the next.' },
     ],
   },
   {
@@ -51,37 +78,14 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: 'Webhooks', href: '/docs/api/webhooks', summary: 'Event types, delivery model, retries, signature verification.' },
       { label: 'Versioning', href: '/docs/api/versioning', summary: 'How API versions are pinned, upgraded, and deprecated.' },
       { label: 'Idempotency', href: '/docs/api/versioning#idempotency', summary: 'Safe retries on every write via Idempotency-Key.' },
-      { label: 'Dry-run', href: '/docs/api/versioning#dry-run', summary: 'Preview every write before committing.' },
+      { label: 'Dry-run', href: '/docs/api/versioning#dry-run', summary: 'Preview a write before committing, where the endpoint supports it.' },
     ],
   },
   {
     label: 'API reference',
-    links: [
-      { label: 'Overview', href: '/docs/api/reference', summary: 'All resources, grouped by domain.' },
-      { label: 'Companies', href: '/docs/api/reference/companies' },
-      { label: 'Customers', href: '/docs/api/reference/customers' },
-      { label: 'Invoices', href: '/docs/api/reference/invoices' },
-      { label: 'Articles', href: '/docs/api/reference/articles' },
-      { label: 'Suppliers', href: '/docs/api/reference/suppliers' },
-      { label: 'Supplier invoices', href: '/docs/api/reference/supplier-invoices' },
-      { label: 'Transactions', href: '/docs/api/reference/transactions' },
-      { label: 'Journal entries', href: '/docs/api/reference/journal-entries' },
-      { label: 'Fiscal periods', href: '/docs/api/reference/fiscal-periods' },
-      { label: 'Accounts', href: '/docs/api/reference/accounts' },
-      { label: 'Documents', href: '/docs/api/reference/documents' },
-      { label: 'Inbox items', href: '/docs/api/reference/inbox-items' },
-      { label: 'Dimensions', href: '/docs/api/reference/dimensions' },
-      { label: 'Employees', href: '/docs/api/reference/employees' },
-      { label: 'Salary runs', href: '/docs/api/reference/salary-runs' },
-      { label: 'Reports', href: '/docs/api/reference/reports' },
-      { label: 'Imports', href: '/docs/api/reference/imports' },
-      { label: 'Compliance check', href: '/docs/api/reference/compliance' },
-      { label: 'Reconciliation', href: '/docs/api/reference/reconciliation' },
-      { label: 'Webhooks', href: '/docs/api/reference/webhooks' },
-      { label: 'Operations', href: '/docs/api/reference/operations' },
-      { label: 'Voucher gap explanations', href: '/docs/api/reference/voucher-gap-explanations' },
-    ],
+    links: [{ label: 'Overview', href: '/docs/api/reference', summary: 'All resources, grouped by domain.' }],
   },
+  ...REFERENCE_NAV_SECTIONS,
   {
     label: 'Reference',
     links: [

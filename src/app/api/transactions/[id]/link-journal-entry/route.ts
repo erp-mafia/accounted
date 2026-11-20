@@ -32,10 +32,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { LinkTransactionJournalEntrySchema } from '@/lib/api/schemas'
-import { ensureInitialized } from '@/lib/init'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'transaction.link_journal_entry',
@@ -79,6 +76,8 @@ export const POST = withRouteContext(
       invoice_status: outcome.result.invoiceStatus,
       paid_amount: outcome.result.paidAmount,
       remaining_amount: outcome.result.remainingAmount,
+      // The sale verifikat this link booked first (defer_invoice_booking).
+      ...(outcome.result.saleJournalEntryId ? { sale_journal_entry_id: outcome.result.saleJournalEntryId } : {}),
     })
   },
   { requireWrite: true },

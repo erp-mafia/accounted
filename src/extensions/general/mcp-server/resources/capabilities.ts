@@ -2,6 +2,7 @@ import type { McpResource } from './types'
 import { TOOL_SCOPE_MAP, hasScope } from '@/lib/auth/api-keys'
 import { resolveCompanyEntityType, UnknownEntityTypeError } from '@/lib/company/entity-type'
 import { offersPayroll } from '@/lib/company/offers-payroll'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface Capability {
   tool: string
@@ -17,7 +18,7 @@ export const capabilitiesResource: McpResource = {
   description: 'What the current API key can actually do given (a) its granted scopes and (b) the current company state. Surfaces blockers like locked periods so the agent knows ahead of time why an action would fail.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId, scopes }) => {
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayIsoStockholm()
 
     const { data: activePeriod } = await supabase
       .from('fiscal_periods')

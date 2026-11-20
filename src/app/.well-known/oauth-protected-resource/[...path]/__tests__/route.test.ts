@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+
 import { GET } from '../route'
 
 // RFC 9728 path-based discovery: Claude.ai's connector setup fetches
 // /.well-known/oauth-protected-resource/<mcp path> before any 401 and treats
-// a 404 as "Authorization failed" (seen in production 2026-08-26).
+// a 404 as "Authorization failed" (seen 2026-08-26).
 
 function call(url: string, path: string[]) {
   return GET(new Request(url, { headers: { host: new URL(url).host } }), {
@@ -14,6 +20,24 @@ function call(url: string, path: string[]) {
 describe('path-based MCP protected-resource discovery', () => {
   afterEach(() => {
     vi.unstubAllEnvs()
+  })
+
+  it('serves a registered byrå domain its own resource, the first document Claude.ai reads', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+    resolveBrandResultByHostMock.mockResolvedValue({
+      brand: { domain: 'byra.example.se' },
+      lookupFailed: false,
+    })
+    const response = await call(
+      'https://byra.example.se/.well-known/oauth-protected-resource/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted',
+      ['api', 'extensions', 'ext', 'mcp-server', 'mcp']
+    )
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.resource).toBe(
+      'https://byra.example.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted'
+    )
+    expect(body.authorization_servers).toEqual(['https://byra.example.se'])
   })
 
   it('serves the MCP endpoint metadata at the RFC 9728 path-based location', async () => {

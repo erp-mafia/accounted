@@ -1,7 +1,8 @@
 import type { DocType } from '@/lib/documents/classify/taxonomy'
+import { DUE_DATE_RULE } from '@/lib/documents/due-date-labels'
 
 /**
- * Extraction schemas, version 1 (dev_docs/arkiv_plan.md, phases 3 and 6).
+ * Extraction schemas, version 1.
  * One schema per document type, a small generic one for `other`.
  * Every field is grounded: the model returns the value, the page it read it
  * from and a short verbatim quote; the reading layer's word boxes turn the
@@ -383,12 +384,12 @@ export const SCHEMAS: Record<string, ExtractionSchemaDef> = {
     schemaType: 'supplier_invoice',
     version: 1,
     subject: 'an invoice the company must pay',
-    keywords: ['faktura', 'fakturanummer', 'förfallodatum', 'att betala', 'moms', 'bankgiro', 'plusgiro', 'ocr'],
+    keywords: ['faktura', 'fakturanummer', 'förfallodatum', 'oss tillhanda', 'att betala', 'moms', 'bankgiro', 'plusgiro', 'ocr'],
     fields: [
       ...party('supplier', 'supplier'),
       { name: 'invoice_number', kind: 'text', description: 'Invoice number.', required: true },
       { name: 'invoice_date', kind: 'date', description: 'Invoice date, YYYY-MM-DD.' },
-      { name: 'due_date', kind: 'date', description: 'Due date, YYYY-MM-DD.' },
+      { name: 'due_date', kind: 'date', description: `Due date, YYYY-MM-DD: ${DUE_DATE_RULE}` },
       { name: 'total_amount', kind: 'amount', description: 'Total to pay including VAT.', required: true },
       { name: 'vat_amount', kind: 'amount', description: 'VAT amount.' },
       { name: 'currency', kind: 'text', description: 'Currency, ISO code.' },
@@ -417,12 +418,12 @@ export const SCHEMAS: Record<string, ExtractionSchemaDef> = {
     schemaType: 'customer_invoice',
     version: 1,
     subject: "a copy of the company's own sales invoice",
-    keywords: ['faktura', 'fakturanummer', 'förfallodatum', 'kund', 'moms', 'att betala'],
+    keywords: ['faktura', 'fakturanummer', 'förfallodatum', 'oss tillhanda', 'kund', 'moms', 'att betala'],
     fields: [
       ...party('customer', 'customer'),
       { name: 'invoice_number', kind: 'text', description: 'Invoice number.', required: true },
       { name: 'invoice_date', kind: 'date', description: 'Invoice date, YYYY-MM-DD.' },
-      { name: 'due_date', kind: 'date', description: 'Due date, YYYY-MM-DD.' },
+      { name: 'due_date', kind: 'date', description: `Due date, YYYY-MM-DD: ${DUE_DATE_RULE}` },
       { name: 'total_amount', kind: 'amount', description: 'Total including VAT.', required: true },
       { name: 'vat_amount', kind: 'amount', description: 'VAT amount.' },
       { name: 'currency', kind: 'text', description: 'Currency, ISO code.' },

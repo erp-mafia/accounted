@@ -1,0 +1,402 @@
+[
+  {
+    "name": "payout: one RUT begäran paid in full to 1930",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-10",
+          "description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-01)",
+          "source_type": "rot_rut_payout",
+          "source_id": "00000000-0000-4000-8000-200000000001",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 2500,
+              "credit_amount": 0,
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-01)"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-01)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-0"
+    }
+  },
+  {
+    "name": "payout: one ROT begäran to 1940, the öre its invoices carried on 1513 to 3740",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-11",
+          "description": "Utbetalning ROT-avdrag från Skatteverket (ROT 2026-02)",
+          "source_type": "rot_rut_payout",
+          "source_id": "00000000-0000-4000-8000-200000000002",
+          "lines": [
+            {
+              "account_number": "1940",
+              "debit_amount": 6750,
+              "credit_amount": 0,
+              "line_description": "Utbetalning ROT-avdrag från Skatteverket (ROT 2026-02)"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0.75,
+              "credit_amount": 0,
+              "line_description": "Öresavrundning ROT-avdrag (ROT 2026-02)"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 6750.75,
+              "line_description": "Utbetalning ROT-avdrag från Skatteverket (ROT 2026-02)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-1"
+    }
+  },
+  {
+    "name": "payout: a grön teknik begäran",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-12",
+          "description": "Utbetalning skattereduktion grön teknik från Skatteverket (GT 2026-01)",
+          "source_type": "rot_rut_payout",
+          "source_id": "00000000-0000-4000-8000-200000000003",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 9700,
+              "credit_amount": 0,
+              "line_description": "Utbetalning skattereduktion grön teknik från Skatteverket (GT 2026-01)"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 9700,
+              "line_description": "Utbetalning skattereduktion grön teknik från Skatteverket (GT 2026-01)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-2"
+    }
+  },
+  {
+    "name": "payout set: a ROT and a RUT begäran paid in one transfer",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-14",
+          "description": "Utbetalning ROT/RUT-avdrag från Skatteverket (ROT 2026-03, RUT 2026-04)",
+          "source_type": "rot_rut_payout",
+          "source_id": "00000000-0000-4000-8000-200000000004",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 5500.25,
+              "credit_amount": 0,
+              "line_description": "Utbetalning ROT/RUT-avdrag från Skatteverket (ROT 2026-03, RUT 2026-04)"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0.5,
+              "credit_amount": 0,
+              "line_description": "Öresavrundning ROT-avdrag (ROT 2026-03)"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 4000.5,
+              "line_description": "Utbetalning ROT-avdrag från Skatteverket (ROT 2026-03)"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 1500.25,
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-04)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-3"
+    }
+  },
+  {
+    "name": "payout set: two RUT begäran on 1940",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-15",
+          "description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-05, RUT 2026-06)",
+          "source_type": "rot_rut_payout",
+          "source_id": "00000000-0000-4000-8000-200000000006",
+          "lines": [
+            {
+              "account_number": "1940",
+              "debit_amount": 5000,
+              "credit_amount": 0,
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-05, RUT 2026-06)"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 3000,
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-05)"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-06)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-4"
+    }
+  },
+  {
+    "name": "payout set: no begäran refused before anything is read",
+    "calls": [],
+    "outcome": {
+      "threw": "A rot/rut payout voucher needs at least one begäran"
+    }
+  },
+  {
+    "name": "payout set: öre rounding beyond what the invoices could leave refused",
+    "calls": [],
+    "outcome": {
+      "threw": "Invalid öre rounding 1.5 on begäran RUT 2026-07"
+    }
+  },
+  {
+    "name": "payout: no open fiscal period, refused",
+    "calls": [],
+    "outcome": {
+      "threw": "No open fiscal period found for payment date 2026-09-16"
+    }
+  },
+  {
+    "name": "reclaim: a RUT begäran refused for two invoices",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Nekat RUT-avdrag från Skatteverket (RUT 2026-09)",
+          "source_type": "rot_rut_reclaim",
+          "source_id": "00000000-0000-4000-8000-200000000010",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 2500,
+              "credit_amount": 0,
+              "line_description": "Nekat RUT-avdrag faktura 1001"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 1250.5,
+              "credit_amount": 0,
+              "line_description": "Nekat RUT-avdrag faktura 00000000-0000-4000-8000-300000000002"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "Nekat RUT-avdrag faktura 1001"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 1250.5,
+              "line_description": "Nekat RUT-avdrag faktura 00000000-0000-4000-8000-300000000002"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-8"
+    }
+  },
+  {
+    "name": "reclaim: a ROT share, legs of zero dropped",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-21",
+          "description": "Nekat ROT-avdrag från Skatteverket (ROT 2026-10)",
+          "source_type": "rot_rut_reclaim",
+          "source_id": "00000000-0000-4000-8000-200000000011",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 3000,
+              "credit_amount": 0,
+              "line_description": "Nekat ROT-avdrag faktura 1004"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 0,
+              "credit_amount": 3000,
+              "line_description": "Nekat ROT-avdrag faktura 1004"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-9"
+    }
+  },
+  {
+    "name": "reclaim: nothing refused, refused",
+    "calls": [],
+    "outcome": {
+      "threw": "A rot/rut reclaim voucher needs at least one refused share"
+    }
+  },
+  {
+    "name": "reclaim: no open fiscal period, refused",
+    "calls": [],
+    "outcome": {
+      "threw": "No open fiscal period found for booking date 2026-09-23"
+    }
+  },
+  {
+    "name": "reclassification: a migrated invoice's RUT deduction to 1513",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-24",
+          "description": "RUT-avdrag faktura V-1042, omföring vid systembyte",
+          "source_type": "rot_rut_reclassification",
+          "source_id": "00000000-0000-4000-8000-300000000006",
+          "lines": [
+            {
+              "account_number": "1513",
+              "debit_amount": 3750,
+              "credit_amount": 0,
+              "line_description": "RUT-avdrag faktura V-1042, omföring vid systembyte"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 3750,
+              "line_description": "RUT-avdrag faktura V-1042, omföring vid systembyte"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-12"
+    }
+  },
+  {
+    "name": "reclassification: a ROT deduction on an invoice without a number",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-25",
+          "description": "ROT-avdrag faktura 00000000-0000-4000-8000-300000000007, omföring vid systembyte",
+          "source_type": "rot_rut_reclassification",
+          "source_id": "00000000-0000-4000-8000-300000000007",
+          "lines": [
+            {
+              "account_number": "1513",
+              "debit_amount": 1234.56,
+              "credit_amount": 0,
+              "line_description": "ROT-avdrag faktura 00000000-0000-4000-8000-300000000007, omföring vid systembyte"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 1234.56,
+              "line_description": "ROT-avdrag faktura 00000000-0000-4000-8000-300000000007, omföring vid systembyte"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-13"
+    }
+  },
+  {
+    "name": "reclassification: a zero deduction, refused",
+    "calls": [],
+    "outcome": {
+      "threw": "A deduction reclassification voucher needs a positive amount"
+    }
+  },
+  {
+    "name": "reclassification: no open fiscal period, refused",
+    "calls": [],
+    "outcome": {
+      "threw": "No open fiscal period found for booking date 2026-09-27"
+    }
+  }
+]

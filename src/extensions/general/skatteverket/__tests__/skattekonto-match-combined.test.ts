@@ -1,11 +1,22 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   combinedMatchWindow,
+  findLedgerTwinCandidates,
   findMatchCandidates,
   findMatchSuggestionsBulk,
+  groupMatchWindow,
   matchSkattekontoToEntry,
+  parseAgiPeriod,
+  type SkattekontoMatchCandidate,
 } from '../lib/skattekonto-match'
+
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
 
 /**
  * crm#128: an imported AGI voucher books avdragen skatt + arbetsgivaravgift
@@ -232,5 +243,403 @@ describe('matchSkattekontoToEntry with a combined candidate', () => {
       name: 'SkattekontoMatchError',
       code: 'INVALID_CANDIDATE',
     })
+  })
+})
+
+/**
+ * crm#1004: the previous system booked a day of Skatteverket events of BOTH
+ * signs as one net 1630 line (an inbetalning net of the debits it paid,
+ * slutlig skatt net of tillgodoförd preliminärskatt). Amounts are made up.
+ */
+describe('crm#1004: same-day rows of both signs against one net 1630 line', () => {
+  type Row = {
+    id: string
+    transaktionsdatum: string
+    transaktionstext: string
+    belopp_skatteverket: number
+    journal_entry_id: null
+  }
+  const row = (id: string, date: string, text: string, belopp: number): Row => ({
+    id,
+    transaktionsdatum: date,
+    transaktionstext: text,
+    belopp_skatteverket: belopp,
+    journal_entry_id: null,
+  })
+
+  const DAY = '2026-08-12'
+  const PAY = row('pay', DAY, 'Inbetalning bokförd 260811', 20000)
+  const TAX = row('tax', DAY, 'Avdragen skatt juli 2026', -4521)
+  const FEE = row('fee', DAY, 'Arbetsgivaravgift juli 2026', -7704)
+  /** The day booked net: the bank payment and the AGI debits it covered. */
+  const NET: E = { id: 'net', voucher: 301, date: DAY, lines: [['1630', 7775, 0], ['2710', 4521, 0], ['2731', 7704, 0], ['1930', 0, 20000]] }
+
+  /** A payment net of one debit, next to a beslut that reverses a fee: the pair moves nothing on 1630. */
+  const PART_PAY = row('part-pay', DAY, 'Inbetalning bokförd 260811', 12000)
+  const FEE_OUT = row('avgift', DAY, 'Förseningsavgift', -1250)
+  const FEE_BACK = row('beslut', DAY, 'Beslut förseningsavgift', 1250)
+  const PART_NET: E = { id: 'part-net', voucher: 303, date: DAY, lines: [['1630', 7479, 0], ['2710', 4521, 0], ['1930', 0, 12000]] }
+
+  /** One inbetalning that paid two debits, booked as two bank payments: one per debit. */
+  const SPLIT = row('split', DAY, 'Inbetalning bokförd 260811', 31000)
+  const DEBIT_A = row('debit-a', DAY, 'Debiterad preliminärskatt', -13000)
+  const DEBIT_B = row('debit-b', DAY, 'Moms juni 2026', -18000)
+  const PAYMENT_A: E = { id: 'payment-a', voucher: 304, date: DAY, lines: [['1630', 13000, 0], ['1930', 0, 13000]] }
+  const PAYMENT_B: E = { id: 'payment-b', voucher: 305, date: DAY, lines: [['1630', 18000, 0], ['1930', 0, 18000]] }
+
+  async function bulk(rows: Row[], entries: E[]) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueCandidateLines(enqueue, entries)
+    enqueue({ data: [] }) // none linked
+    if (rows.some((r) => parseAgiPeriod(r.transaktionstext))) enqueue({ data: [] }) // agi_declarations
+    enqueueCancellationRead(enqueue, entries)
+    return findMatchSuggestionsBulk(supabase as never, COMPANY, rows)
+  }
+
+  async function candidatesFor(probe: Row, dayRows: Row[], entries: E[]) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...probe, company_id: COMPANY, status: 'booked' } })
+    enqueueCandidateLines(enqueue, entries)
+    enqueue({ data: [] }) // none linked
+    if (parseAgiPeriod(probe.transaktionstext)) enqueue({ data: [] }) // agi_declarations
+    enqueue({ data: dayRows }) // the day's open rows
+    enqueueCancellationRead(enqueue, entries)
+    return (await findMatchCandidates(supabase as never, COMPANY, probe.id)).candidates
+  }
+
+  const companions = (c?: SkattekontoMatchCandidate) => (c?.combined_with ?? []).map((o) => o.id).sort()
+
+  it('proposes the net voucher for an inbetalning and the debits it paid', async () => {
+    const result = await bulk([PAY, TAX, FEE], [NET])
+
+    for (const r of [PAY, TAX, FEE]) expect(result.get(r.id)?.journal_entry_id).toBe('net')
+    expect(companions(result.get('tax'))).toEqual(['fee', 'pay'])
+    expect(result.get('pay')?.combined_total).toBe(7775)
+  })
+
+  it('settles only the exact net, on its side', async () => {
+    const slut = row('slut', '2026-06-08', 'Slutlig skatt', -61234.56)
+    const till = row('till', '2026-06-08', 'Tillgodoförd debiterad preliminärskatt', 58000)
+    const voucher = (lines: E['lines']): E => ({ id: 'v', voucher: 90, date: '2026-06-08', lines })
+
+    const credit = await bulk([slut, till], [voucher([['1630', 0, 3234.56], ['2512', 61234.56, 0], ['2518', 0, 58000]])])
+    expect(credit.get('slut')).toMatchObject({ journal_entry_id: 'v', combined_total: 3234.56 })
+    expect(credit.get('till')?.journal_entry_id).toBe('v')
+
+    expect((await bulk([slut, till], [voucher([['1630', 3234.56, 0], ['2512', 0, 3234.56]])])).size).toBe(0)
+    expect((await bulk([slut, till], [voucher([['1630', 0, 3234.55], ['2512', 3234.55, 0]])])).size).toBe(0)
+  })
+
+  it('lists the net voucher in the match dialog and as every row\'s ledger twin', async () => {
+    const candidates = await candidatesFor(TAX, [PAY, TAX, FEE], [NET])
+    expect(candidates.map((c) => c.journal_entry_id)).toEqual(['net'])
+    expect(companions(candidates[0])).toEqual(['fee', 'pay'])
+    expect(candidates[0].combined_total).toBe(7775)
+
+    // The booking guard's batch search: booking any of the three would put
+    // the event on 1630 a second time.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueCandidateLines(enqueue, [NET])
+    enqueue({ data: [] }) // none linked
+    enqueue({ data: [] }) // agi_declarations
+    enqueue({ data: [PAY, TAX, FEE] })
+    enqueueCancellationRead(enqueue, [NET])
+    const twins = await findLedgerTwinCandidates(supabase as never, COMPANY, [PAY, TAX, FEE])
+    expect(companions(twins.get('pay')?.[0])).toEqual(['fee', 'tax'])
+    expect(companions(twins.get('fee')?.[0])).toEqual(['pay', 'tax'])
+  })
+
+  it('never lets a part that nets to zero join the group', async () => {
+    const day = [PART_PAY, TAX, FEE_OUT, FEE_BACK]
+
+    const result = await bulk(day, [PART_NET])
+    expect(result.get('part-pay')?.journal_entry_id).toBe('part-net')
+    expect(companions(result.get('part-pay'))).toEqual(['tax'])
+    expect(result.has('avgift')).toBe(false)
+    expect(result.has('beslut')).toBe(false)
+
+    expect(companions((await candidatesFor(TAX, day, [PART_NET]))[0])).toEqual(['part-pay'])
+    expect(await candidatesFor(FEE_OUT, day, [PART_NET])).toEqual([])
+  })
+
+  it('keeps a same-sign group first and leaves the day\'s zero-sum pair unproposed', async () => {
+    const agi: E = { id: 'agi', voucher: 302, date: DAY, lines: [['1630', 0, 12225], ['2710', 4521, 0], ['2731', 7704, 0]] }
+    const paid = row('paid', DAY, 'Inbetalning bokförd 260811', 10000)
+    const prel = row('prel', DAY, 'Debiterad preliminärskatt', -10000)
+
+    const result = await bulk([TAX, FEE, paid, prel], [agi])
+
+    expect(result.get('tax')?.journal_entry_id).toBe('agi')
+    expect(companions(result.get('tax'))).toEqual(['fee'])
+    expect(result.has('paid')).toBe(false)
+    expect(result.has('prel')).toBe(false)
+  })
+
+  it('proposes nothing when two groups of the day share a row (one inbetalning, one bank payment per debit)', async () => {
+    const day = [SPLIT, DEBIT_A, DEBIT_B]
+
+    expect((await bulk(day, [PAYMENT_A, PAYMENT_B])).size).toBe(0)
+    expect(await candidatesFor(DEBIT_A, day, [PAYMENT_A, PAYMENT_B])).toEqual([])
+    expect(await candidatesFor(SPLIT, day, [PAYMENT_A, PAYMENT_B])).toEqual([])
+  })
+
+  it('keeps a row that settles a verifikat on its own out of every net group', async () => {
+    // Two bank-payment vouchers carry the inbetalning alone: ambiguous, so it
+    // gets no proposal, but it is booked separately and not part of NET.
+    const bank1: E = { id: 'bank-1', voucher: 306, date: DAY, lines: [['1630', 20000, 0], ['1930', 0, 20000]] }
+    const bank2: E = { ...bank1, id: 'bank-2', voucher: 307, date: '2026-08-13' }
+
+    expect((await bulk([PAY, TAX, FEE], [NET, bank1, bank2])).size).toBe(0)
+    expect(await candidatesFor(TAX, [PAY, TAX, FEE], [NET, bank1, bank2])).toEqual([])
+  })
+
+  it('links the whole mixed group to the net voucher in one guarded update, and refuses the other side', async () => {
+    const rows = [TAX, FEE, PAY].map((r) => ({ id: r.id, belopp_skatteverket: r.belopp_skatteverket, journal_entry_id: null, is_ignored: false, status: 'booked' }))
+    const entry = (debit: number, credit: number) => ({ id: 'net', status: 'posted', lines: [{ account_number: '1630', debit_amount: debit, credit_amount: credit }] })
+
+    const ok = createQueuedMockSupabase()
+    ok.enqueue({ data: rows })
+    ok.enqueue({ data: entry(7775, 0) })
+    ok.enqueue({ data: [] })
+    ok.enqueue({ data: rows.map(({ id }) => ({ id })) })
+    await expect(matchSkattekontoToEntry(ok.supabase as never, COMPANY, 'tax', 'net', ['fee', 'pay'])).resolves.toBeUndefined()
+    expect(ok.findCalls('skattekonto_transactions', 'update')).toHaveLength(1)
+
+    const wrongSide = createQueuedMockSupabase()
+    wrongSide.enqueue({ data: rows })
+    wrongSide.enqueue({ data: entry(0, 7775) })
+    wrongSide.enqueue({ data: [] })
+    await expect(matchSkattekontoToEntry(wrongSide.supabase as never, COMPANY, 'tax', 'net', ['fee', 'pay'])).rejects.toMatchObject({
+      code: 'INVALID_CANDIDATE',
+    })
+  })
+})
+
+/**
+ * crm#1147: an imported payroll voucher books the bank payment into the
+ * skattekonto and the debitering it paid in ONE voucher (1630 debit and
+ * credit, net 0), while Skatteverket posts the debitering as two rows
+ * (avdragen skatt + arbetsgivaravgift). "Matcha mot verifikat" on one of the
+ * two rows found nothing when the rows had different dates, or when the
+ * payment row was already linked to the voucher. Amounts are made up.
+ */
+describe('crm#1147: one row of a group, searched from the single-row dialog', () => {
+  type Row = {
+    id: string
+    transaktionsdatum: string
+    transaktionstext: string
+    belopp_skatteverket: number
+    journal_entry_id: null
+  }
+  const row = (id: string, date: string, text: string, belopp: number): Row => ({
+    id,
+    transaktionsdatum: date,
+    transaktionstext: text,
+    belopp_skatteverket: belopp,
+    journal_entry_id: null,
+  })
+
+  const TAX = row('tax', '2026-09-14', 'Avdragen skatt augusti 2026', -4521)
+  const FEE = row('fee', '2026-09-14', 'Arbetsgivaravgift augusti 2026', -7704)
+  /** The same event posted two days later than the tax row. */
+  const FEE_LATER = { ...FEE, transaktionsdatum: '2026-09-16' }
+  /** Payment into the skattekonto and the debitering it paid: 1630 nets to 0. */
+  const PAYROLL: E = {
+    id: 'payroll',
+    voucher: 412,
+    date: '2026-09-14',
+    lines: [['1630', 12225, 0], ['1630', 0, 12225], ['1930', 0, 12225], ['2710', 4521, 0], ['2731', 7704, 0]],
+  }
+  const PAYMENT_LINKED = [{ journal_entry_id: 'payroll', belopp_skatteverket: 12225 }]
+
+  async function candidatesFor(
+    probe: Row,
+    openRows: Row[],
+    entries: E[],
+    linked: Array<{ journal_entry_id: string; belopp_skatteverket: number }> = [],
+  ) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...probe, company_id: COMPANY, status: 'booked' } })
+    enqueueCandidateLines(enqueue, entries)
+    enqueue({ data: linked })
+    if (parseAgiPeriod(probe.transaktionstext)) enqueue({ data: [] }) // agi_declarations
+    enqueue({ data: openRows }) // open rows around the probe
+    enqueueCancellationRead(enqueue, entries)
+    return (await findMatchCandidates(supabase as never, COMPANY, probe.id)).candidates
+  }
+
+  const companions = (c?: SkattekontoMatchCandidate) => (c?.combined_with ?? []).map((o) => o.id).sort()
+
+  it('finds the voucher from either row when the two rows have different dates', async () => {
+    const fromTax = await candidatesFor(TAX, [TAX, FEE_LATER], [PAYROLL])
+    expect(fromTax.map((c) => c.journal_entry_id)).toEqual(['payroll'])
+    expect(companions(fromTax[0])).toEqual(['fee'])
+    expect(fromTax[0].combined_with?.[0].transaktionsdatum).toBe('2026-09-16')
+    expect(fromTax[0].combined_total).toBe(12225)
+    expect(fromTax[0].joins_linked_count).toBeUndefined()
+
+    const fromFee = await candidatesFor(FEE_LATER, [TAX, FEE_LATER], [PAYROLL])
+    expect(fromFee.map((c) => c.journal_entry_id)).toEqual(['payroll'])
+    expect(companions(fromFee[0])).toEqual(['tax'])
+  })
+
+  it('finds the voucher when the payment row is already linked to it', async () => {
+    const candidates = await candidatesFor(TAX, [TAX, FEE], [PAYROLL], PAYMENT_LINKED)
+    expect(candidates.map((c) => c.journal_entry_id)).toEqual(['payroll'])
+    expect(companions(candidates[0])).toEqual(['fee'])
+    expect(candidates[0]).toMatchObject({ combined_total: 12225, joins_linked_count: 1 })
+  })
+
+  it('finds it with both at once: the payment linked and the rows on different dates', async () => {
+    const candidates = await candidatesFor(FEE_LATER, [TAX, FEE_LATER], [PAYROLL], PAYMENT_LINKED)
+    expect(candidates.map((c) => c.journal_entry_id)).toEqual(['payroll'])
+    expect(companions(candidates[0])).toEqual(['tax'])
+    expect(candidates[0].joins_linked_count).toBe(1)
+  })
+
+  it('still requires the sum to the öre: one öre off is no match, linked or not', async () => {
+    const offByOne = { ...FEE_LATER, belopp_skatteverket: -7704.01 }
+    expect(await candidatesFor(TAX, [TAX, offByOne], [PAYROLL])).toEqual([])
+    expect(await candidatesFor(TAX, [TAX, offByOne], [PAYROLL], PAYMENT_LINKED)).toEqual([])
+    // The right amounts on the wrong side of 1630 are no match either.
+    const wrongSide: E = { ...PAYROLL, lines: [['1630', 12225, 0], ['1930', 0, 12225]] }
+    expect(await candidatesFor(TAX, [TAX, FEE_LATER], [wrongSide])).toEqual([])
+  })
+
+  it('never reaches for a row more than 14 days from the one searched', async () => {
+    const farFee = { ...FEE, transaktionsdatum: '2026-09-29' }
+    expect(await candidatesFor(TAX, [TAX, farFee], [PAYROLL])).toEqual([])
+  })
+
+  it('reads the open rows of the 14 days around the searched row, settled and unlinked only', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { ...TAX, company_id: COMPANY, status: 'booked' } })
+    enqueueCandidateLines(enqueue, [PAYROLL])
+    enqueue({ data: [] }) // none linked
+    enqueue({ data: [] }) // agi_declarations
+    enqueue({ data: [TAX, FEE_LATER] })
+    enqueueCancellationRead(enqueue, [PAYROLL])
+
+    await findMatchCandidates(supabase as never, COMPANY, 'tax')
+
+    expect(findCalls('skattekonto_transactions', 'gte')).toEqual([['transaktionsdatum', '2026-08-31']])
+    expect(findCalls('skattekonto_transactions', 'lte')).toEqual([['transaktionsdatum', '2026-09-28']])
+    expect(findCalls('skattekonto_transactions', 'eq')).toContainEqual(['status', 'booked'])
+    expect(findCalls('skattekonto_transactions', 'eq')).toContainEqual(['is_ignored', false])
+    // The verifikat read covers what a group with such a row can reach: back
+    // to the row's AGI month, and 14 days past a row 14 days later.
+    expect(findCalls('journal_entries', 'gte')[0]).toEqual(['entry_date', '2026-08-01'])
+    expect(findCalls('journal_entries', 'lte')[0]).toEqual(['entry_date', '2026-10-12'])
+  })
+
+  it('gives both rows the same answer when the voucher lies more than 14 days from one of them', async () => {
+    // 2026-10-02 is 7 days after the later row and 18 days after the tax
+    // row: inside the pair's window (14 days after its latest row), which is
+    // the window a ticked selection of the two rows gets.
+    const late: E = { ...PAYROLL, date: '2026-10-02' }
+    const feeLate = { ...FEE, transaktionsdatum: '2026-09-25', transaktionstext: 'Debiterad avgift' }
+    const taxPlain = { ...TAX, transaktionstext: 'Debiterad skatt' }
+    for (const probe of [taxPlain, feeLate]) {
+      const candidates = await candidatesFor(probe, [taxPlain, feeLate], [late])
+      expect(candidates.map((c) => c.journal_entry_id)).toEqual(['payroll'])
+      expect(candidates[0].combined_total).toBe(12225)
+    }
+    // Alone, neither row reaches further than 14 days: a voucher carrying
+    // the tax row's own amount 18 days later is no candidate for it.
+    const lateAlone: E = { id: 'late-alone', voucher: 413, date: '2026-10-02', lines: [['1630', 0, 4521], ['2710', 4521, 0]] }
+    expect(await candidatesFor(taxPlain, [taxPlain], [lateAlone])).toEqual([])
+  })
+
+  it('never takes a voucher outside the group\'s window', async () => {
+    // 15 days after the later row: outside what a ticked selection gets too.
+    const tooLate: E = { ...PAYROLL, date: '2026-10-10' }
+    const feeLate = { ...FEE, transaktionsdatum: '2026-09-25', transaktionstext: 'Debiterad avgift' }
+    const taxPlain = { ...TAX, transaktionstext: 'Debiterad skatt' }
+    expect(await candidatesFor(taxPlain, [taxPlain, feeLate], [tooLate])).toEqual([])
+    expect(await candidatesFor(feeLate, [taxPlain, feeLate], [tooLate])).toEqual([])
+  })
+
+  it('never mistakes this month\'s rows for a fully linked voucher of the same amounts', async () => {
+    // Fixed salaries: last month's voucher carries the same amounts, and its
+    // payment, tax and fee rows are all linked. Their sum plus this month's
+    // rows equals its 1630 credit line, but the voucher has nothing left for them.
+    const fullyLinked = [
+      ...PAYMENT_LINKED,
+      { journal_entry_id: 'payroll', belopp_skatteverket: -4521 },
+      { journal_entry_id: 'payroll', belopp_skatteverket: -7704 },
+    ]
+    expect(await candidatesFor(TAX, [TAX, FEE], [PAYROLL], fullyLinked)).toEqual([])
+    expect(await candidatesFor(TAX, [TAX, FEE_LATER], [PAYROLL], fullyLinked)).toEqual([])
+  })
+
+  it('prefers the day\'s own group over one that borrows a row from another day', async () => {
+    const sameDayFee = row('fee-same-day', '2026-09-14', 'Arbetsgivaravgift augusti 2026', -7704)
+    const candidates = await candidatesFor(TAX, [FEE_LATER, TAX, sameDayFee], [PAYROLL])
+    expect(candidates).toHaveLength(1)
+    expect(companions(candidates[0])).toEqual(['fee-same-day'])
+  })
+
+  it('takes the nearest other day first, so the answer does not depend on row order', async () => {
+    const feeNear = row('fee-near', '2026-09-15', 'Arbetsgivaravgift augusti 2026', -7704)
+    const feeFar = row('fee-far', '2026-09-10', 'Arbetsgivaravgift augusti 2026', -7704)
+    for (const open of [[TAX, feeFar, feeNear], [feeNear, feeFar, TAX]]) {
+      const candidates = await candidatesFor(TAX, open, [PAYROLL])
+      expect(candidates).toHaveLength(1)
+      expect(companions(candidates[0])).toEqual(['fee-near'])
+    }
+  })
+
+  it('is the booking guard\'s answer too: booking either row would put the debitering on 1630 twice', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueCandidateLines(enqueue, [PAYROLL])
+    enqueue({ data: PAYMENT_LINKED })
+    enqueue({ data: [] }) // agi_declarations
+    enqueue({ data: [TAX, FEE_LATER] })
+    enqueueCancellationRead(enqueue, [PAYROLL])
+
+    const twins = await findLedgerTwinCandidates(supabase as never, COMPANY, [TAX, FEE_LATER])
+    expect(companions(twins.get('tax')?.[0])).toEqual(['fee'])
+    expect(companions(twins.get('fee')?.[0])).toEqual(['tax'])
+  })
+
+  it('links the two rows to the voucher that already carries the payment', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [TAX, FEE_LATER].map((r) => ({ id: r.id, belopp_skatteverket: r.belopp_skatteverket, journal_entry_id: null, is_ignored: false, status: 'booked' })),
+    })
+    enqueue({ data: { id: 'payroll', status: 'posted', lines: PAYROLL.lines.map(([account_number, debit_amount, credit_amount]) => ({ account_number, debit_amount, credit_amount })) } })
+    enqueue({ data: [{ id: 'payment', belopp_skatteverket: 12225 }] }) // already linked
+    enqueue({ data: [{ id: 'tax' }, { id: 'fee' }] })
+
+    await expect(matchSkattekontoToEntry(supabase as never, COMPANY, 'tax', 'payroll', ['fee'])).resolves.toBeUndefined()
+    expect(findCalls('skattekonto_transactions', 'update')).toHaveLength(1)
+  })
+})
+
+describe('groupMatchWindow', () => {
+  it('is combinedMatchWindow for rows of one day', () => {
+    const rows = [
+      { transaktionsdatum: '2026-06-12', transaktionstext: 'Avdragen skatt maj 2026' },
+      { transaktionsdatum: '2026-06-12', transaktionstext: 'Arbetsgivaravgift maj 2026' },
+    ]
+    expect(groupMatchWindow(rows)).toEqual(combinedMatchWindow('2026-06-12', rows))
+  })
+
+  it('runs from 14 days before the earliest row to 14 days after the latest', () => {
+    expect(
+      groupMatchWindow([
+        { transaktionsdatum: '2026-09-16', transaktionstext: 'Debiterad avgift' },
+        { transaktionsdatum: '2026-09-14', transaktionstext: 'Debiterad skatt' },
+      ]),
+    ).toEqual({ from: '2026-08-31', to: '2026-09-30' })
+  })
+
+  it('reaches back to the declaration month every row names', () => {
+    expect(
+      groupMatchWindow([
+        { transaktionsdatum: '2026-09-14', transaktionstext: 'Avdragen skatt augusti 2026' },
+        { transaktionsdatum: '2026-09-16', transaktionstext: 'Arbetsgivaravgift augusti 2026' },
+      ]),
+    ).toEqual({ from: '2026-08-01', to: '2026-09-30' })
   })
 })

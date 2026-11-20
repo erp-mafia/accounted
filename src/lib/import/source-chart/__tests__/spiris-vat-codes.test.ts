@@ -104,17 +104,18 @@ describe('spirisVatTreatment', () => {
 
 describe('spirisVatTreatment: the code must file where the source said', () => {
   // Omvänd skattskyldighet inom Sverige is the one treatment whose ruta comes
-  // from the account NUMBER rather than from itself: 4415-4417 varor file ruta
-  // 23, 4425-4427 tjänster file ruta 24, and everything else falls to the
-  // goods branch. A Spiris "24" on any other class 4 account therefore filed a
-  // service purchase as goods, and did it silently, because the code HAD
-  // translated and so the row never reached the review list.
+  // from the account NUMBER rather than from itself: 4410/4415-4417 varor file
+  // ruta 23, 4420/4425-4427 tjänster file ruta 24, and everything else falls
+  // to the goods branch. A Spiris "24" on any other class 4 account therefore
+  // filed a service purchase as goods, and did it silently, because the code
+  // HAD translated and so the row never reached the review list.
 
-  it('translates 23 and 24 on the six accounts whose number carries the split', () => {
-    for (const account of ['4415', '4416', '4417']) {
+  it('translates 23 and 24 on the eight accounts whose number carries the split', () => {
+    for (const account of ['4410', '4415', '4416', '4417']) {
       expect(spirisVatTreatment('23-25%', account)).toBe('reverse_charge_domestic')
     }
-    for (const account of ['4425', '4426', '4427']) {
+    // 4420 is BAS tjänster without a stated sats (crm#1754).
+    for (const account of ['4420', '4425', '4426', '4427']) {
       expect(spirisVatTreatment('24-25%', account)).toBe('reverse_charge_domestic')
     }
   })
@@ -130,6 +131,7 @@ describe('spirisVatTreatment: the code must file where the source said', () => {
 
   it('refuses 23 on an account the resolver would read as tjänster', () => {
     expect(spirisVatTreatment('23-25%', '4425')).toBeNull()
+    expect(spirisVatTreatment('23-25%', '4420')).toBeNull()
     // Classes 5 and 6 never take the varor branch, so a goods code there is
     // exactly as unreadable.
     expect(spirisVatTreatment('23-25%', '5010')).toBeNull()
@@ -148,7 +150,7 @@ describe('spirisVatTreatment: the code must file where the source said', () => {
     // covered without anyone remembering to extend a fixture.
     const accounts = [
       '3051', '3110', '3231', '3910', '3058', '3107', '3105', '3308', '3305', '3401', '3004',
-      '4415', '4416', '4417', '4425', '4426', '4427', '4400', '4429', '4512', '4515', '4535',
+      '4410', '4415', '4416', '4417', '4420', '4425', '4426', '4427', '4400', '4429', '4512', '4515', '4535',
       '4531', '4545', '5010', '6010',
     ]
     const rates = ['-25%', '-12%', '-6%', '-0%', '']

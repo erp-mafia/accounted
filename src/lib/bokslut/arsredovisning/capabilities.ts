@@ -1,6 +1,12 @@
 import { flagEnabled } from '@/lib/env/public-flags'
-import { isEntityType, preparesArsredovisning, supportsIxbrl } from '@/lib/company/entity-type'
+import { k3IxbrlEnabled } from '@/lib/bokslut/ixbrl/k3-release'
+import {
+  isEntityType,
+  preparesArsredovisning,
+  supportsIxbrl,
+} from '@/lib/company/entity-type'
 import type { AnnualReportEligibilityResult, AnnualReportFramework } from './compliance-types'
+import { k3ArsredovisningReleasedFor, k3DocumentCoversForm } from './k3-release'
 
 export interface AnnualReportCapabilities {
   paper: {
@@ -43,17 +49,27 @@ export function getAnnualReportCapabilities(
   // A form the product prepares but no Bolagsverket taxonomy covers (an
   // ekonomisk förening) files the PDF package on paper.
   const formHasTaxonomy = formPrepared && supportsIxbrl(entityType)
-  const ixbrlEnabled = formHasTaxonomy && framework === 'k2'
+  // K3 joins only behind its own default-off flag (NEXT_PUBLIC_K3_IXBRL_ENABLED,
+  // lib/bokslut/ixbrl/k3-release.ts), on top of the release gate below.
+  const frameworkHasDocument = framework === 'k2' || (framework === 'k3' && k3IxbrlEnabled())
+  const ixbrlEnabled = formHasTaxonomy && frameworkHasDocument
   const eligible = eligibility?.digital_filing_eligible ?? false
+  // K3 goes on paper once its release flag is on, and only for the form its
+  // document is built for, the aktiebolag (k3-release.ts): a
+  // bostadsrättsförening's or ekonomisk förening's K3 document is not finished.
+  const k3FormSupported = formPrepared && k3DocumentCoversForm(entityType)
+  const paperEnabled = formPrepared && (framework === 'k2' || k3ArsredovisningReleasedFor(entityType))
   return {
     paper: {
-      enabled: formPrepared && framework === 'k2',
+      enabled: paperEnabled,
       delivery: 'post',
       reason: !formPrepared
         ? FORM_NOT_PREPARED_REASON
-        : framework === 'k2'
+        : paperEnabled
           ? null
-          : 'K3-dokumentet är endast ett granskningsutkast tills hela upplysningsmatrisen är implementerad och granskad.',
+          : !k3FormSupported
+            ? 'Accounteds K3-dokument stöder ännu inte den här företagsformen.'
+            : 'K3-dokumentet är ett granskningsutkast tills det har granskats av en redovisningskonsult och K3 har släppts i Accounted.',
     },
     ixbrl_preview: {
       enabled: ixbrlEnabled,
@@ -62,8 +78,8 @@ export function getAnnualReportCapabilities(
         : ixbrlEnabled
           ? null
           : !formHasTaxonomy
-            ? 'iXBRL-generering stöds ännu endast för aktiebolag (K2-taxonomin täcker inte den här företagsformen).'
-            : 'iXBRL-generering stöds ännu endast för K2.',
+            ? 'iXBRL-generering stöds ännu endast för aktiebolag (taxonomin täcker inte den här företagsformen).'
+            : 'Accounted skapar ännu inget iXBRL-dokument för K3-årsredovisningar.',
     },
     connected_filing: {
       enabled: releaseGateOpen && ixbrlEnabled && eligible,
@@ -75,7 +91,7 @@ export function getAnnualReportCapabilities(
           : !ixbrlEnabled
             ? !formHasTaxonomy
               ? 'Direktinlämning stöds ännu endast för aktiebolag.'
-              : 'Direktinlämning stöds ännu endast för K2.'
+              : 'Direktinlämning av K3-årsredovisningar är ännu inte öppnad.'
             : !eligible
               ? 'Årsredovisningen uppfyller inte alla behörighets- och fullständighetskrav.'
               : null,

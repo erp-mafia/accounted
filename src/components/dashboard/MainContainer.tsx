@@ -5,6 +5,19 @@ import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { SIEImportHoldBanner } from '@/components/import/SIEImportHoldBanner'
 import { isFullBleedEditorPath } from '@/lib/invoices/editor/new-editor-params'
+import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
+import { AGENT_FAB_CLEARANCE_CLASS } from '@/components/ui/fab-clearance'
+import { cn } from '@/lib/utils'
+
+/**
+ * The padded canvas (product decision 2026-09-07, PR #2390): no max-width,
+ * 24px side padding, and PageHeader restyled into the panel's top bar by the
+ * .page-header rules in globals.css. The 16px top padding is what the sticky
+ * top bar pulls itself back over (negative margin), so the numbers must stay
+ * in step with the CSS. A full-bleed route that shows a plain page (the
+ * extension shell) applies it itself.
+ */
+export const PADDED_CANVAS_CLASS = 'px-4 pb-8 pt-4 md:px-6'
 
 /**
  * Picks the dashboard chrome container based on route. Extension workspaces
@@ -26,6 +39,9 @@ export function MainContainer({
   children: ReactNode
 }) {
   const pathname = usePathname()
+  // The invoicing-only role never reaches the import: no banner, so no poll
+  // of the SIE holds the server refuses every time (for #206).
+  const holdCompanyId = useIsInvoicer() ? null : companyId
 
   // The panel (<main>) is its own scroll container on desktop, so Next's
   // built-in scroll-to-top on navigation (which targets the window) never
@@ -47,20 +63,17 @@ export function MainContainer({
   if (isFullBleed) {
     return (
       <div key={companyId ?? ''} className="h-full">
-        <SIEImportHoldBanner companyId={companyId} />
+        <SIEImportHoldBanner companyId={holdCompanyId} />
         {children}
       </div>
     )
   }
 
-  // The panel is the canvas (founder decision 2026-09-07, PR #2390): no
-  // max-width, 24px side padding, and PageHeader restyled into the panel's
-  // top bar by the .page-header rules in globals.css. The 16px top padding
-  // is what the sticky top bar pulls itself back over (negative margin), so
-  // the two numbers must stay in step with the CSS.
+  // While the floating assistant button is on screen the bottom padding
+  // grows, so the last row of a page scrolls clear of the button (crm#1841).
   return (
-    <div key={companyId ?? ''} className="px-4 pb-8 pt-4 md:px-6">
-      <SIEImportHoldBanner companyId={companyId} />
+    <div key={companyId ?? ''} className={cn(PADDED_CANVAS_CLASS, AGENT_FAB_CLEARANCE_CLASS)}>
+      <SIEImportHoldBanner companyId={holdCompanyId} />
       {children}
     </div>
   )

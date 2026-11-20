@@ -4,6 +4,7 @@ import {
   creditNoteNumber,
   creditNoteOriginalReference,
 } from '@/lib/invoices/build-credit-note'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { makeInvoice } from '@/tests/helpers'
 
 describe('creditNoteOriginalReference', () => {
@@ -78,5 +79,26 @@ describe('buildCreditNoteFields', () => {
       .toBe('Fel antal timmar.')
     expect(buildCreditNoteFields(original, { originalReference: '1043', reason: null, today: '2026-10-05' }).notes)
       .toBe('Krediterar faktura 1043')
+  })
+
+  // crm#1480: the credit note left ore_rounding out, so it inherited the
+  // company setting while the original kept its own choice.
+  it("carries the original's own öresavrundning choice, so both print the same amount", () => {
+    const unrounded = { ...original, currency: 'SEK' as const, total: 4.38, ore_rounding: false }
+    const fields = buildCreditNoteFields(unrounded, { originalReference: '1043', today: '2026-10-05' })
+    expect(fields.ore_rounding).toBe(false)
+    // Company on, invoice off: the credit note prints -4,38, as the invoice printed 4,38.
+    expect(getAmountToPay(fields, { ore_rounding: true }).toPay).toBe(-4.38)
+
+    const rounded = { ...original, currency: 'SEK' as const, total: 4.38, ore_rounding: true }
+    const roundedFields = buildCreditNoteFields(rounded, { originalReference: '1043', today: '2026-10-05' })
+    expect(roundedFields.ore_rounding).toBe(true)
+    // Company off, invoice on: -4,00, never more than the invoice asked for.
+    expect(getAmountToPay(roundedFields, { ore_rounding: false }).toPay).toBe(-4)
+  })
+
+  it('leaves an original without its own choice without one', () => {
+    const inherited = { ...original, ore_rounding: null }
+    expect(buildCreditNoteFields(inherited, { originalReference: '1043', today: '2026-10-05' }).ore_rounding).toBeNull()
   })
 })

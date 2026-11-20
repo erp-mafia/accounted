@@ -31,6 +31,9 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/vat/filing-record-store', () => store)
 
+const changes = vi.hoisted(() => ({ listVatFilingsWithChanges: vi.fn() }))
+vi.mock('@/lib/vat/filed-period-changes', () => changes)
+
 import { GET as getRoute, POST as postRoute, DELETE as deleteRoute } from '../route'
 
 // A static route still receives Next's route context as its second argument.
@@ -90,14 +93,32 @@ describe('GET /api/reports/vat-declaration/filings', () => {
     expect(res.status).toBe(401)
   })
 
-  it('returns the filing records', async () => {
+  it('returns the filing records with what changed each period after it was filed', async () => {
     auth()
-    store.listVatFilings.mockResolvedValue([RECORD])
+    const changed = {
+      ...YEARLY_RECORD,
+      changed_after_filing: {
+        changed_after: '2026-08-20T21:59:59Z',
+        rutor_change: { ruta48: 162, ruta49: -162 },
+        verifikat: [
+          {
+            journal_entry_id: '22222222-2222-4222-8222-222222222222',
+            voucher: 'A18',
+            entry_date: '2026-04-25',
+            changed_at: '2026-09-24T23:19:00Z',
+            kind: 'posted',
+            rutor_change: { ruta48: 162, ruta49: -162 },
+          },
+        ],
+      },
+    }
+    changes.listVatFilingsWithChanges.mockResolvedValue([changed, { ...RECORD, changed_after_filing: null }])
     const res = await GET(createMockRequest('/api/reports/vat-declaration/filings'))
     const { status, body } = await parseJsonResponse<{ data: unknown[] }>(res)
     expect(status).toBe(200)
-    expect(body.data).toEqual([RECORD])
-    expect(store.listVatFilings).toHaveBeenCalledWith({}, 'company-1')
+    expect(body.data).toEqual([changed, { ...RECORD, changed_after_filing: null }])
+    expect(changes.listVatFilingsWithChanges).toHaveBeenCalledWith({}, 'company-1')
+    expect(store.listVatFilings).not.toHaveBeenCalled()
   })
 })
 

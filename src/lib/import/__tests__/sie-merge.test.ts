@@ -16,7 +16,7 @@ function sieYear(opts: {
   vouchers?: string[][]
   extra?: string[]
 }): string {
-  const { year, companyName = 'One Punkt Com AB', konto = [], vouchers = [], extra = [] } = opts
+  const { year, companyName = 'Exempel Punkt Com AB', konto = [], vouchers = [], extra = [] } = opts
   return [
     '#FLAGGA 0',
     '#SIETYP 4',
@@ -85,7 +85,7 @@ describe('mergeParsedSIEFiles', () => {
     // Accounts are a union across files.
     expect(merged.accounts.map((a) => a.number).sort()).toEqual(['1930', '2641', '3041', '4010'])
     expect(merged.stats.totalAccounts).toBe(4)
-    expect(merged.header.companyName).toBe('One Punkt Com AB')
+    expect(merged.header.companyName).toBe('Exempel Punkt Com AB')
     expect(merged.header.orgNumber).toBe('5566778899')
   })
 
@@ -150,11 +150,11 @@ describe('mergeParsedSIEFiles', () => {
 
   it('keeps the most common non-empty company name and concatenates issues', () => {
     const a = parseSIEFile(sieYear({ year: 2024, companyName: 'Gamla Namnet AB' }))
-    const b = parseSIEFile(sieYear({ year: 2025, companyName: 'One Punkt Com AB' }))
-    const c = parseSIEFile(sieYear({ year: 2026, companyName: 'One Punkt Com AB' }))
+    const b = parseSIEFile(sieYear({ year: 2025, companyName: 'Exempel Punkt Com AB' }))
+    const c = parseSIEFile(sieYear({ year: 2026, companyName: 'Exempel Punkt Com AB' }))
 
     const merged = mergeParsedSIEFiles([a, b, c])
-    expect(merged.header.companyName).toBe('One Punkt Com AB')
+    expect(merged.header.companyName).toBe('Exempel Punkt Com AB')
     expect(merged.issues).toEqual([...a.issues, ...b.issues, ...c.issues])
   })
 

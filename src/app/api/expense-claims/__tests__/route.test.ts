@@ -160,6 +160,43 @@ describe('/api/expense-claims', () => {
     expect(registerMock).not.toHaveBeenCalled()
   })
 
+  it('POST hands reverse_charge to the service for a receipt from abroad without VAT (crm#1028)', async () => {
+    const response = await POST(
+      post({ ...validClaim, vat_amount: 0, currency: 'USD', reverse_charge: 'non_eu_services' }),
+      {} as never,
+    )
+
+    expect(response.status).toBe(201)
+    expect(registerMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ reverse_charge: 'non_eu_services', vat_amount: 0, currency: 'USD' }),
+    )
+  })
+
+  it.each([
+    ['with VAT on the receipt', { vat_amount: 100 }, 'vat_amount'],
+    [
+      'beside custom lines',
+      {
+        vat_amount: 0,
+        lines: [
+          { account_number: '5410', debit_amount: 500, credit_amount: 0 },
+          { account_number: '2893', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+      'reverse_charge',
+    ],
+    ['of a kind an utlägg does not book', { vat_amount: 0, reverse_charge: 'domestic_services' }, 'reverse_charge'],
+  ])('POST rejects reverse_charge %s with a field-level 400', async (_case, extra, field) => {
+    const response = await POST(post({ ...validClaim, reverse_charge: 'eu_services', ...extra }), {} as never)
+    const { status, body } = await parseJsonResponse<{ errors: { field: string }[] }>(response)
+    expect(status).toBe(400)
+    expect(body.errors).toEqual(expect.arrayContaining([expect.objectContaining({ field })]))
+    expect(registerMock).not.toHaveBeenCalled()
+  })
+
   it('POST rejects a claim without employee or claimant name', async () => {
     const { claimant_name: _omitted, ...rest } = validClaim
     const response = await POST(post(rest), {} as never)

@@ -6,13 +6,15 @@
  */
 
 import * as crypto from 'crypto'
-import type { BankFileFormat, BankFileFormatId, BankFileParseResult, ParsedBankTransaction } from './types'
+import type { RawTransaction } from '@/types'
+import type { BankFileFormat, BankFileFormatId, BankFileParseIssue, BankFileParseResult, ParsedBankTransaction } from './types'
 
 // The format registry and detection live in ./formats (no Node imports) so
 // client components (BankFileImportHistory) can name a format without
 // pulling this module's `crypto` import into the browser bundle.
 import { detectFileFormat, getAllFormats, getFormat } from './formats'
 export { detectFileFormat, getAllFormats, getFormat } from './formats'
+import { headerLikeCells } from './columns'
 
 /**
  * Parse a bank file with auto-detection or explicit format
@@ -76,11 +78,16 @@ export function parseBankFile(
   } else {
     format = detectFileFormat(content, filename) || undefined
     if (!format) {
-      // Build diagnostic message listing which formats were tried
-      const tried = getAllFormats()
-        .filter(f => f.id !== 'generic_csv')
+      // Say what IS supported, so a user holding a camt.053 statement or a
+      // bank CSV knows the file, not the import, is the problem (crm#1160).
+      const csvFormats = getAllFormats()
+        .filter(f => f.id !== 'generic_csv' && f.id !== 'camt053')
         .map(f => f.name)
+      // Name the columns the file has (its most header-like row, past any
+      // heading rows above it); the raw first line only when it has none.
+      const found = headerLikeCells(content)
       const firstLine = content.split('\n')[0]?.substring(0, 80) || ''
+      const seen = found.length > 0 ? `Kolumner i filen: ${found.join(', ')}.` : `Första raden: "${firstLine}".`
       return {
         format: 'generic_csv',
         format_name: 'Unknown',
@@ -89,7 +96,7 @@ export function parseBankFile(
         date_to: null,
         issues: [{
           row: 0,
-          message: `Kunde inte identifiera bankformat. Testade: ${tried.join(', ')}. Första raden: "${firstLine}". Välj bank manuellt eller använd "Annan CSV".`,
+          message: `Kunde inte identifiera bankformatet. Stödda format: CSV- och Excel-exporter från ${csvFormats.join(', ')} samt kontoutdrag i ISO 20022 camt.053 (XML, oavsett filändelse). ${seen} En bankfil behöver minst en datumkolumn och en beloppskolumn. Välj bank manuellt eller använd "Annan CSV".`,
           severity: 'error',
         }],
         stats: { total_rows: 0, parsed_rows: 0, skipped_rows: 0, total_income: 0, total_expenses: 0 },
@@ -98,6 +105,16 @@ export function parseBankFile(
   }
 
   return format.parse(content)
+}
+
+/**
+ * The rows of a file its parser could not read, each a warning on its own row.
+ * A lost bank row is a hole in the books, so a door that imports the rest says
+ * which. A row left out on purpose (pending, preliminary) is no warning: the
+ * booked version arrives in a later statement.
+ */
+export function unreadRows(result: BankFileParseResult): BankFileParseIssue[] {
+  return result.issues.filter((issue) => issue.severity === 'warning' && issue.row > 0)
 }
 
 /**
@@ -133,6 +150,39 @@ export function generateExternalId(
   const composite = `${formatId}|${tx.date}|${tx.description}|${tx.amount}|${rowIndex}`
   const hash = crypto.createHash('sha256').update(composite).digest('hex').substring(0, 16)
   return `${formatId}_${hash}`
+}
+
+/**
+ * A parsed file row as the ingest contract takes it. The one mapping for the
+ * dashboard import and v1, so neither drops a field the parser read.
+ *
+ * `import_source` is load-bearing, not cosmetic: isImportedTransaction()
+ * reads it to keep imported rows ignore-only, and ingest's cross-channel and
+ * hand-entered dedup mirrors are gated on the batch being an import feed.
+ */
+export function toRawTransaction(
+  tx: ParsedBankTransaction,
+  formatId: BankFileFormatId,
+  rowIndex: number
+): RawTransaction {
+  return {
+    external_id: generateExternalId(tx, formatId, rowIndex),
+    date: tx.date,
+    description: tx.description,
+    amount: tx.amount,
+    currency: tx.currency || 'SEK',
+    reference: tx.reference || null,
+    merchant_name: tx.counterparty || null,
+    import_source: formatId === 'camt053' ? 'camt053' : `csv_${formatId}`,
+    value_date: tx.value_date || null,
+    end_to_end_id: tx.end_to_end_id || null,
+    provider_transaction_id: tx.provider_transaction_id || null,
+    counterparty_iban: tx.counterparty_iban || null,
+    bank_transaction_code: tx.bank_transaction_code || null,
+    // The file's running balance (Saldo / Bokfört saldo). Every parser reads
+    // it; without this line no bank-file row ever stored it (crm#1491).
+    balance_after: tx.balance ?? null,
+  }
 }
 
 /**

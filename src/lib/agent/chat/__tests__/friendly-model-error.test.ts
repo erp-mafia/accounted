@@ -15,7 +15,16 @@ describe('friendlyModelError', () => {
   })
 
   it('5xx → temporary service error', () => {
-    expect(friendlyModelError({ status: 503, message: 'Service Unavailable' })).toMatch(/tillfälligt fel/i)
+    expect(friendlyModelError({ status: 500, message: 'Internal Server Error' })).toMatch(/tillfälligt fel/i)
+  })
+
+  it('provider overload (overloaded_error event, 529, Bedrock 503) → honest overload line', () => {
+    const overloaded = 'Assistenten är överbelastad just nu, försök igen om en minut.'
+    expect(
+      friendlyModelError(new Error('{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')),
+    ).toBe(overloaded)
+    expect(friendlyModelError({ status: 529, message: 'Overloaded' })).toBe(overloaded)
+    expect(friendlyModelError({ status: 503, message: 'Bedrock is unable to process your request.' })).toBe(overloaded)
   })
 
   it('unknown error → generic Swedish line', () => {

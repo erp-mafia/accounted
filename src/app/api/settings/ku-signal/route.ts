@@ -1,35 +1,36 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-
 import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
-/**
- * Accounts whose postings indicate a kontrolluppgifter obligation:
- * 2898 outtagen vinstutdelning (KU31 on utdelning), 2393/2893 lån från
- * närstående (KU20 on interest paid to the owner). 2091 is deliberately NOT
- * a signal: every closed year moves balanserad vinst, so it would flag
- * nearly all aktiebolag.
- */
-const KU_SIGNAL_ACCOUNTS = ['2898', '2393', '2893']
-
-/** How far back to look for KU-relevant postings. */
-const LOOKBACK_MONTHS = 15
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import {
+  DIVIDEND_ACCOUNT,
+  isOwnerLoanInterestAccount,
+  kuSignalTriggers,
+  OWNER_LOAN_ACCOUNTS,
+  type KuSignalLine,
+} from '@/lib/tax/ku-signal'
 
 /**
  * GET /api/settings/ku-signal
  *
- * Derived suggestion signal for the tax settings page: an aktiebolag whose
- * ledger shows utdelning or ägarlån postings likely owes kontrolluppgifter
- * on 31 January (SFL 24 kap. 1 §), but KU31 is never covered by AGI so the
- * obligation is easy to miss. The settings UI uses this to prompt the user
- * to enable the KU deadline; it never flips the flag itself (mirrors the
- * EU-trade signal from the periodisk sammanställning suggestion).
+ * Derived suggestion signal for the tax settings page: an aktiebolag (or
+ * ekonomisk förening) whose ledger shows interest paid on a loan from the
+ * owner or utdelning owes kontrolluppgifter on 31 January (SFL 17 kap.,
+ * 24 kap. 1 §), and neither is covered by AGI, so the obligation is easy to
+ * miss. The rule and its sources live in lib/tax/ku-signal.ts. The answer
+ * names what triggered it (`triggers`), so the page can say which postings
+ * and amounts it means. A loan on 2393/2893 without interest is no signal: it
+ * used to be, and fired for every interest-free ägarlån (crm#1171).
+ *
+ * The window is the previous and the current calendar year: the inkomstår of
+ * the next kontrolluppgifter and the one being booked. The settings UI uses
+ * the signal to prompt the user to enable the KU deadline; it never flips
+ * the flag itself (mirrors the EU-trade signal).
  */
 export const GET = withRouteContext(
   'settings.ku_signal',
   async (_request, { supabase, companyId, log }) => {
-    // Kontrolluppgifter for utdelning/ägarlån only exist for aktiebolag; an
-    // enskild firma has no shareholder to report on.
     const { data: settings, error: settingsError } = await supabase
       .from('company_settings')
       .select('entity_type')
@@ -43,27 +44,67 @@ export const GET = withRouteContext(
       })
     }
 
-    // KU31 on utdelning and KU20 on interest to members apply to every form
-    // that files INK2 (aktiebolag, ekonomisk förening).
+    // KU31 on utdelning and kontrolluppgift on interest to members apply to
+    // every form that files INK2 (aktiebolag, ekonomisk förening).
     if (!isEntityType(settings?.entity_type) || !usesInk2(settings.entity_type)) {
-      return NextResponse.json({ data: { has_ku_signal: false } })
+      return NextResponse.json({ data: { has_ku_signal: false, triggers: [] } })
     }
 
-    const since = new Date()
-    since.setMonth(since.getMonth() - LOOKBACK_MONTHS)
-    const sinceStr = since.toISOString().split('T')[0]
+    const since = `${Number(todayIsoStockholm().slice(0, 4)) - 1}-01-01`
 
-    const lines = await fetchEntryLines<{ account_number: string }>({
-      supabase,
-      lineColumns: 'account_number',
-      filterEntries: (q: EntryLinesQuery) =>
-        q
-          .eq('company_id', companyId)
-          .in('status', ['posted', 'reversed'])
-          .gte('entry_date', sinceStr),
-      filterLines: (q: EntryLinesQuery) => q.in('account_number', KU_SIGNAL_ACCOUNTS),
-    })
+    const [rows, closing] = await Promise.all([
+      fetchEntryLines<{
+        journal_entry_id: string
+        account_number: string
+        debit_amount: number | string
+        credit_amount: number | string
+        journal_entries: { entry_date: string }
+      }>({
+        supabase,
+        entryColumns: 'id, entry_date',
+        lineColumns: 'journal_entry_id, account_number, debit_amount, credit_amount',
+        filterEntries: (q: EntryLinesQuery) =>
+          q
+            .eq('company_id', companyId)
+            .eq('status', 'posted')
+            .neq('source_type', 'storno')
+            .gte('entry_date', since),
+        // The loan, dividend and räntekostnad accounts; the rule pairs them
+        // per verifikat.
+        filterLines: (q: EntryLinesQuery) =>
+          q.or(
+            `account_number.in.(${[...OWNER_LOAN_ACCOUNTS, DIVIDEND_ACCOUNT].join(',')}),` +
+              'and(account_number.gte.8400,account_number.lte.8429)',
+          ),
+      }),
+      supabase
+        .from('fiscal_periods')
+        .select('closing_entry_id')
+        .eq('company_id', companyId)
+        .not('closing_entry_id', 'is', null),
+    ])
+    if (closing.error) {
+      log.warn('ku-signal: fiscal_periods lookup failed', { code: closing.error.code })
+    }
 
-    return NextResponse.json({ data: { has_ku_signal: lines.length > 0 } })
+    const lines: KuSignalLine[] = rows
+      .filter((r) => r.account_number === DIVIDEND_ACCOUNT
+        || (OWNER_LOAN_ACCOUNTS as readonly string[]).includes(r.account_number)
+        || isOwnerLoanInterestAccount(r.account_number))
+      .map((r) => ({
+        journal_entry_id: r.journal_entry_id,
+        account_number: r.account_number,
+        debit_amount: Number(r.debit_amount) || 0,
+        credit_amount: Number(r.credit_amount) || 0,
+        entry_date: r.journal_entries.entry_date,
+      }))
+    const closingIds = new Set(
+      ((closing.data ?? []) as Array<{ closing_entry_id: string | null }>)
+        .map((r) => r.closing_entry_id)
+        .filter((id): id is string => !!id),
+    )
+    const triggers = kuSignalTriggers(lines, closingIds)
+
+    return NextResponse.json({ data: { has_ku_signal: triggers.length > 0, triggers } })
   },
 )

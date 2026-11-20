@@ -76,7 +76,7 @@ export default function AddressFields({ initial, onChange, placeholders, enterHi
       </div>
       <p className="jny-enterhint">{enterHint}</p>
       <div className="jny-qactions">
-        <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => onSubmit({})}>
+        <Button variant="ghost" className="text-muted-foreground" onClick={() => onSubmit({})}>
           {skipLabel}
         </Button>
       </div>

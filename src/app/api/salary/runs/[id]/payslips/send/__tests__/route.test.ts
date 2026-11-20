@@ -8,7 +8,7 @@ import {
 } from '@/tests/helpers'
 
 // The route is wrapped in withRouteContext (auth via requireAuth, company via
-// getActiveCompanyId, write gate via requireWritePermission) — mock those.
+// getActiveCompanyId, write gate via requireWritePermission) - mock those.
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({
@@ -53,6 +53,18 @@ vi.mock('@/lib/salary/payslips/links', async (importOriginal) => {
   }
 })
 
+const mailboxMock = vi.hoisted(() => ({
+  payslipMailboxBlock: vi.fn(),
+  deliverPayslipsToMailbox: vi.fn(),
+}))
+vi.mock('@/lib/salary/payslips/send-digital-mailbox', () => mailboxMock)
+const usageGate = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/usage/gate', () => ({ usageGateRefusal: usageGate }))
+vi.mock('@/lib/supabase/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase/server')>()),
+  createServiceClient: () => ({ service: true }),
+}))
+
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getEmailService } from '@/lib/email/service'
@@ -70,7 +82,7 @@ function authed(supabase: unknown) {
 
 function mockEmail(result: { success: boolean; messageId?: string; error?: string }) {
   const sendEmail = vi.fn().mockResolvedValue(result)
-  vi.mocked(getEmailService).mockReturnValue({
+  vi.mocked(getEmailService).mockResolvedValue({
     sendEmail,
     isConfigured: () => true,
   })
@@ -427,6 +439,232 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
       expect(response.status).toBe(200)
       expect(findCall('salary_runs', 'update')).toBeUndefined()
       expect(findCall('company_settings', 'select')).toBeUndefined()
+    })
+  })
+
+  describe('digital mailbox channel', () => {
+    beforeEach(() => {
+      mailboxMock.payslipMailboxBlock.mockResolvedValue(null)
+      mailboxMock.deliverPayslipsToMailbox.mockResolvedValue([])
+      usageGate.mockResolvedValue(null)
+    })
+
+    it('stops a Kivra run at what the month includes, before any payslip goes, counting everyone on the run', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'kivra_send')
+      try {
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        authed(supabase)
+        const sendEmail = mockEmail({ success: true })
+        usageGate.mockResolvedValue({
+          ok: false,
+          code: 'USAGE_LIMIT_REACHED',
+          details: { kind: 'kivra_send', period: '2026-11', used: 0, included: 0, requested: 2, unit_price_ore: 300 },
+          messageSv: 'Utskick till Kivra kostar 3,00 kr st och faktureras i efterskott. En admin godkänner det under Inställningar, Abonnemang, Användning.',
+        })
+        enqueueMany([
+          { data: RUN },
+          { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+          {
+            data: [
+              { employee_id: 'emp-1', employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test', personnummer: 'enc' } },
+              { employee_id: 'emp-2', employee: { first_name: 'Bo', last_name: 'B', email: 'bo@example.test', personnummer: 'enc' } },
+            ],
+          },
+        ])
+        const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'kivra' } })
+        const { status, body } = await parseJsonResponse<{ error: { code: string; details: { included: number; unit_price_ore: number } } }>(
+          await POST(request, createMockRouteParams({ id: 'run-1' })),
+        )
+        expect(status).toBe(409)
+        expect(body.error).toMatchObject({ code: 'USAGE_LIMIT_REACHED', details: { included: 0, unit_price_ore: 300 } })
+        expect(usageGate).toHaveBeenCalledWith({ service: true }, 'company-1', 'kivra_send', { requested: 2 })
+        expect(mailboxMock.deliverPayslipsToMailbox).not.toHaveBeenCalled()
+        expect(sendEmail).not.toHaveBeenCalled()
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('never asks the gate about a channel that is not billed (Billo)', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', '*')
+      try {
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        authed(supabase)
+        mockEmail({ success: true })
+        mailboxMock.deliverPayslipsToMailbox.mockResolvedValue([{ employee_id: 'emp-1', status: 'sent', error: null }])
+        enqueueMany([
+          { data: RUN },
+          { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+          { data: [{ employee_id: 'emp-1', employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test', personnummer: 'enc' } }] },
+          ...ISSUE_SECTIONS,
+        ])
+        const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'billo' } })
+        expect((await POST(request, createMockRouteParams({ id: 'run-1' }))).status).toBe(200)
+        expect(usageGate).not.toHaveBeenCalled()
+        expect(mailboxMock.deliverPayslipsToMailbox).toHaveBeenCalled()
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('returns 400 for an unknown channel', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      authed(supabase)
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'fax' } })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      expect(response.status).toBe(400)
+    })
+
+    it('refuses a mailbox channel whose sending is not active', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      authed(supabase)
+      mockEmail({ success: true })
+      mailboxMock.payslipMailboxBlock.mockResolvedValue('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+      enqueueMany([{ data: RUN }])
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'billo' } })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+      expect(mailboxMock.deliverPayslipsToMailbox).not.toHaveBeenCalled()
+    })
+
+    it('sends to the mailbox first and emails a link only to whoever it did not reach', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true, messageId: 'msg-2' })
+      mailboxMock.deliverPayslipsToMailbox.mockResolvedValue([
+        { employee_id: 'emp-1', status: 'sent', error: null },
+        { employee_id: 'emp-2', status: 'failed', error: 'provider down' },
+      ])
+      enqueueMany([
+        { data: RUN },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        {
+          data: [
+            { employee_id: 'emp-1', employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test', personnummer: 'enc' } },
+            { employee_id: 'emp-2', employee: { first_name: 'Bo', last_name: 'B', email: 'bo@example.test', personnummer: 'enc' } },
+          ],
+        },
+        ...ISSUE_SECTIONS,
+      ])
+
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'billo' } })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      const { status, body } = await parseJsonResponse<{ data: { sent: number; total: number } }>(response)
+
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ sent: 2, total: 2 })
+      expect(mailboxMock.deliverPayslipsToMailbox).toHaveBeenCalledWith(
+        expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+        expect.objectContaining({ provider: 'billo', salaryRunId: 'run-1' }),
+      )
+      // Only Bo, whom the mailbox did not reach, gets the email link.
+      expect(sendEmail).toHaveBeenCalledTimes(1)
+      expect(sendEmail.mock.calls[0]![0]).toMatchObject({ to: 'bo@example.test' })
+    })
+  })
+
+  // crm#1658: a company paying hourly staff early in the month and monthly
+  // staff on the 26th sends each group its payslips on its own payout day.
+  describe('employee_ids: only the chosen employees', () => {
+    const EMP_A = '11111111-1111-4111-8111-111111111111'
+    const EMP_B = '22222222-2222-4222-8222-222222222222'
+    const STRANGER = '33333333-3333-4333-8333-333333333333'
+    const ROSTER = [
+      { employee_id: EMP_A, employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test' } },
+      { employee_id: EMP_B, employee: { first_name: 'Bo', last_name: 'B', email: 'bo@example.test' } },
+    ]
+
+    it('emails only the named employee and rotates only their link', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true, messageId: 'msg-1' })
+      enqueueMany([
+        { data: RUN },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        { data: ROSTER },
+        ...ISSUE_SECTIONS,
+      ])
+
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', {
+        method: 'POST',
+        body: { employee_ids: [EMP_B] },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      const { status, body } = await parseJsonResponse<{ data: { sent: number; total: number } }>(response)
+
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ sent: 1, total: 1 })
+      expect(sendEmail).toHaveBeenCalledTimes(1)
+      expect(sendEmail.mock.calls[0]![0]).toMatchObject({ to: 'bo@example.test' })
+      expect(rotateLinkForEmployee).toHaveBeenCalledTimes(1)
+      expect(rotateLinkForEmployee).toHaveBeenCalledWith(supabase, expect.objectContaining({ employeeId: EMP_B }))
+    })
+
+    it('without employee_ids still emails everyone on the run', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true, messageId: 'msg-1' })
+      enqueueMany([
+        { data: RUN },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        { data: ROSTER },
+        ...ISSUE_SECTIONS,
+      ])
+
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: {} })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      const { status, body } = await parseJsonResponse<{ data: { sent: number; total: number } }>(response)
+
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ sent: 2, total: 2 })
+      expect(sendEmail).toHaveBeenCalledTimes(2)
+    })
+
+    it('400 SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN for an id not on the run, sending nothing', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true })
+      enqueueMany([
+        { data: RUN },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        { data: ROSTER },
+      ])
+
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', {
+        method: 'POST',
+        body: { employee_ids: [EMP_A, STRANGER] },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN')
+      expect(sendEmail).not.toHaveBeenCalled()
+      expect(rotateLinkForEmployee).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['an empty list', []],
+      ['a non-uuid id', ['emp-1']],
+      ['a non-array', EMP_A],
+    ])('400 VALIDATION_ERROR on employee_ids for %s, before reading the run', async (_label, ids) => {
+      const { supabase } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true })
+
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', {
+        method: 'POST',
+        body: { employee_ids: ids },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details?: { field?: string } } }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details?.field).toBe('employee_ids')
+      expect(sendEmail).not.toHaveBeenCalled()
     })
   })
 })

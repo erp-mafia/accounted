@@ -15,6 +15,8 @@ vi.mock('../migration-job-worker', () => ({
 }))
 vi.mock('../provider-client', () => ({ ensureConsentSourceIdentity: ensureIdentity, ProviderCompanyMismatchError: MismatchError }))
 import { migrationJobRoutes } from '../migration-job-routes'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { VismaApiError } from '@/lib/providers/visma/client'
 const id = '5c4da29a-b51a-44ef-9705-fcf437d6c658'
 const route = (method: string, path = '/migration-jobs') => migrationJobRoutes.find(r => r.method === method && r.path === path)!.handler
 const request = (body: unknown) => new Request('http://localhost/api/extensions/ext/arcim-migration/migration-jobs', {
@@ -27,13 +29,10 @@ function context() {
 }
 beforeEach(() => { vi.clearAllMocks(); ensureIdentity.mockResolvedValue('present') })
 describe('migration job API', () => {
-  it('rejects an unauthenticated request before creating service work', async () => {
-    expect((await route('POST')(request({ consentId: id, resources: ['customers'] }))).status).toBe(401)
-    expect(serviceRpc).not.toHaveBeenCalled()
-  })
   it('validates resources and rejects client-supplied company or fiscal scope', async () => {
     for (const body of [{ consentId: id, resources: [] }, { consentId: id, resources: ['journalEntries'] },
-      { consentId: id, resources: ['customers'], companyId: 'foreign' }, { consentId: id, resources: ['customers'], scope: {} }]) {
+      { consentId: id, resources: ['customers'], companyId: 'foreign' }, { consentId: id, resources: ['customers'], scope: {} },
+      { consentId: id, resources: ['supplierInvoices'], allSupplierInvoices: 'yes' }]) {
       expect((await route('POST')(request(body), context().ctx)).status).toBe(400)
     }
     expect(serviceRpc).not.toHaveBeenCalled()
@@ -57,9 +56,29 @@ describe('migration job API', () => {
     expect(after).toHaveBeenCalledOnce()
     expect(worker).not.toHaveBeenCalled()
   })
-  it('requires a completed SIE import even for a direct API caller', async () => {
+  it('puts a request for paid supplier invoices on the job scope, only with supplier invoices selected', async () => {
+    const { ctx, mockResult } = context(); mockResult({ data: [{ fiscal_year_start: '2025-01-01', fiscal_year_end: '2025-12-31' }] })
+    serviceRpc.mockResolvedValue({ data: { id }, error: null })
+    expect((await route('POST')(request({ consentId: id, resources: ['supplierInvoices'], allSupplierInvoices: true }), ctx)).status).toBe(202)
+    expect((await route('POST')(request({ consentId: id, resources: ['customers'], allSupplierInvoices: true }), ctx)).status).toBe(202)
+    expect((await route('POST')(request({ consentId: id, resources: ['supplierInvoices'] }), ctx)).status).toBe(202)
+    expect(serviceRpc.mock.calls.map(([, args]) => args.p_scope)).toEqual([
+      { start: '2025-01-01', end: '2025-12-31', allSupplierInvoices: true },
+      { start: '2025-01-01', end: '2025-12-31' },
+      { start: '2025-01-01', end: '2025-12-31' },
+    ])
+  })
+  // 2026-11-09: a new company started the register fetch nine times in 50
+  // minutes without an imported ledger, read "Importen kunde inte fortsätta.
+  // Dina sparade framsteg finns kvar." each time, and never imported anything.
+  it('requires a completed SIE import even for a direct API caller, and says so', async () => {
     const { ctx, mockResult } = context(); mockResult({ data: [] })
-    expect((await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)).status).toBe(400)
+    const response = await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)
+    expect(response.status).toBe(400)
+    const { error } = await response.json()
+    expect(error.code).toBe('PROVIDER_SIE_IMPORT_REQUIRED')
+    expect(error.message).toBe(getErrorEntry('PROVIDER_SIE_IMPORT_REQUIRED')!.message_sv)
+    expect(error.message).not.toContain('kunde inte fortsätta')
     expect(serviceRpc).not.toHaveBeenCalled()
   })
   it.each(['run', 'retry'])('does not %s an inaccessible job', async action => {
@@ -98,7 +117,9 @@ describe('source identity before the job is created', () => {
     ensureIdentity.mockRejectedValue(new MismatchError('5560160680', '5567037485', 'Annat Bolag AB'))
     const response = await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)
     expect(response.status).toBe(422)
-    expect((await response.json()).error.code).toBe('PROVIDER_COMPANY_MISMATCH')
+    const { error } = await response.json()
+    expect(error.code).toBe('PROVIDER_COMPANY_MISMATCH')
+    expect(error.message).toContain('Annat Bolag AB (org.nr 556703-7485)')
     expect(serviceRpc).not.toHaveBeenCalled()
   })
 
@@ -109,16 +130,48 @@ describe('source identity before the job is created', () => {
     expect((await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)).status).toBe(202)
   })
 
+  // 2026-11-05: Visma's company information answered "No access to module:
+  // api_standard". The fetch left it to the RPC, which refused as "identity
+  // missing", read as "Importen kunde inte fortsätta".
+  it('answers a subscription refusal during the identity lookup with its own sentence', async () => {
+    const { ctx, mockResult } = context(); mockResult(imports)
+    ensureIdentity.mockRejectedValue(new VismaApiError('Visma API error: 403 Forbidden', 403,
+      '{"ErrorCode":4002,"DeveloperErrorMessage":"ForbiddenRequestException - No access to module: api_standard"}'))
+    const response = await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)
+    const { error } = await response.json()
+    expect(error.code).toBe('PROVIDER_API_MODULE_INACTIVE')
+    expect(error.message).toBe(getErrorEntry('PROVIDER_API_MODULE_INACTIVE')!.message_sv)
+    expect(serviceRpc).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
+  })
+
   it('logs the RPC failure code on a 409, not just the status', async () => {
     const { ctx, log, mockResult } = context(); mockResult(imports)
     ensureIdentity.mockResolvedValue('unavailable')
     serviceRpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'MIGRATION_SOURCE_IDENTITY_MISSING' } })
     const response = await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)
     expect(response.status).toBe(409)
-    expect((await response.json()).error.code).toBe('MIGRATION_SOURCE_IDENTITY_MISSING')
+    const { error } = await response.json()
+    expect(error.code).toBe('MIGRATION_SOURCE_IDENTITY_MISSING')
+    expect(error.message).toContain('lämnade inte ut företagets organisationsnummer')
     expect(log.warn).toHaveBeenCalledWith('create_provider_migration_job refused', {
       consentId: id, failure: 'MIGRATION_SOURCE_IDENTITY_MISSING', pgCode: 'P0001',
     })
+    expect(after).not.toHaveBeenCalled()
+  })
+
+  // crm#2002: the onboarding import read "Importen kunde inte fortsätta" when
+  // an earlier register fetch still waited for its review.
+  it('says why a new fetch waits for the open one, and where to finish it', async () => {
+    const { ctx, mockResult } = context(); mockResult(imports)
+    serviceRpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'MIGRATION_ALREADY_ACTIVE' } })
+    const response = await route('POST')(request({ consentId: id, resources: ['salesInvoices'] }), ctx)
+    expect(response.status).toBe(409)
+    const { error } = await response.json()
+    expect(error.code).toBe('MIGRATION_ALREADY_ACTIVE')
+    expect(error.message).toBe(getErrorEntry('MIGRATION_ALREADY_ACTIVE')!.message_sv)
+    expect(error.message).toContain('Import och flytt')
+    expect(error.message).not.toContain('kunde inte fortsätta')
     expect(after).not.toHaveBeenCalled()
   })
 

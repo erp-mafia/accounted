@@ -37,11 +37,6 @@ vi.mock('@/lib/bookkeeping/settlement-account', () => ({
   resolveSettlementAccount: (...args: unknown[]) => mockResolveSettlementAccount(...args),
 }))
 
-const mockHasLiveLink = vi.fn()
-vi.mock('@/lib/transactions/link-journal-entry', () => ({
-  hasLiveJournalEntryLink: (...args: unknown[]) => mockHasLiveLink(...args),
-}))
-
 import { POST } from '../route'
 
 const TX_ID = '11111111-1111-4111-8111-111111111111'
@@ -75,7 +70,6 @@ beforeEach(() => {
   reset()
   requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
   mockResolveSettlementAccount.mockResolvedValue('1930')
-  mockHasLiveLink.mockResolvedValue(false)
   mockCreatePayoutBatch.mockResolvedValue({
     ok: true,
     batch_id: 'batch-1',
@@ -130,22 +124,30 @@ describe('POST /api/transactions/[id]/match-expense-payout', () => {
 
   it('refuses a row that is already booked (live pointer or bank_line junction)', async () => {
     enqueue({ data: makeTxRow({ journal_entry_id: 'je-old' }) })
-    mockHasLiveLink.mockResolvedValue(true)
+    enqueue({ data: [{ id: 'je-old', status: 'posted' }] })
     let response = await POST(makeReq(), routeParams)
     let parsed = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(parsed.status).toBe(400)
     expect(parsed.body.error.code).toBe('EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED')
 
     reset()
-    mockHasLiveLink.mockResolvedValue(false)
     enqueue({
       data: makeTxRow({
         transaction_voucher_links: [{ journal_entry_id: 'je-bulk', role: 'bank_line' }],
       }),
     })
+    enqueue({ data: [{ id: 'je-bulk', status: 'posted' }] })
     response = await POST(makeReq(), routeParams)
     parsed = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(parsed.body.error.code).toBe('EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED')
+    expect(mockCreatePayoutBatch).not.toHaveBeenCalled()
+  })
+
+  it('refuses an ignored row before anything posts', async () => {
+    enqueue({ data: makeTxRow({ is_ignored: true }) })
+    const response = await POST(makeReq(), routeParams)
+    const { body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(body.error.code).toBe('BANK_ROW_IGNORED')
     expect(mockCreatePayoutBatch).not.toHaveBeenCalled()
   })
 

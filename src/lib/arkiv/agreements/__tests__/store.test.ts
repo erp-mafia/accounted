@@ -10,7 +10,7 @@ vi.mock('@/lib/documents/provenance', () => ({
 vi.mock('../counterparty', () => ({ resolveCounterparty: vi.fn() }))
 vi.mock('@/lib/arkiv/graph/snapshot', () => ({ markCompanyGraphStale: vi.fn(async () => undefined) }))
 
-import { deriveDocument, initialDeadlineStatus, linkByPerson, needsRederivation, withdrawDerivedAgreement } from '../store'
+import { deriveDocument, initialDeadlineStatus, needsRederivation, withdrawDerivedAgreement } from '../store'
 import { markCompanyGraphStale } from '@/lib/arkiv/graph/snapshot'
 import { resolveCounterparty } from '../counterparty'
 import { recordActivity } from '@/lib/documents/provenance'
@@ -161,16 +161,6 @@ describe('deriveDocument', () => {
     enqueue({ data: extraction() })
     enqueue({ error: { message: 'no such column' } })
     expect(await deriveDocument(supabase, 'doc-1', { today: '2026-09-15' })).toEqual({ status: 'error', reason: 'agreement upsert failed: no such column' })
-  })
-})
-
-describe('linkByPerson', () => {
-  it('inserts a proven person link with its activity, and reports a duplicate', async () => {
-    enqueue({ data: { id: 'link-1' } })
-    await expect(linkByPerson(supabase, { companyId: 'co-1', documentId: 'doc-1', userId: 'user-1', targetKind: 'asset', targetId: 'asset-1' })).resolves.toEqual({ id: 'link-1' })
-    expect(findCall('document_links', 'insert')?.[0]).toMatchObject({ target_kind: 'asset', asset_id: 'asset-1', basis: 'proven', method: 'person', created_by_user_id: 'user-1', activity_id: 'activity-1' })
-    enqueue({ error: { code: '23505', message: 'dup' } })
-    await expect(linkByPerson(supabase, { companyId: 'co-1', documentId: 'doc-1', userId: 'user-1', targetKind: 'asset', targetId: 'asset-1' })).resolves.toEqual({ conflict: true })
   })
 })
 

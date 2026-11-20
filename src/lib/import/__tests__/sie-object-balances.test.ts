@@ -12,20 +12,8 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CreateJournalEntryLineInput } from '@/types'
 
-vi.mock('@/lib/bookkeeping/engine', () => ({
-  createJournalEntry: vi.fn(),
-  replaceOpeningBalanceEntry: vi.fn(async () => ({
-    newEntryId: 'ob-new',
-    stornoEntryId: 'ob-storno',
-    newVoucherNumber: 2,
-    stornoVoucherNumber: 1,
-  })),
-}))
-
-import { replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
-import { DimensionValidationError } from '@/lib/bookkeeping/dimension-errors'
 import { parseSIEFile, getEffectiveObjectOpeningBalances } from '../sie-parser'
-import { buildSIEOpeningBalanceEntry, resyncNextPeriodOpeningBalance, validateIBBalance } from '../sie-import'
+import { buildSIEOpeningBalanceEntry, validateIBBalance } from '../sie-import'
 import { openingBalanceSplitRefusedNotice, planObjectBalances, splitBalanceLines } from '../sie-object-balances'
 import { collectSIEDimensionUsage } from '../sie-dimensions'
 import { prepareSIEOpeningBalance, toPrepared } from '../sie-job-preparation'
@@ -397,118 +385,6 @@ describe('toPrepared (resumable job path): nets per account and project bag', ()
       ['1470', 3800, 0, {}, 1],
       ['2081', 0, 5000, {}, 2],
     ])
-  })
-})
-
-describe('resyncNextPeriodOpeningBalance: splits on #OUB 0', () => {
-  const { supabase, enqueue, reset } = createQueuedMockSupabase()
-  beforeEach(() => {
-    vi.clearAllMocks()
-    reset()
-  })
-
-  it('books the next IB per project from the year\'s closing object balances', async () => {
-    enqueue({
-      data: {
-        id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31',
-        is_closed: false, locked_at: null, opening_balance_entry_id: 'ob-old', opening_balances_set: true,
-      },
-    }) // fiscal_periods
-    enqueue({ data: { voucher_series: 'A' } }) // journal_entries: the old IB
-    enqueue({ data: [{ sie_dim_no: 6 }] }) // dimensions: accumulating
-
-    const parsed = {
-      closingBalances: [
-        { yearIndex: 0, account: '1470', amount: 1000 },
-        { yearIndex: 0, account: '2081', amount: -1000 },
-      ],
-      objectClosingBalances: [{ yearIndex: 0, account: '1470', dimNo: '6', code: 'P1', amount: 700 }],
-    } as unknown as ParsedSIEFile
-
-    const result = await resyncNextPeriodOpeningBalance(
-      supabase as unknown as SupabaseClient, 'co-1', 'user-1', '2025-12-31', parsed, new Map(), '2099',
-    )
-    expect(result).toMatchObject({ resynced: true })
-    const input = vi.mocked(replaceOpeningBalanceEntry).mock.calls[0][4] as { lines: CreateJournalEntryLineInput[] }
-    expect(netByBag(input.lines)).toEqual({ '1470 {"6":"P1"}': 700, '1470': 300, '2081': -1000 })
-  })
-
-  it('does not read the registry when the file has no closing object balances', async () => {
-    enqueue({
-      data: {
-        id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31',
-        is_closed: false, locked_at: null, opening_balance_entry_id: 'ob-old', opening_balances_set: true,
-      },
-    })
-    enqueue({ data: { voucher_series: 'A' } })
-
-    const parsed = {
-      closingBalances: [
-        { yearIndex: 0, account: '1930', amount: 1000 },
-        { yearIndex: 0, account: '2081', amount: -1000 },
-      ],
-    } as unknown as ParsedSIEFile
-    await resyncNextPeriodOpeningBalance(
-      supabase as unknown as SupabaseClient, 'co-1', 'user-1', '2025-12-31', parsed, new Map(), '2099',
-    )
-    expect(supabase.from).toHaveBeenCalledTimes(2)
-    const input = vi.mocked(replaceOpeningBalanceEntry).mock.calls[0][4] as { lines: CreateJournalEntryLineInput[] }
-    expect(input.lines.every((l) => l.dimensions === undefined)).toBe(true)
-  })
-
-  it('resyncs per account, flagged, when the registry refuses a #OUB object (nothing posted by the refused try)', async () => {
-    enqueue({
-      data: {
-        id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31',
-        is_closed: false, locked_at: null, opening_balance_entry_id: 'ob-old', opening_balances_set: true,
-      },
-    })
-    enqueue({ data: { voucher_series: 'A' } })
-    enqueue({ data: [{ sie_dim_no: 6 }] })
-    vi.mocked(replaceOpeningBalanceEntry).mockRejectedValueOnce(
-      new DimensionValidationError([{ sie_dim_no: '6', code: 'P1', reason: 'archived_value', dimension_name: 'Projekt' }])
-    )
-
-    const parsed = {
-      closingBalances: [
-        { yearIndex: 0, account: '1470', amount: 1000 },
-        { yearIndex: 0, account: '2081', amount: -1000 },
-      ],
-      objectClosingBalances: [{ yearIndex: 0, account: '1470', dimNo: '6', code: 'P1', amount: 700 }],
-    } as unknown as ParsedSIEFile
-
-    const result = await resyncNextPeriodOpeningBalance(
-      supabase as unknown as SupabaseClient, 'co-1', 'user-1', '2025-12-31', parsed, new Map(), '2099',
-    )
-    expect(result).toMatchObject({ resynced: true, splitRefused: { reason: 'registry' } })
-    expect(replaceOpeningBalanceEntry).toHaveBeenCalledTimes(2)
-    const retry = vi.mocked(replaceOpeningBalanceEntry).mock.calls[1][4] as { lines: CreateJournalEntryLineInput[] }
-    expect(netByBag(retry.lines)).toEqual({ '1470': 1000, '2081': -1000 })
-    // Both tries replace the same old IB.
-    expect(vi.mocked(replaceOpeningBalanceEntry).mock.calls[1][3]).toBe('ob-old')
-  })
-
-  it('does not swallow other failures', async () => {
-    enqueue({
-      data: {
-        id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31',
-        is_closed: false, locked_at: null, opening_balance_entry_id: 'ob-old', opening_balances_set: true,
-      },
-    })
-    enqueue({ data: { voucher_series: 'A' } })
-    enqueue({ data: [{ sie_dim_no: 6 }] })
-    vi.mocked(replaceOpeningBalanceEntry).mockRejectedValueOnce(new Error('period locked'))
-    const parsed = {
-      closingBalances: [
-        { yearIndex: 0, account: '1470', amount: 1000 },
-        { yearIndex: 0, account: '2081', amount: -1000 },
-      ],
-      objectClosingBalances: [{ yearIndex: 0, account: '1470', dimNo: '6', code: 'P1', amount: 700 }],
-    } as unknown as ParsedSIEFile
-    await expect(
-      resyncNextPeriodOpeningBalance(supabase as unknown as SupabaseClient, 'co-1', 'user-1', '2025-12-31', parsed, new Map(), '2099'),
-    ).rejects.toThrow('period locked')
-    expect(replaceOpeningBalanceEntry).toHaveBeenCalledTimes(1)
   })
 })
 

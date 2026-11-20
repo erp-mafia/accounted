@@ -80,8 +80,8 @@ describe('GET /api/invoices/[id]/peppol/deliveries', () => {
   it('returns minimized delivery status and a truthful transport gate', async () => {
     enqueue({ data: { id: INVOICE_ID }, error: null })
     // Deliveries are read from peppol_deliveries with the service client (the
-    // service is shared with the v1 door, where no auth.uid() exists for the
-    // list_peppol_delivery_summaries RPC), no longer through the user's RPC.
+    // service is shared with the v1 door, where no auth.uid() exists), not
+    // through an RPC on the user's client.
     serviceTables.enqueue({
       data: [{
         id: '22222222-2222-4222-8222-222222222222',

@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { roundOre } from '@/lib/money'
 import {
   Document,
@@ -14,18 +14,22 @@ import {
 import type { ReactNode } from 'react'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import type { InvoicePdfPaymentQr } from '@/lib/invoices/payment-qr'
-import { getAmountToPay } from '@/lib/invoices/rounding'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
-import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
+import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { unitLabel } from '@/lib/invoices/unit-labels'
+import { deliveryAddressLines } from '@/lib/invoices/delivery-address'
+import { formatPostalAddress, postalPlaceLine } from '@/lib/invoices/postal-address'
+import { sellerRegisteredOffice } from '@/lib/invoices/seller-registered-office'
 import {
   PAYMENT_AREA_GAP_PT,
   PAYMENT_AREA_HEIGHT_PT,
   PAYMENT_QR_PT,
 } from '@/lib/invoices/pdf/geometry'
-import { bareLabel, formatPdfAmount, formatPdfCurrency, formatPdfDate, type PdfLang } from '@/lib/invoices/pdf/format'
+import { bareLabel, formatPdfAmount, formatPdfCurrency, formatPdfDate, formatPdfQuantity, type PdfLang } from '@/lib/invoices/pdf/format'
+import { invoiceFinePrint } from '@/lib/invoices/fine-print'
 import {
   DEDUCTION_LABOR_ONLY_NOTICE,
   GRON_TEKNIK_BASE_NOTICE,
@@ -40,6 +44,7 @@ import {
 } from '@/lib/invoices/pdf/styles'
 import {
   DESCRIPTION_COLUMN_PT,
+  FINE_PRINT_KEEP_TOGETHER_LINES,
   FULL_WIDTH_BOX_PT,
   HEADING_MIN_PRESENCE_AHEAD,
   MAX_KEEP_TOGETHER_LINES,
@@ -50,6 +55,7 @@ import {
   fitsOnOnePage,
   keepTogetherLineCap,
   splitParagraphs,
+  wrapArticleNumberWords,
   wrapDescriptionWords,
   wrapFullWidthWords,
 } from '@/lib/invoices/pdf/text-fit'
@@ -87,6 +93,18 @@ export {
   USABLE_PAGE_HEIGHT_PT,
 } from '@/lib/invoices/pdf/geometry'
 
+
+/**
+ * Whether the line table prints the article number column: the company's
+ * setting is on and at least one row with amounts carries a number.
+ */
+export function articleNumberColumnShown(
+  company: Pick<CompanySettings, 'invoice_show_article_number'>,
+  items: InvoiceItem[],
+): boolean {
+  if (company.invoice_show_article_number !== true) return false
+  return items.some((item) => !isTextLikeLine(item) && Boolean(item.article_number?.trim()))
+}
 
 export function buildPdfVatBreakdown(items: InvoiceItem[]): Map<number, { base: number; vat: number }> {
   const vatByRate = new Map<number, { base: number; vat: number }>()
@@ -130,8 +148,28 @@ export function qrPathInPoints(vector: { path: string; size: number }): string {
   return vector.path.replace(/-?\d+(?:\.\d+)?/g, (n) => String(Math.round(Number(n) * scale * 1000) / 1000))
 }
 
-/** The payment area's three columns: amount, rows (or a status), and the QR slot. */
+/** The payment area's three columns: amount, rows (under or in place of a status), and the QR slot. */
 function renderPaymentArea(area: PdfPaymentArea, styles: PdfStyles, lang: PdfLang): ReactNode {
+  const rows = area.rows.map((row) => (
+    <View key={row.key} style={styles.areaRow}>
+      <Text style={styles.areaRowLabel} hyphenationCallback={wrapDescriptionWords}>{row.label}</Text>
+      {row.href ? (
+        // The text in its own Text: the area is laid out by a
+        // `render` callback, where react-pdf drops a bare string
+        // child of a Link and prints only the empty link box.
+        <Link src={row.href} style={[styles.areaRowValue, styles.areaRowLink]}>
+          <Text>{row.value}</Text>
+        </Link>
+      ) : (
+        <Text
+          style={row.emphasis ? styles.areaRowValueStrong : styles.areaRowValue}
+          hyphenationCallback={wrapDescriptionWords}
+        >
+          {row.value}
+        </Text>
+      )}
+    </View>
+  ))
   return (
     <View style={styles.paymentArea}>
       <View style={styles.areaLeft}>
@@ -156,25 +194,11 @@ function renderPaymentArea(area: PdfPaymentArea, styles: PdfStyles, lang: PdfLan
                 {area.status.text}
               </Text>
             )}
+            {/* Cancelled and credited carry no rows; Autogiro's payer number sits under its heading. */}
+            {rows.length > 0 && <View style={styles.areaStatusRows}>{rows}</View>}
           </>
         ) : (
-          area.rows.map((row) => (
-            <View key={row.key} style={styles.areaRow}>
-              <Text style={styles.areaRowLabel} hyphenationCallback={wrapDescriptionWords}>{row.label}</Text>
-              {row.href ? (
-                <Link src={row.href} style={styles.areaRowValue}>
-                  {row.value}
-                </Link>
-              ) : (
-                <Text
-                  style={row.emphasis ? styles.areaRowValueStrong : styles.areaRowValue}
-                  hyphenationCallback={wrapDescriptionWords}
-                >
-                  {row.value}
-                </Text>
-              )}
-            </View>
-          ))
+          rows
         )}
       </View>
       <View style={styles.areaSlot}>
@@ -312,6 +336,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     : new Set<number>()
   const showVatColumn = hasPerLineVat && uniqueRates.size > 1
 
+  // Article number column (crm#1084): only when the company turned it on and
+  // a row carries a number, so a free-text invoice, and every invoice written
+  // before the number was copied onto its lines, prints as before.
+  const showArticleNumberColumn = articleNumberColumnShown(company, items)
+
   const vatByRate = hasPerLineVat
     ? buildPdfVatBreakdown(billableItems)
     : new Map<number, { base: number; vat: number }>()
@@ -373,8 +402,20 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   const sellerCountry = customer.country && customer.country !== (company.country || 'SE')
     ? getCountryName(company.country || 'SE', lang)
     : null
-  const postalLine = (postal: string | null | undefined, city: string | null | undefined) =>
-    postal || city ? `${postal ?? ''} ${city ?? ''}`.trim() : null
+  // Each address in its country's order (lib/invoices/postal-address.ts):
+  // "111 22 Stockholm", "Bellevue, WA 98006".
+  const sellerAddressLines = formatPostalAddress(company, sellerCountry)
+  const buyerAddressLines = formatPostalAddress(
+    customer,
+    customer.country && customer.country !== 'SE' ? getCountryName(customer.country, lang) : null,
+  )
+  // Leveransadress (crm#1547): where the goods go, when not to the invoice address.
+  const deliveryLines = deliveryAddressLines(
+    invoice.delivery_address,
+    company.country || 'SE',
+    (code) => getCountryName(code, lang),
+    customer.country,
+  )
 
   // The one notice slot: the statutory VAT notice, then the proforma or quote
   // notice. "Not VAT-registered" trumps the others ONLY when the invoice
@@ -395,17 +436,33 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   )
 
   // Fine print: the company's payment terms (Betalningsvillkor, Dröjsmålsränta).
-  // Part of the totals block, so it can never be stranded alone on a page
-  // (crm#242). Payment terms, so only on a document that asks for a payment:
-  // never on a quote, a kreditfaktura or a följesedel.
+  // A short one travels with the payment area, or with the totals when there
+  // is none, so it can never be stranded alone on a page (crm#242); a long one
+  // follows the totals as ordinary text and may break across pages
+  // (FINE_PRINT_KEEP_TOGETHER_LINES, crm#1787). Payment terms, so only on a
+  // document that asks for a payment: never on a quote, a kreditfaktura or a
+  // följesedel. In the invoice's language: the English texts on an English
+  // invoice, each falling back to the Swedish one (crm#1735).
+  const { lateFee, creditTerms } = invoiceFinePrint(company, lang)
   const finePrint = isQuote || isDeliveryNote || isCreditNote
     ? []
-    : [company.invoice_late_fee_text, company.invoice_credit_terms_text].filter((t): t is string => !!t?.trim())
+    : [lateFee, creditTerms].filter((t): t is string => t !== null)
+  const finePrintTravelsWhole = fitsOnOnePage(finePrint.join('\n'), FULL_WIDTH_BOX_PT, FINE_PRINT_KEEP_TOGETHER_LINES)
+  const finePrintBlock = finePrint.length > 0 ? (
+    <View style={styles.finePrint}>
+      {finePrint.map((text, index) => (
+        <Text key={index} style={styles.finePrintText} hyphenationCallback={wrapFullWidthWords}>
+          {text}
+        </Text>
+      ))}
+    </View>
+  ) : null
 
   const hasDeductionBox = !isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0
-  // The totals block moves to the next page as one unit, unless a long
-  // ROT/RUT breakdown makes it taller than a page could hold: then it may
-  // split, each of its parts still kept whole (MAX_KEEP_TOGETHER_LINES).
+  // The summary (totals, the underlag, the notice) is kept whole, unless a
+  // long ROT/RUT breakdown makes it taller than a page could hold: then the
+  // breakdown may split, each of its parts still kept whole
+  // (MAX_KEEP_TOGETHER_LINES).
   const deductionFits = !hasDeductionBox || fitsOnOnePage(
     items
       .filter((i) => i.deduction_type)
@@ -422,12 +479,15 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     </View>
   )
 
+  const registeredOffice = sellerRegisteredOffice(company)
   const statutoryLine = [
     company.company_name,
     company.address_line1,
     company.address_line2,
-    postalLine(company.postal_code, company.city),
-    company.org_number ? `${bareLabel(L.orgNoLong)} ${formatOrgNumber(company.org_number)}` : null,
+    postalPlaceLine(company),
+    company.org_number ? `${bareLabel(L.orgNoLong)} ${formatOrgNumberDisplay(company.org_number)}` : null,
+    // Säte when the company has set it (crm#1604); never the postal town.
+    registeredOffice ? `${bareLabel(L.registeredOffice)} ${registeredOffice}` : null,
     // Momsreg.nr only for a VAT-registered seller (ML 17 kap 24 § p.3);
     // F-skatt only when the company holds it.
     company.vat_registered !== false && company.vat_number ? `${bareLabel(L.vatRegNo)} ${company.vat_number}` : null,
@@ -617,12 +677,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             <View style={styles.metaColumn}>
               <Text style={styles.metaLabel}>{L.fromHeading}</Text>
               <Text style={styles.metaNameFull} hyphenationCallback={wrapDescriptionWords}>{company.company_name}</Text>
-              {company.address_line1 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{company.address_line1}</Text>}
-              {company.address_line2 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{company.address_line2}</Text>}
-              {postalLine(company.postal_code, company.city) && (
-                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{postalLine(company.postal_code, company.city)}</Text>
-              )}
-              {sellerCountry && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{sellerCountry}</Text>}
+              {sellerAddressLines.map((line, index) => (
+                <Text key={`seller-address-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
               {company.email && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{company.email}</Text>}
               {invoice.our_reference && (
                 <Text style={styles.metaReference} hyphenationCallback={wrapDescriptionWords}>
@@ -635,14 +692,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             <View style={styles.metaColumnLast}>
               <Text style={styles.metaLabel}>{L.toHeading}</Text>
               <Text style={styles.metaNameFull} hyphenationCallback={wrapDescriptionWords}>{customer.name}</Text>
-              {customer.address_line1 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{customer.address_line1}</Text>}
-              {customer.address_line2 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{customer.address_line2}</Text>}
-              {postalLine(customer.postal_code, customer.city) && (
-                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{postalLine(customer.postal_code, customer.city)}</Text>
-              )}
-              {customer.country && customer.country !== 'SE' && (
-                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{getCountryName(customer.country, lang)}</Text>
-              )}
+              {buyerAddressLines.map((line, index) => (
+                <Text key={`buyer-address-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
               {/* No identifier rows for a private customer: their personnummer
                   is not required on a B2C invoice (ML 17 kap 24§ asks for name
                   + address only) and printing it is a GDPR data-minimisation
@@ -671,6 +723,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   <Text style={styles.metaMuted}>{L.invoiceMarking}</Text> {invoice.invoice_marking.trim()}
                 </Text>
               )}
+              {deliveryLines.length > 0 && (
+                <Text style={styles.metaReference} hyphenationCallback={wrapDescriptionWords}>
+                  <Text style={styles.metaMuted}>{L.deliveryAddress}</Text>
+                </Text>
+              )}
+              {deliveryLines.map((line, index) => (
+                <Text key={`delivery-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
             </View>
           </View>
 
@@ -689,6 +749,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             it repeats on every page the table continues to. */}
         <View>
           <View style={styles.tableHeader} fixed minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>
+            {showArticleNumberColumn && (
+              <Text style={[styles.colArticleNumber, styles.tableHeaderText]}>{L.colArticleNumber}</Text>
+            )}
             <Text style={[styles.colDescription, styles.tableHeaderText]}>{L.colDescription}</Text>
             <Text style={[styles.colQty, styles.tableHeaderText]}>{L.colQty}</Text>
             {!isDeliveryNote && (
@@ -721,6 +784,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 style={styles.tableRow}
                 wrap={!fitsOnOnePage(descriptionCellBudget(item), DESCRIPTION_COLUMN_PT, rowLineCap)}
               >
+                {showArticleNumberColumn && (
+                  // Blank for a row that is not from an article.
+                  <Text style={styles.colArticleNumber} hyphenationCallback={wrapArticleNumberWords}>
+                    {item.article_number?.trim() || ' '}
+                  </Text>
+                )}
                 <View style={styles.colDescription}>
                   <Text hyphenationCallback={wrapDescriptionWords}>{item.description}</Text>
                   {/* A discount is stated on the row (ML 17 kap 24 § p.10:
@@ -729,7 +798,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                     <Text style={styles.rowSubline} hyphenationCallback={wrapDescriptionWords}>{L.discountLine(item.discount_percent ?? 0)}</Text>
                   )}
                 </View>
-                <Text style={styles.colQty}>{item.quantity} {unitLabel(item.unit, lang)}</Text>
+                <Text style={styles.colQty}>{formatPdfQuantity(item.quantity, lang)} {unitLabel(item.unit, lang, item.quantity)}</Text>
                 {!isDeliveryNote && (
                   <Text style={styles.colPrice}>{formatPdfAmount(item.unit_price, lang)}</Text>
                 )}
@@ -762,14 +831,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           </View>
         )}
 
-        {/* Zone D: the totals block. Totals, the deduction underlag, the one
-            notice slot, the fine print and a spacer as tall as the payment
-            area, together: it moves to the next page as a unit, and the page
-            it lands on is the last one, where the payment area is drawn over
-            the spacer. A ROT/RUT breakdown too long to keep whole comes
-            first instead and may split; everything after it stays one unit,
-            so the totals still share the last page with the payment area. */}
-        <View style={styles.totalsBlock} wrap={!deductionFits}>
+        {/* Zone D: the totals block, in two units that are each kept whole.
+            The summary (totals, the deduction underlag, the one notice slot)
+            stays on the page where the rows and the note end whenever it fits
+            (agent feedback seq 1080289: it used to follow the payment area's
+            reservation to the next page and leave page 1 half empty). The
+            fine print and a spacer as tall as the payment area follow it and
+            may move to the next page on their own (a long fine print is its
+            own unit and may break, crm#1787); the page the spacer lands
+            on is the last one, where the payment area, which states the
+            amount again, is drawn over it. A ROT/RUT breakdown too long to
+            keep whole comes first instead and may split. */}
+        <View style={styles.totalsBlock}>
           {!deductionFits && deductionBox}
           <View style={deductionFits ? undefined : styles.totalsAfterDeduction} wrap={false}>
             {!isDeliveryNote && (
@@ -876,23 +949,24 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               </View>
             )}
 
-            {/* Fine print and the payment area's reservation, kept together so
-                the last page always has room for the payment area. */}
-            {(finePrint.length > 0 || hasPaymentArea) && (
-              <View wrap={false}>
-                {finePrint.length > 0 && (
-                  <View style={styles.finePrint}>
-                    {finePrint.map((text, index) => (
-                      <Text key={index} style={styles.finePrintText} hyphenationCallback={wrapFullWidthWords}>
-                        {text}
-                      </Text>
-                    ))}
-                  </View>
-                )}
-                {hasPaymentArea && <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />}
-              </View>
-            )}
+            {/* No payment area (proforma): a short fine print stays with the totals. */}
+            {!hasPaymentArea && finePrintTravelsWhole && finePrintBlock}
           </View>
+
+          {/* A long fine print follows the summary as ordinary text and may
+              break across pages, so it never drags a unit kept whole to a
+              fresh page and leaves the page above mostly empty (crm#1787). */}
+          {!finePrintTravelsWhole && finePrintBlock}
+
+          {/* The payment area's reservation, one unit so the last page always
+              has room for the payment area. A short fine print travels with
+              it, so it is never stranded without it. */}
+          {hasPaymentArea && (
+            <View wrap={false}>
+              {finePrintTravelsWhole && finePrintBlock}
+              <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />
+            </View>
+          )}
         </View>
 
         {/* Zone E: the payment area, drawn over the spacer at the bottom of

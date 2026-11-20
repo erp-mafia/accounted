@@ -3,8 +3,8 @@
  *
  * Physical routes under `app/api/extensions/<extensionId>/` are the ONE
  * sanctioned place where app code may import from `@/extensions/` (see the
- * "Check no core imports from extensions" step in
- * .github/workflows/core-build.yml, which exempts exactly this directory).
+ * "No core imports from extensions" step of the Checks job in
+ * .github/workflows/ci.yml, which exempts exactly this directory).
  * They exist because Vercel crons and OAuth callbacks need concrete file
  * routes; the `ext/[...path]` dispatcher covers everything else.
  *
@@ -20,10 +20,11 @@
  *      build; disabling an extension in extensions.config.json only removes
  *      it from the runtime registry, never from the filesystem. So a route
  *      that executes extension code must first check
- *      `extensionRegistry.get('<id>')` (after loadExtensions()) and refuse
- *      when the extension is not registered: otherwise a disabled extension
- *      still exposes a live, invokable surface (this is exactly how the
- *      disabled push-notifications extension shipped an always-armed cron).
+ *      `await extensionRegistry.get('<id>')` (which loads the extensions on
+ *      first use) and refuse when the extension is not registered: otherwise
+ *      a disabled extension still exposes a live, invokable surface (this is
+ *      exactly how the disabled push-notifications extension shipped an
+ *      always-armed cron).
  *      Pre-existing routes are allowlisted below; the set may only shrink as
  *      gates are added. A NEW route must ship with the gate.
  */
@@ -41,9 +42,6 @@ export const UNGATED_EXTENSION_ROUTES = new Set([
   'app/api/extensions/skatteverket/agi/kvittenser/cron/route.ts',
   'app/api/extensions/skatteverket/skattekonto/sync/cron/route.ts',
   'app/api/extensions/skatteverket/vat/kvittenser/cron/route.ts',
-  'app/api/extensions/stripe/callback/route.ts',
-  'app/api/extensions/stripe/sync/cron/route.ts',
-  'app/api/extensions/stripe/transactions/cron/route.ts',
 ])
 
 const EXTENSION_IMPORT_RE = /from\s+['"]@\/extensions\/[^/'"]+\/([^/'"]+)\//g
@@ -101,7 +99,18 @@ export function findExtensionRouteFindings(ROOT) {
 
     if (!importsOwnExtension && crossImports.every((c) => c.file !== relPath)) continue
 
+    // A route that hands its whole flow to the shared partner OAuth callback
+    // (lib/auth/partner-oauth-callback.ts) is gated there: the helper checks
+    // extensionRegistry.get(extensionId) before anything else. A cron on
+    // withCronContext / withServiceCronContext with requireExtension is gated
+    // by the wrapper the same way (lib/api/with-cron-context.ts).
+    const delegatesGate =
+      (src.includes('completePartnerOAuthCallback(') &&
+        (src.includes(`extensionId: '${extensionId}'`) || src.includes(`extensionId: "${extensionId}"`))) ||
+      (/with(Service)?CronContext\(/.test(src) &&
+        (src.includes(`requireExtension: '${extensionId}'`) || src.includes(`requireExtension: "${extensionId}"`)))
     const hasGate =
+      delegatesGate ||
       src.includes(`extensionRegistry.get('${extensionId}')`) ||
       src.includes(`extensionRegistry.get("${extensionId}")`)
     if (!hasGate) ungated.push(relPath)

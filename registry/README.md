@@ -1,7 +1,7 @@
 # Community Registry
 
 This directory is the source of truth for the registry shown at
-[gnubok.se/community/registry](https://www.gnubok.se/community/registry):
+[accounted.se/community/registry](https://www.accounted.se/community/registry):
 skills, MCP servers, workflows and apps built on Accounted. The website syncs
 its registry pages from here, so adding an entry is a normal pull request
 against this repo.
@@ -19,7 +19,7 @@ Files starting with `_` are templates and are ignored by validation and sync.
 ## Adding an entry
 
 1. Copy `entries/_template.mdx` to `entries/<your-slug>.mdx`. The filename is
-   the slug and the public URL: `gnubok.se/community/registry/<your-slug>`.
+   the slug and the public URL: `accounted.se/community/registry/<your-slug>`.
 2. If this is your first contribution, copy `authors/_template.mdx` to
    `authors/<your-handle>.mdx`. The `author` field in your entry must match an
    author file, so first-time contributors add both files in the same PR.
@@ -73,7 +73,7 @@ beats three superlatives.
 ## What gets accepted
 
 - It must exist and work against Accounted today (the live app or the
-  [MCP server](https://www.gnubok.se/community/registry/gnubok-mcp)).
+  [MCP server](https://www.accounted.se/community/registry/gnubok-mcp)).
 - It must describe its write behavior truthfully. Anything that writes to the
   ledger goes through staged operations that a human approves; entries that
   work around that will not be listed.

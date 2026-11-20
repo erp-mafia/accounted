@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS, RowFoldout, VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { cn } from '@/lib/utils'
@@ -45,7 +45,7 @@ export function RegisterColumnSummary<K extends string>({
 
   return (
     <div className="space-y-2">
-      <p className="text-[12.5px] leading-5 text-muted-foreground">
+      <p className="text-xs leading-5 text-muted-foreground">
         {ignored.length === 0
           ? t('columns_all_imported', { total: fileColumns.length })
           : t('columns_imported', { used: fileColumns.length - ignored.length, total: fileColumns.length })}{' '}
@@ -63,7 +63,7 @@ export function RegisterColumnSummary<K extends string>({
         </button>
       </p>
       {open && (
-        <table className="animate-fade-in border-collapse text-[12.5px]">
+        <table className="animate-fade-in border-collapse text-xs">
           <thead>
             <tr>
               <th className={VTH_CLASS}>{t('file_column')}</th>
@@ -119,12 +119,12 @@ export function RowExpandButton({
     <Button
       type="button"
       variant="ghost"
-      size="icon-sm"
+      size="icon"
       aria-expanded={expanded}
       aria-label={expanded ? t('hide_fields') : t('show_fields')}
       onClick={(e) => onToggle(e.currentTarget)}
     >
-      <ChevronRight
+      <ChevronRightIcon
         className={cn(
           'h-3.5 w-3.5 text-muted-foreground transition-transform duration-150',
           expanded && 'rotate-90',
@@ -139,23 +139,31 @@ export function RegisterRowDetails<R>({
   row,
   fields,
   colSpan,
+  errors = [],
 }: {
   row: R
   fields: Readonly<Record<string, ReviewField<R>>>
   /** From useExpandedRows; undefined while the row is folded. */
   colSpan: number | undefined
+  /** Why the row cannot be imported, each naming the file's column (PH 204). */
+  errors?: readonly string[]
 }) {
   if (colSpan === undefined) return null
   return (
     <tr className="border-b last:border-0">
       <td colSpan={colSpan} className="p-0">
         <RowFoldout>
+          {errors.length > 0 && (
+            <ul className="space-y-1 px-3 pt-2 text-xs leading-5 text-destructive">
+              {errors.map((e) => <li key={e}>{e}</li>)}
+            </ul>
+          )}
           <dl className="grid grid-cols-1 gap-x-6 gap-y-3 px-3 pb-4 pt-2 sm:grid-cols-2 lg:grid-cols-3">
             {Object.entries(fields).map(([key, field]) => {
               const value = field.value(row)
               return (
                 <div key={key} className="min-w-0">
-                  <dt className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <dt className="text-xs text-muted-foreground">
                     {field.label}
                   </dt>
                   <dd

@@ -1,8 +1,10 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
-import { useState } from 'react'
+import { useTranslations, useLocale } from 'next-intl'
+import { useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -13,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverHeader } from '@/components/ui/slide-over'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -26,67 +29,84 @@ import {
   toggleInSet,
   type PickerCompany,
 } from '@/components/settings/CompanyPickerList'
-import { Plus, AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon, PlusIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import {
   ALL_SCOPES,
   SCOPE_GROUPS,
   STAGING_SCOPES,
   TOOL_COUNT_BY_SCOPE,
-  scopeKind,
   type ApiKeyScope,
   type ScopeGroup,
 } from '@/lib/auth/scope-catalog'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { presetScopes, readLockedBy, readScopeOf, toggleScope, type ScopePreset } from '@/components/settings/scope-selection'
+import { groupLabelKey, scopeLabelKey, scopeVerb } from '@/components/settings/scope-labels'
 
 type Scope = ApiKeyScope
 
-/** i18n key for a scope card: `scope_<domain>_<verb>`. */
-const scopeLabelKey = (scope: Scope) => `scope_${scope.replace(':', '_')}`
-/** i18n key for a group heading: `group_<domain>`. */
-const groupLabelKey = (group: ScopeGroup) => `group_${group.domain}`
 /** A group with no MCP tool behind any of its scopes only gates REST endpoints. */
 const isRestOnlyGroup = (group: ScopeGroup) =>
   group.scopes.every((scope) => TOOL_COUNT_BY_SCOPE[scope] === 0)
 
-
-function ScopeCard({
+/** One scope in the picker; exported for its render test. */
+export function ScopeCard({
   scope,
   checked,
   onCheckedChange,
+  groupLabelId,
+  lockedNote,
 }: {
   scope: Scope
   checked: boolean
   onCheckedChange: (checked: boolean) => void
+  /** The group heading's id: the checkbox is named "<group> <verb>". */
+  groupLabelId: string
+  /** Set while an elevated scope in the group keeps this read scope ticked. */
+  lockedNote?: string
 }) {
   const t = useTranslations('settings_api_keys')
+  const id = useId()
   const label = t(scopeLabelKey(scope))
   const tools = TOOL_COUNT_BY_SCOPE[scope]
-  const sepIdx = label.indexOf(': ')
-  const verb = sepIdx > 0 ? label.slice(0, sepIdx) : label
-  const description = sepIdx > 0 ? label.slice(sepIdx + 2) : ''
+  const verb = scopeVerb(label)
+  const description = label.length > verb.length ? label.slice(verb.length + 2) : ''
+  const locked = lockedNote !== undefined
 
   return (
+    // The whole card is the checkbox's label, so a click on the verb or the
+    // description toggles it. A locked card says why on the verb line (no
+    // new line, so the cards below never move under the pointer).
     <label
       className={cn(
-        'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-lg border p-2 transition-colors',
-        checked
-          ? 'border-border bg-secondary'
-          : 'border-border hover:bg-secondary/60'
+        'flex min-h-[68px] flex-col gap-1 rounded-lg p-2 transition-colors bg-control shadow-raised',
+        locked ? 'cursor-default' : 'cursor-pointer',
+        checked ? 'bg-secondary' : 'hover:bg-secondary/60'
       )}
     >
       <div className="flex items-center gap-2">
         <Checkbox
           checked={checked}
+          disabled={locked}
           onCheckedChange={onCheckedChange}
+          aria-labelledby={`${groupLabelId} ${id}-verb`}
+          aria-describedby={[description && `${id}-desc`, locked && `${id}-note`].filter(Boolean).join(' ') || undefined}
           className="shrink-0"
         />
-        <span className="flex-1 text-xs font-medium text-foreground">{verb}</span>
-        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span id={`${id}-verb`} className="text-xs font-medium text-foreground">{verb}</span>
+          {locked && (
+            <span id={`${id}-note`} className="truncate text-xs text-muted-foreground">
+              {lockedNote}
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {tools > 0 ? t('tools_count', { count: tools }) : t('rest_badge')}
         </span>
       </div>
       {description && (
-        <p className="ml-6 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+        <p id={`${id}-desc`} className="ml-6 line-clamp-2 text-xs leading-snug text-muted-foreground">
           {description}
         </p>
       )}
@@ -116,7 +136,9 @@ export function ApiKeysPanel({
   borderless?: boolean
 }) {
   const t = useTranslations('settings_api_keys')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const { dialogProps: sodDialogProps, confirm: confirmSod } = useDestructiveConfirm()
 
   const [isCreating, setIsCreating] = useState(false)
@@ -129,6 +151,7 @@ export function ApiKeysPanel({
   const [newKeyMode, setNewKeyMode] = useState<'live' | 'test'>('live')
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
   const [newKeyValue, setNewKeyValue] = useState('')
+  const scopeGroupIdPrefix = useId()
 
   // Company allowlist and per-company access. The picker only appears for a
   // user with two or more companies; every company starts ticked at read and
@@ -155,22 +178,22 @@ export function ApiKeysPanel({
     newKeyScopes.has('pending_operations:approve') && sodConflictScope !== null
 
   // Elevated scopes (write/approve/signoff) imply the group's read scope:
-  // ticking one ticks read, and unticking read clears the whole group.
-  function toggleScope(group: ScopeGroup, scope: Scope, checked: boolean) {
-    setNewKeyScopes((prev) => {
-      const next = new Set(prev)
-      const readScope = group.scopes.find((s) => scopeKind(s) === 'read')
-      if (checked) {
-        next.add(scope)
-        if (readScope) next.add(readScope)
-      } else if (scope === readScope) {
-        for (const s of group.scopes) next.delete(s)
-      } else {
-        next.delete(scope)
-      }
-      return next
-    })
+  // ticking one ticks read, which stays locked until they are unticked
+  // (scope-selection.ts).
+  function onScopeChange(group: ScopeGroup, scope: Scope, checked: boolean) {
+    setNewKeyScopes((prev) => toggleScope(prev, group, scope, checked))
   }
+
+  // "krävs för Skriv och Godkänn": the ticked elevated verbs holding read.
+  const verbList = new Intl.ListFormat(errorLocale, { type: 'conjunction' })
+  function lockedNoteFor(group: ScopeGroup, scope: Scope): string | undefined {
+    if (scope !== readScopeOf(group)) return undefined
+    const holders = readLockedBy(newKeyScopes, group)
+    if (holders.length === 0) return undefined
+    return t('scope_read_locked', { verbs: verbList.format(holders.map((s) => scopeVerb(t(scopeLabelKey(s))))) })
+  }
+
+  const PRESETS: ScopePreset[] = ['all', 'read_only', 'none']
 
   async function handleCreate() {
     // SoD: require an explicit, auditable acknowledgement before minting a key
@@ -213,10 +236,7 @@ export function ApiKeysPanel({
         // The route returns the canonical { error: { code, message, message_en } }
         // envelope: render the message string, never the object (a React child
         // must be a string, not { code, message, ... }).
-        const message =
-          typeof json.error === 'string'
-            ? json.error
-            : json.error?.message ?? t('toast_create_failed')
+        const message = getErrorMessage(json, { locale: errorLocale, fallback: t('toast_create_failed') })
         toast({ title: message, variant: 'destructive' })
         return
       }
@@ -249,24 +269,22 @@ export function ApiKeysPanel({
           <Button
             variant="outline"
             onClick={openCreateDialog}
-            disabled={keyCount >= MAX_KEYS}
+            disabled={!canWrite || keyCount >= MAX_KEYS}
+            title={lockedTitle}
           >
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            <PlusIcon className="h-3.5 w-3.5" />
             {t('create_key')}
           </Button>
         </SettingsRowEnd>
       </SettingsRow>
 
-      {/* Create key dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-[calc(100vw-2rem)] rounded-xl p-4 sm:max-w-3xl sm:p-6">
-          <DialogHeader>
-            <DialogTitle>{t('create_dialog_title')}</DialogTitle>
-            <DialogDescription>
-              {t('create_dialog_description')}
-            </DialogDescription>
-          </DialogHeader>
+      {/* Create key: a small record, made in a drawer over the list (V7 creation forms) */}
+      <SlideOver open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <SlideOverContent aria-describedby={undefined}>
+          <SlideOverHeader title={t('create_dialog_title')} />
+          <SlideOverBody>
           <div className="space-y-6">
+            <p className="text-[13px] text-muted-foreground">{t('create_dialog_description')}</p>
             <div className="space-y-2">
               <Label htmlFor="key-name">{t('name_label')}</Label>
               <Input
@@ -279,7 +297,7 @@ export function ApiKeysPanel({
             </div>
             <div className="space-y-2">
               <Label>{t('mode_label')}</Label>
-              <div className="flex w-fit rounded-full border p-0.5" role="radiogroup" aria-label={t('mode_label')}>
+              <div className="flex w-fit rounded-md border p-0.5" role="radiogroup" aria-label={t('mode_label')}>
                 {(['live', 'test'] as const).map((m) => (
                   <button
                     key={m}
@@ -288,7 +306,7 @@ export function ApiKeysPanel({
                     aria-checked={newKeyMode === m}
                     onClick={() => setNewKeyMode(m)}
                     className={cn(
-                      'rounded-full px-3 py-1.5 text-xs transition-colors',
+                      'rounded-md px-3 py-1.5 text-xs transition-colors',
                       newKeyMode === m
                         ? 'bg-secondary text-foreground'
                         : 'text-muted-foreground hover:text-foreground',
@@ -328,6 +346,19 @@ export function ApiKeysPanel({
                   <p className="text-xs text-muted-foreground">
                     {t('permissions_help')}
                   </p>
+                  {/* Starting points: a narrow key took one click per group. */}
+                  <div className="flex flex-wrap gap-x-3 pt-0.5" role="group" aria-label={t('scope_presets_aria')}>
+                    {PRESETS.map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        className={QUIET_LINK_CLASS}
+                        onClick={() => setNewKeyScopes(presetScopes(preset))}
+                      >
+                        {t(`scope_preset_${preset}`)}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                   {t('selected_count', { selected: newKeyScopes.size, total: ALL_SCOPES.length })}
@@ -336,7 +367,7 @@ export function ApiKeysPanel({
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {SCOPE_GROUPS.map((group) => (
                   <div key={group.domain} className="space-y-2">
-                    <h4 className="text-sm font-medium">
+                    <h4 id={`${scopeGroupIdPrefix}-${group.domain}`} className="text-sm font-medium">
                       {isRestOnlyGroup(group)
                         ? t('group_rest_only', { name: t(groupLabelKey(group)) })
                         : t(groupLabelKey(group))}
@@ -347,7 +378,9 @@ export function ApiKeysPanel({
                           key={scope}
                           scope={scope}
                           checked={newKeyScopes.has(scope)}
-                          onCheckedChange={(checked) => toggleScope(group, scope, checked)}
+                          onCheckedChange={(checked) => onScopeChange(group, scope, checked)}
+                          groupLabelId={`${scopeGroupIdPrefix}-${group.domain}`}
+                          lockedNote={lockedNoteFor(group, scope)}
                         />
                       ))}
                     </div>
@@ -357,16 +390,17 @@ export function ApiKeysPanel({
               {hasSodConflict && (
                 <div
                   role="alert"
-                  className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-foreground"
+                  className="flex items-start gap-2 rounded-lg p-3 text-xs text-foreground bg-control shadow-raised"
                 >
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                  <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                   <p className="leading-snug">{t('sod_warning')}</p>
                 </div>
               )}
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
+          </SlideOverBody>
+          <SlideOverFooter>
+            <Button variant="ghost" onClick={() => setShowCreateDialog(false)}>
               {t('cancel')}
             </Button>
             <Button
@@ -374,11 +408,11 @@ export function ApiKeysPanel({
               disabled={newKeyScopes.size === 0 || (hasCompanyPicker && newKeyCompanies.size === 0)}
               loading={isCreating}
             >
-              {t('create')}
+              {t('create_key')}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SlideOverFooter>
+        </SlideOverContent>
+      </SlideOver>
 
       <DestructiveConfirmDialog {...sodDialogProps} />
 

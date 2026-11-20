@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { CreateSalesOrderSchema, SalesOrderListQuerySchema } from '@/lib/api/schemas'
@@ -10,8 +9,6 @@ import { createSalesOrder } from '@/lib/sales-orders/write'
 import { serviceFailureResponse } from '@/lib/sales-orders/respond'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import type { SalesOrder } from '@/types'
-
-ensureInitialized()
 
 /**
  * GET /api/sales-orders: the company's kundorder with customer, lines and

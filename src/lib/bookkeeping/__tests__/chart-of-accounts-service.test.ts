@@ -158,6 +158,32 @@ describe('deleteAccount', () => {
     expect(writes(calls)).toEqual([])
   })
 
+  it('refuses an account a budget uses, though no verifikat does (accounted#134)', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'acc-1', account_number: '5410', account_name: 'X', is_system_account: false } })
+    enqueue({ data: [] })
+    enqueue({ data: [{ budget_id: 'budget-1' }] })
+    const outcome = await deleteAccount(ctxFor(supabase), '5410')
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'ACCOUNT_IN_USE',
+      messageSv: expect.stringContaining('budget'),
+      details: { account_number: '5410', usage_count: 0, budget_id: 'budget-1' },
+    })
+    expect(writes(calls)).toEqual([])
+  })
+
+  it('deletes an account no verifikat and no budget uses', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'acc-1', account_number: '5410', account_name: 'X', is_system_account: false } })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    const outcome = await deleteAccount(ctxFor(supabase), '5410')
+    expect(outcome).toMatchObject({ ok: true, data: { deleted: true, account_number: '5410' } })
+    expect(writes(calls).length).toBeGreaterThan(0)
+  })
+
   it('refuses a system account before counting usage', async () => {
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'acc-1', account_number: '1930', account_name: 'Bank', is_system_account: true } })

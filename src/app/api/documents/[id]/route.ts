@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { removeDocument } from '@/lib/documents/document-actions'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { eventBus } from '@/lib/events'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /**
  * GET /api/documents/:id

@@ -1,0 +1,297 @@
+[
+  {
+    "name": "clearing: an issued invoice paid in full (mark-paid without lines)",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-15",
+          "description": "Inbetalning kundfaktura F-1000, Kund AB",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1000, Kund AB"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Inbetalning kundfaktura F-1000, Kund AB"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "status": "paid",
+      "journalEntryId": "je-0"
+    }
+  },
+  {
+    "name": "clearing: an EUR invoice with a kursvinst, to the account the invoice asked for",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-16",
+          "description": "Inbetalning kundfaktura F-1001, Kund AB",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "1931",
+              "debit_amount": 2340,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1001, Kund AB"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Inbetalning kundfaktura F-1001, Kund AB"
+            },
+            {
+              "account_number": "3960",
+              "debit_amount": 0,
+              "credit_amount": 40,
+              "line_description": "Valutakursvinst"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "status": "paid",
+      "journalEntryId": "je-1"
+    }
+  },
+  {
+    "name": "clearing: a Stripe payment into the PSP balance on 1686",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-17",
+          "description": "Inbetalning kundfaktura F-1002, Kund AB",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1002, Kund AB"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Inbetalning kundfaktura F-1002, Kund AB"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "status": "paid",
+      "journalEntryId": "je-2"
+    }
+  },
+  {
+    "name": "cash: kontantmetoden books a never-booked invoice with its moms",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-18",
+          "description": "Kontantbetalning kundfaktura F-1003, Kund AB",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning kundfaktura F-1003, Kund AB"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Försäljning faktura F-1003"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Utgående moms 25% faktura F-1003"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "status": "paid",
+      "journalEntryId": "je-3"
+    }
+  },
+  {
+    "name": "cash: a kontantfaktura paid at issue under faktureringsmetoden",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Kontantbetalning kundfaktura F-1004, Kund AB",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning kundfaktura F-1004, Kund AB"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Försäljning faktura F-1004"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Utgående moms 25% faktura F-1004"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "status": "paid",
+      "journalEntryId": "je-4"
+    }
+  },
+  {
+    "name": "own rows: a partial payment on the person's rows",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-19",
+          "description": "Inbetalning kundfaktura F-1005, Kund AB",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 600,
+              "credit_amount": 0,
+              "line_description": "Delbetalning"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 600
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "status": "partially_paid",
+      "journalEntryId": "je-5"
+    }
+  },
+  {
+    "name": "own rows: kontantmetoden on the person's rows books as a cash payment",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Inbetalning kundfaktura F-1006",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1500,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 1200
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "status": "paid",
+      "journalEntryId": "je-6"
+    }
+  },
+  {
+    "name": "own rows: no open fiscal period, refused before the engine",
+    "calls": [],
+    "outcome": {
+      "ok": false,
+      "code": "INVOICE_PAID_NO_FISCAL_PERIOD"
+    }
+  },
+  {
+    "name": "clearing: no open fiscal period, refused",
+    "calls": [],
+    "outcome": {
+      "ok": false,
+      "code": "INVOICE_PAID_BOOK_FAILED"
+    }
+  }
+]

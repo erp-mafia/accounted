@@ -57,6 +57,9 @@ export interface BrandingConfig {
   navDensity: 'standard' | 'slim'
 }
 
+/** The built-in mark (a dark tile); a deployment may set its own logo instead. */
+export const DEFAULT_LOGO_PATH = '/accounted-icon.png'
+
 const DEFAULT_BRANDING: BrandingConfig = {
   appName: 'Accounted',
   appDescription: 'Ekonomihantering',
@@ -71,7 +74,7 @@ const DEFAULT_BRANDING: BrandingConfig = {
   // The visible brand mark now renders as text via <BrandWordmark>; this
   // image path is kept as a fallback for any surface still using <Image>
   // (e.g. PWA-style metadata that demands a concrete file).
-  logoPath: '/accounted-icon.png',
+  logoPath: DEFAULT_LOGO_PATH,
   faviconPath: '/favicon.ico',
   appleTouchIconPath: '/icons/icon-192.png',
   pwaIconBasePath: '/icons',

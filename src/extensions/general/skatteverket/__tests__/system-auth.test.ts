@@ -85,7 +85,10 @@ describe('system-auth config', () => {
   })
 
   it('parses scopes from env with a sensible default', () => {
-    expect(getSystemScopes()).toEqual(['skattekonto', 'agd:lasa', 'momsdeklaration', 'obr'])
+    // SKV's real scope names for the APIs the ombud path calls. Skattekonto is
+    // `ska`: `skattekonto` is not a scope, and a token without `ska` gets a
+    // 403 on every saldo read and grant probe.
+    expect(getSystemScopes()).toEqual(['ska', 'momsdeklaration', 'obr'])
     process.env.SKATTEVERKET_SYSTEM_SCOPES = 'a  b'
     expect(getSystemScopes()).toEqual(['a', 'b'])
   })

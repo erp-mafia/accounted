@@ -2,18 +2,20 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
-import { formatRedovisare } from '@/lib/skatteverket/format'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { companyRedovisare } from '@/lib/company/org-number'
 import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { refreshSkattekontoProposals } from './skattekonto-proposals'
 import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattekonto-reconciliation'
+import { ensureSkattekontoAccountDerived } from '@/lib/skatteverket/skattekonto-account'
 import {
   SKATTEKONTO_RECONCILIATION_LATEST_KEY,
   type SkattekontoReconciliationLatest,
 } from '@/lib/reconciliation/skattekonto-latest'
-import { getSaldo, getTransaktioner } from './skattekonto-client'
+import { getSaldo, getTransaktioner, isSkattekontoMissing } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
 import { auditUserIdFor } from './audit'
 import type {
@@ -29,6 +31,62 @@ const log = createLogger('skattekonto-sync')
 const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
 const LAST_SYNCED_AT_KEY = 'skattekonto_last_synced_at'
 const SKIPPED_ROWS_KEY = 'skattekonto_skipped_rows'
+const UNAVAILABLE_KEY = 'skattekonto_unavailable'
+
+/**
+ * Why Skatteverket would not hand over the skattekonto on the last attempt,
+ * when the answer was a state rather than a failure:
+ *   no_account     : Skatteverket keeps no skattekonto for the org number
+ *                    (yet): 404 / felkod 3. Newly formed companies.
+ *   not_authorized : the consenting person lacks Skatteverket's
+ *                    authorization for the company (403 felkod 6,
+ *                    BEHORIGHET_SAKNAS).
+ * Stored per company in extension_data and removed by the next successful
+ * sync. The settings panel shows it and the hourly cron re-checks it on a
+ * slower cadence instead of logging the same answer as an error every hour.
+ */
+export type SkattekontoUnavailableReason = 'no_account' | 'not_authorized'
+
+export interface SkattekontoUnavailableState {
+  reason: SkattekontoUnavailableReason
+  /** First attempt that got this answer (kept while the reason is unchanged). */
+  since: string
+  /** Latest attempt that got this answer. */
+  checkedAt: string
+}
+
+/** The unavailable reason an error from a skattekonto read stands for, or null for a real failure. */
+export function skattekontoUnavailableReason(err: unknown): SkattekontoUnavailableReason | null {
+  if (isSkattekontoMissing(err)) return 'no_account'
+  if (err instanceof SkatteverketAuthError && err.code === 'BEHORIGHET_SAKNAS') return 'not_authorized'
+  return null
+}
+
+/**
+ * Record (or refresh) the unavailable state. Best effort: health bookkeeping
+ * must never mask the answer the caller is about to rethrow.
+ */
+async function recordUnavailable(
+  ctx: ExtensionContext,
+  reason: SkattekontoUnavailableReason,
+): Promise<void> {
+  try {
+    const previous = await ctx.settings.get<SkattekontoUnavailableState>(UNAVAILABLE_KEY)
+    const now = new Date().toISOString()
+    const state: SkattekontoUnavailableState = {
+      reason,
+      since: previous?.reason === reason && previous.since ? previous.since : now,
+      checkedAt: now,
+    }
+    await ctx.settings.set(UNAVAILABLE_KEY, state)
+  } catch (err) {
+    log.warn('skattekonto unavailable state not recorded', {
+      companyId: ctx.companyId,
+      reason,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
 
 /**
  * Cap the retained skipped-row trace: it mirrors the CURRENT sync response
@@ -40,10 +98,9 @@ const MAX_SKIPPED_ROWS_RETAINED = 50
 /** SKV's default lookback for tidigare transaktioner when no datumFrom is sent. */
 const SKV_DEFAULT_WINDOW_DAYS = 555
 
+/** `days` before the Swedish calendar day, the day SKV counts its own window from. */
 function isoDateDaysAgo(days: number): string {
-  const d = new Date()
-  d.setUTCDate(d.getUTCDate() - days)
-  return d.toISOString().slice(0, 10)
+  return addDaysIso(todayIsoStockholm(), -days)
 }
 
 /**
@@ -164,17 +221,9 @@ async function resolveOmfragad(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<string> {
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('org_number, entity_type')
-    .eq('company_id', companyId)
-    .single()
-
-  if (!settings?.org_number) {
-    throw new Error('Organisationsnummer saknas i företagsinställningar')
-  }
-
-  return formatRedovisare(settings.org_number, settings.entity_type)
+  const redovisare = await companyRedovisare(supabase, companyId)
+  if (!redovisare) throw new Error('Organisationsnummer saknas i företagsinställningar')
+  return redovisare
 }
 
 /**
@@ -273,6 +322,8 @@ export async function syncSkattekonto(
       getTransaktioner(auth, omfragad, datumFrom, { companyId: ctx.companyId, userId: auditUserId }),
     ])
   } catch (err) {
+    const unavailable = skattekontoUnavailableReason(err)
+    if (unavailable) await recordUnavailable(ctx, unavailable)
     if (err instanceof SkatteverketAuthError) {
       if (
         err.code === 'REFRESH_EXHAUSTED' ||
@@ -514,7 +565,7 @@ export async function syncSkattekonto(
 
   // Auto-settle AGI tax payments: when the period's AGI debit is booked
   // (one combined "Arbetsgivardeklaration YYYYMM" row in the test
-  // environment, the "Avdragen skatt" + "Arbetsgivaravgift" pair in prod)
+  // environment, the "Avdragen skatt" + "Arbetsgivaravgift" pair in production)
   // and the account is not in deficit, the period is paid.
   // Best-effort inside (never throws).
   await settleAgiTaxPayments(
@@ -524,10 +575,21 @@ export async function syncSkattekonto(
     saldo.saldoSkatteverket,
   )
 
+  // The skattekonto's ledger account (1630, or 2012 for an enskild firma
+  // that runs it there), derived once from the books while the company has
+  // not chosen: an imported K1/Fortnox chart on 2012 is matched on 2012 from
+  // its first sync (PH 175). Best effort inside (never throws).
+  const account = await ensureSkattekontoAccountDerived(ctx.supabase, ctx.companyId, (err) =>
+    log.warn('skattekonto account not derived', {
+      companyId: ctx.companyId,
+      message: err instanceof Error ? err.message : String(err),
+    }),
+  )
+
   // Exact-twin proposals for the open rows (migration 20260823120000): the
   // reconciliation page, the worklist and agents read them from the row
   // instead of recomputing per request. Best-effort inside (never throws).
-  const proposals = await refreshSkattekontoProposals(ctx.supabase, ctx.companyId)
+  const proposals = await refreshSkattekontoProposals(ctx.supabase, ctx.companyId, account)
   if (proposals.proposed > 0 || proposals.cleared > 0) {
     log.info('proposals refreshed', { companyId: ctx.companyId, ...proposals })
   }
@@ -539,12 +601,22 @@ export async function syncSkattekonto(
   }
   await ctx.settings.set(BALANCE_SNAPSHOT_KEY, snapshot)
   await ctx.settings.set(LAST_SYNCED_AT_KEY, new Date().toISOString())
+  // Skatteverket handed the account over: any earlier "no account / not
+  // authorized" state is history. Best effort, like recordUnavailable.
+  try {
+    await ctx.settings.clear(UNAVAILABLE_KEY)
+  } catch (err) {
+    log.warn('skattekonto unavailable state not cleared', {
+      companyId: ctx.companyId,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   // Persist the reconciliation summary so the Hem notice and the attention
   // resource can read "skattekontot stämmer inte med bokföringen" cheaply
   // instead of recomputing the bridge on every render. Best effort.
   try {
-    const status = await getSkattekontoReconciliationStatus(ctx.supabase, ctx.companyId)
+    const status = await getSkattekontoReconciliationStatus(ctx.supabase, ctx.companyId, { account })
     if (status) {
       const latest: SkattekontoReconciliationLatest = {
         as_of: status.as_of,
@@ -626,3 +698,4 @@ export async function syncSkattekonto(
 export const SKATTEKONTO_BALANCE_SNAPSHOT_KEY = BALANCE_SNAPSHOT_KEY
 export const SKATTEKONTO_LAST_SYNCED_AT_KEY = LAST_SYNCED_AT_KEY
 export const SKATTEKONTO_SKIPPED_ROWS_KEY = SKIPPED_ROWS_KEY
+export const SKATTEKONTO_UNAVAILABLE_KEY = UNAVAILABLE_KEY

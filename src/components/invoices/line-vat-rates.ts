@@ -1,6 +1,8 @@
 import {
   getAvailableVatRates,
   getPermittedVatRates,
+  resolveInvoiceVatRules,
+  type InvoiceVatOverride,
   type VatRateOption,
 } from '@/lib/invoices/vat-rules'
 import type { CustomerType } from '@/types'
@@ -32,6 +34,8 @@ import type { CustomerType } from '@/types'
 /** The minimum this module needs to know about the picked customer. */
 export interface VatRateCustomer {
   customer_type: CustomerType
+  /** Read only when the invoice states its own treatment (resolveInvoiceVatRules). */
+  vat_number?: string | null
   vat_number_validated?: boolean | null
   /** ISO 3166-1 alpha-2; gates reverse charge together with the two above. */
   country?: string | null
@@ -62,8 +66,17 @@ export interface LineVatRatePlan {
  */
 export const FALLBACK_VAT_RATE = 25
 
+/**
+ * `override` is what the invoice states about its own supply (crm#1007: the
+ * domestic reverse charge checkbox). When the stated facts hold for this
+ * customer (resolveInvoiceVatRules), that treatment's permitted rates are
+ * both the lawful set and the default: under omvänd betalningsskyldighet
+ * that is 0 % alone. When they do not (no Swedish VAT number yet), the plan
+ * stays the customer's, exactly as the server would book it.
+ */
 export function resolveLineVatRates(
   customer: VatRateCustomer | null | undefined,
+  override?: InvoiceVatOverride | null,
 ): LineVatRatePlan {
   if (!customer) {
     return {
@@ -72,6 +85,19 @@ export function resolveLineVatRates(
       defaultRate: FALLBACK_VAT_RATE,
       hasSingleDefault: false,
       isPickerLocked: false,
+    }
+  }
+  if (override) {
+    const resolved = resolveInvoiceVatRules(customer, override)
+    if (resolved.ok && !resolved.explainFromCustomer) {
+      const stated = resolved.permittedRates
+      return {
+        options: stated,
+        defaultRates: stated,
+        defaultRate: stated[0]?.rate ?? FALLBACK_VAT_RATE,
+        hasSingleDefault: stated.length === 1,
+        isPickerLocked: stated.length === 1,
+      }
     }
   }
   const validated = customer.vat_number_validated ?? false
@@ -121,6 +147,32 @@ export function planCustomerSwitchVatSnap(params: {
     const current = item?.vat_rate ?? previousDefaultRate
     if (current !== previousDefaultRate) return
     snaps.push({ index, rate: nextDefaultRate })
+  })
+  return snaps
+}
+
+/**
+ * Which lines move when the rate plan changes: a customer switch, a customer
+ * that gains its Swedish VAT number, or the invoice's own treatment ticked on
+ * or off. A plan locked to one rate (omvänd betalningsskyldighet: 0 % only)
+ * takes every priced line, since no other rate is lawful under it and the
+ * server would refuse the invoice. Any other plan moves only the lines still
+ * on the previous default (planCustomerSwitchVatSnap).
+ */
+export function planVatPlanSnap(params: {
+  items: VatRateLine[]
+  previousDefaultRate: number
+  next: LineVatRatePlan
+}): Array<{ index: number; rate: number }> {
+  const { items, previousDefaultRate, next } = params
+  if (!next.isPickerLocked) {
+    return planCustomerSwitchVatSnap({ items, previousDefaultRate, nextDefaultRate: next.defaultRate })
+  }
+  const snaps: Array<{ index: number; rate: number }> = []
+  items.forEach((item, index) => {
+    if (item?.line_type === 'text') return
+    const current = item?.vat_rate ?? previousDefaultRate
+    if (current !== next.defaultRate) snaps.push({ index, rate: next.defaultRate })
   })
   return snaps
 }

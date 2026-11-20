@@ -34,8 +34,11 @@ export function parseStartMonthDay(value: string | null | undefined): number | n
  * strong but not perfect signal (a filed report can lag in the data).
  * Acceptable because every consumer only feeds a confirm-question
  * suggestion; never auto-set first_fiscal_year from this.
- * Returns both the toggle state and a seeded `first_year_start` (always the
- * 1st of the registration month, the format the date inputs expect).
+ * Returns both the toggle state and a seeded `first_year_start`: the
+ * registration day itself (UTC date, as the onboarding shows it). An
+ * aktiebolag is bokföringsskyldigt from its registration and only the first
+ * year may start mid-month (BFL 2 and 3 kap.), so rounding to the 1st of the
+ * month seeded a start before the company existed (crm#1140).
  *
  * `now` exists for tests; production callers omit it.
  */
@@ -57,7 +60,5 @@ export function deriveFirstYearDefaults(
   const windowMonths = opts?.noClosedPeriod ? 18 : 12
   const monthsAgo = (now - regDate.getTime()) / (1000 * 60 * 60 * 24 * 30.44)
   if (monthsAgo >= windowMonths) return { isFirstFiscalYear: false, firstYearStart: undefined }
-  const year = regDate.getUTCFullYear()
-  const month = String(regDate.getUTCMonth() + 1).padStart(2, '0')
-  return { isFirstFiscalYear: true, firstYearStart: `${year}-${month}-01` }
+  return { isFirstFiscalYear: true, firstYearStart: regDate.toISOString().slice(0, 10) }
 }

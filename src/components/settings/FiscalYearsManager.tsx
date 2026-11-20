@@ -1,7 +1,7 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
-import { useState, useCallback } from 'react'
+import { useTranslations, useLocale } from 'next-intl'
+import { useState, useCallback, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -10,19 +10,29 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
-import { Plus, Lock, Unlock, Eraser, Pencil } from 'lucide-react'
+import {
+  BackspaceIcon,
+  LockClosedIcon,
+  LockOpenIcon,
+  PencilIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { FiscalYearResetDialog } from '@/components/settings/FiscalYearResetDialog'
+import { FiscalYearReopenDialog } from '@/components/settings/FiscalYearReopenDialog'
 import { FiscalYearEditDialog } from '@/components/settings/FiscalYearEditDialog'
 import { SIEOpeningBalanceReview } from '@/components/settings/SIEOpeningBalanceReview'
-import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fiscalYearShortName, suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** Status of a fiscal period, in legal precedence: closed > locked > open. */
 function periodStatus(p: FiscalPeriod): 'closed' | 'locked' | 'open' {
@@ -40,8 +50,10 @@ const STATUS_VARIANT: Record<'closed' | 'locked', 'secondary' | 'warning'> = {
 
 export function FiscalYearsManager() {
   const t = useTranslations('settings_bookkeeping')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { role } = useCompany()
+  const { canWrite, lockedTitle } = useViewerLock()
   const { dialogProps, confirm } = useDestructiveConfirm()
   // Session-cached registry (lib/reference-data): the same list every
   // picker renders, so a lock/unlock/reset here is visible everywhere the
@@ -51,7 +63,9 @@ export function FiscalYearsManager() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mutatingId, setMutatingId] = useState<string | null>(null)
   const [resetTarget, setResetTarget] = useState<FiscalPeriod | null>(null)
+  const [reopenTarget, setReopenTarget] = useState<FiscalPeriod | null>(null)
   const [editTarget, setEditTarget] = useState<FiscalPeriod | null>(null)
+  const [editMode, setEditMode] = useState<'edit' | 'start'>('edit')
 
   // Only owners/admins may change a period's lock state. The API enforces this
   // too (requireWrite); this just hides controls a viewer/member can't use.
@@ -61,6 +75,67 @@ export function FiscalYearsManager() {
 
   // Newest first: matches the API's ordering and reads most-recent-at-top.
   const sorted = [...periods].sort((a, b) => b.period_start.localeCompare(a.period_start))
+  const earliestId = sorted.length > 0 ? sorted[sorted.length - 1].id : null
+  const earliest = sorted.length > 0 ? sorted[sorted.length - 1] : null
+
+  // crm#1450: an empty first year (seeded before the company existed by an
+  // older onboarding) can be removed. Offered only on the earliest open year
+  // of a company with more than one year and no posted verifikat in it; the
+  // server checks everything else (drafts, voucher numbers, linked records).
+  const [earliestPostedCount, setEarliestPostedCount] = useState<number | null>(null)
+  const earliestCandidateId =
+    canManage && sorted.length > 1 && earliest && periodStatus(earliest) === 'open' ? earliest.id : null
+  useEffect(() => {
+    setEarliestPostedCount(null)
+    if (!earliestCandidateId) return
+    let cancelled = false
+    fetch(`/api/bookkeeping/fiscal-periods/${earliestCandidateId}/entry-count`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { data?: { posted_count?: number } } | null) => {
+        if (!cancelled && typeof body?.data?.posted_count === 'number') setEarliestPostedCount(body.data.posted_count)
+      })
+      .catch(() => {
+        // Safe to ignore: without the count Ta bort is simply not offered,
+        // and the server refuses any year that is not empty anyway.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [earliestCandidateId])
+
+  async function handleDelete(period: FiscalPeriod) {
+    const ok = await confirm({
+      title: t('fy_delete_confirm_title', { name: period.name }),
+      description: t('fy_delete_confirm_body', { name: period.name }),
+      confirmLabel: t('fy_action_delete'),
+      cancelLabel: t('fy_confirm_cancel'),
+      variant: 'destructive',
+    })
+    if (!ok) return
+    setMutatingId(period.id)
+    try {
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${period.id}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('fy_action_error') }))
+      }
+      toast({ title: t('fy_delete_success') })
+      await refreshPeriods()
+    } catch (err) {
+      toast({
+        title: t('fy_action_error'),
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
+        variant: 'destructive',
+      })
+    } finally {
+      setMutatingId(null)
+    }
+  }
+
+  function openEdit(period: FiscalPeriod, mode: 'edit' | 'start') {
+    setEditMode(mode)
+    setEditTarget(period)
+  }
 
   async function runLockAction(
     period: FiscalPeriod,
@@ -75,7 +150,7 @@ export function FiscalYearsManager() {
       if (!res.ok) {
         // Surface the backend's message verbatim: e.g. "X affärstransaktion(er)
         // saknar bokföring", which tells the user exactly what to fix first.
-        throw new Error(body?.error?.message || t('fy_action_error'))
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('fy_action_error') }))
       }
       toast({
         title:
@@ -152,10 +227,24 @@ export function FiscalYearsManager() {
           const isMutating = mutatingId === p.id
           const closedExternally = status === 'closed' && p.closed_externally === true
           const canReopen = canManage && closedExternally && !p.closing_entry_id
+          // A year closed with a bokslut here: the owner reopens it while its
+          // årsredovisning has no legal weight (crm#1290). A closing entry on
+          // a year that is no longer closed is a reopen that stopped midway,
+          // offered again so it can finish. The dialog shows every gate; the
+          // server enforces them.
+          const canReopenClosed =
+            role === 'owner' && !closedExternally && Boolean(p.closing_entry_id)
+          // crm#1140: the company's first year may still get its start
+          // corrected within its month once it is locked or closed (the
+          // registration day instead of the 1st). Posted opening balances
+          // pin the start, so the action is not offered then.
+          const canCorrectStart =
+            canManage && status !== 'open' && p.id === earliestId && !p.opening_balance_entry_id
+          const canDelete = p.id === earliestCandidateId && earliestPostedCount === 0
           return (
-            <div key={p.id} className="flex flex-col items-start gap-3 border-b border-border px-1 py-3 sm:flex-row sm:items-center">
+            <div key={p.id} className="flex flex-col items-start gap-3 border-b-hairline px-1 py-3 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
-                <span className="text-sm font-medium">{p.name}</span>
+                <span className="text-sm font-medium">{fiscalYearShortName(p.name)}</span>
                 <span className="ml-2 text-sm text-muted-foreground tabular-nums">
                   {formatDate(p.period_start)} - {formatDate(p.period_end)}
                 </span>
@@ -170,65 +259,96 @@ export function FiscalYearsManager() {
                   </Badge>
                 )}
                 {/* Ändra is offered on open years only, like Lås and
-                    Nollställ: the PATCH route refuses locked and closed years
-                    outright, and the row already carries that chip. */}
+                    Nollställ: the PATCH route refuses locked and closed years,
+                    and the row already carries that chip. The one exception
+                    is Rätta startdatum on the first year, below. */}
                 {canManage && status === 'open' && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     disabled={isMutating}
-                    onClick={() => setEditTarget(p)}
+                    onClick={() => openEdit(p, 'edit')}
                   >
-                    <Pencil className="mr-1.5 h-4 w-4" />
+                    <PencilIcon className="h-4 w-4" />
                     {t('fy_action_edit')}
+                  </Button>
+                )}
+                {canCorrectStart && (
+                  <Button
+                    variant="outline"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => openEdit(p, 'start')}
+                  >
+                    <PencilIcon className="h-4 w-4" />
+                    {t('fy_action_correct_start')}
                   </Button>
                 )}
                 {canManage && status === 'open' && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     loading={isMutating}
                     onClick={() => handleLock(p)}
                   >
-                    {!isMutating && <Lock className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockClosedIcon className="h-4 w-4" />}
                     {t('fy_action_lock')}
                   </Button>
                 )}
                 {canManage && status === 'open' && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-destructive hover:text-destructive"
                     disabled={isMutating}
                     onClick={() => setResetTarget(p)}
                   >
-                    <Eraser className="mr-1.5 h-4 w-4" />
+                    <BackspaceIcon className="h-4 w-4" />
                     {t('fy_action_reset')}
+                  </Button>
+                )}
+                {canDelete && (
+                  <Button
+                    variant="outline"
+                    className="text-destructive hover:text-destructive"
+                    loading={isMutating}
+                    disabled={!canWrite}
+                    title={lockedTitle}
+                    onClick={() => handleDelete(p)}
+                  >
+                    {!isMutating && <TrashIcon className="h-4 w-4" />}
+                    {t('fy_action_delete')}
                   </Button>
                 )}
                 {canManage && status === 'locked' && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     loading={isMutating}
                     onClick={() => handleUnlock(p)}
                   >
-                    {!isMutating && <Unlock className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockOpenIcon className="h-4 w-4" />}
                     {t('fy_action_unlock')}
                   </Button>
                 )}
                 {canReopen && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     loading={isMutating}
                     onClick={() => handleReopen(p)}
                   >
-                    {!isMutating && <Unlock className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockOpenIcon className="h-4 w-4" />}
+                    {t('fy_action_reopen')}
+                  </Button>
+                )}
+                {canReopenClosed && (
+                  <Button
+                    variant="outline"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => setReopenTarget(p)}
+                  >
+                    <LockOpenIcon className="h-4 w-4" />
                     {t('fy_action_reopen')}
                   </Button>
                 )}
@@ -242,12 +362,12 @@ export function FiscalYearsManager() {
       <div className="px-1 pt-3">
         <Button
           variant="outline"
-          size="sm"
           className="text-muted-foreground hover:text-foreground"
           onClick={() => setDialogOpen(true)}
-          disabled={isLoading}
+          disabled={!canWrite || isLoading}
+          title={lockedTitle}
         >
-          <Plus className="mr-1.5 h-4 w-4" />
+          <PlusIcon className="h-4 w-4" />
           {t('fy_create')}
         </Button>
       </div>
@@ -255,14 +375,16 @@ export function FiscalYearsManager() {
       <CreatePeriodDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        entryDate={suggestSeedDate(periods, new Date().toISOString().split('T')[0])}
+        entryDate={suggestSeedDate(periods, todayIsoStockholm())}
         periods={periods}
         onCreated={refreshPeriods}
       />
 
       {editTarget && (
         <FiscalYearEditDialog
+          key={`${editTarget.id}-${editMode}`}
           period={editTarget}
+          mode={editMode}
           open={editTarget !== null}
           onOpenChange={(open) => {
             if (!open) setEditTarget(null)
@@ -280,6 +402,18 @@ export function FiscalYearsManager() {
             if (!open) setResetTarget(null)
           }}
           onReset={refreshPeriods}
+        />
+      )}
+
+      {reopenTarget && (
+        <FiscalYearReopenDialog
+          periodId={reopenTarget.id}
+          periodName={reopenTarget.name}
+          open={reopenTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setReopenTarget(null)
+          }}
+          onReopened={refreshPeriods}
         />
       )}
 

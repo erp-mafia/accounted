@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { generateJournalRegister } from '@/lib/reports/journal-register'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -11,6 +12,7 @@ import {
 } from '@/lib/reports/xlsx-export'
 
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 interface FlatRow {
   voucher: string
@@ -46,7 +48,7 @@ export const GET = withRouteContext('report.journal_register.xlsx', async (reque
     // file is filterable in Excel without losing context.
     const rows: FlatRow[] = []
     for (const entry of report.entries) {
-      const voucherLabel = `${entry.voucher_series}${entry.voucher_number}`
+      const voucherLabel = formatVoucher(entry)
       for (const line of entry.lines) {
         rows.push({
           voucher: voucherLabel,
@@ -63,7 +65,7 @@ export const GET = withRouteContext('report.journal_register.xlsx', async (reque
       }
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Grundbok',
         columns: [
@@ -93,12 +95,7 @@ export const GET = withRouteContext('report.journal_register.xlsx', async (reque
     ])
 
     const filename = xlsxFilename('grundbok', companyRow?.company_name ?? '', report.period.end)
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera grundbok' },

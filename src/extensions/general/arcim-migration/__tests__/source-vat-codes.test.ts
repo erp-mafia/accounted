@@ -95,7 +95,7 @@ function buildCtx(): ExtensionContext {
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
   }
-  return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+  return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
 
 function request() {
@@ -120,7 +120,6 @@ beforeEach(() => {
   ;(getAllowedFiscalYears as Mock).mockReturnValue(new Set([CY - 2, CY - 1, CY]))
   ;(fetchProviderSieFiles as Mock).mockResolvedValue({
     files: [{ fiscalYear: CY, rawContent: SIE }],
-    availableYears: [CY],
     sourceYears: [{ year: CY, fromDate: `${CY}-01-01`, toDate: `${CY}-12-31`, inDefaultSelection: true }],
     failedYears: [],
     omittedYears: [],

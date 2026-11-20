@@ -47,4 +47,21 @@ describe('calculateSoliditet', () => {
     expect(mapping.totals.egetKapitalSkulder.current).toBe(768_122)
     expect(calculateSoliditet(mapping)).toBe(84.8)
   })
+
+  it('counts the result of a prior year that was never closed in the books (crm#1080)', () => {
+    // A flerårsöversikt year: 200 000 kr assets, 50 000 kr aktiekapital,
+    // 100 000 kr liabilities and a 50 000 kr result still on the result
+    // accounts. Equity is 100 000 kr, not the 50 000 kr that is booked.
+    const rows = [
+      row('1930', 200_000, 0),
+      row('2081', 0, 50_000),
+      row('2440', 0, 100_000),
+      row('3010', 0, 50_000),
+    ]
+    const pair = { full: rows, preClosing: rows }
+
+    expect(calculateSoliditet(mapTrialBalancesToK2(pair, null, { currentIsPriorYear: true }))).toBe(50)
+    // The current year is never derived: its closing has to be booked.
+    expect(calculateSoliditet(mapTrialBalancesToK2(pair, null))).toBe(25)
+  })
 })

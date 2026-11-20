@@ -60,21 +60,33 @@ export const AGIKontrolleraIUSchema = z
     kontantErsattningUlagAG: AMOUNT.optional(),
     avdrPrelSkatt: AMOUNT.optional(),
 
-    // Benefit amounts (UlagAG variants)
+    // Benefit amounts (UlagAG variants). Kostförmån has no field of its
+    // own: it is summed into FK012 with the other benefits (#81).
     skatteplBilformanUlagAG: AMOUNT.optional(),       // FK013
     drivmVidBilformanUlagAG: AMOUNT.optional(),       // FK018
-    kostformanUlagAG: AMOUNT.optional(),              // FK015
     skatteplOvrigaFormanerUlagAG: AMOUNT.optional(),  // FK012
 
     // Housing benefit KRYSS flags
     bostadsformanSmahusUlagAG: z.boolean().optional(),    // FK041
     bostadsformanEjSmahusUlagAG: z.boolean().optional(),  // FK043
 
-    // F-skatt / ej UlagSA variants
+    // UlagEA variants: underlag for the recipient's egenavgifter, where the
+    // AGI declares an F-skatt payee's pay and benefits (Fältlista 1.1.18.1
+    // FK125 "inkomst av tjänst för mottagare med F-skatt"; #82). JSON names
+    // per Tjänstebeskrivning Arbetsgivardeklaration inlämning 8.2. As for
+    // FK041/FK043, the housing flags carry no amount: the förmånsvärde goes
+    // in FK126 (kontroll S_157, which Skatteverket answers in kontrollsvar).
+    kontantErsattningUlagEA: AMOUNT.optional(),           // FK125
+    skatteplBilformanUlagEA: AMOUNT.optional(),           // FK127
+    drivmVidBilformanUlagEA: AMOUNT.optional(),           // FK128
+    skatteplOvrigaFormanerUlagEA: AMOUNT.optional(),      // FK126
+    bostadsformanSmahusUlagEA: z.boolean().optional(),    // FK123
+    bostadsformanEjSmahusUlagEA: z.boolean().optional(),  // FK124
+
+    // Ej UlagSA variants: pay that is no underlag for socialavgifter
     kontantErsattningEjUlagSA: AMOUNT.optional(),         // FK131
     skatteplBilformanEjUlagSA: AMOUNT.optional(),         // FK133
     drivmVidBilformanEjUlagSA: AMOUNT.optional(),         // FK134
-    kostformanEjUlagSA: AMOUNT.optional(),                // FK139
     skatteplOvrigaFormanerEjUlagSA: AMOUNT.optional(),    // FK132
     bostadsformanSmahusEjUlagSA: z.boolean().optional(),  // FK137
     bostadsformanEjSmahusEjUlagSA: z.boolean().optional(),// FK138
@@ -110,10 +122,3 @@ export const AGIKontrolleraIUSchema = z
       })
     }
   })
-
-/**
- * Hard cap on the raw JSON body for kontrollera endpoints. Even a fully
- * legal IU is < 4 KB serialised; 64 KB is a generous safety margin that
- * still trivially rejects pathological inputs before they reach Zod.
- */
-export const AGI_KONTROLLERA_MAX_BYTES = 64 * 1024

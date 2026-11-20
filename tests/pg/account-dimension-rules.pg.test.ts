@@ -141,7 +141,7 @@ describe('UNIQUE (company_id, account_number, dimension_id)', () => {
     const valueId = await insertValue({ companyId, dimensionId: dimId, code: 'P001' })
     await insertRule({ companyId, dimensionId: dimId, ruleType: 'default', valueId })
 
-    // Different rule_type, same (company, account, dimension) — still one slot.
+    // Different rule_type, same (company, account, dimension) - still one slot.
     await expect(
       insertRule({ companyId, dimensionId: dimId, ruleType: 'required' }),
     ).rejects.toThrow(/duplicate|unique/)
@@ -156,7 +156,7 @@ describe('cascade behavior', () => {
     const ruleId = await insertRule({ companyId, dimensionId: dimId, ruleType: 'fixed', valueId })
 
     // The value is unreferenced by posted lines, so the retention trigger
-    // allows the delete — and the rule must ride the cascade.
+    // allows the delete - and the rule must ride the cascade.
     await getPool().query(`DELETE FROM public.dimension_values WHERE id = $1`, [valueId])
 
     const { rows } = await getPool().query(

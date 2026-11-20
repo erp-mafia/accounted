@@ -66,11 +66,14 @@ vi.mock('@/lib/bookkeeping/dimension-rules', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { eventBus } from '@/lib/events/bus'
 import { DELETE as deleteTx, PATCH as patchTx } from '../[id]/route'
 import { POST as refreshRate } from '../[id]/refresh-exchange-rate/route'
 import { POST as linkJe } from '../[id]/link-journal-entry/route'
 import { POST as matchBatch } from '../[id]/match-batch/route'
 import { POST as bulkBook } from '../bulk-book/route'
+import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -114,7 +117,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['transactions', 'invoices', 'invoice_payments', 'cash_accounts', 'journal_entries'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -356,7 +359,7 @@ describe('PATCH /transactions/:id (transactions.update)', () => {
     mockServiceClient.mockReturnValue(client)
     const res = await patch({ description: 'Lunch', account_number: '1931' })
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toEqual({ id: TX_ID, description: 'Lunch', title_edited_at: '2026-06-01T10:00:00Z', cash_account_id: CA_ID })
+    expect((await res.json()).data).toEqual({ id: TX_ID, handle: toHandle('transaction', TX_ID), description: 'Lunch', title_edited_at: '2026-06-01T10:00:00Z', cash_account_id: CA_ID })
     const update = client.calls.find((c) => c.table === 'transactions' && c.method === 'update')
     expect(update?.args[0]).toMatchObject({ description: 'Lunch', cash_account_id: CA_ID })
     expect(client.calls).toContainEqual({ table: 'transactions', method: 'is', args: ['supplier_invoice_id', null] })
@@ -424,6 +427,8 @@ describe('POST /transactions/:id/refresh-exchange-rate', () => {
 
 // ---------------------------------------------------------------------------
 
+const BANK_LINE = { data: [{ account_number: '1930', debit_amount: 500, credit_amount: 0 }], error: null }
+
 describe('POST /transactions/:id/link-journal-entry', () => {
   const post = (body: unknown, query = '') =>
     linkJe(request(`${BASE}/${TX_ID}/link-journal-entry${query}`, { method: 'POST', body: JSON.stringify(body) }), txParams())
@@ -455,6 +460,8 @@ describe('POST /transactions/:id/link-journal-entry', () => {
       company_members: OWNER,
       transactions: { data: txRow, error: null },
       journal_entries: { data: { id: JE_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-05-12' }, error: null },
+      // The verifikat's line on the row's bank account (the bank link core's check).
+      journal_entry_lines: BANK_LINE,
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ journal_entry_id: JE_ID }, '?dry_run=true')
@@ -471,6 +478,8 @@ describe('POST /transactions/:id/link-journal-entry', () => {
         { data: [{ id: TX_ID }], error: null },
       ],
       journal_entries: { data: { id: JE_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-05-12' }, error: null },
+      // The verifikat's line on the row's bank account (the bank link core's check).
+      journal_entry_lines: BANK_LINE,
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ journal_entry_id: JE_ID })
@@ -508,7 +517,7 @@ describe('POST /transactions/:id/match-batch', () => {
     const client = makeClient({ company_members: OWNER, invoices: { data: [{ id: INV_ID, document_type: 'proforma' }], error: null } })
     mockServiceClient.mockReturnValue(client)
     expect((await (await post({ allocations })).json()).error.code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('409 BATCH_TX_POSSIBLE_DUPLICATE when posted vouchers already explain the row', async () => {
@@ -518,7 +527,7 @@ describe('POST /transactions/:id/match-batch', () => {
     const res = await post({ allocations })
     expect(res.status).toBe(409)
     expect((await res.json()).error.code).toBe('BATCH_TX_POSSIBLE_DUPLICATE')
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('404 BATCH_TX_NOT_FOUND on a dry run for a row outside the company', async () => {
@@ -541,6 +550,8 @@ describe('POST /transactions/:id/match-batch', () => {
     expect(preview).toMatchObject({ total_allocated: 1250, allocations_count: 2, expected_lines_balanced: true })
     expect(preview.expected_lines.length).toBeGreaterThan(0)
     expect(wrote(client)).toBe(false)
+    expect(routeRpcCalls(client.rpc)).toEqual([])
+    expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
   // Issue #3097: the RPC books the bank leg on the row's own cash account, so
@@ -569,7 +580,26 @@ describe('POST /transactions/:id/match-batch', () => {
     expect((await (await post({ allocations }, '?dry_run=true')).json()).error.code).toBe('BATCH_AMOUNT_EXCEEDS_TX')
   })
 
+  // Issue #131: a payout net of the provider's fee meets the row once the fee is a row of its own.
+  it('dry run with a fee row: the invoices less the fee meet the row, and the fee is a 6570 debit', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      invoices,
+      transactions: { data: { id: TX_ID, amount: 1200, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }, error: null },
+      chart_of_accounts: { data: [{ account_number: '6570' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ allocations, fees: [{ account: '6570', amount: 50 }] }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const preview = (await res.json()).data.preview
+    expect(preview).toMatchObject({ total_allocated: 1250, total_fees: 50, expected_lines_balanced: true })
+    expect(preview.expected_lines).toContainEqual({ account_number: '6570', description: 'Avgift betaltjänst', debit: 50, credit: 0 })
+    expect(wrote(client)).toBe(false)
+    expect((await post({ allocations, fees: [{ account: '4535', amount: 50 }] }, '?dry_run=true')).status).toBe(400)
+  })
+
   it('200 commits through the RPC with the API key user as actor', async () => {
+    const posted = { id: JE_ID, company_id: COMPANY_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, lines: [] }
     const client = makeClient({
       company_members: OWNER,
       invoices,
@@ -577,12 +607,18 @@ describe('POST /transactions/:id/match-batch', () => {
         data: { ok: true, journal_entry_id: JE_ID, voucher_series: 'A', voucher_number: 12, tx_id: TX_ID, allocations: [], total_allocated: 1250, leftover: 0 },
         error: null,
       },
+      journal_entries: { data: posted, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ allocations })
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ journal_entry_id: JE_ID, voucher_number: 12, total_allocated: 1250 })
     expect(client.rpc).toHaveBeenCalledWith('match_batch_allocate', expect.objectContaining({ p_company_id: COMPANY_ID, p_user_id: 'user-1', p_tx_id: TX_ID }))
+    // The integrator door announces the samlingsverifikat like any commit.
+    expect(eventBus.emit).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: posted, userId: 'user-1', companyId: COMPANY_ID },
+    })
   })
 })
 
@@ -645,7 +681,7 @@ describe('POST /transactions/bulk-book', () => {
     mockServiceClient.mockReturnValue(client)
     const res = await post({ tx_ids: [TX_ID, TX2_ID], template_id: JE_ID, mode: 'sum_per_account', entry_description: 'x' })
     expect((await res.json()).error.code).toBe('BULK_BOOK_TEMPLATE_NOT_FOUND')
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE names the flagged row', async () => {
@@ -669,9 +705,11 @@ describe('POST /transactions/bulk-book', () => {
     expect(preview).toMatchObject({ mode: 'create_new', tx_count: 2, tx_sum: 300, currency: 'SEK' })
     expect(preview.lines).toHaveLength(2)
     expect(wrote(client)).toBe(false)
+    expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
   it('200 commits through the RPC with the API key user as actor', async () => {
+    const posted = { id: JE_ID, company_id: COMPANY_ID, status: 'posted', voucher_series: 'A', voucher_number: 57, lines: [] }
     const client = makeClient({
       company_members: OWNER,
       transactions: rows,
@@ -680,11 +718,18 @@ describe('POST /transactions/bulk-book', () => {
         data: { ok: true, mode: 'create_new', journal_entry_id: JE_ID, voucher_series: 'A', voucher_number: 57, linked_tx_count: 2, tx_sum: 300, docs_linked: 0 },
         error: null,
       },
+      // The gate: no posted verifikat booked from the rows (#203); then the posted samlingsverifikat.
+      journal_entries: [{ data: [], error: null }, { data: posted, error: null }],
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post(manual)
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ journal_entry_id: JE_ID, voucher_number: 57, tx_sum: 300 })
     expect(client.rpc).toHaveBeenCalledWith('bulk_book_transactions', expect.objectContaining({ p_company_id: COMPANY_ID, p_user_id: 'user-1' }))
+    // The integrator door announces the new samlingsverifikat like any commit.
+    expect(eventBus.emit).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: posted, userId: 'user-1', companyId: COMPANY_ID },
+    })
   })
 })

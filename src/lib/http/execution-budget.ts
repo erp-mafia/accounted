@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { globalSingleton } from '@/lib/global-singleton'
 
 /** A work deadline is a deferral, never an authentication or provider failure. */
 export class ExecutionBudgetExceeded extends Error {
@@ -16,7 +17,10 @@ interface ExecutionBudget {
 
 // Clients are singletons. A request-local scope keeps concurrent invocations
 // independent without putting mutable deadlines on those shared clients.
-const budgets = new AsyncLocalStorage<ExecutionBudget>()
+// One scope per process, not per module copy (lib/global-singleton.ts): a
+// route opens it through its copy of this module, and extension code, which
+// lib/init loads from instrumentation.ts, reads it through another.
+const budgets = globalSingleton('executionBudgets', () => new AsyncLocalStorage<ExecutionBudget>())
 
 export function currentExecutionBudget(): ExecutionBudget | undefined {
   return budgets.getStore()

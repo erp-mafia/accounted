@@ -26,6 +26,7 @@
  * that belongs to a declaration the correction supersedes. Everything below
  * therefore resolves the record against the run before trusting it.
  */
+import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 
 /**
  * Per-period submission state mirrored in extension_data under
@@ -73,6 +74,19 @@ export interface AgiSubmissionState {
   salaryRunId?: string
   /** ISO timestamp the submission record was last written by the extension. */
   updatedAt?: string
+  /**
+   * Every kvittens recorded for the period (agi_kvittenser), newest signing
+   * first. The period record above follows the latest declaration; a run that
+   * filed before a correction finds its own receipt here.
+   */
+  receipts?: AgiKvittensReceipt[]
+}
+
+/** One recorded AGI kvittens for the period. */
+export interface AgiKvittensReceipt {
+  kvittensnummer: string
+  signeradAv?: string
+  signeradTid?: string
 }
 
 export type AgiFilingState =
@@ -97,6 +111,27 @@ function epoch(value: string | null | undefined): number | null {
 }
 
 /**
+ * Whether the run's declaration is already filed: the one rule for every
+ * writer, so a filed declaration is never rewritten (the generator answers
+ * with the stored XML, the submit path leaves it alone). The run's own
+ * kvittens stamp (agi_submitted_at) is authoritative. Without it, a receipt
+ * on the row counts only when it is not older than the run's XML: a
+ * correction run that took over the original's filed row before the
+ * generator reset its filing state kept that original's status and kvittens,
+ * and its own declaration is still unfiled.
+ */
+export function agiFiledForRun(
+  run: Pick<AgiFilingRun, 'agi_submitted_at' | 'agi_generated_at'>,
+  declaration: { status: string; submitted_at: string | null } | null,
+): boolean {
+  if (run.agi_submitted_at) return true
+  if (!declaration || !AGI_RECEIPT_STATUSES.includes(declaration.status)) return false
+  const receiptAt = epoch(declaration.submitted_at)
+  const generatedAt = epoch(run.agi_generated_at)
+  return receiptAt === null || generatedAt === null || receiptAt >= generatedAt
+}
+
+/**
  * Narrow the period-scoped submission record to the run it actually describes.
  *
  * Returns the record when it provably belongs to `run`, otherwise null so the
@@ -112,8 +147,44 @@ function epoch(value: string | null | undefined): number | null {
  * 3. `updatedAt` against `run.agi_generated_at`: a record written before this
  *    run produced its XML cannot describe this run's declaration. A run with no
  *    XML at all owns nothing.
+ *
+ * When the period record is not the run's, a filed run still owns the
+ * recorded receipt (`receipts`) whose signing moment stamped its
+ * agi_submitted_at: the original of a corrected month keeps its kvittens.
+ * The answer never carries `receipts`: it describes one run.
  */
 export function resolveRunAgiSubmission(
+  run: AgiFilingRun,
+  submission: AgiSubmissionState | null | undefined,
+): AgiSubmissionState | null {
+  const own = resolvePeriodRecord(run, submission)
+  if (own?.receipts === undefined) return own ?? ownRecordedReceipt(run, submission?.receipts)
+  const { receipts: _periodReceipts, ...record } = own
+  return record
+}
+
+/** A filed run's receipt among the period's recorded kvittenser, matched on signing moment. */
+function ownRecordedReceipt(
+  run: AgiFilingRun,
+  receipts: readonly AgiKvittensReceipt[] | undefined,
+): AgiSubmissionState | null {
+  const submittedAt = epoch(run.agi_submitted_at)
+  if (submittedAt === null || !receipts?.length) return null
+  const receipt = receipts.find((candidate) => epoch(candidate.signeradTid) === submittedAt)
+  if (!receipt?.signeradTid) return null
+  const record: AgiSubmissionState = {
+    status: 'signed',
+    kvittensnummer: receipt.kvittensnummer,
+    signeradTid: receipt.signeradTid,
+    submittedAt: receipt.signeradTid,
+    submittedAtEstimated: false,
+    source: 'declaration',
+  }
+  if (receipt.signeradAv) record.signeradAv = receipt.signeradAv
+  return record
+}
+
+function resolvePeriodRecord(
   run: AgiFilingRun,
   submission: AgiSubmissionState | null | undefined,
 ): AgiSubmissionState | null {
@@ -175,8 +246,9 @@ export function deriveAgiFilingState(
  *
  * Null unless the period record is both signed and provably this run's, so no
  * two runs in the same month can ever show the same kvittens. A run that filed
- * (agi_submitted_at set) but whose receipt has since been superseded in the
- * cache renders as filed without a number rather than with someone else's.
+ * (agi_submitted_at set) and whose receipt the period record has moved past
+ * shows its own recorded receipt; with none recorded it renders as filed
+ * without a number rather than with someone else's.
  */
 export function resolveRunAgiKvittensnummer(
   run: AgiFilingRun,

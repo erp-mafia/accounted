@@ -37,12 +37,17 @@ describe('fan-out gate', () => {
 
   it('enqueues only for verified endpoints and legacy endpoints inside their grace window', async () => {
     const inserted: Array<Record<string, unknown>> = []
+    const containsCalls: unknown[][] = []
     serviceClient.current = {
       from: (table: string) => {
         if (table === 'webhooks') {
           const chain = {
             select: () => chain,
             eq: () => chain,
+            contains: (...args: unknown[]) => {
+              containsCalls.push(args)
+              return chain
+            },
             is: () =>
               Promise.resolve({
                 data: [
@@ -73,6 +78,8 @@ describe('fan-out gate', () => {
 
     expect(inserted.map((r) => r.webhook_id).sort()).toEqual(['grace', 'verified'])
     expect(kick).toHaveBeenCalledTimes(1)
+    // A subscription matches any type it lists, not only its first.
+    expect(containsCalls).toEqual([['event_types', ['customer.created']]])
   })
 })
 

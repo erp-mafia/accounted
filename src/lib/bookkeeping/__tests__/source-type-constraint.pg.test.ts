@@ -6,7 +6,7 @@ import { insertDraftJournalEntry, seedCompany } from '@/tests/pg/fixtures'
 
 // Guards against drift between the TS/Zod source_type allowlist and the DB
 // CHECK constraint `journal_entries_source_type_check`. Originally added
-// after a production incident where 'inbox_item' was in the TS type and
+// after 'inbox_item' was in the TS type and
 // Zod schema but missing from the DB constraint, causing every standalone
 // "Bokför direkt" from the document inbox to fail with PG 23514.
 describe('journal_entries.source_type CHECK constraint', () => {

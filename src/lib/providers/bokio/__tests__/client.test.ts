@@ -93,7 +93,7 @@ describe('BokioClient', () => {
   );
 
   it('accepts the flat company object the live v1 API returns (no envelope)', async () => {
-    // Observed on api.bokio.se/v1 in production 2026-08-20: a 200 whose body
+    // Observed on api.bokio.se/v1 in seen 2026-08-20: a 200 whose body
     // is the company itself, not `{ companyInformation }` as the spec says.
     vi.mocked(fetch).mockResolvedValueOnce(
       Response.json({

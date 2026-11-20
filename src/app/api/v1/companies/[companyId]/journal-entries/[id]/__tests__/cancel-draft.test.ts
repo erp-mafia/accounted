@@ -62,13 +62,18 @@ const DRAFT = {
  * answers from a queue so the pre-flight read and the post-cancel refetch can
  * return different rows. Everything else (the idempotency store) answers null.
  */
-function makeSupabase(journalEntryRows: unknown[]) {
+function makeSupabase(journalEntryRows: unknown[], documentRows: unknown[] = []) {
   const queue = [...journalEntryRows]
   const build = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_t, prop) {
         if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+          return (resolve: (v: unknown) => void) =>
+            resolve(
+              table === 'document_attachments'
+                ? { data: documentRows, error: null, count: documentRows.length }
+                : { data: null, error: null },
+            )
         }
         if (prop === 'maybeSingle' || prop === 'single') {
           return () => {
@@ -177,6 +182,24 @@ describe('DELETE /api/v1/companies/:companyId/journal-entries/:id', () => {
     const res = await DELETE(makeRequest(), routeParams())
     const body = (await res.json()) as { error: { code: string } }
     expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(mockCancel).not.toHaveBeenCalled()
+  })
+
+  // A cancelled draft's documents can never be re-pointed at another
+  // verifikat (enforce_document_journal_entry_immutability), so a draft with
+  // underlag is refused, not cancelled.
+  it('refuses a draft that holds documents with 409 DRAFT_HAS_DOCUMENTS and lists them', async () => {
+    mockServiceClient.mockReturnValue(
+      makeSupabase([DRAFT], [{ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', file_name: 'kvitto.pdf' }]),
+    )
+    const res = await DELETE(makeRequest(), routeParams())
+    const body = (await res.json()) as { error: { code: string; details: Record<string, unknown> } }
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('DRAFT_HAS_DOCUMENTS')
+    expect(body.error.details).toMatchObject({
+      document_count: 1,
+      documents: [{ document_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', file_name: 'kvitto.pdf' }],
+    })
     expect(mockCancel).not.toHaveBeenCalled()
   })
 

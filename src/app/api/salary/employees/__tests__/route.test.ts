@@ -242,14 +242,16 @@ describe('POST /api/salary/employees', () => {
     expect(insert.mock.calls[0][0]).toMatchObject({ vacation_pay_rate: 0.135 })
   })
 
-  it('inserts null vacation_pay_rate (statutory) when the body omits it', async () => {
+  it('leaves vacation_pay_rate to its column default, null (statutory), when the body omits it', async () => {
     const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
     authed(supabase)
 
     const res = await POST(postRequest(CREATE_BASE), params)
 
     expect(res.status).toBe(201)
-    expect(insert.mock.calls[0][0]).toMatchObject({ vacation_pay_rate: null })
+    // Omitted, not null: the shared create (lib/salary/employee-commands.ts)
+    // writes only what the caller sent, and the column has no other default.
+    expect(insert.mock.calls[0][0]).not.toHaveProperty('vacation_pay_rate')
   })
 
   it('returns 400 on a semesterlön rate below the statutory 12 % floor, without inserting', async () => {
@@ -272,18 +274,17 @@ describe('POST /api/salary/employees', () => {
     expect(insert).not.toHaveBeenCalled()
   })
 
-  it('inserts null jämkning fields when the body omits them', async () => {
+  it('leaves the jämkning fields to their null column default when the body omits them', async () => {
     const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
     authed(supabase)
 
     const res = await POST(postRequest(CREATE_BASE), params)
 
     expect(res.status).toBe(201)
-    expect(insert.mock.calls[0][0]).toMatchObject({
-      jamkning_percentage: null,
-      jamkning_valid_from: null,
-      jamkning_valid_to: null,
-    })
+    const row = insert.mock.calls[0][0]
+    expect(row).not.toHaveProperty('jamkning_percentage')
+    expect(row).not.toHaveProperty('jamkning_valid_from')
+    expect(row).not.toHaveProperty('jamkning_valid_to')
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -295,6 +296,37 @@ describe('POST /api/salary/employees', () => {
 
     const res = await POST(postRequest(CREATE_BASE), params)
     expect(res.status).toBe(401)
+  })
+
+  // Personalkategori: arbetare book the 70xx wage series, tjänstemän 72xx.
+  it('inserts tjansteman when the body leaves the personnel category out', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest(CREATE_BASE), params)
+
+    expect(res.status).toBe(201)
+    expect(insert.mock.calls[0][0]).toMatchObject({ personnel_category: 'tjansteman' })
+  })
+
+  it('inserts arbetare when the body sets it', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest({ ...CREATE_BASE, personnel_category: 'arbetare' }), params)
+
+    expect(res.status).toBe(201)
+    expect(insert.mock.calls[0][0]).toMatchObject({ personnel_category: 'arbetare' })
+  })
+
+  it('returns 400 on an unknown personnel category, without inserting', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest({ ...CREATE_BASE, personnel_category: 'kollektiv' }), params)
+
+    expect(res.status).toBe(400)
+    expect(insert).not.toHaveBeenCalled()
   })
 
   it('returns 400 on a personnummer that fails the checksum, without inserting', async () => {

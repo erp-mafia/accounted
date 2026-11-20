@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GROUP_LABEL_KEYS, GROUP_ORDER, deriveLibraryCategory, groupForAccount, libraryTemplateGroup } from '../template-groups'
-import { getTemplateGroups } from '../booking-templates'
+import type { TemplateGroup } from '../booking-templates'
 import type { BookingTemplateLibraryLine } from '@/types'
 
 const line = (account: string, type: BookingTemplateLibraryLine['type'] = 'business', side: 'debit' | 'credit' = 'debit'): BookingTemplateLibraryLine =>
@@ -8,7 +8,9 @@ const line = (account: string, type: BookingTemplateLibraryLine['type'] = 'busin
 
 describe('GROUP_ORDER', () => {
   it('lists every family of the catalog exactly once, with a label key', () => {
-    const catalog = getTemplateGroups().map((g) => g.group).sort()
+    // GROUP_LABEL_KEYS is a Record<TemplateGroup, string>, so its keys are
+    // every family the type knows.
+    const catalog = (Object.keys(GROUP_LABEL_KEYS) as TemplateGroup[]).sort()
     expect([...GROUP_ORDER].sort()).toEqual(catalog)
     expect(new Set(GROUP_ORDER).size).toBe(GROUP_ORDER.length)
     for (const g of GROUP_ORDER) expect(GROUP_LABEL_KEYS[g]).toMatch(/^group_/)

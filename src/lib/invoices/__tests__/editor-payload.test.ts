@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildInvoiceWritePayload,
   buildSelfBilledPayload,
+  domesticReverseChargeStatement,
   hasDimensionValues,
   pruneItemDimensions,
   sanitizeDeductionItems,
@@ -416,6 +417,55 @@ describe('buildInvoiceWritePayload semantics', () => {
     )
     expect(body.ore_rounding).toBe(false)
     expect(body.default_dimensions).toEqual({})
+  })
+
+  it('sends the VAT statement pair only when one is given (crm#1007)', () => {
+    const none = JSON.parse(jsonOf(buildInvoiceWritePayload(form(), { oreRounding: true, defaultDims: {} })))
+    expect(none).not.toHaveProperty('vat_treatment')
+    expect(none).not.toHaveProperty('delivery_country')
+
+    const stated = JSON.parse(
+      jsonOf(
+        buildInvoiceWritePayload(form(), {
+          oreRounding: true,
+          defaultDims: {},
+          vatStatement: { vat_treatment: 'reverse_charge_domestic', delivery_country: null },
+        }),
+      ),
+    )
+    expect(stated.vat_treatment).toBe('reverse_charge_domestic')
+    expect(stated.delivery_country).toBeNull()
+
+    const cleared = JSON.parse(
+      jsonOf(
+        buildInvoiceWritePayload(form(), {
+          oreRounding: true,
+          defaultDims: {},
+          vatStatement: { vat_treatment: null, delivery_country: null },
+        }),
+      ),
+    )
+    expect(cleared.vat_treatment).toBeNull()
+    expect(cleared.delivery_country).toBeNull()
+  })
+})
+
+describe('domesticReverseChargeStatement (crm#1007)', () => {
+  it('states reverse_charge_domestic whenever the box is ticked', () => {
+    const stated = { vat_treatment: 'reverse_charge_domestic', delivery_country: null }
+    expect(domesticReverseChargeStatement({ checked: true, stored: false })).toEqual(stated)
+    expect(domesticReverseChargeStatement({ checked: true, stored: true })).toEqual(stated)
+  })
+
+  it('clears the statement when the box is unticked on a draft that had it', () => {
+    expect(domesticReverseChargeStatement({ checked: false, stored: true })).toEqual({
+      vat_treatment: null,
+      delivery_country: null,
+    })
+  })
+
+  it('sends nothing otherwise, so a treatment set through the API stays on the draft', () => {
+    expect(domesticReverseChargeStatement({ checked: false, stored: false })).toBeUndefined()
   })
 })
 

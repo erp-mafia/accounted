@@ -49,17 +49,27 @@ describe('generateBankgiroPaymentBgLb', () => {
     expect(paymentLine.slice(2, 12)).toBe('0050501055')
   })
 
-  it('encodes OCR right-justified zero-padded in pos 13-37', () => {
+  it('writes the OCR left-justified and blank-filled in pos 13-37, so the bank reads its exact digits', () => {
     const result = generateBankgiroPaymentBgLb(
       company,
       { receiverBankgiro: '5050-1055', ocr: '55601234566', amount: 1000 },
       { paymentDate: '2026-05-12', periodLabel: '2026-04' }
     )
     const paymentLine = result.content.split('\r\n')[1]
-    // OCR "55601234566" (11 digits) padded to 25 chars right-justified = 14 zeros + OCR
-    expect(paymentLine.slice(12, 37)).toBe('00000000000000055601234566'.slice(-25))
-    expect(paymentLine.slice(12, 37).length).toBe(25)
-    expect(paymentLine.slice(12, 37).endsWith('55601234566')).toBe(true)
+    // The same field style as the supplier payment file: a zero-filled OCR is
+    // read as another number and the bank refuses the file (crm#1952).
+    expect(paymentLine.slice(12, 37)).toBe('55601234566' + ' '.repeat(14))
+    expect(paymentLine.slice(12, 37).startsWith('0')).toBe(false)
+  })
+
+  it('keeps an OCR of the full 25 digits intact', () => {
+    const ocr = '1234567890123456789012345'
+    const result = generateBankgiroPaymentBgLb(
+      company,
+      { receiverBankgiro: '5050-1055', ocr, amount: 1000 },
+      { paymentDate: '2026-05-12', periodLabel: '2026-04' }
+    )
+    expect(result.content.split('\r\n')[1].slice(12, 37)).toBe(ocr)
   })
 
   it('encodes amount in öre (no decimal)', () => {

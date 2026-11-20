@@ -15,6 +15,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { CloudScopeMissingError } from './cloud-provider'
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const DRIVE_UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3/files'
@@ -38,6 +39,31 @@ export class DriveFileGoneError extends Error {
   }
 }
 
+/**
+ * Google's answer when the access token lacks the Drive scope: 403 with
+ * `insufficient_scope` in the WWW-Authenticate challenge and
+ * ACCESS_TOKEN_SCOPE_INSUFFICIENT in the body. A file-level permission
+ * problem is also a 403 but says neither, so it stays an ordinary failure.
+ */
+function isInsufficientScope(res: Response, body: string): boolean {
+  if (res.status !== 403) return false
+  const challenge = res.headers.get('www-authenticate') ?? ''
+  return (
+    challenge.includes('insufficient_scope') ||
+    body.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT') ||
+    body.includes('insufficient authentication scopes')
+  )
+}
+
+/** Turn a failed Drive response into the error the caller should see. */
+async function driveError(res: Response, prefix: string): Promise<Error> {
+  const body = await res.text()
+  const detail = `${prefix} ${res.status}: ${body.slice(0, 200)}`
+  return isInsufficientScope(res, body)
+    ? new CloudScopeMissingError('Google Drive', detail)
+    : new Error(detail)
+}
+
 async function driveFetch(
   accessToken: string,
   path: string,
@@ -51,8 +77,7 @@ async function driveFetch(
     },
   })
   if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Drive API ${res.status}: ${body.slice(0, 200)}`)
+    throw await driveError(res, 'Drive API')
   }
   return res
 }
@@ -130,8 +155,7 @@ export async function getFileMeta(
   )
   if (res.status === 404) return null
   if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Drive API ${res.status}: ${body.slice(0, 200)}`)
+    throw await driveError(res, 'Drive API')
   }
   const json = (await res.json()) as { id: string; name: string; trashed?: boolean }
   return { id: json.id, name: json.name, trashed: json.trashed === true }
@@ -234,8 +258,7 @@ async function resumableUpload(
     throw new DriveFileGoneError(target.fileId)
   }
   if (!initRes.ok) {
-    const body = await initRes.text()
-    throw new Error(`Drive upload init failed: ${initRes.status} ${body.slice(0, 200)}`)
+    throw await driveError(initRes, 'Drive upload init')
   }
   const sessionUrl = initRes.headers.get('location')
   if (!sessionUrl) {

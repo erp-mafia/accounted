@@ -17,6 +17,20 @@ describe('resolveDefaultPaymentTerms', () => {
     expect(from).not.toHaveBeenCalled()
   })
 
+  // #2070: 0 days (betalning direkt) is a valid choice, not "unset".
+  it('keeps an explicit 0 without touching settings', async () => {
+    const { client, from } = makeSettingsClient({ data: { invoice_default_days: 10 } })
+    await expect(resolveDefaultPaymentTerms(client, 'company-1', 0)).resolves.toBe(0)
+    expect(from).not.toHaveBeenCalled()
+  })
+
+  it('falls back for a negative or non-integer provided value', async () => {
+    const { client } = makeSettingsClient({ data: { invoice_default_days: 10 } })
+    await expect(resolveDefaultPaymentTerms(client, 'company-1', -1)).resolves.toBe(10)
+    await expect(resolveDefaultPaymentTerms(client, 'company-1', 2.5)).resolves.toBe(10)
+    await expect(resolveDefaultPaymentTerms(client, 'company-1', Number.NaN)).resolves.toBe(10)
+  })
+
   it('falls back to company_settings.invoice_default_days when nothing is provided', async () => {
     const { client } = makeSettingsClient({ data: { invoice_default_days: 10 } })
     await expect(resolveDefaultPaymentTerms(client, 'company-1', undefined)).resolves.toBe(10)

@@ -104,6 +104,28 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
     expect(details[0]).toContain('/invoices/4');
   });
 
+  it('requests a DRAFT before the open and the paid invoice (crm#1245)', async () => {
+    // A saved, unsent Fortnox invoice: the next document the user sends,
+    // and a row-less one cannot be sent with the right rows and VAT.
+    // Three detail fetches run at once, so the assertions are per wave: the
+    // draft (listed last) is in the first wave, the paid invoice is the last.
+    const DRAFT = { DocumentNumber: 9, InvoiceDate: '2025-11-03', Currency: 'SEK', Total: 750, Balance: 750, Sent: false, Booked: false };
+    const open = (n: number) => ({ ...OPEN, DocumentNumber: n, Sent: true });
+    stubFetch((url) => {
+      const id = url.match(/\/invoices\/(\d+)/)?.[1];
+      return id ? json(detailFor(Number(id), id === '5' ? 500 : 1250)) : json(listResponse([PAID, open(4), open(6), open(7), DRAFT]));
+    });
+
+    const { invoices } = await fetchSalesInvoicesHydrated('fortnox', 'token');
+
+    const ids = requested.map((u) => u.match(/\/invoices\/(\d+)/)?.[1]).filter(Boolean);
+    expect(ids).toHaveLength(5);
+    expect(ids.slice(0, 3)).toContain('9');
+    expect(ids.at(-1)).toBe('5');
+    // Results keep the register's own order.
+    expect(invoices.map((inv) => inv.id)).toEqual(['5', '4', '6', '7', '9']);
+  });
+
   it('reports what the budget could not reach instead of looking complete', async () => {
     stubFetch(() => json(listResponse([OPEN, PAID])));
 
@@ -154,6 +176,20 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
     expect(hydration.abortedBy).toBeUndefined();
     expect(hydration.failed).toBe(1);
     expect(hydration.hydrated).toBe(1);
+  });
+
+  it('stops at the first detail Fortnox refuses with a 400, as it does for the 403 form of the same refusal', async () => {
+    const refusal = JSON.stringify({ ErrorInformation: { error: 1, message: 'Saknar behörighet för kundregister.', code: 2001538 } });
+    const many = Array.from({ length: 20 }, (_, i) => ({ ...OPEN, DocumentNumber: 100 + i }));
+    stubFetch((url) => url.includes('/invoices/1')
+      ? new Response(refusal, { status: 400 })
+      : json(listResponse(many)));
+
+    const { hydration } = await fetchSalesInvoicesHydrated('fortnox', 'token');
+
+    expect(hydration.abortedBy).toBe('auth');
+    // Only the concurrency window was spent, not all 20.
+    expect(requested.filter((url) => /\/invoices\/\d\d\d/.test(url)).length).toBeLessThanOrEqual(3);
   });
 
   it('keeps the list-form invoice when its detail fetch fails', async () => {

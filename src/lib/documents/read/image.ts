@@ -6,7 +6,7 @@ const log = createLogger('documents/read/image')
 /**
  * The model refuses an image above 5 MB as sent, and a 12 MP phone photo is
  * routinely 3 to 5 MB, so a receipt photographed on a phone came back
- * "image exceeds 5 MB maximum" (prod 2026-09-22, two 4.2 MB Skatteverket
+ * "image exceeds 5 MB maximum" (seen 2026-09-22, two 4.2 MB Skatteverket
  * photos). The inbox extension solved the same thing for underlag: rotate by
  * EXIF, fit inside 2000 px, JPEG 80. Same numbers here so a photo reads the
  * same whichever door it came through. HEIC/HEIF (the iPhone default) is

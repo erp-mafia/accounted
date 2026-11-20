@@ -186,8 +186,12 @@ export function parseReading(item: RawItem, line: ReaderLine, model: string): Mo
   }
 }
 
-/** Reads every line, batched; a failed batch yields no readings for its lines. */
-export async function readCounterparts(lines: ReaderLine[], ai: AiService = getAiService()): Promise<Map<number, ModelReading>> {
+/**
+ * Reads every line, batched. A failed batch yields no readings for its lines
+ * and adds their numbers to `failed`: no reading is not "nobody", so the
+ * caller must not store those lines as resolved (accounted#115).
+ */
+export async function readCounterparts(lines: ReaderLine[], ai: AiService = getAiService(), failed?: Set<number>): Promise<Map<number, ModelReading>> {
   const out = new Map<number, ModelReading>()
   for (let b = 0; b < lines.length; b += READ_BATCH_SIZE) {
     const batch = lines.slice(b, b + READ_BATCH_SIZE)
@@ -209,6 +213,8 @@ export async function readCounterparts(lines: ReaderLine[], ai: AiService = getA
         if (reading) out.set(line.i, reading)
       }
     } catch (err) {
+      for (const l of batch) failed?.add(l.i)
+      // The detail; the run reports the failure once per company (run.ts).
       log.warn('counterpart reading batch failed', { message: err instanceof Error ? err.message : String(err), lines: batch.length })
     }
   }

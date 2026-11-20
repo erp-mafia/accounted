@@ -1,0 +1,152 @@
+[
+  {
+    "name": "one tjänsteman, booked liability below the computed one: 7290/2920 and 7519/2940",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Semesterårsavslut 2025: justering semesterlöneskuld",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "7290",
+              "debit_amount": 5575.7,
+              "credit_amount": 0,
+              "line_description": "Justering semesterlöneskuld"
+            },
+            {
+              "account_number": "2920",
+              "debit_amount": 0,
+              "credit_amount": 5575.7,
+              "line_description": "Justering semesterlöneskuld"
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 1751.88,
+              "credit_amount": 0,
+              "line_description": "Justering upplupna avgifter semester"
+            },
+            {
+              "account_number": "2940",
+              "debit_amount": 0,
+              "credit_amount": 1751.88,
+              "line_description": "Justering upplupna avgifter semester"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "closure_id": "00000000-0000-4000-8000-000000000001",
+      "adjustment_entry_id": "je-adjust-1"
+    }
+  },
+  {
+    "name": "an arbetare and a tjänsteman: the 2920 drift split over 7090 and 7290",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Semesterårsavslut 2025: justering semesterlöneskuld",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "7090",
+              "debit_amount": 3450.47,
+              "credit_amount": 0,
+              "line_description": "Justering semesterlöneskuld"
+            },
+            {
+              "account_number": "7290",
+              "debit_amount": 7393.88,
+              "credit_amount": 0,
+              "line_description": "Justering semesterlöneskuld"
+            },
+            {
+              "account_number": "2920",
+              "debit_amount": 0,
+              "credit_amount": 10844.35,
+              "line_description": "Justering semesterlöneskuld"
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 3407.29,
+              "credit_amount": 0,
+              "line_description": "Justering upplupna avgifter semester"
+            },
+            {
+              "account_number": "2940",
+              "debit_amount": 0,
+              "credit_amount": 3407.29,
+              "line_description": "Justering upplupna avgifter semester"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "closure_id": "00000000-0000-4000-8000-000000000002",
+      "adjustment_entry_id": "je-adjust-2"
+    }
+  },
+  {
+    "name": "booked liability above the computed one: the drift released back to 7290 and 7519",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Semesterårsavslut 2025: justering semesterlöneskuld",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "2920",
+              "debit_amount": 35327.29,
+              "credit_amount": 0,
+              "line_description": "Justering semesterlöneskuld"
+            },
+            {
+              "account_number": "7290",
+              "debit_amount": 0,
+              "credit_amount": 35327.29,
+              "line_description": "Justering semesterlöneskuld"
+            },
+            {
+              "account_number": "2940",
+              "debit_amount": 11099.83,
+              "credit_amount": 0,
+              "line_description": "Justering upplupna avgifter semester"
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 0,
+              "credit_amount": 11099.83,
+              "line_description": "Justering upplupna avgifter semester"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "closure_id": "00000000-0000-4000-8000-000000000003",
+      "adjustment_entry_id": "je-adjust-3"
+    }
+  }
+]

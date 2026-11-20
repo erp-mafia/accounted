@@ -9,7 +9,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
-import { applyAccountOverride, reconcileRcBasisWithCostAccount } from '../account-override'
+import { applyAccountOverride } from '../account-override'
+import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
+import { chartVatTreatmentsOf } from '../vat-entries'
 import { buildMappingResultFromCategory } from '../category-mapping'
 import { buildTransactionEntryLines } from '../transaction-entries'
 import type { MappingResult, Transaction } from '@/types'
@@ -163,71 +165,61 @@ describe('applyAccountOverride', () => {
   })
 })
 
-// #2919: the category path adds the 45xx/4598 basis pair for its own default
-// cost account. An override that lands the cost line on an account which
-// reports ruta 20-24 by itself must drop that pair, or the declaration counts
-// the purchase twice (RC_OUTPUT_MISSING); any other account keeps it.
+// #2919 / crm#1096: the category path books the 45xx/4598 basis pair for its
+// own default cost account. applyAccountOverride leaves it as booked; the door
+// then settles it on the account the cost line landed on, with the company's
+// momskoder (reconcileRcBasisWithCostLines): an account that reports ruta
+// 20-24 by itself loses the pair, or the declaration counts the purchase twice
+// (RC_OUTPUT_MISSING); any other account keeps it.
 describe('applyAccountOverride: reverse-charge basis pair', () => {
   const rcTx = { amount: -250, amount_sek: -250, currency: 'SEK', exchange_rate: 1, description: 'GOOGLE PLAY' } as Transaction
   const rcMapping = () => buildMappingResultFromCategory('expense_software', rcTx, true, 'aktiebolag', 'reverse_charge')
 
-  const accountsAfter = async (row: Record<string, unknown>, override: string) => {
+  const overridden = async (row: Record<string, unknown>, override: string) => {
     const { supabase, mockResult } = createMockSupabase()
     mockResult({ data: chartRow({ account_number: override, ...row }) })
-    const result = await applyAccountOverride(supabase as never, 'company-1', override, -250, rcMapping(), true)
-    return result.vat_lines.map((l) => l.account_number)
+    return applyAccountOverride(supabase as never, 'company-1', override, -250, rcMapping(), true)
   }
+  const accountsAfter = async (row: Record<string, unknown>, override: string, treatment: string | null = null) =>
+    reconcileRcBasisWithCostLines(
+      await overridden(row, override),
+      chartVatTreatmentsOf([{ account_number: override, default_vat_treatment: treatment }]),
+    )
+      .vat_lines.map((l) => l.account_number)
+
+  it('leaves the pair as the category booked it: the door settles it on the final account', async () => {
+    const result = await overridden({ account_class: 4 }, '4535')
+    expect(result.debit_account).toBe('4535')
+    expect(result.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+  })
 
   it('keeps the pair on an ordinary cost account (the issue case, 6540)', async () => {
-    expect(await accountsAfter({ account_class: 6, default_vat_treatment: null }, '6540'))
+    expect(await accountsAfter({ account_class: 6 }, '6540'))
       .toEqual(['2645', '2614', '4535', '4598'])
   })
 
   it('drops the pair on a BAS basis account (4535 already reports ruta 21)', async () => {
-    expect(await accountsAfter({ account_class: 4, default_vat_treatment: null }, '4535'))
+    expect(await accountsAfter({ account_class: 4 }, '4535'))
       .toEqual(['2645', '2614'])
   })
 
   it('drops the pair on a cost account configured with a reverse_charge_* treatment', async () => {
-    expect(await accountsAfter({ account_class: 6, default_vat_treatment: 'reverse_charge_non_eu_services' }, '6541'))
+    expect(await accountsAfter({ account_class: 6 }, '6541', 'reverse_charge_non_eu_services'))
       .toEqual(['2645', '2614'])
   })
 
   it('keeps the pair on a company 45xx account with no treatment (it reports no box)', async () => {
-    expect(await accountsAfter({ account_class: 4, default_vat_treatment: null }, '4538'))
+    expect(await accountsAfter({ account_class: 4 }, '4538'))
       .toEqual(['2645', '2614', '4535', '4598'])
   })
 
   it('the resulting verifikat balances with the pair dropped', async () => {
-    const { supabase, mockResult } = createMockSupabase()
-    mockResult({ data: chartRow({ account_number: '4531', account_class: 4, default_vat_treatment: null }) })
-    const result = await applyAccountOverride(supabase as never, 'company-1', '4531', -250, rcMapping(), true)
+    const result = reconcileRcBasisWithCostLines(await overridden({ account_class: 4 }, '4531'), new Map())
     const lines = buildTransactionEntryLines(rcTx, result)
     const debit = lines.reduce((s, l) => s + l.debit_amount, 0)
     const credit = lines.reduce((s, l) => s + l.credit_amount, 0)
     expect(Math.round(debit * 100) / 100).toBe(Math.round(credit * 100) / 100)
     expect(lines.find((l) => l.account_number === '4531')?.debit_amount).toBe(250)
     expect(lines.some((l) => l.account_number === '4598')).toBe(false)
-  })
-})
-
-describe('reconcileRcBasisWithCostAccount', () => {
-  const withPair = () => mapping({
-    vat_lines: [
-      { account_number: '2645', debit_amount: 25, credit_amount: 0, description: '' },
-      { account_number: '2614', debit_amount: 0, credit_amount: 25, description: '' },
-      { account_number: '4535', debit_amount: 100, credit_amount: 0, description: '' },
-      { account_number: '4598', debit_amount: 0, credit_amount: 100, description: '' },
-    ],
-  })
-
-  it('leaves an income override alone', () => {
-    const m = withPair()
-    expect(reconcileRcBasisWithCostAccount(m, 100, '4535', null)).toBe(m)
-  })
-
-  it('leaves a mapping without a basis pair alone', () => {
-    const m = mapping()
-    expect(reconcileRcBasisWithCostAccount(m, -100, '4535', null)).toBe(m)
   })
 })

@@ -24,6 +24,42 @@ describe('MCP SIE legacy recovery', () => {
     expect(outputValidator.safeParse({ ...result, kind: 'legacy' }).success).toBe(false)
   })
 
+  // crm#1967: the job result's review is a receipt of the moment the import
+  // finished; the answer says whether it is still open and which tool confirms it.
+  const YEAR = '33333333-3333-4333-8333-333333333333'
+  const TOKEN = '44444444-4444-4444-8444-444444444444'
+  const IB = '55555555-5555-4555-8555-555555555555'
+  const reviewJob = { id: IMPORT, job_state: 'completed', chunks_done: 4, chunks_total: 4, transactions_count: 81, error_message: null,
+    job_result: { completed: true, nextPeriodOpeningBalanceReview: { nextPeriodId: YEAR, nextPeriodName: 'Räkenskapsår 2026',
+      openingBalanceEntryId: IB, importId: IMPORT, reviewToken: TOKEN, reason: 'import' } } }
+
+  it('names the open review of the next year and the tool that confirms it', async () => {
+    db.enqueueMany([{ data: reviewJob },
+      { data: { id: YEAR, name: 'Räkenskapsår 2026', opening_balance_entry_id: IB, opening_balance_review_token: TOKEN } }])
+    const result = await call()
+    expect(result.opening_balance_review).toMatchObject({ fiscal_period_id: YEAR, period_name: 'Räkenskapsår 2026', open: true,
+      review_token: TOKEN, opening_balance_entry_id: IB, acknowledge_tool: 'gnubok_acknowledge_opening_balance_review' })
+    expect(String((result.opening_balance_review as { next: string }).next)).toContain('gnubok_acknowledge_opening_balance_review')
+    expect(outputValidator.safeParse(result).success).toBe(true)
+    expect(db.findCalls('fiscal_periods', 'eq')).toEqual([['id', YEAR], ['company_id', 'company-1']])
+    expect(db.supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('says a confirmed review is closed, and gives no token to confirm it again', async () => {
+    db.enqueueMany([{ data: reviewJob },
+      { data: { id: YEAR, name: 'Räkenskapsår 2026', opening_balance_entry_id: IB, opening_balance_review_token: null } }])
+    const result = await call()
+    expect(result.opening_balance_review).toMatchObject({ open: false, review_token: null, opening_balance_entry_id: null })
+    expect(outputValidator.safeParse(result).success).toBe(true)
+  })
+
+  it('answers the token a later import renewed, not the receipt\'s', async () => {
+    const renewed = '66666666-6666-4666-8666-666666666666'
+    db.enqueueMany([{ data: reviewJob },
+      { data: { id: YEAR, name: 'Räkenskapsår 2026', opening_balance_entry_id: IB, opening_balance_review_token: renewed } }])
+    expect((await call()).opening_balance_review).toMatchObject({ open: true, review_token: renewed })
+  })
+
   it.each(['failed', 'pending', 'completed', 'undone', 'timed_out'])('reports legacy %s as review-required, with no invented progress', async status => {
     const row = { id: IMPORT, status, job_state: null, fiscal_period_id: 'period-1' }
     db.enqueueMany([{ data: row }, { data: row },

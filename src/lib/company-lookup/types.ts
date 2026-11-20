@@ -11,8 +11,14 @@ export interface EnrichmentCompanyRole {
   positionTypes: string[]
   positionDescriptions: string[]
   positionStart: string
+  /** Absent in every payload seen so far: the register keeps positions open. */
   positionEnd: string | null
-  companyStatus: string
+  /**
+   * The company's state: absent for an active company, a TIC status code
+   * such as `Deregistered` or `LiquidationDecided` otherwise. See
+   * isCeasedCompanyStatus in ./engagements.
+   */
+  companyStatus?: string | null
   signatureDescription?: string
 }
 

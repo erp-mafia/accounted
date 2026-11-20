@@ -72,8 +72,8 @@ describe('GET /api/customers/[id]/personal-number', () => {
   })
 
   it('returns 403 for a viewer, who keeps seeing the mask', async () => {
-    // The drill-in retires the `no_full_value_read_endpoint` safeguard in
-    // .compliance/ropa.yaml, so it stays as narrow as the purpose allows: the
+    // The drill-in retires the `no_full_value_read_endpoint` safeguard in the
+    // record of processing activities, so it stays as narrow as the purpose allows: the
     // person who needs to verify a personnummer is the one who can correct it.
     requireWriteMock.mockResolvedValue({
       ok: false,

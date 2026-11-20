@@ -27,9 +27,10 @@ const log = createLogger('reconciliation.covering-set-candidate')
  * against its unlinked legs, and a stored hint would add a stale-pointer
  * class for no saving (the utlägg pairing precedent, DECISIONS 2026-09-05).
  * Never auto-applied: the unattended sweep persists and applies 1:1 matches
- * only, and use_proposals reads the persisted column. A set proposal is
- * confirmed per row through the ordinary 1:N link (linkTransactionToVouchers),
- * which revalidates every slice at click time.
+ * only. A person confirms a set proposal, per row or with use_proposals,
+ * which reads bucket `proposed` as the listing does (readProposedBankRows,
+ * crm#1668); either way it is the ordinary 1:N link
+ * (linkTransactionToVouchers), which revalidates every slice at link time.
  *
  * SEK accounts only. The detector sums in SEK; the 1:N link that confirms
  * the proposal compares in the account's own currency (ledgerLineAmountIn),

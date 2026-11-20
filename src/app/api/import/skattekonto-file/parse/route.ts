@@ -3,7 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
-import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
+import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { generateFileHash } from '@/lib/import/bank-file/parser'
 import {
   detectSkattekontoFile,
@@ -101,17 +101,7 @@ export const POST = withRouteContext(
       // Wrong-company guard: the modern export names its orgnr in the header
       // row. A mismatch is surfaced for the preview step to confirm, not a
       // hard block (legacy files have no header at all).
-      let orgNumberMismatch = false
-      if (parseResult.org_number) {
-        const { data: settings } = await supabase
-          .from('company_settings')
-          .select('org_number')
-          .eq('company_id', companyId)
-          .maybeSingle()
-        const companyOrg = normalizeOrgNumber(settings?.org_number ?? null)
-        const fileOrg = normalizeOrgNumber(parseResult.org_number)
-        orgNumberMismatch = companyOrg !== null && fileOrg !== null && companyOrg !== fileOrg
-      }
+      const { mismatch: orgNumberMismatch } = await checkSourceOrgNumber(supabase, companyId, parseResult.org_number)
 
       const existing = await fetchExistingSkattekontoRows(
         supabase,

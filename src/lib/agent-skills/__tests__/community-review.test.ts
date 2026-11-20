@@ -6,7 +6,7 @@ import { communityBodySha } from '../community-approval'
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 beforeEach(() => reset())
 
-const row = (id: string, name: string, body = '# Rutin\n\n1. Gör det.\n') => ({ id, name, description: 'Kort.', body, kind: 'workflow', author_handle: 'jakob', share_confirmed_at: '2026-09-25T10:00:00Z' })
+const row = (id: string, name: string, body = '# Rutin\n\n1. Gör det.\n') => ({ id, name, description: 'Kort.', body, kind: 'workflow', author_handle: 'anna', share_confirmed_at: '2026-09-25T10:00:00Z' })
 
 describe('community review', () => {
   it('shows each submission as the file to publish, with a free folder name and a privacy screen', async () => {

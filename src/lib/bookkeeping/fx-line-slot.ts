@@ -35,6 +35,7 @@
  * cannot depend on which line the loop happens to reach first.
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { CURRENCY_LEDGER_DEFAULTS } from '@/lib/cash-accounts/ledger-slots'
 
@@ -164,7 +165,7 @@ export function resolveFxLineSlot(lines: FxSlotLine[], input: FxSlotInput): FxSl
   //    The tolerance absorbs the double rounding on the way in: the foreign
   //    amount is itself öre-rounded, so converting it back can miss the booked
   //    SEK figure by up to half an öre times the rate.
-  const expectedSek = roundOre(input.foreignAmount * input.exchangeRate)
+  const expectedSek = sekOfForeign(input.foreignAmount, input.exchangeRate)
   const tolerance = roundOre(input.exchangeRate * 0.005) + 0.01
 
   const candidates = lines

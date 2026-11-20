@@ -19,7 +19,7 @@
  *      because a UUID's hex runs can otherwise look like a 10/12-digit
  *      personnummer and would nuke useful ids. A hit replaces the WHOLE string:
  *      the digits around a personnummer are usually themselves identifying.
- *   3. Substring patterns for emails, Swedish IBANs and gnubok API keys,
+ *   3. Substring patterns for emails, Swedish IBANs and API keys,
  *      replaced in place with a placeholder naming what was removed. These are
  *      self-delimiting secrets, so the rest of the string (a log line, a stack
  *      trace) stays useful.
@@ -54,10 +54,15 @@ export const REDACT_KEYS = new Set([
 
 const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const PERSONNUMMER_PATTERN = /\b\d{6}-?\d{4}\b|\b\d{8}-?\d{4}\b/
-// gnubok API keys (secret keys and invite tokens). The wire-format prefix is
+// Credentials this app issues: API keys (sk), invite tokens (inv), MCP OAuth
+// refresh tokens (rt) and connector keys (ck). The wire-format prefix is
 // permanent (see CLAUDE.md: the gnubok_* prefixes are kept on purpose), so
-// this pattern will not rot with the Accounted rename.
-const API_KEY_PATTERN = /gnubok_(?:sk|inv)_[A-Za-z0-9_]+/g
+// this pattern will not rot with the Accounted rename. The prefixes are
+// listed, not matched loosely: MCP tool names share the gnubok_ namespace
+// (gnubok_get_..., gnubok_set_...) and must stay readable in logs. The body
+// is base64url, which includes '-': without it in the class the match stopped
+// at the first hyphen and left the rest of the credential in the log line.
+const API_KEY_PATTERN = /gnubok_(?:sk|inv|rt|ck)_[A-Za-z0-9_-]+/g
 // Swedish IBAN: SE + 22 digits, optionally grouped with spaces
 // ("SE4550000000058398257466" or "SE45 5000 0000 0583 9825 7466").
 const SE_IBAN_PATTERN = /\bSE(?:\s?\d){22}\b/g
@@ -79,6 +84,144 @@ export function redactString(value: string): string {
     .replace(API_KEY_PATTERN, '[REDACTED_API_KEY]')
     .replace(SE_IBAN_PATTERN, '[REDACTED_IBAN]')
     .replace(EMAIL_PATTERN, '[REDACTED_EMAIL]')
+}
+
+/**
+ * Query keys whose value is an identity number whatever its written form. An
+ * organisationsnummer is listed because a sole trader's IS the owner's
+ * personnummer, and a form the regex misses ('121212+1212' decodes to a space
+ * where the '+' was) must not slip through on such a key.
+ */
+const IDENTITY_QUERY_KEYS = new Set(['org_number', 'orgnr', 'personal_number', 'pnr'])
+
+function decodeQueryPart(part: string): string {
+  try {
+    return decodeURIComponent(part.replace(/\+/g, ' '))
+  } catch {
+    return part
+  }
+}
+
+/**
+ * A request path ('/route?a=1&b=2') as it may leave the process. The pathname
+ * goes through redactString like any string; each query value is decoded and
+ * goes through it on its own, and the value of a key on the denylist (or one
+ * naming an identity number) is replaced whole, so `?org_number=` never
+ * reaches a vendor in clear while `?page=2` stays readable.
+ */
+export function redactRequestPath(path: string): string {
+  const q = path.indexOf('?')
+  const pathname = redactString(q === -1 ? path : path.slice(0, q))
+  const query = q === -1 ? '' : path.slice(q + 1)
+  if (!query) return pathname
+  const pairs = query.split('&').map((pair) => {
+    const eq = pair.indexOf('=')
+    const key = decodeQueryPart(eq === -1 ? pair : pair.slice(0, eq))
+    if (eq === -1) return redactString(key)
+    const lower = key.toLowerCase()
+    if (REDACT_KEYS.has(lower) || IDENTITY_QUERY_KEYS.has(lower)) return `${key}=${REDACTED}`
+    return `${key}=${redactString(decodeQueryPart(pair.slice(eq + 1)))}`
+  })
+  return `${pathname}?${pairs.join('&')}`
+}
+
+/** An Error as redactedError() hands it to a vendor: `code` set when the source had one. */
+export type RedactedError = Error & { code?: string }
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+/**
+ * The message a captured non-Error object carries. Covers what reaches a
+ * capture in practice: redact()'s serialized Error ({ name, message, stack,
+ * code }, which is what the logger hands the sink for EVERY logged error), a
+ * PostgREST error body ({ message, code, details, hint }), a GoTrue body
+ * ({ msg } or { error, error_description }) and a Google-style
+ * { error: { message } }. With no message anywhere it names the keys only:
+ * values are data, and a key list both leaks nothing and groups stably.
+ */
+function messageOfObject(o: Record<string, unknown>): string {
+  const nested =
+    typeof o.error === 'object' && o.error !== null
+      ? nonEmptyString((o.error as Record<string, unknown>).message)
+      : undefined
+  const message =
+    nonEmptyString(o.message) ??
+    nonEmptyString(o.msg) ??
+    nonEmptyString(o.error_description) ??
+    nested ??
+    nonEmptyString(o.error)
+  if (message !== undefined) return message
+  if (typeof o.message === 'string') return o.message
+  const keys = Object.keys(o).sort()
+  if (keys.length === 0) return 'Non-Error object captured (no keys)'
+  const shown = keys.slice(0, 10).join(', ') + (keys.length > 10 ? ', ...' : '')
+  return `Non-Error object captured (keys: ${shown})`
+}
+
+function nameOfObject(o: Record<string, unknown>): string {
+  const name = nonEmptyString(o.name)
+  if (name !== undefined) return name
+  if ('code' in o && ('details' in o || 'hint' in o)) return 'PostgrestError'
+  if ('error_description' in o || ('msg' in o && 'code' in o)) return 'AuthError'
+  return 'Error'
+}
+
+/** What any thrown value says about itself, before redaction. */
+export interface ThrownDescription {
+  name: string
+  message: string
+  stack?: string
+  code?: unknown
+}
+
+/**
+ * The name, message, stack and code of any thrown value: an Error's own, a
+ * plain object's from the shapes messageOfObject knows, a string as its own
+ * message. Not redacted: redactedError redacts for a vendor, and toError
+ * (lib/errors/to-error.ts) hands the logger an Error it redacts itself.
+ */
+export function describeThrown(err: unknown): ThrownDescription {
+  if (err instanceof Error) {
+    return {
+      name: err.name,
+      message: err.message,
+      stack: typeof err.stack === 'string' ? err.stack : undefined,
+      code: (err as Error & { code?: unknown }).code,
+    }
+  }
+  if (typeof err === 'object' && err !== null) {
+    const o = err as Record<string, unknown>
+    return { name: nameOfObject(o), message: messageOfObject(o), stack: nonEmptyString(o.stack), code: o.code }
+  }
+  return { name: 'Error', message: typeof err === 'string' ? err : `Non-Error value captured: ${String(err)}` }
+}
+
+/**
+ * An Error a vendor SDK can take (it wants an instance, not redact()'s plain
+ * object), with the message and the stack redacted as redact() does them.
+ *
+ * Any captured value comes out as a real Error whose message says what
+ * failed. A plain object used to become `new Error(String(value))`, that is
+ * "Error: [object Object]": every error the logger forwards reaches the
+ * adapter as redact()'s serialized object, so in PostHog all of them shared
+ * one message and one adapter-frame stack and merged into a single issue.
+ * The serialized stack is kept, so an event groups on the frames that threw.
+ * A value with no stack of its own gets a header-only stack rather than this
+ * function's frames, which would lump unrelated failures together again.
+ *
+ * Only name, message, stack and code cross. PostgREST `details` echoes row
+ * values ("Failing row contains (...)") and the logger's serialization never
+ * carried it either; `cause` is not followed for the same reason.
+ */
+export function redactedError(err: unknown): RedactedError {
+  const { name, message, stack, code } = describeThrown(err)
+  const safe: RedactedError = new Error(redactString(message))
+  safe.name = redactString(name)
+  safe.stack = stack !== undefined ? redactString(stack) : `${safe.name}: ${safe.message}`
+  if (typeof code === 'string' || typeof code === 'number') safe.code = redactString(String(code))
+  return safe
 }
 
 export function redact(value: unknown, keyPath = ''): unknown {

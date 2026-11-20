@@ -27,7 +27,8 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 import { POST } from '../route'
 
-const idParams = { params: Promise.resolve({ id: 'deadline-1' }) }
+const DEADLINE_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+const idParams = { params: Promise.resolve({ id: DEADLINE_ID }) }
 
 interface Captured {
   update?: Record<string, unknown>
@@ -46,7 +47,7 @@ function createCapturingSupabase(
     const result = results[idx++] ?? { data: null, error: null }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ['select', 'eq', 'single', 'maybeSingle']) {
+    for (const m of ['select', 'eq', 'is', 'single', 'maybeSingle']) {
       b[m] = () => b
     }
     b.update = (payload: Record<string, unknown>) => {
@@ -93,23 +94,39 @@ describe('POST /api/deadlines/[id]/complete', () => {
     expect(res.status).toBe(403)
   })
 
-  it('maps zero-rows to 404 with a Swedish message', async () => {
-    auth(createCapturingSupabase([{ error: { code: 'PGRST116', message: 'no rows' } }], {}))
-    const { status, body } = await parseJsonResponse<{ error: string }>(
+  it('answers 404 with a Swedish message when the company has no such deadline', async () => {
+    // Another company's deadline and a dismissed one read as no row: the
+    // read filters on company_id and dismissed_at (lib/deadlines/completion.ts).
+    const captured: Captured = {}
+    auth(createCapturingSupabase([{ data: null }], captured))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await POST(
         createMockRequest('/x', { method: 'POST', body: { is_completed: false } }),
         idParams,
       ),
     )
     expect(status).toBe(404)
-    expect(body.error).toBe('Deadline hittades inte')
+    expect(body.error.code).toBe('DEADLINE_NOT_FOUND')
+    expect(body.error.message).toBe('Deadline hittades inte.')
+    expect(captured.update).toBeUndefined()
+  })
+
+  it('answers 404 for an id that is not a uuid, before any read', async () => {
+    const captured: Captured = {}
+    auth(createCapturingSupabase([], captured))
+    const res = await POST(
+      createMockRequest('/x', { method: 'POST', body: { is_completed: true } }),
+      { params: Promise.resolve({ id: 'deadline-1' }) },
+    )
+    expect(res.status).toBe(404)
+    expect(captured.update).toBeUndefined()
   })
 
   it('marks a pending deadline done and stamps completed_at', async () => {
     const captured: Captured = {}
     auth(
       createCapturingSupabase(
-        [{ data: { is_completed: false } }, { data: { id: 'deadline-1', is_completed: true } }],
+        [{ data: { id: DEADLINE_ID, is_completed: false } }, { data: { id: DEADLINE_ID, is_completed: true } }],
         captured,
       ),
     )
@@ -128,7 +145,7 @@ describe('POST /api/deadlines/[id]/complete', () => {
     const captured: Captured = {}
     auth(
       createCapturingSupabase(
-        [{ data: { is_completed: true } }, { data: { id: 'deadline-1', is_completed: false } }],
+        [{ data: { id: DEADLINE_ID, is_completed: true } }, { data: { id: DEADLINE_ID, is_completed: false } }],
         captured,
       ),
     )
@@ -150,7 +167,7 @@ describe('POST /api/deadlines/[id]/complete', () => {
     const captured: Captured = {}
     auth(
       createCapturingSupabase(
-        [{ data: { is_completed: false } }, { data: { id: 'deadline-1', is_completed: false } }],
+        [{ data: { id: DEADLINE_ID, is_completed: false } }, { data: { id: DEADLINE_ID, is_completed: false } }],
         captured,
       ),
     )
@@ -161,24 +178,26 @@ describe('POST /api/deadlines/[id]/complete', () => {
       ),
     )
     expect(status).toBe(200)
-    expect(captured.update?.is_completed).toBe(false)
-    expect(captured.update?.completed_at).toBeNull()
+    // Already pending: nothing is written at all.
+    expect(captured.update).toBeUndefined()
   })
 
   it('is idempotent: re-completing an already-done deadline keeps it done', async () => {
     const captured: Captured = {}
     auth(
       createCapturingSupabase(
-        [{ data: { is_completed: true } }, { data: { id: 'deadline-1', is_completed: true } }],
+        [{ data: { id: DEADLINE_ID, is_completed: true } }, { data: { id: DEADLINE_ID, is_completed: true } }],
         captured,
       ),
     )
-    await POST(
+    const res = await POST(
       createMockRequest('/x', { method: 'POST', body: { is_completed: true } }),
       idParams,
     )
-    expect(captured.update?.is_completed).toBe(true)
-    expect(captured.update?.completed_at).toBeTruthy()
+    // No write: completed_at keeps the moment it was first ticked off (or the
+    // filing date a recorded moms or AGI filing gave it).
+    expect(res.status).toBe(200)
+    expect(captured.update).toBeUndefined()
   })
 
   it('falls back to toggling when the body carries no state', async () => {
@@ -186,7 +205,7 @@ describe('POST /api/deadlines/[id]/complete', () => {
     const captured: Captured = {}
     auth(
       createCapturingSupabase(
-        [{ data: { is_completed: false } }, { data: { id: 'deadline-1', is_completed: true } }],
+        [{ data: { id: DEADLINE_ID, is_completed: false } }, { data: { id: DEADLINE_ID, is_completed: true } }],
         captured,
       ),
     )
@@ -243,7 +262,7 @@ describe('POST /api/deadlines/[id]/complete', () => {
     const captured: Captured = {}
     auth(
       createCapturingSupabase(
-        [{ data: { is_completed: false } }, { data: { id: 'deadline-1', is_completed: true } }],
+        [{ data: { id: DEADLINE_ID, is_completed: false } }, { data: { id: DEADLINE_ID, is_completed: true } }],
         captured,
       ),
     )

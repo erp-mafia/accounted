@@ -30,11 +30,22 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/pagination'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
-import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { bankRowRefusalCode, decideBankRowRebooking, type GatedBankRow } from '@/lib/transactions/is-booked'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
-import { roundOre, sumOre } from '@/lib/money'
 import {
+  readPayslipLinesForClaims,
+  withExpenseClaimPayoutState,
+  type ExpenseClaimPayoutState,
+} from '@/lib/salary/expense-claim-payout-state'
+import { readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
+import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { roundOre, sumOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { AccountsNotInChartError, BookingReviewRequiredError } from '@/lib/bookkeeping/errors'
+import {
+  claimReceiptDocumentId,
   createPayoutBatch,
   deleteExpenseClaim,
   planExpenseClaim,
@@ -73,6 +84,8 @@ export interface ExpenseClaimPublic {
   status: 'registered' | 'paid'
   journal_entry_id: string | null
   payout_batch_id: string | null
+  /** The salary run that repays the claim, while it is registered and on a payslip. */
+  salary_run_id: string | null
   created_at: string
 }
 
@@ -80,7 +93,9 @@ function nullableNumber(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value)
 }
 
-export function toPublicClaim(row: Partial<ExpenseClaimRow> & { id: string }): ExpenseClaimPublic {
+export function toPublicClaim(
+  row: Partial<ExpenseClaimRow> & { id: string } & Partial<ExpenseClaimPayoutState>,
+): ExpenseClaimPublic {
   return {
     expense_claim_id: row.id,
     employee_id: row.employee_id ?? null,
@@ -98,6 +113,7 @@ export function toPublicClaim(row: Partial<ExpenseClaimRow> & { id: string }): E
     status: row.status === 'paid' ? 'paid' : 'registered',
     journal_entry_id: row.journal_entry_id ?? null,
     payout_batch_id: row.payout_batch_id ?? null,
+    salary_run_id: row.salary_run?.salary_run_id ?? null,
     created_at: row.created_at ?? '',
   }
 }
@@ -136,12 +152,17 @@ export async function listExpenseClaimsPage(
   const rows = (data ?? []) as unknown as ExpenseClaimRow[]
   const page = rows.slice(0, limit)
   const last = page[page.length - 1]
-  return {
-    ok: true,
-    data: {
-      expense_claims: page.map(toPublicClaim),
-      next_cursor: rows.length > limit && last ? encodeDefaultCursor(last) : null,
-    },
+  try {
+    const claims = await withExpenseClaimPayoutState(ctx.supabase, ctx.companyId, page)
+    return {
+      ok: true,
+      data: {
+        expense_claims: claims.map(toPublicClaim),
+        next_cursor: rows.length > limit && last ? encodeDefaultCursor(last) : null,
+      },
+    }
+  } catch (err) {
+    return failed(err)
   }
 }
 
@@ -157,7 +178,12 @@ export async function getExpenseClaim(
     .maybeSingle()
   if (error) return failed(error)
   if (!data) return { ok: false, code: 'EXPENSE_CLAIM_NOT_FOUND' }
-  return { ok: true, data: toPublicClaim(data as unknown as ExpenseClaimRow) }
+  try {
+    const [claim] = await withExpenseClaimPayoutState(ctx.supabase, ctx.companyId, [data as unknown as ExpenseClaimRow])
+    return { ok: true, data: toPublicClaim(claim) }
+  } catch (err) {
+    return failed(err)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +200,9 @@ const REGISTER_CODES: Record<RegisterExpenseClaimFailure['code'], string> = {
   CLAIM_INSERT_FAILED: 'EXPENSE_CLAIM_SAVE_FAILED',
   COMPANY_NOT_FOUND: 'COMPANY_NOT_FOUND',
   LINK_WRITE_FAILED: 'EXPENSE_CLAIM_LINK_FAILED',
+  INBOX_ITEM_NOT_FOUND: 'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND',
+  INBOX_ITEM_BOOKED: 'INBOX_ITEM_ALREADY_BOOKED',
+  INBOX_ITEM_PAIR_BOOKED: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
 }
 
 function registerFailure(ctx: OperationContext, failure: RegisterExpenseClaimFailure): Failure {
@@ -185,6 +214,8 @@ function registerFailure(ctx: OperationContext, failure: RegisterExpenseClaimFai
     ok: false,
     code,
     ...(failure.code === 'INVALID_LINES' && failure.detail ? { details: { reason: failure.detail } } : {}),
+    // The pair guard's sentence names the verifikat the other half is on.
+    ...(failure.code === 'INBOX_ITEM_PAIR_BOOKED' && failure.detail ? { messageSv: failure.detail } : {}),
   }
 }
 
@@ -207,12 +238,18 @@ async function periodLockFailure(
   }
 }
 
+/** What checkUnderlag answers: a refusal, or the inbox item's own document (null without one). */
+type UnderlagCheck = { ok: false; failure: Failure } | { ok: true; inboxDocumentId: string | null }
+
 /**
  * The receipt and the inbox item must be the company's own. The v1 and MCP
  * doors run as the service role, where no RLS stops a foreign id from being
  * written onto the claim row (and read back through its document join).
+ * Passing answers the inbox item's document, which the registration attaches
+ * as the receipt (claimReceiptDocumentId).
  */
-async function underlagFailure(ctx: OperationContext, input: RegisterExpenseClaimInput): Promise<Failure | null> {
+async function checkUnderlag(ctx: OperationContext, input: RegisterExpenseClaimInput): Promise<UnderlagCheck> {
+  const refuse = (failure: Failure): UnderlagCheck => ({ ok: false, failure })
   if (input.document_id) {
     const { data, error } = await ctx.supabase
       .from('document_attachments')
@@ -220,22 +257,32 @@ async function underlagFailure(ctx: OperationContext, input: RegisterExpenseClai
       .eq('id', input.document_id)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
-    if (error) return failed(error)
-    if (!data) return { ok: false, code: 'EXPENSE_CLAIM_DOCUMENT_NOT_FOUND', details: { document_id: input.document_id } }
+    if (error) return refuse(failed(error))
+    if (!data) return refuse({ ok: false, code: 'EXPENSE_CLAIM_DOCUMENT_NOT_FOUND', details: { document_id: input.document_id } })
   }
-  if (input.inbox_item_id) {
-    const { data, error } = await ctx.supabase
-      .from('invoice_inbox_items')
-      .select('id')
-      .eq('id', input.inbox_item_id)
-      .eq('company_id', ctx.companyId)
-      .maybeSingle()
-    if (error) return failed(error)
-    if (!data) {
-      return { ok: false, code: 'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND', details: { inbox_item_id: input.inbox_item_id } }
-    }
+  if (!input.inbox_item_id) return { ok: true, inboxDocumentId: null }
+  // Same answer the registration gives before it posts, so a dry run (the
+  // staged preview) refuses an underlag that is already booked (accounted#14).
+  const booking = await readInboxItemBookingState(ctx.supabase, ctx.companyId, input.inbox_item_id)
+  if (booking.state === 'error') return refuse(failed(booking.error))
+  if (booking.state === 'missing') {
+    return refuse({ ok: false, code: 'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND', details: { inbox_item_id: input.inbox_item_id } })
   }
-  return null
+  if (booking.state === 'booked') {
+    return refuse({
+      ok: false,
+      code: 'INBOX_ITEM_ALREADY_BOOKED',
+      details: {
+        inbox_item_id: input.inbox_item_id,
+        ...(booking.journal_entry_id ? { journal_entry_id: booking.journal_entry_id } : {}),
+        ...(booking.supplier_invoice_id ? { supplier_invoice_id: booking.supplier_invoice_id } : {}),
+      },
+    })
+  }
+  // The other half of this purchase is booked already: an utlägg of it books the purchase twice.
+  const pairBooked = await refuseWhenPairBooked(ctx.supabase, ctx.companyId, input.inbox_item_id)
+  if (pairBooked) return refuse({ ok: false, code: pairBooked.code, details: pairBooked.details, messageSv: pairBooked.messageSv })
+  return { ok: true, inboxDocumentId: booking.document_id ?? null }
 }
 
 /**
@@ -251,17 +298,29 @@ export async function createExpenseClaim(
   try {
     const locked = await periodLockFailure(supabase, companyId, input.expense_date)
     if (locked) return locked
-    const underlag = await underlagFailure(ctx, input)
-    if (underlag) return underlag
+    const underlag = await checkUnderlag(ctx, input)
+    if (!underlag.ok) return underlag.failure
 
     if (options.dryRun) {
       const planned = await planExpenseClaim(supabase, companyId, input, { dryRun: true })
       if (!planned.ok) return registerFailure(ctx, planned)
       const { plan } = planned
-      const totalDebit = sumOre(plan.lines.map((l) => l.debit_amount))
-      const totalCredit = sumOre(plan.lines.map((l) => l.credit_amount))
-      if (totalDebit !== totalCredit || totalDebit <= 0) {
+      const { balanced, totalDebit, totalCredit } = lineBalance(plan.lines)
+      if (!balanced) {
         return { ok: false, code: 'EXPENSE_CLAIM_INVALID_LINES', details: { reason: 'unbalanced' } }
+      }
+      // The engine resolves the lines' accounts only when the commit posts;
+      // the same read-only verdict here, answered with the error the commit
+      // would answer, so a dry run that passes is a commit that posts
+      // (crm#1536). A BAS account absent from the chart passes (the engine
+      // seeds it); a deactivated or non-BAS number does not.
+      const unresolvable = await findUnresolvableAccounts(
+        supabase,
+        companyId,
+        plan.lines.map((l) => l.account_number),
+      )
+      if (unresolvable.length > 0) {
+        return { ok: false, code: 'ACCOUNTS_NOT_IN_CHART', error: new AccountsNotInChartError(unresolvable) }
       }
       return {
         ok: true,
@@ -269,6 +328,7 @@ export async function createExpenseClaim(
         preview: {
           claimant_name: plan.claimantName,
           employee_id: plan.employeeId,
+          expense_account: input.expense_account,
           liability_account: plan.liabilityAccount,
           expense_date: input.expense_date,
           fiscal_period_id: plan.fiscalPeriodId,
@@ -276,7 +336,8 @@ export async function createExpenseClaim(
           vat_sek: plan.vatSek,
           currency: input.currency,
           exchange_rate: input.currency === 'SEK' ? null : plan.rate,
-          document_id: input.document_id ?? null,
+          // The receipt the registration attaches: the inbox item's own document, when it has one.
+          document_id: claimReceiptDocumentId(input, underlag.inboxDocumentId) ?? null,
           inbox_item_id: input.inbox_item_id ?? null,
           verifikat: {
             description: plan.entryDescription,
@@ -298,6 +359,7 @@ export async function createExpenseClaim(
     if (!result.ok) return registerFailure(ctx, result)
     return { ok: true, data: result.claim, created: true }
   } catch (err) {
+    if (err instanceof BookingReviewRequiredError) return { ok: false, code: 'BOOKING_REVIEW_REQUIRED' }
     ctx.log.error('failed to register expense claim', err as Error)
     return failed(err)
   }
@@ -483,17 +545,18 @@ async function previewPayout(
   const notOpen = claims.find((c) => c.status !== 'registered')
   if (notOpen) return { ok: false, code: 'EXPENSE_PAYOUT_ALREADY_PAID', details: { claim_id: notOpen.id } }
 
-  const { data: scheduled, error: scheduledError } = await supabase
-    .from('salary_line_items')
-    .select('source_expense_claim_id')
-    .eq('company_id', companyId)
-    .in('source_expense_claim_id', claimIds)
-  if (scheduledError) return failed(scheduledError)
-  const onPayslip = ((scheduled ?? []) as Array<{ source_expense_claim_id: string | null }>).find(
-    (row) => row.source_expense_claim_id,
-  )
+  const payslipLines = await readPayslipLinesForClaims(supabase, companyId, claimIds)
+  const onPayslip = claimIds.find((id) => payslipLines.has(id))
   if (onPayslip) {
-    return { ok: false, code: 'EXPENSE_PAYOUT_ON_PAYSLIP', details: { claim_id: onPayslip.source_expense_claim_id } }
+    const run = payslipLines.get(onPayslip)?.salary_run
+    return {
+      ok: false,
+      code: 'EXPENSE_PAYOUT_ON_PAYSLIP',
+      details: {
+        claim_id: onPayslip,
+        ...(run ? { salary_run_id: run.salary_run_id, salary_run_status: run.status } : {}),
+      },
+    }
   }
 
   const claimantKey = (c: (typeof claims)[number]) =>
@@ -631,19 +694,16 @@ export async function matchExpensePayout(
     // samlingsverifikat carries journal_entry_id = NULL and must still refuse.
     const { data: transactionRow, error: fetchTxError } = await supabase
       .from('transactions')
-      .select('id, date, amount, currency, journal_entry_id, cash_account_id, transaction_voucher_links(journal_entry_id, role)')
+      .select('id, date, amount, currency, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(journal_entry_id, role)')
       .eq('id', input.transaction_id)
       .eq('company_id', companyId)
       .single()
     if (fetchTxError || !transactionRow) return { ok: false, code: 'TX_CATEGORIZE_TX_NOT_FOUND' }
-    const { transaction_voucher_links: junctionLinks, ...transaction } = transactionRow as {
-      id: string
+    const transaction = transactionRow as GatedBankRow & {
       date: string
       amount: number
       currency: string | null
-      journal_entry_id: string | null
       cash_account_id: string | null
-      transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
     }
 
     if (!(transaction.amount < 0)) {
@@ -652,18 +712,16 @@ export async function matchExpensePayout(
     if ((transaction.currency || 'SEK').toUpperCase() !== 'SEK') {
       return { ok: false, code: 'EXPENSE_PAYOUT_MATCH_CURRENCY', details: { currency: transaction.currency } }
     }
-    // Only a LIVE (posted) pointer or a bank_line junction row blocks: a
-    // pointer left behind by a storno reads as "utan koppling" in the UI and
-    // must stay matchable (same predicate as link-journal-entry, issue #988).
-    // The RPC re-checks under its row lock; this is the early, readable answer.
-    if (
-      hasBankLineJunctionRow(junctionLinks) ||
-      (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id))
-    ) {
+    // The gate every booking door asks: a posted pointer or bank_line link
+    // refuses, a pointer left behind by a storno does not (issue #988), and
+    // an ignored row is refused. The RPC re-checks under its row lock; this
+    // is the early, readable answer.
+    const rebooking = await decideBankRowRebooking(supabase, companyId, transaction, { replace: false })
+    if (rebooking.outcome === 'refuse') {
       return {
         ok: false,
-        code: 'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED',
-        details: { existingJournalEntryId: transaction.journal_entry_id },
+        code: bankRowRefusalCode(rebooking, 'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED'),
+        details: { existingJournalEntryId: rebooking.journalEntryId },
       }
     }
 
@@ -686,6 +744,9 @@ export async function matchExpensePayout(
       }
       return payoutFailure(ctx, result)
     }
+    // The bank row's own underlag, as on every booking of a row (BFL 5 kap 6-7 §):
+    // one row, one payout verifikat. Never throws, the payout stands either way.
+    await propagateUnderlagForBookedTransaction(supabase, companyId, input.transaction_id, result.journal_entry_id)
     txLog.info('expense payout matched from bank transaction', {
       userId: ctx.userId,
       journalEntryId: result.journal_entry_id,

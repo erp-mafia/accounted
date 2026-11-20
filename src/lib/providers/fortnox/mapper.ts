@@ -8,10 +8,11 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto, CreditedInvoiceRefDto,
 } from '../dto';
-import { creditNoteTypeCode } from '../dto';
+import { documentPayment, documentState, type DocumentState } from '../document-state';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 import { sourceVoucherFromParts } from '../source-voucher';
-import { roundOre } from '@/lib/money';
+import { splitGrossVat } from '@/lib/bookkeeping/gross-split';
+import { ORE_TOLERANCE, roundOre } from '@/lib/money';
 
 /**
  * A row amount net of VAT.
@@ -19,20 +20,20 @@ import { roundOre } from '@/lib/money';
  * Fortnox prices an invoice either excluding or including VAT, and says which
  * with the invoice-level `VATIncluded` flag: when it is true the row `Price`
  * and `Total` are the amounts the customer saw, VAT inside, and the net is
- * the amount divided by (1 + rate). Newer payloads also carry the net on the
+ * what splitGrossVat leaves beside the VAT. Newer payloads also carry the net on the
  * row (`TotalExcludingVAT`, `PriceExcludingVAT`), which callers prefer when
  * present; this is the fallback for the ones that do not. Without a stated
  * rate the amount cannot be split and is returned as it is, and the
  * consumer's rows-versus-header check reports the disagreement.
  *
- * Found on Profilio (2026-09-05): 345 VAT-inclusive invoices whose rows were
+ * Found in one migration (2026-09-05): 345 VAT-inclusive invoices whose rows were
  * stored as if net, so the rows summed to the gross and carried 25 % VAT on
  * top of it, beside a header that was right.
  */
 function netOfVat(amount: number, vatIncluded: boolean, ratePercent: number | undefined): number {
   if (!vatIncluded || ratePercent === undefined) return amount;
   const rate = ratePercent > 1 ? ratePercent / 100 : ratePercent;
-  return roundOre(amount / (1 + rate));
+  return splitGrossVat(amount, rate).net;
 }
 
 /**
@@ -60,6 +61,20 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * Days of a Fortnox terms-of-payment code. The field holds the code of an
+ * entry in the company's register (/3/termsofpayments), and Fortnox's own
+ * codes are the day count itself ("0", "10", "30"). Any other code ("K", a
+ * custom one) does not say its days, so it is left unknown rather than read
+ * as a number: Number("K") is NaN.
+ */
+function termsOfPaymentDays(code: unknown): number | undefined {
+  const text = typeof code === 'number' ? String(code) : typeof code === 'string' ? code.trim() : '';
+  if (!/^\d{1,3}$/.test(text)) return undefined;
+  const days = Number(text);
+  return days <= 365 ? days : undefined;
+}
+
 function providerEmailAddresses(
   raw: Record<string, unknown>,
   field: string,
@@ -84,15 +99,54 @@ function providerEmailAddresses(
 }
 
 /**
- * Single source of truth for "is this invoice fully settled?", used by BOTH
- * deriveInvoiceStatus and the paymentStatus.paid flag so they can never diverge.
- * Numeric, not strict === 0, so a residual öre / float drift still reads as paid.
- * Number(undefined ?? NaN) = NaN and NaN <= 0 is false, so an ABSENT Balance is
- * treated as NOT paid (the supplier-invoice list payload omits Balance); only an
- * explicit FullyPaid flag or a present non-positive Balance counts as paid.
+ * "Is this invoice fully settled?", used by BOTH deriveInvoiceStatus and the
+ * paymentStatus.paid flag so they can never diverge. Numeric, not strict === 0,
+ * so a residual öre / float drift still reads as paid. Number(undefined ?? NaN)
+ * = NaN and NaN <= 0 is false, so an ABSENT Balance is treated as NOT paid (the
+ * supplier-invoice list payload omits Balance); only an explicit FullyPaid flag
+ * or a present non-positive Balance counts as paid.
  */
 function isFullyPaid(raw: Record<string, unknown>): boolean {
   return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
+}
+
+/** The supplier list form spells cancellation `Cancel`, every detail form `Cancelled`. */
+function isCancelled(raw: Record<string, unknown>): boolean {
+  return raw['Cancel'] === true || raw['Cancelled'] === true;
+}
+
+/**
+ * What a Fortnox document is. It was never issued when it states it was
+ * neither sent (`Sent`) nor booked (`Booked`), the two status flags both the
+ * list and the detail form carry. Both have to be stated false: a payload that
+ * omits them (the supplier-invoice forms have no `Sent`) says nothing.
+ */
+function fortnoxDocumentState(raw: Record<string, unknown>, total: number): DocumentState {
+  return documentState({
+    issued: !(raw['Sent'] === false && raw['Booked'] === false),
+    paymentStated: raw['FullyPaid'] === true,
+    cancelled: isCancelled(raw),
+    creditFlag: isFlaggedCredit(raw),
+    total,
+  });
+}
+
+/**
+ * Why a Fortnox supplier invoice from the register list is not an open
+ * payable, or null when it is one. Read from the list form's own fields, not
+ * from Fortnox's `?filter=unpaid`: that filtered list came back empty for a
+ * company whose ledger held five booked supplier invoices without a payment,
+ * the whole 2440 balance (PH 230). Unbooked stays out: it has no verifikat in
+ * the imported ledger, so 2440 would not agree with the register. An absent
+ * Balance says nothing and is kept; a negative one is an open credit.
+ */
+export function fortnoxSupplierInvoiceNotOpen(
+  raw: Record<string, unknown>,
+): 'cancelled' | 'unbooked' | 'paid' | null {
+  if (isCancelled(raw)) return 'cancelled';
+  if (raw['Booked'] === false) return 'unbooked';
+  const balance = readNumber(raw, ['Balance']);
+  return balance !== undefined && Math.abs(balance) < ORE_TOLERANCE ? 'paid' : null;
 }
 
 /**
@@ -107,7 +161,7 @@ function isFullyPaid(raw: Record<string, unknown>): boolean {
  * not one with status 'credited'. Every credit note had fallen through to
  * isFullyPaid (a credit invoice's balance is never positive) and was imported
  * as a PAID invoice with a negative paid amount (#2789). Both spellings are
- * read; the negative total covers the list form (see creditNoteTypeCode).
+ * read; the negative total covers the list form (see documentState).
  */
 function isFlaggedCredit(raw: Record<string, unknown>): boolean {
   const flag = raw['Credit'];
@@ -144,25 +198,35 @@ function creditedInvoiceRefOf(
   return { id: reference, invoiceNumber: reference };
 }
 
-function deriveInvoiceStatus(raw: Record<string, unknown>, isCreditNote: boolean): InvoiceStatusCode {
-  if (raw['Cancelled'] === true) return 'cancelled';
-  if (isCreditNote) return 'credited';
-  if (isFullyPaid(raw)) return 'paid';
+function deriveInvoiceStatus(raw: Record<string, unknown>, paid: boolean): InvoiceStatusCode {
+  if (paid) return 'paid';
   if (raw['Booked'] === true) return 'booked';
   if (raw['Sent'] === true) return 'sent';
   return 'draft';
 }
 
-function buildParty(name: string, orgNumber?: string, address?: Record<string, unknown>): PartyDto {
+/**
+ * A customer's invoices go to EmailInvoice; Email, the general contact, is
+ * the fallback and must not override an invoice-specific address. A supplier
+ * record has only Email.
+ */
+const CUSTOMER_EMAIL = ['EmailInvoice', 'Email'] as const;
+const SUPPLIER_EMAIL = ['Email'] as const;
+
+function buildParty(name: string, orgNumber?: string, address?: Record<string, unknown>,
+  emailFields: readonly string[] = CUSTOMER_EMAIL): PartyDto {
   return {
     name,
     identifications: orgNumber ? [{ id: orgNumber, schemeId: 'SE:ORGNR' }] : [],
     postalAddress: address ? {
-      streetName: (address['Address1'] ?? address['Address']) as string | undefined,
+      streetName: address['Address1'] as string | undefined,
       additionalStreetName: address['Address2'] as string | undefined,
-      cityName: (address['City'] ?? address['CityName']) as string | undefined,
-      postalZone: (address['ZipCode'] ?? address['PostalCode']) as string | undefined,
-      countryCode: address['Country'] as string | undefined,
+      cityName: address['City'] as string | undefined,
+      postalZone: address['ZipCode'] as string | undefined,
+      // A customer or supplier record names its country twice: CountryCode
+      // (ISO, "DE") and Country, the name Fortnox shows ("Tyskland"). The
+      // code needs no translating; an invoice carries only the name.
+      countryCode: nonEmptyString(address['CountryCode']) ?? nonEmptyString(address['Country']),
     } : undefined,
     legalEntity: orgNumber ? {
       registrationName: name,
@@ -171,10 +235,11 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
     } : undefined,
     contact: {
       name: nonEmptyString(address?.['YourReference']),
-      // EmailInvoice is the delivery address. Email is the general contact
-      // fallback and must not override an invoice-specific address.
-      email: nonEmptyString(address?.['EmailInvoice']) ?? nonEmptyString(address?.['Email']),
-      telephone: nonEmptyString(address?.['Phone1']),
+      email: emailFields.map((field) => nonEmptyString(address?.[field])).find((email) => email !== undefined),
+      // The single record names it Phone1; the customer and supplier lists
+      // name the same number Phone (crm#1436). A card whose only number is
+      // in Phone2 (Telefon 2) still has a phone: the card holds one.
+      telephone: nonEmptyString(address?.['Phone1']) ?? nonEmptyString(address?.['Phone']) ?? nonEmptyString(address?.['Phone2']),
     },
   };
 }
@@ -215,16 +280,19 @@ function headerChargeLines(
 export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['Currency'] as string) ?? 'SEK';
   const total = raw['Total'] as number ?? 0;
+  const doc = fortnoxDocumentState(raw, total);
+  const { invoiceTypeCode } = doc;
   // Default an ABSENT Balance to the full total (= fully unpaid), never 0, so a
   // missing Balance never silently reads as paid. A present Balance (incl. 0) is
   // used as-is. Mirrors the supplier path; paid-ness comes from isFullyPaid().
   // When paid, force balance to 0 so the DTO is internally consistent
   // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
   // would otherwise leave balance = total alongside paid = true.
-  const paid = isFullyPaid(raw);
-  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
-  // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
-  const invoiceTypeCode = creditNoteTypeCode(isFlaggedCredit(raw), total);
+  const fullyPaid = isFullyPaid(raw);
+  const { paid, balance } = documentPayment(doc, total, {
+    paid: fullyPaid,
+    balance: fullyPaid ? 0 : ((raw['Balance'] as number | undefined) ?? total),
+  });
 
   // Whether the row amounts include VAT. Absent on the list form, where there
   // are no rows anyway; false is the default when the detail form omits it.
@@ -264,7 +332,7 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
 
   // Freight and administration fee live on the header, not in InvoiceRows,
   // and Fortnox's `Net` excludes them while `TotalVAT` and `Total` include
-  // them. Verified on live payloads (Profilio 295 and 242, 2026-09-05):
+  // them. Verified on live payloads (two invoices of one migration, 2026-09-05):
   // `Freight` is the fee as the customer saw it (gross when VATIncluded,
   // net otherwise) and `FreightVAT` is the VAT AMOUNT on it, not a rate
   // (88 and 22 on a 25 % invoice). The same pair exists for the fee. Without
@@ -301,7 +369,7 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
     // importer resolves the sign convention once for every provider.
     creditedInvoiceRef: invoiceTypeCode ? creditedInvoiceRefOf(raw) : undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
+    status: doc.status ?? deriveInvoiceStatus(raw, paid),
     supplier: buildParty(
       (raw['CompanyName'] ?? '') as string,
       raw['OrganisationNumber'] as string | undefined,
@@ -330,25 +398,32 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
 
 export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
   const currency = (raw['Currency'] as string) ?? 'SEK';
-  const total = raw['Total'] as number ?? 0;
+  // The supplier invoice list serialises Total and Balance as strings. A cast
+  // kept the string in every amount below, and roundOre and every number check
+  // downstream read it as no amount (crm#1157).
+  const total = readNumber(raw, ['Total']) ?? 0;
   // Default an ABSENT Balance to the full total (= fully unpaid), never 0.
-  // The supplier-invoice list is fetched with ?filter=unpaid, so a missing
-  // Balance must not be mistaken for "settled": that would flip a genuinely
-  // open payable to paid downstream. A present Balance (incl. 0) is used as-is.
+  // The default import keeps only open invoices (fortnoxSupplierInvoiceNotOpen),
+  // so a missing Balance must not be mistaken for "settled": that would flip a
+  // genuinely open payable to paid downstream. A present Balance (incl. 0) is
+  // used as-is.
   // When paid, force balance to 0 so the DTO is internally consistent
   // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
   // would otherwise leave balance = total alongside paid = true.
-  const paid = isFullyPaid(raw);
-  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
-  // 381 for a supplier kreditfaktura: the one signal the importer reads
-  // (dto.ts). Fortnox's schema types `Credit` as a boolean here and as a
-  // string on the sales side, so both spellings are read. The negative total
-  // is the signal production proves: on 2026-09-21 it held 26 Fortnox
-  // supplier documents with a negative `Total`, and not one of them had been
-  // read as credited by the old `Credit === true` test (all 26 landed as
-  // 'paid', #2838). `Total` is read as a number whether Fortnox serialises it
-  // as one or as a string.
-  const invoiceTypeCode = creditNoteTypeCode(isFlaggedCredit(raw), readNumber(raw, ['Total']) ?? 0);
+  const fullyPaid = isFullyPaid(raw);
+  // 381 for a supplier kreditfaktura. Fortnox's schema types `Credit` as a
+  // boolean here and as a string on the sales side, so both spellings are
+  // read. The negative total is the signal production proves: on 2026-09-21
+  // it held 26 Fortnox supplier documents with a negative `Total`, and not one
+  // of them had been read as credited by the old `Credit === true` test (all
+  // 26 landed as 'paid', #2838). `Total` is read as a number whether Fortnox
+  // serialises it as one or as a string.
+  const doc = fortnoxDocumentState(raw, total);
+  const { invoiceTypeCode } = doc;
+  const { paid, balance } = documentPayment(doc, total, {
+    paid: fullyPaid,
+    balance: fullyPaid ? 0 : (readNumber(raw, ['Balance']) ?? total),
+  });
 
   const rows = (raw['SupplierInvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
@@ -386,9 +461,16 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
     balance: amount(balance, currency),
   };
 
+  // Fortnox numbers every supplier invoice itself (`GivenNumber`, the
+  // löpnummer): it is the record id, and the importer keeps it in
+  // fortnox_number. The number the supplier printed is `InvoiceNumber`
+  // (crm#1157); an invoice without one gets none, never the löpnummer.
+  const supplierNumber = raw['InvoiceNumber'];
+
   return {
     id: String(raw['GivenNumber'] ?? ''),
-    invoiceNumber: String(raw['GivenNumber'] ?? ''),
+    invoiceNumber: typeof supplierNumber === 'number' ? String(supplierNumber)
+      : typeof supplierNumber === 'string' ? supplierNumber.trim() : '',
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     invoiceTypeCode,
@@ -400,7 +482,7 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
     // existing, ordinary invoice of the same supplier.
     creditedInvoiceRef: invoiceTypeCode ? creditedInvoiceRefOf(raw, 'CreditReference', 'GivenNumber') : undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
+    status: doc.status ?? deriveInvoiceStatus(raw, paid),
     supplier: buildParty(
       (raw['SupplierName'] ?? '') as string,
       raw['OrganisationNumber'] as string | undefined,
@@ -430,7 +512,7 @@ export function mapFortnoxToCustomer(raw: Record<string, unknown>): CustomerDto 
     invoiceEmailBccAddresses: providerEmailAddresses(raw, 'EmailInvoiceBCC'),
     active: raw['Active'] !== false,
     vatNumber: raw['VATNumber'] as string | undefined,
-    defaultPaymentTermsDays: raw['TermsOfPayment'] != null ? Number(raw['TermsOfPayment']) : undefined,
+    defaultPaymentTermsDays: termsOfPaymentDays(raw['TermsOfPayment']),
     note: raw['Comments'] as string | undefined,
     updatedAt: raw['@LastModified'] as string | undefined,
     _raw: raw,
@@ -444,13 +526,18 @@ export function mapFortnoxToSupplier(raw: Record<string, unknown>): SupplierDto 
   return {
     id: String(raw['SupplierNumber'] ?? ''),
     supplierNumber: String(raw['SupplierNumber'] ?? ''),
-    party: buildParty(name, orgNumber, raw),
+    party: buildParty(name, orgNumber, raw, SUPPLIER_EMAIL),
     active: raw['Active'] !== false,
     vatNumber: raw['VATNumber'] as string | undefined,
     bankAccount: raw['BankAccountNumber'] as string | undefined,
+    clearingNumber: nonEmptyString(raw['ClearingNumber']),
     bankGiro: raw['BG'] as string | undefined,
     plusGiro: raw['PG'] as string | undefined,
-    defaultPaymentTermsDays: raw['TermsOfPayment'] != null ? Number(raw['TermsOfPayment']) : undefined,
+    iban: nonEmptyString(raw['IBAN']),
+    bic: nonEmptyString(raw['BIC']),
+    currencyCode: nonEmptyString(raw['Currency']),
+    defaultExpenseAccount: nonEmptyString(raw['PreDefinedAccount']),
+    defaultPaymentTermsDays: termsOfPaymentDays(raw['TermsOfPayment']),
     note: raw['Comments'] as string | undefined,
     updatedAt: raw['@LastModified'] as string | undefined,
     _raw: raw,

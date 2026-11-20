@@ -26,11 +26,6 @@ export const woocommerceExtension: Extension = {
   version: '1.0.0',
   sector: 'general',
 
-  settingsPanel: {
-    label: 'WooCommerce',
-    path: '/import?mode=woocommerce',
-  },
-
   apiRoutes: woocommerceApiRoutes,
 }
 

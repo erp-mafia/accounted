@@ -27,11 +27,13 @@ export const SUPPLIER_CREDIT_NOTE_STATUS = 'credited' as const
 export interface SupplierCreditNoteSource {
   id: string
   supplier_id: string
-  supplier_invoice_number: string
+  supplier_invoice_number: string | null
   currency: string
   exchange_rate: number | null
   vat_treatment: string
   reverse_charge: boolean
+  /** Goods or services under an EU supplier's reverse charge; the credit books the same box. */
+  reverse_charge_kind?: string | null
   subtotal: number
   subtotal_sek: number | null
   vat_amount: number
@@ -55,15 +57,27 @@ export interface SupplierCreditNoteContext {
   supplierCreditNoteNumber?: string | null
   /** The supplier's credit note document: the underlag the row points at. */
   documentId?: string | null
+  /**
+   * Crediting a self-billing invoice (crm#1367): the credit note is ours too,
+   * numbered from the same series by the insert trigger, under the original's
+   * agreement, with a snapshot that names the invoice it credits.
+   */
+  selfBilling?: { agreementRef: string; snapshot: Record<string, unknown> } | null
 }
 
-/** The number a credit note row carries: the supplier's own, else KREDIT-<original>. */
+/**
+ * The number a credit note row carries: the supplier's own, else
+ * KREDIT-<original>. An original without a number gives a credit note
+ * without one (NULL, never "KREDIT-" or "KREDIT-null"): credited_invoice_id
+ * already ties the two together.
+ */
 export function supplierCreditNoteNumber(
-  originalNumber: string,
+  originalNumber: string | null,
   supplierNumber: string | null | undefined,
-): string {
+): string | null {
   const own = supplierNumber?.trim()
-  return own ? own : `KREDIT-${originalNumber}`
+  if (own) return own
+  return originalNumber?.trim() ? `KREDIT-${originalNumber}` : null
 }
 
 /**
@@ -83,7 +97,16 @@ export function buildSupplierCreditNoteRow(
     company_id: ctx.companyId,
     supplier_id: original.supplier_id,
     arrival_number: ctx.arrivalNumber,
-    supplier_invoice_number: supplierCreditNoteNumber(original.supplier_invoice_number, ctx.supplierCreditNoteNumber),
+    supplier_invoice_number: ctx.selfBilling
+      ? null
+      : supplierCreditNoteNumber(original.supplier_invoice_number, ctx.supplierCreditNoteNumber),
+    ...(ctx.selfBilling
+      ? {
+          is_self_billed: true,
+          self_billing_agreement_ref: ctx.selfBilling.agreementRef,
+          self_billing_snapshot: ctx.selfBilling.snapshot,
+        }
+      : {}),
     invoice_date: ctx.date,
     due_date: ctx.date,
     status: SUPPLIER_CREDIT_NOTE_STATUS,
@@ -91,6 +114,7 @@ export function buildSupplierCreditNoteRow(
     exchange_rate: original.exchange_rate,
     vat_treatment: original.vat_treatment,
     reverse_charge: original.reverse_charge,
+    reverse_charge_kind: original.reverse_charge_kind ?? null,
     subtotal: original.subtotal,
     subtotal_sek: original.subtotal_sek,
     vat_amount: original.vat_amount,

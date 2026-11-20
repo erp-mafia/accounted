@@ -149,24 +149,6 @@ export async function failOperation(
 }
 
 /**
- * Update progress on a running operation. Non-blocking: a write failure is
- * logged but not raised: the work continues regardless.
- */
-export async function updateOperationProgress(
-  supabase: SupabaseClient,
-  args: { id: string; progress: OperationProgress },
-  log: Logger,
-): Promise<void> {
-  const { error } = await supabase
-    .from('operations')
-    .update({ progress: args.progress })
-    .eq('id', args.id)
-  if (error) {
-    log.warn('updateOperationProgress failed', { operationId: args.id, errorCode: error.code })
-  }
-}
-
-/**
  * Read an operation row, scoped to the caller's company. Returns null when
  * the id is not found (or belongs to another company; RLS already excludes
  * those, but the explicit `.eq('company_id')` keeps the contract clear).
@@ -183,4 +165,70 @@ export async function getOperation(
     .maybeSingle()
   if (error || !data) return null
   return data as OperationRow
+}
+
+/**
+ * A row still `running` this long after it started has no request behind
+ * it. The work runs inside the request that started it: those routes run 300
+ * s at most (declared by the bank import route; year-end and currency
+ * revaluation declare none, and run on the platform's 300 s), and no route in
+ * the repository declares more than 800 s. 900 s leaves room for clock skew
+ * and the last write.
+ */
+export const OPERATION_ABANDONED_AFTER_MS = 900_000
+
+/** The error.code a polling client reads for an operation whose request died. */
+export const OPERATION_ABANDONED_CODE = 'OPERATION_ABANDONED'
+
+const OPERATION_ABANDONED_MESSAGE =
+  'The request running this operation ended before it recorded an outcome. The work may be partly or fully done: check the resource it was changing before starting it again.'
+
+/**
+ * For the poll endpoint: a request the platform killed (time limit, memory,
+ * a deploy) never reaches completeOperation or failOperation, so its row
+ * stayed `running` and the client polled forever. A `running` row older than
+ * OPERATION_ABANDONED_AFTER_MS is written `failed` with OPERATION_ABANDONED
+ * and answered that way.
+ *
+ * The write is guarded on status='running': of all the polls of one
+ * operation exactly one moves the row and logs the error, and a row that
+ * reached a terminal status in the same moment is read again and answered as
+ * it is (terminal rows are immutable, enforce_operation_immutability). A
+ * `queued` row is left alone: nothing queues today, and a queued row has not
+ * started. A write the database refused is logged and the row answered as
+ * stored; the next poll tries again.
+ */
+export async function failAbandonedOperation(
+  supabase: SupabaseClient,
+  row: OperationRow,
+  log: Logger,
+  now: number = Date.now(),
+): Promise<OperationRow> {
+  if (row.status !== 'running' || !row.started_at) return row
+  const ageMs = now - Date.parse(row.started_at)
+  if (!(ageMs > OPERATION_ABANDONED_AFTER_MS)) return row
+
+  const completedAt = new Date(now).toISOString()
+  const error = { code: OPERATION_ABANDONED_CODE, message: OPERATION_ABANDONED_MESSAGE }
+  const { data, error: updateError } = await supabase
+    .from('operations')
+    .update({ status: 'failed', completed_at: completedAt, error })
+    .eq('id', row.id)
+    .eq('status', 'running')
+    .select('id')
+  if (updateError) {
+    log.error('abandoned operation not marked failed', { operationId: row.id, errorCode: updateError.code })
+    return row
+  }
+  if (((data ?? []) as unknown[]).length === 0) {
+    return (await getOperation(supabase, { id: row.id, companyId: row.company_id })) ?? row
+  }
+  log.error('operation abandoned: still running after the route time limit, reported as failed', {
+    operationId: row.id,
+    companyId: row.company_id,
+    operationType: row.operation_type,
+    startedAt: row.started_at,
+    ageMs,
+  })
+  return { ...row, status: 'failed', completed_at: completedAt, error }
 }

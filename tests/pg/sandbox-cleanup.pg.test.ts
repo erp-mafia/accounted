@@ -17,7 +17,7 @@ import { insertPostedJournalEntry, insertTransaction, seedCompany } from './fixt
  * that never got a company_settings row.
  *
  * Extended by 20260901120000 with the four blockers that stalled nine
- * sandboxes on prod (oldest 2026-07-22): a betalfil batch holding a supplier
+ * sandboxes in production (oldest 2026-07-22): a betalfil batch holding a supplier
  * invoice through ON DELETE RESTRICT, a fiscal period pointing at its IB and
  * bokslut vouchers through NO ACTION FKs, a terminal webhook delivery, and a
  * payment_match_log row with company_id NULL. The seed now carries all four,
@@ -55,15 +55,16 @@ async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
      VALUES ($1, $2, 2026, 1, '2026-01-25', $3)`,
     [companyId, userId, entryId],
   )
-  // System dimensions (undeletable outside teardown) and a terminal-state
-  // pending operation (delete-protected per BFL 7 kap.): both exist in every
+  // System dimensions (undeletable outside teardown) and terminal-state
+  // pending operations (delete-protected per BFL 7 kap.): both exist in every
   // modern sandbox and both blocked the auth.users cascade before the
-  // gnubok.sandbox_cleanup bypass.
+  // gnubok.sandbox_cleanup bypass. 'unknown' (20261109170400) is terminal too.
   await getPool().query(`SELECT public.ensure_company_dimensions($1)`, [companyId])
   await getPool().query(
     `INSERT INTO public.pending_operations
        (user_id, company_id, operation_type, title, status)
-     VALUES ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'rejected')`,
+     VALUES ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'rejected'),
+            ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'unknown')`,
     [userId, companyId],
   )
   // processing_history references companies with a plain NO ACTION FK and no
@@ -1075,7 +1076,7 @@ describe('sandbox teardown with posted registers (pg, #2837)', () => {
       `INSERT INTO public.company_members (company_id, user_id, role) VALUES ($1, $2, 'owner')`,
       [ownCompanyId, sandbox.userId],
     )
-    // Settings row without user_id, as on prod: invisible to the old
+    // Settings row without user_id, as in production: invisible to the old
     // "every settings row of this user is a sandbox" check.
     await getPool().query(
       `INSERT INTO public.company_settings (company_id, is_sandbox) VALUES ($1, false)`,

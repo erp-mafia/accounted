@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createQueuedMockSupabase, createMockRequest } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, testRoutes } from '@/tests/helpers'
 
 /**
  * PII boundary for the two inbound-mail behandlingshistorik events.
@@ -52,7 +52,7 @@ import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createClient } from '@supabase/supabase-js'
 
-const webhookRoute = invoiceInboxExtension.apiRoutes!.find(
+const webhookRoute = testRoutes(invoiceInboxExtension).find(
   (r) => r.method === 'POST' && r.path === '/inbound'
 )!
 
@@ -207,7 +207,6 @@ describe('POST /inbound behandlingshistorik payloads', () => {
     const payload = historyPayload('InboundMailReceived')
     expect(payload).toEqual({
       inbox_id: 'inbox-1',
-      custom_domain: false,
       tags: ['lev'],
       unknown_tag_count: 1,
       kind_hint: 'supplier_invoice',
@@ -223,6 +222,42 @@ describe('POST /inbound behandlingshistorik payloads', () => {
     expect(json).not.toContain('@')
     expect(json).not.toContain('anna')
     expect(json).not.toContain('19850101')
+  })
+
+  it('records a file the company already had as a duplicate, not as filed (PH 225)', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent(2) as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue(mockFullEmail(2) as never)
+    vi.mocked(checkInboxUploadRateLimit).mockResolvedValue({ ok: true } as never)
+    vi.mocked(fetchInboundAttachment).mockResolvedValue({
+      buffer: new ArrayBuffer(8),
+      contentType: 'application/pdf',
+      filename: 'invoice.pdf',
+    } as never)
+    // The first attachment joins the item an earlier mail filed (its bytes
+    // were archived already); the second is new.
+    vi.mocked(uploadAndExtract)
+      .mockResolvedValueOnce({ inbox_item_id: 'item-earlier', skip_reason: 'duplicate_content', duplicate: true } as never)
+      .mockResolvedValueOnce({ inbox_item_id: 'item-new', skip_reason: null } as never)
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // redelivery check, attachment 0
+    enqueue({ data: null }) // redelivery check, attachment 1
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results).toEqual([
+      { attachment_id: 'att_0', inbox_item_id: 'item-earlier', duplicate: true },
+      { attachment_id: 'att_1', inbox_item_id: 'item-new' },
+    ])
+
+    expect(historyPayload('InboundMailReceived')?.attachments).toEqual([
+      { id: 'att_0', outcome: 'duplicate', inbox_item_id: 'item-earlier', reason: 'duplicate_content' },
+      { id: 'att_1', outcome: 'filed', inbox_item_id: 'item-new' },
+    ])
   })
 
   it('keeps the mail traceable through the Resend email id', async () => {

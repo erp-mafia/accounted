@@ -55,7 +55,7 @@ export interface IncomeFigureDefinition {
  */
 export const INCOME_STATEMENT_DEFINITIONS = {
   basis: {
-    accounts: '3000-8998',
+    accounts: '3000-8989',
     definition:
       "Resultaträkning before bokslut, exact to the öre: every year-end entry (skatt, bokslutsdispositioner, year-end avskrivningar, kontantmetod cut-off) is excluded. Equals the årsredovisning and INK2R lines only while no bokslut entry is booked, and then only before their rounding to whole kronor; for a closed year's filed figures use gnubok_preview_arsredovisning.",
   },
@@ -85,13 +85,11 @@ export const INCOME_STATEMENT_DEFINITIONS = {
     definition: 'Rörelseresultat before bokslut entries: operating income minus operating expenses, before finansiella poster.',
   },
   total_financial: {
-    accounts: '8000-8998',
-    definition: 'Class 8 except 8999: finansiella poster, plus any bokslutsdispositioner (88xx) or skatt (89xx) booked outside bokslut; see basis.',
+    accounts: '8000-8989',
+    definition: 'Class 8 except årets resultat (8990-8999): finansiella poster, plus any bokslutsdispositioner (88xx) or skatt (89xx) booked outside bokslut; see basis.',
   },
   net_result: {
-    accounts: '3000-8998',
+    accounts: '3000-8989',
     definition: 'Resultat före bokslutstransaktioner: rorelseresultat + total_financial. Not årets resultat once bokslut entries are booked; see basis.',
   },
 } as const satisfies Record<string, IncomeFigureDefinition>
-
-export type IncomeStatementDefinitions = typeof INCOME_STATEMENT_DEFINITIONS

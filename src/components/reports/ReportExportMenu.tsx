@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Download, FileCode, FileSpreadsheet, FileText, Table } from 'lucide-react'
+import {
+  ArrowDownTrayIcon,
+  CodeBracketSquareIcon,
+  DocumentTextIcon,
+  TableCellsIcon,
+} from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,9 +29,9 @@ export interface ReportExportItem {
 }
 
 /**
- * The focused report page renders one toolbar row and leaves this slot at
- * its right end. A menu mounted anywhere below it moves in there,
- * so a report never spends a row of its own on the Exportera button.
+ * The focused report page leaves this slot at the right end of its top bar.
+ * A menu mounted anywhere below it moves in there: Exportera is a page-level
+ * action, and a report never spends a row of its own on the button.
  */
 export const REPORT_TOOLBAR_SLOT_ID = 'report-toolbar-end'
 
@@ -38,12 +43,12 @@ export const REPORT_TOOLBAR_SLOT_ID = 'report-toolbar-end'
 export function ReportExportMenu({
   items,
   children,
-  size = 'sm',
+  size = 'toolbar',
   variant = 'outline',
 }: {
   items?: ReportExportItem[]
   children?: React.ReactNode
-  size?: 'default' | 'sm'
+  size?: 'default' | 'toolbar'
   /** Trigger style; the VAT Stegen page uses the primary pill. */
   variant?: 'outline' | 'default'
 }) {
@@ -63,7 +68,7 @@ export function ReportExportMenu({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant={variant} size={size}>
-              <Download className="h-4 w-4 mr-2" />
+              <ArrowDownTrayIcon className="h-4 w-4" />
               {t('export')}
             </Button>
           </DropdownMenuTrigger>
@@ -74,13 +79,13 @@ export function ReportExportMenu({
                 onSelect={() => window.open(item.href, '_blank')}
               >
                 {item.format === 'pdf' ? (
-                  <FileText className="h-4 w-4 mr-2" />
+                  <DocumentTextIcon className="h-4 w-4 mr-2" />
                 ) : item.format === 'csv' ? (
-                  <Table className="h-4 w-4 mr-2" />
+                  <TableCellsIcon className="h-4 w-4 mr-2" />
                 ) : item.format === 'xml' ? (
-                  <FileCode className="h-4 w-4 mr-2" />
+                  <CodeBracketSquareIcon className="h-4 w-4 mr-2" />
                 ) : (
-                  <FileSpreadsheet className="h-4 w-4 mr-2" />
+                  <TableCellsIcon className="h-4 w-4 mr-2" />
                 )}
                 {item.format === 'pdf'
                   ? t('download_pdf')

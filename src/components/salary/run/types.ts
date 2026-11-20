@@ -1,3 +1,4 @@
+import { formatCurrency } from '@/lib/utils'
 import type { SalaryRun } from '@/types'
 
 /** Latest-attempt payslip delivery counts, from GET /api/salary/runs/[id]. */
@@ -26,4 +27,13 @@ export type RunDetail = SalaryRun & {
 
 export function periodLabelOf(run: Pick<SalaryRun, 'period_year' | 'period_month'>): string {
   return `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+}
+
+/**
+ * Every amount on the run page: always two decimals, "14 313,70 kr", the öre
+ * the payslip and the verifikat carry. formatCurrency's default drops
+ * trailing zeros, which printed employer fees as "14 313,7 kr" (crm#1001).
+ */
+export function formatRunAmount(amount: number): string {
+  return formatCurrency(amount, 'SEK', { minimumFractionDigits: 2 })
 }

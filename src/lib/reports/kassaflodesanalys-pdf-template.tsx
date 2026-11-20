@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import {
   Document,
   Page,
@@ -6,13 +6,22 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
-import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
-import type { KassaflodesanalysReport } from './kassaflodesanalys'
+import { formatDateSv, pdfAmount } from '@/lib/pdf/number-text'
+import type { KassaflodesanalysFullReport } from './kassaflodesanalys'
+import {
+  KASSAFLODESANALYS_LAYOUT,
+  type KassaflodesanalysLayoutRow,
+  type KassaflodesanalysSection,
+  type KassaflodesanalysYear,
+} from '@/lib/reports/kassaflodesanalys-statement'
 import type { CompanySettings } from '@/types'
 
 // Single-file PDF template: the kassaflödesanalys layout is distinct enough
 // from the BR/RR template (no per-account rows, three labelled sections, a
 // reconciliation footer) that a dedicated template keeps things readable.
+// It prints the K3 chapter 7 statement (report.statement) in the order and
+// wording of KASSAFLODESANALYS_LAYOUT, with the comparative year when the
+// report carries one.
 // Typography mirrors CLAUDE.md design system: Times-Roman as the serif
 // (closest stock @react-pdf font to Hedvig Letters Serif, which @react-pdf
 // can't ship by default), Helvetica for body, Courier for tabular numbers
@@ -161,21 +170,38 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   footerText: { fontSize: 8, color: '#888' },
+  // Two amount columns: the year and the comparative year (K3 3.5).
+  yearAmount: {
+    width: 100,
+    textAlign: 'right',
+    fontFamily: 'Courier',
+    color: '#1a1a1a',
+  },
+  yearHeader: {
+    width: 100,
+    textAlign: 'right',
+    fontSize: 9,
+    color: '#666',
+  },
+  noteText: { fontSize: 9, color: '#444', marginTop: 4 },
 })
 
-function formatAmount(n: number): string {
-  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
-  // so a negative cash flow would print as positive (issue #1982).
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(n),
-  )
+/** A financial year's column heading: 2026, or 2025/26 for a broken year. */
+function yearLabel(year: KassaflodesanalysYear): string {
+  const start = year.period_start.slice(0, 4)
+  const end = year.period_end.slice(0, 4)
+  return start === end ? end : `${start}/${end.slice(2)}`
+}
+
+const SECTION_HEADINGS: Record<KassaflodesanalysSection, string | null> = {
+  lopande: 'Den löpande verksamheten',
+  investering: 'Investeringsverksamheten',
+  finansiering: 'Finansieringsverksamheten',
+  likvida_medel: null,
 }
 
 interface KassaflodePDFProps {
-  report: KassaflodesanalysReport
+  report: KassaflodesanalysFullReport
   company: CompanySettings
   generatedAt: string
 }
@@ -187,11 +213,44 @@ export function KassaflodesanalysPDF({
 }: KassaflodePDFProps) {
   const companyName = company.company_name || ''
   const periodLabel = `${formatDateSv(report.period_start)}: ${formatDateSv(report.period_end)}`
-  const recon = report.reconciliation
+  const { current, previous } = report.statement
+  const recon = current.reconciliation
   const reconStyles = [
     styles.reconciliationBlock,
     recon.is_reconciled ? styles.reconciliationOk : styles.reconciliationBad,
   ]
+
+  const shown = KASSAFLODESANALYS_LAYOUT.filter((row) => row.alwaysShow
+    || current.amounts[row.key] !== 0
+    || (previous !== null && previous.amounts[row.key] !== 0))
+  const labelOf = (row: KassaflodesanalysLayoutRow) => row.key === 'ovriga_poster'
+    ? `${row.label} (konto ${[...new Set([...current.unclassified_accounts, ...(previous?.unclassified_accounts ?? [])])].join(', ')})`
+    : row.label
+  const amountCells = (pick: (year: KassaflodesanalysYear) => number, style: typeof styles.yearAmount) => (
+    <>
+      <Text style={style}>{pdfAmount(pick(current))}</Text>
+      {previous && <Text style={style}>{pdfAmount(pick(previous))}</Text>}
+    </>
+  )
+  const renderRow = (row: KassaflodesanalysLayoutRow) => (
+    <View key={row.key} style={row.kind === 'line' ? styles.row : styles.subtotalRow}>
+      <Text style={row.kind === 'line' ? styles.label : styles.subtotalLabel}>{labelOf(row)}</Text>
+      {amountCells((year) => year.amounts[row.key], styles.yearAmount)}
+    </View>
+  )
+  const sections = (['lopande', 'investering', 'finansiering', 'likvida_medel'] as const).map((section) => ({
+    section,
+    heading: SECTION_HEADINGS[section],
+    rows: shown.filter((row) => row.section === section),
+  }))
+  const composition: { label: string; pick: (year: KassaflodesanalysYear, side: 'ib' | 'ub') => number }[] = [
+    { label: 'Kassamedel', pick: (year, side) => year.likvida_medel[side].kassamedel },
+    { label: 'Disponibla tillgodohavanden hos banker och kreditinstitut', pick: (year, side) => year.likvida_medel[side].bank },
+    { label: 'Kortfristiga placeringar', pick: (year, side) => year.likvida_medel[side].kortfristiga_placeringar },
+    { label: 'Andel av medel på koncernkonto', pick: (year, side) => year.likvida_medel[side].koncernkonto },
+  ]
+  const compositionShown = composition.filter(({ pick }) => pick(current, 'ub') !== 0
+    || (previous !== null && pick(previous, 'ub') !== 0))
 
   return (
     <Document>
@@ -201,7 +260,7 @@ export function KassaflodesanalysPDF({
             <Text style={styles.title}>Kassaflödesanalys</Text>
             {companyName && <Text style={styles.subtitle}>{companyName}</Text>}
             <Text style={styles.period}>Period: {periodLabel}</Text>
-            <Text style={styles.period}>Indirekt metod enligt BFNAR 2012:1 kap 7</Text>
+            <Text style={styles.period}>Indirekt metod enligt K3 kapitel 7 (BFNAR 2012:1)</Text>
           </View>
           <View style={styles.companyInfo}>
             {company.company_name && (
@@ -209,7 +268,7 @@ export function KassaflodesanalysPDF({
             )}
             {company.org_number && (
               <Text style={styles.companyMeta}>
-                Org.nr: {formatOrgNumber(company.org_number)}
+                Org.nr: {formatOrgNumberDisplay(company.org_number)}
               </Text>
             )}
             {company.vat_number && (
@@ -218,166 +277,68 @@ export function KassaflodesanalysPDF({
           </View>
         </View>
 
-        {/* Section 1: Löpande verksamhet */}
-        <View style={styles.section}>
-          <Text style={styles.sectionHeading}>Den löpande verksamheten</Text>
-          <View style={styles.row}>
-            <Text style={styles.label}>Resultat efter finansiella poster</Text>
-            <Text style={styles.amount}>
-              {formatAmount(report.lopande.resultat_efter_finansiella_poster)}
-            </Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Justeringar för avskrivningar</Text>
-            <Text style={styles.amount}>{formatAmount(report.lopande.avskrivningar)}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Övriga ej-kassaflödespåverkande poster</Text>
-            <Text style={styles.amount}>
-              {formatAmount(report.lopande.ovriga_ej_kassaflodesposter)}
-            </Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Förändring av kortfristiga fordringar</Text>
-            <Text style={styles.amount}>
-              {formatAmount(report.lopande.delta_kortfristiga_fordringar)}
-            </Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Förändring av varulager</Text>
-            <Text style={styles.amount}>{formatAmount(report.lopande.delta_varulager)}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Förändring av kortfristiga skulder</Text>
-            <Text style={styles.amount}>
-              {formatAmount(report.lopande.delta_kortfristiga_skulder)}
-            </Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Betald inkomstskatt</Text>
-            <Text style={styles.amount}>{formatAmount(report.lopande.skatt_betald)}</Text>
-          </View>
-          {report.lopande.koncernbidrag !== 0 && (
-            <View style={styles.row}>
-              <Text style={styles.label}>Koncernbidrag</Text>
-              <Text style={styles.amount}>{formatAmount(report.lopande.koncernbidrag)}</Text>
-            </View>
-          )}
-          {report.lopande.ovriga_poster !== 0 && (
-            <View style={styles.row}>
-              <Text style={styles.label}>
-                Övriga poster (konto {report.unclassified_accounts.join(', ')})
-              </Text>
-              <Text style={styles.amount}>{formatAmount(report.lopande.ovriga_poster)}</Text>
-            </View>
-          )}
-          <View style={styles.subtotalRow}>
-            <Text style={styles.subtotalLabel}>
-              Kassaflöde från den löpande verksamheten
-            </Text>
-            <Text style={styles.subtotalAmount}>{formatAmount(report.lopande.total)}</Text>
-          </View>
+        <View style={styles.row}>
+          <Text style={styles.label} />
+          <Text style={styles.yearHeader}>{yearLabel(current)}</Text>
+          {previous && <Text style={styles.yearHeader}>{yearLabel(previous)}</Text>}
         </View>
 
-        {/* Section 2: Investeringsverksamhet */}
+        {sections.map(({ section, heading, rows }) => heading ? (
+          <View key={section} style={styles.section}>
+            <Text style={styles.sectionHeading}>{heading}</Text>
+            {rows.map(renderRow)}
+          </View>
+        ) : (
+          <View key={section} style={styles.totalBlock}>
+            {rows.map(renderRow)}
+          </View>
+        ))}
+
+        {/* Likvida medel by the parts K3 7.18 names. */}
         <View style={styles.section}>
-          <Text style={styles.sectionHeading}>Investeringsverksamheten</Text>
-          <View style={styles.row}>
-            <Text style={styles.label}>Förvärv av anläggningstillgångar</Text>
-            <Text style={styles.amount}>
-              {formatAmount(report.investerings.forvarv_anlaggningar)}
-            </Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Avyttring av anläggningstillgångar</Text>
-            <Text style={styles.amount}>
-              {formatAmount(report.investerings.avyttring_anlaggningar)}
-            </Text>
-          </View>
-          {report.investerings.kortfristiga_placeringar !== 0 && (
-            <View style={styles.row}>
-              <Text style={styles.label}>Förändring av kortfristiga placeringar</Text>
-              <Text style={styles.amount}>
-                {formatAmount(report.investerings.kortfristiga_placeringar)}
-              </Text>
+          <Text style={styles.sectionHeading}>Likvida medel</Text>
+          {compositionShown.map(({ label, pick }) => (
+            <View key={label} style={styles.row}>
+              <Text style={styles.label}>{label}</Text>
+              {amountCells((year) => pick(year, 'ub'), styles.yearAmount)}
             </View>
+          ))}
+          <View style={styles.subtotalRow}>
+            <Text style={styles.subtotalLabel}>Likvida medel vid årets slut</Text>
+            {amountCells((year) => year.likvida_medel.ub.total, styles.yearAmount)}
+          </View>
+          {current.likvida_medel.definition.koncernkonto_included && current.likvida_medel.ub.koncernkonto !== 0 && (
+            <Text style={styles.noteText}>
+              Företagets andel av medel på koncernkonto har behandlats som likvida medel.
+            </Text>
           )}
-          <View style={styles.subtotalRow}>
-            <Text style={styles.subtotalLabel}>
-              Kassaflöde från investeringsverksamheten
-            </Text>
-            <Text style={styles.subtotalAmount}>
-              {formatAmount(report.investerings.total)}
-            </Text>
-          </View>
-        </View>
-
-        {/* Section 3: Finansieringsverksamhet */}
-        <View style={styles.section}>
-          <Text style={styles.sectionHeading}>Finansieringsverksamheten</Text>
-          <View style={styles.row}>
-            <Text style={styles.label}>Förändring av lån</Text>
-            <Text style={styles.amount}>{formatAmount(report.finansierings.delta_lan)}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Utdelningar till ägare</Text>
-            <Text style={styles.amount}>
-              {formatAmount(report.finansierings.utdelningar)}
-            </Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Nyemission</Text>
-            <Text style={styles.amount}>{formatAmount(report.finansierings.nyemission)}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Erhållna aktieägartillskott</Text>
-            <Text style={styles.amount}>
-              {formatAmount(report.finansierings.erhallna_aktieagartillskott)}
-            </Text>
-          </View>
-          <View style={styles.subtotalRow}>
-            <Text style={styles.subtotalLabel}>
-              Kassaflöde från finansieringsverksamheten
-            </Text>
-            <Text style={styles.subtotalAmount}>
-              {formatAmount(report.finansierings.total)}
-            </Text>
-          </View>
-        </View>
-
-        {/* Total */}
-        <View style={[styles.totalBlock, styles.row]}>
-          <Text style={styles.totalLabel}>Årets kassaflöde</Text>
-          <Text style={styles.totalAmount}>{formatAmount(report.total_cash_flow)}</Text>
         </View>
 
         {/* Reconciliation */}
         <View style={reconStyles}>
-          <Text style={styles.reconciliationTitle}>
-            Avstämning mot likvida medel (19xx)
-          </Text>
+          <Text style={styles.reconciliationTitle}>Avstämning mot likvida medel</Text>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Ingående saldo</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.opening_cash_1xxx)}
+              {pdfAmount(current.amounts.likvida_medel_ib)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Utgående saldo</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.closing_cash_1xxx)}
+              {pdfAmount(current.amounts.likvida_medel_ub)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Faktisk förändring</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.delta_actual)}
+              {pdfAmount(recon.delta_actual)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Beräknad förändring</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.delta_calculated)}
+              {pdfAmount(recon.delta_calculated)}
             </Text>
           </View>
           {!recon.is_reconciled && (
@@ -390,7 +351,7 @@ export function KassaflodesanalysPDF({
               <Text
                 style={[styles.reconciliationAmount, styles.reconciliationMismatch]}
               >
-                {formatAmount(recon.mismatch_amount)}
+                {pdfAmount(recon.mismatch_amount)}
               </Text>
             </View>
           )}
@@ -399,7 +360,7 @@ export function KassaflodesanalysPDF({
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
             {companyName}
-            {company.org_number ? ` · ${formatOrgNumber(company.org_number)}` : ''}
+            {company.org_number ? ` · ${formatOrgNumberDisplay(company.org_number)}` : ''}
           </Text>
           <Text
             style={styles.footerText}

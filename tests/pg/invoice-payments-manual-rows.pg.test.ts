@@ -19,7 +19,7 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
-import { insertPostedJournalEntry, seedCompany } from './fixtures'
+import { insertPostedJournalEntry, seedCompany, setActiveCompany } from './fixtures'
 
 async function seedCustomerInvoice(params: {
   userId: string
@@ -44,15 +44,6 @@ async function seedCustomerInvoice(params: {
     [id, params.userId, params.companyId, customerId, `F-${id.slice(0, 8)}`, total],
   )
   return id
-}
-
-async function setActiveCompany(userId: string, companyId: string) {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
 }
 
 const INSERT_MANUAL_PAYMENT = `

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { rpcClientForBulkDelete } from '@/lib/import/sie-import'
+import { rpcClientForBulkDelete } from '@/lib/supabase/bulk-delete-client'
 import type { FiscalYearResetEligibility, FiscalYearResetRpcResult } from '@/types'
 
 /**

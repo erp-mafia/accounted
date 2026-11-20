@@ -3,7 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { MonitorDown } from 'lucide-react'
+import { ComputerDesktopIcon } from '@/components/icons'
 import {
   SettingsRow,
   SettingsRowEnd,
@@ -85,8 +85,8 @@ export function InstallAppSection() {
     <SettingsRow label={t('install_app_title')} help={t('install_app_description', { appName })}>
       {installPrompt ? (
         <SettingsRowEnd>
-          <Button variant="outline" size="sm" onClick={handleInstall}>
-            <MonitorDown className="mr-2 h-3.5 w-3.5" />
+          <Button variant="outline" onClick={handleInstall}>
+            <ComputerDesktopIcon className="h-3.5 w-3.5" />
             {t('install_app_button')}
           </Button>
         </SettingsRowEnd>

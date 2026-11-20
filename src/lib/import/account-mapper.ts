@@ -31,6 +31,11 @@ const GROUP_HEADER_REDIRECTS: Record<string, string> = {
   '2640': '2641', // Ingående moms → Debiterad ingående moms
 }
 
+/** Whether source → target is one of the group-header redirects above. */
+export function isGroupHeaderRedirect(sourceAccount: string, targetAccount: string): boolean {
+  return GROUP_HEADER_REDIRECTS[sourceAccount] === targetAccount
+}
+
 /**
  * Check if an account is a source-system internal account that should be
  * excluded from import. BAS accounts use classes 1-8 (1000-8999). Account
@@ -199,6 +204,36 @@ export function suggestMappings(
   mappings.sort((a, b) => a.confidence - b.confidence)
 
   return mappings
+}
+
+/**
+ * What the mapper did with an account, as the mapping step names it. Null
+ * only when there is no target at all, a state the unmapped filter owns.
+ *
+ * Read from matchType, isOverride and whether source and target are the same
+ * number, never from a threshold on `confidence`: the mapper attaches one
+ * fixed value per case (1 exact, 0.7 bas_range), so grading the number named
+ * an identity mapping "likely".
+ *
+ * `from_file` is deliberately not "the company's own account": bas_range
+ * covers both a source system's invention (a Fortnox 4599) and a standard
+ * sub-account the BAS reference does not carry (1241 Personbilar), and
+ * nothing here can tell them apart.
+ *
+ * `uncertain` is the one suggestion the mapper itself marks for review: a
+ * class 9 account carrying amounts, placed on 2999 OBS-konto with matchType
+ * 'class' (prepareSIEPreviewMappings).
+ */
+export type AccountMatchKind = 'bas' | 'from_file' | 'redirected' | 'uncertain' | 'manual'
+
+export function resolveAccountMatch(mapping: AccountMapping): AccountMatchKind | null {
+  if (!mapping.targetAccount) return null
+  // Before the identity check: remapping an account to itself is still a choice.
+  if (mapping.isOverride) return 'manual'
+  if (mapping.matchType === 'class') return 'uncertain'
+  if (mapping.targetAccount !== mapping.sourceAccount) return 'redirected'
+  if (mapping.matchType === 'bas_range') return 'from_file'
+  return 'bas'
 }
 
 /**

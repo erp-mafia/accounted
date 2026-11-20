@@ -19,6 +19,8 @@ vi.mock('@/lib/email/brand-sender', () => ({
 
 import {
   InvoiceDeliverySnapshotError,
+  fetchInvoicesWithImportedCopy,
+  recordImportedInvoiceDelivery,
   recordManualInvoiceDelivery,
   reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
@@ -108,6 +110,32 @@ describe('invoice delivery tracking', () => {
       replyTo: null,
       brand: null,
     })
+  })
+
+  it('attaches the invoice PDF first, then the invoice\'s own files in order (crm#1269)', async () => {
+    const { supabase } = makeSupabase()
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend', messageId: 'm-1' })
+    const timeReport = { filename: 'tidrapport.pdf', content: Buffer.from('report'), contentType: 'application/pdf' }
+    const receipt = { filename: 'kvitto tåg.jpg', content: Buffer.from('jpeg'), contentType: 'image/jpeg' }
+
+    await sendTrackedInvoiceEmail({
+      ...makeInput(supabase, makeEmailService(sendEmail)),
+      extraAttachments: [timeReport, receipt],
+    })
+
+    const attachments = sendEmail.mock.calls[0]![0].attachments as Array<{ filename: string; content: Buffer }>
+    expect(attachments.map((a) => a.filename)).toEqual(['faktura-f-1001.pdf', 'tidrapport.pdf', 'kvitto tåg.jpg'])
+    expect(attachments[0]!.content).toEqual(Buffer.from('exact-pdf'))
+    expect(attachments[2]).toBe(receipt)
+  })
+
+  it('sends only the PDF when the invoice carries no files', async () => {
+    const { supabase } = makeSupabase()
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend', messageId: 'm-1' })
+
+    await sendTrackedInvoiceEmail(makeInput(supabase, makeEmailService(sendEmail)))
+
+    expect(sendEmail.mock.calls[0]![0].attachments).toHaveLength(1)
   })
 
   it('persists the exact payload before sending and records provider success', async () => {
@@ -294,6 +322,58 @@ describe('invoice delivery tracking', () => {
     expect(mockDeleteDocument).not.toHaveBeenCalled()
   })
 
+  describe('resending an archived file (crm#1339)', () => {
+    const archivedDocument = { id: 'archived-document', sha256Hash: 'sha256-archived' }
+
+    it('points the delivery at the archived document instead of archiving a copy', async () => {
+      const { supabase, rpcSpy } = makeSupabase()
+      const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend', messageId: 'm-2' })
+
+      const result = await sendTrackedInvoiceEmail({
+        ...makeInput(supabase, makeEmailService(sendEmail)),
+        archivedDocument,
+      })
+
+      expect(mockUploadDocument).not.toHaveBeenCalled()
+      expect(rpcSpy).toHaveBeenCalledWith(
+        'capture_invoice_delivery_payload',
+        expect.objectContaining({
+          p_document_attachment_id: 'archived-document',
+          p_attachment_sha256: 'sha256-archived',
+        }),
+      )
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+        attachments: [expect.objectContaining({ content: Buffer.from('exact-pdf') })],
+      }))
+      expect(result).toMatchObject({ success: true, documentId: 'archived-document' })
+    })
+
+    it('never deletes the archived document when the provider fails', async () => {
+      const { supabase } = makeSupabase()
+      const sendEmail = vi.fn().mockResolvedValue({ success: false, error: 'provider rejected the request' })
+
+      const result = await sendTrackedInvoiceEmail({
+        ...makeInput(supabase, makeEmailService(sendEmail)),
+        archivedDocument,
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.trackingWarning).toBeUndefined()
+      expect(mockDeleteDocument).not.toHaveBeenCalled()
+    })
+
+    it('never deletes the archived document when the snapshot cannot be saved', async () => {
+      const { supabase } = makeSupabase({ snapshotData: null, snapshotError: { message: 'update failed' } })
+      const sendEmail = vi.fn()
+
+      await expect(
+        sendTrackedInvoiceEmail({ ...makeInput(supabase, makeEmailService(sendEmail)), archivedDocument }),
+      ).rejects.toBeInstanceOf(InvoiceDeliverySnapshotError)
+      expect(sendEmail).not.toHaveBeenCalled()
+      expect(mockDeleteDocument).not.toHaveBeenCalled()
+    })
+  })
+
   it('returns the reservation selected by the privileged RPC', async () => {
     const { supabase } = makeSupabase({
       reserveData: 'delivery-existing',
@@ -329,5 +409,90 @@ describe('invoice delivery tracking', () => {
       p_invoice_id: 'invoice-1',
       p_sent_at: '2026-07-22T10:30:00.000Z',
     })
+  })
+})
+
+describe('imported invoice originals', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('records the imported PDF through the service-only RPC', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: 'delivery-import-1', error: null })
+    mockCreateServiceClient.mockReturnValue({ rpc })
+
+    await expect(recordImportedInvoiceDelivery({
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'invoice-1',
+      provider: 'fortnox',
+      providerMessageId: 'invoice:1001:invoice-1',
+      documentId: 'document-1',
+    })).resolves.toBe('delivery-import-1')
+
+    // Only references: the RPC reads file name, type and hash from the stored document.
+    expect(rpc).toHaveBeenCalledWith('record_imported_invoice_delivery', {
+      p_company_id: 'company-1',
+      p_invoice_id: 'invoice-1',
+      p_actor_user_id: 'user-1',
+      p_provider: 'fortnox',
+      p_provider_message_id: 'invoice:1001:invoice-1',
+      p_document_attachment_id: 'document-1',
+    })
+  })
+
+  it('answers null when the invoice already holds its imported original', async () => {
+    mockCreateServiceClient.mockReturnValue({ rpc: vi.fn().mockResolvedValue({ data: null, error: null }) })
+
+    await expect(recordImportedInvoiceDelivery({
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'invoice-1',
+      provider: 'fortnox',
+      providerMessageId: 'invoice:1001:invoice-1',
+      documentId: 'document-1',
+    })).resolves.toBeNull()
+  })
+
+  it('throws when the RPC refuses, so the caller can discard its unlinked copy', async () => {
+    mockCreateServiceClient.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'invoice not found in company' } }),
+    })
+
+    await expect(recordImportedInvoiceDelivery({
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'invoice-1',
+      provider: 'fortnox',
+      providerMessageId: 'invoice:1001:invoice-1',
+      documentId: 'document-1',
+    })).rejects.toBeInstanceOf(InvoiceDeliverySnapshotError)
+  })
+
+  it('lists every invoice with an imported original in the company, whoever imported it', async () => {
+    const filters: Array<[string, unknown]> = []
+    const node = {
+      select: () => node,
+      eq: (column: string, value: unknown) => {
+        filters.push([column, value])
+        return node
+      },
+      order: () => node,
+      range: () => Promise.resolve({
+        data: [
+          { id: 'd1', invoice_id: 'invoice-1' },
+          { id: 'd2', invoice_id: 'invoice-2' },
+        ],
+        error: null,
+      }),
+    }
+    const from = vi.fn(() => node)
+    mockCreateServiceClient.mockReturnValue({ from })
+
+    const invoiceIds = await fetchInvoicesWithImportedCopy('company-1')
+
+    expect([...invoiceIds]).toEqual(['invoice-1', 'invoice-2'])
+    expect(from).toHaveBeenCalledWith('invoice_deliveries')
+    expect(filters).toEqual([['company_id', 'company-1'], ['channel', 'import']])
   })
 })

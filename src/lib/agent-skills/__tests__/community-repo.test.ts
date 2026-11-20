@@ -3,7 +3,7 @@ import { communitySlug, detectConnections, githubNewFileUrl, isReservedCommunity
 
 const submission = {
   slug: 'manadsavstamning-bank', title: 'Månadsavstämning av banken', description: 'Stämmer av bankkontot varje månad.',
-  kind: 'rules' as const, author: 'jakob', submissionId: '00000000-0000-4000-8000-000000000001',
+  kind: 'rules' as const, author: 'anna', submissionId: '00000000-0000-4000-8000-000000000001',
   body: '# Månadsavstämning av banken\n\nStäm av 1930.\n\n## Så beskrev användaren det\n\nVi har Swedbank och kunden Acme.\n',
 }
 
@@ -31,7 +31,7 @@ describe('community-repo', () => {
     expect(md).toContain('kind: knowledge')
     expect(md).not.toContain('Acme')
     const parsed = parseCommunitySkillMd('manadsavstamning-bank', md)
-    expect(parsed).toMatchObject({ slug: 'manadsavstamning-bank', title: 'Månadsavstämning av banken', kind: 'rules', author: 'jakob', submissionId: submission.submissionId, industries: [] })
+    expect(parsed).toMatchObject({ slug: 'manadsavstamning-bank', title: 'Månadsavstämning av banken', kind: 'rules', author: 'anna', submissionId: submission.submissionId, industries: [] })
   })
 
   it('names what to fix in a broken file', () => {

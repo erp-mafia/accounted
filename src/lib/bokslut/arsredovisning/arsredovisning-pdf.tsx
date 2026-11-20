@@ -1,6 +1,17 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
+import { pdfTextDeep } from '@/lib/pdf/number-text'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
+import { EquitySpecificationTable } from './equity-specification-pdf'
+import {
+  CERTIFICATE_SIGNER,
+  CERTIFICATE_SIGNER_LINE,
+  draftCertificateNote,
+  eSigningCertificateNote,
+  type ArsredovisningPdfMode,
+} from './signature-pages'
+import { SignaturesPdf } from './signatures-pdf'
 
 const styles = StyleSheet.create({
   page: {
@@ -97,6 +108,23 @@ const styles = StyleSheet.create({
     borderBottomColor: '#333',
     paddingBottom: 2,
   },
+  signatureRole: {
+    width: 120,
+  },
+  signatureDate: {
+    width: 120,
+  },
+  // Explains, in a draft, what a page will hold once it can be filled in.
+  draftNote: {
+    fontSize: 9,
+    color: '#666',
+    lineHeight: 1.4,
+    marginBottom: 12,
+  },
+  draftSigner: {
+    flexDirection: 'row',
+    paddingVertical: 3,
+  },
 })
 
 function fmt(amount: number): string {
@@ -163,17 +191,22 @@ function StatementTable({
 function PageChrome({
   data,
   pageLabel,
+  mode,
 }: {
   data: ArsredovisningData
   pageLabel?: string
+  mode: ArsredovisningPdfMode
 }) {
   return (
     <>
       <View style={styles.pageHeader} fixed>
         <Text>
-          {data.company.name} · {data.company.org_number}
+          {data.company.name} · {formatOrgNumberDisplay(data.company.org_number)}
         </Text>
-        <Text>Årsredovisning {data.fiscal_period.name}</Text>
+        <Text>
+          Årsredovisning {data.fiscal_period.name}
+          {mode === 'draft' ? ' (utkast)' : ''}
+        </Text>
       </View>
       <Text style={styles.pageFooter} fixed>
         {pageLabel ?? ''}
@@ -182,7 +215,21 @@ function PageChrome({
   )
 }
 
-export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
+/**
+ * @param mode 'signing' for a version locked for signature (blank lines to
+ *   fill in by hand), 'draft' otherwise: see signature-pages.ts.
+ */
+export function ArsredovisningPDF({
+  data: reportData,
+  mode = 'draft',
+}: {
+  data: ArsredovisningData
+  mode?: ArsredovisningPdfMode
+}) {
+  // Every text below prints in Helvetica, which has no U+2212 glyph: the
+  // typed texts (förvaltningsberättelse, resultatdisposition, notes) are
+  // made safe here, once, like the amounts are in fmt (crm#1887).
+  const data = pdfTextDeep(reportData)
   // An ekonomisk förening adopts the statements at its ordinarie
   // föreningsstämma (EFL 6 kap. 9-10 §§), owns no share capital and must add
   // the ÅRL 6 kap. 3 § member disclosures to förvaltningsberättelsen.
@@ -194,11 +241,6 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
   const hasForlagsinsatser =
     (data.balansrakning.equity_liabilities.find((row) => row.semantic_key === 'balance_sheet_forlagsinsatser')
       ?.current ?? 0) !== 0
-  const reportSignatureDate = data.signatures
-    .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
-    .filter((date): date is string => date !== null)
-    .sort()
-    .at(-1)
   const agmDispositionDecision =
     data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
       ? `${isForening ? 'Föreningsstämman' : 'Årsstämman'} beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
@@ -209,14 +251,14 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
     <Document>
       {/* Cover */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Försättssida" />
+        <PageChrome data={data} mode={mode} pageLabel="Försättssida" />
         <View>
           <Text style={styles.title}>Årsredovisning</Text>
           <Text style={styles.subtitle}>
             för räkenskapsåret {data.fiscal_period.period_start} till {data.fiscal_period.period_end}
           </Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>
-          <Text style={styles.paragraph}>Organisationsnummer: {data.company.org_number}</Text>
+          <Text style={styles.paragraph}>Organisationsnummer: {formatOrgNumberDisplay(data.company.org_number)}</Text>
           {data.company.registered_office && (
             <Text style={styles.paragraph}>Säte: {data.company.registered_office}</Text>
           )}
@@ -225,7 +267,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
 
       {/* Förvaltningsberättelse */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Förvaltningsberättelse" />
+        <PageChrome data={data} mode={mode} pageLabel="Förvaltningsberättelse" />
         <Text style={styles.sectionTitle}>Förvaltningsberättelse</Text>
 
         <Text style={styles.sectionTitle}>Verksamhet</Text>
@@ -282,12 +324,19 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         )}
 
         <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
-        {data.forvaltningsberattelse.egen_kapital_changes.map((r) => (
-          <View key={r.label} style={styles.tableRow}>
-            <Text style={styles.colLabel}>{r.label}</Text>
-            <Text style={styles.colAmount}>{fmt(r.amount)}</Text>
-          </View>
-        ))}
+        {/* ÅRL 6 kap. 2 § andra stycket: the changes against last year's
+            balance sheet. A version saved before the specification keeps
+            its year-end list. */}
+        {data.equity_specification ? (
+          <EquitySpecificationTable year={data.equity_specification.current} />
+        ) : (
+          data.forvaltningsberattelse.egen_kapital_changes.map((r) => (
+            <View key={r.label} style={styles.tableRow}>
+              <Text style={styles.colLabel}>{r.label}</Text>
+              <Text style={styles.colAmount}>{fmt(r.amount)}</Text>
+            </View>
+          ))
+        )}
 
         <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
@@ -316,9 +365,9 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         ))}
       </Page>
 
-      {/* Resultaträkning — ÅRL post level, no account numbers. */}
+      {/* Resultaträkning - ÅRL post level, no account numbers. */}
       <Page size="A4" style={styles.page} wrap>
-        <PageChrome data={data} pageLabel="Resultaträkning" />
+        <PageChrome data={data} mode={mode} pageLabel="Resultaträkning" />
         <Text style={styles.sectionTitle}>Resultaträkning (kr)</Text>
         <View style={styles.tableHeader}>
           <Text style={styles.colLabel}>Post</Text>
@@ -328,9 +377,9 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         <StatementTable rows={data.resultatrakning} hasPrevious={data.previous_period !== null} />
       </Page>
 
-      {/* Balansräkning — ÅRL post level, no account numbers. */}
+      {/* Balansräkning - ÅRL post level, no account numbers. */}
       <Page size="A4" style={styles.page} wrap>
-        <PageChrome data={data} pageLabel="Balansräkning" />
+        <PageChrome data={data} mode={mode} pageLabel="Balansräkning" />
         <Text style={styles.sectionTitle}>Tillgångar (kr)</Text>
         <View style={styles.tableHeader}>
           <Text style={styles.colLabel}>Post</Text>
@@ -351,7 +400,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
 
       {/* Noter */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Noter" />
+        <PageChrome data={data} mode={mode} pageLabel="Noter" />
         <Text style={styles.sectionTitle}>Noter</Text>
         {data.noter.map((note) => (
           <View key={note.number} style={{ marginBottom: 16 }}>
@@ -363,28 +412,13 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         ))}
       </Page>
 
-      {/* Underskrifter */}
+      {/* Underskrifter. A version locked for signature keeps the blank
+          lines the board fills in by hand; a draft prints who is registered
+          and a note instead (signature-pages.ts). */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Underskrifter" />
+        <PageChrome data={data} mode={mode} pageLabel="Underskrifter" />
         <Text style={styles.sectionTitle}>Underskrifter</Text>
-        <Text style={styles.paragraph}>
-          {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
-          {reportSignatureDate ?? '____________________'}
-        </Text>
-        {(data.signatures.length > 0
-          ? data.signatures
-          : [
-              { role: 'Styrelseledamot', name: '', signed_at: null },
-              { role: 'Styrelseledamot', name: '', signed_at: null },
-            ]
-        ).map((sig, i) => (
-          <View key={i} style={styles.signatureLine}>
-            <View style={styles.signatureSlot}>
-              <Text>{sig.name || ' '}</Text>
-            </View>
-            <Text style={{ width: 120 }}>{sig.role}</Text>
-          </View>
-        ))}
+        <SignaturesPdf data={data} mode={mode} styles={styles} />
       </Page>
 
       {/*
@@ -395,45 +429,59 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         document cannot be filed as-is: Bolagsverket rejects submissions
         that lack the intyg.
 
-        Signer label is "Styrelseledamot (närvarande vid stämman)" per
-        ÅRL 8:3 → 6:6-7 §§: a VD who is not also a styrelseledamot cannot
-        sign the fastställelseintyg. Conflating the two roles ("VD") would
-        render the certificate defective.
+        The intyg is signed by a styrelseledamot or the verkställande
+        direktör (product decision 2026-10-15, following the
+        swedish-financial-reporting skill, bolagsverket-filing.md § 5;
+        ÅRL 8 kap. 3 §): CERTIFICATE_SIGNER in signature-pages.ts.
 
         Body refers to the AGM's RESOLUTION (stämmobeslut), not the board's
         proposal; the board proposes in förvaltningsberättelsen but the
         AGM votes, and it is the vote that must be certified.
+
+        A draft states that the intyg is filled in after the AGM and prints
+        its text only once the AGM date is recorded, never a blank date or
+        signature line (signature-pages.ts).
       */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Fastställelseintyg" />
+        <PageChrome data={data} mode={mode} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
-        <Text style={styles.paragraph}>
-          Undertecknad styrelseledamot, närvarande vid {meeting}, intygar härmed
-          att resultaträkningen och balansräkningen har fastställts på {meetingNoun}
-          den {data.forvaltningsberattelse.agm_date ?? '____________________'} och
-          att {meeting} beslutade om disposition av {entityNoun} resultat i enlighet
-          med vad som anges nedan.
-        </Text>
-        <Text style={styles.paragraph}>
-          Jag intygar också att årsredovisningen ger en rättvisande bild av
-          företagets ställning och resultat samt att förvaltningsberättelsen ger
-          en rättvisande översikt över utvecklingen av företagets verksamhet,
-          ställning och resultat.
-        </Text>
-        <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
-        <Text style={styles.paragraph}>
-          {agmDispositionDecision ?? `${isForening ? 'Föreningsstämmans' : 'Årsstämmans'} beslut har ännu inte registrerats.`}
-        </Text>
-        <View style={styles.signatureLine}>
-          <View style={styles.signatureSlot}>
-            <Text> </Text>
-          </View>
-          <Text style={{ width: 240 }}>Styrelseledamot (närvarande vid stämman)</Text>
-        </View>
-        <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
-          {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
-          datum: {data.forvaltningsberattelse.agm_date ?? '____________________'}
-        </Text>
+        {mode === 'draft' && <Text style={styles.draftNote}>{draftCertificateNote(meeting)}</Text>}
+        {mode === 'e_signing' && <Text style={styles.draftNote}>{eSigningCertificateNote(meeting)}</Text>}
+        {(mode === 'signing' || data.forvaltningsberattelse.agm_date) && (
+          <>
+            <Text style={styles.paragraph}>
+              Undertecknad {CERTIFICATE_SIGNER}, närvarande vid {meeting}, intygar härmed
+              att resultaträkningen och balansräkningen har fastställts på {meetingNoun}{' '}
+              den {data.forvaltningsberattelse.agm_date ?? '____________________'} och
+              att {meeting} beslutade om disposition av {entityNoun} resultat i enlighet
+              med vad som anges nedan.
+            </Text>
+            <Text style={styles.paragraph}>
+              Jag intygar också att årsredovisningen ger en rättvisande bild av
+              företagets ställning och resultat samt att förvaltningsberättelsen ger
+              en rättvisande översikt över utvecklingen av företagets verksamhet,
+              ställning och resultat.
+            </Text>
+            <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
+            <Text style={styles.paragraph}>
+              {agmDispositionDecision ?? `${isForening ? 'Föreningsstämmans' : 'Årsstämmans'} beslut har ännu inte registrerats.`}
+            </Text>
+          </>
+        )}
+        {mode === 'signing' && (
+          <>
+            <View style={styles.signatureLine}>
+              <View style={styles.signatureSlot}>
+                <Text> </Text>
+              </View>
+              <Text style={{ width: 260 }}>{CERTIFICATE_SIGNER_LINE}</Text>
+            </View>
+            <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
+              {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
+              datum: {data.forvaltningsberattelse.agm_date ?? '____________________'}
+            </Text>
+          </>
+        )}
       </Page>
     </Document>
   )

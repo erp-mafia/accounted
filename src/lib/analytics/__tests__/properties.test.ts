@@ -7,10 +7,10 @@ describe('buildPersonProperties', () => {
       buildPersonProperties({
         userId: 'u1',
         email: 'jakob@example.se',
-        fullName: 'Jakob Wennberg',
+        fullName: 'Anna Exempel',
         role: 'owner',
       })
-    ).toEqual({ email: 'jakob@example.se', name: 'Jakob Wennberg', role: 'owner' })
+    ).toEqual({ email: 'jakob@example.se', name: 'Anna Exempel', role: 'owner' })
   })
 
   it('omits missing fields instead of sending nulls', () => {

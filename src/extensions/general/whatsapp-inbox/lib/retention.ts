@@ -3,7 +3,7 @@
  *
  * The receipt itself is 7-year WORM räkenskapsinformation (BFL 7 kap) and is
  * untouched here; everything conversational around it is short-lived. Each
- * pass enforces the retention table documented in .compliance/ropa.yaml
+ * pass enforces the retention table in the record of processing activities
  * (whatsapp.receipt_intake):
  *
  *  1. Chat transcripts (body_text + raw_payload on whatsapp_messages) are

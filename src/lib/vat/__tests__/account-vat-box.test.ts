@@ -2,7 +2,7 @@
  * Per-account momsruta for 26xx VAT accounts: which accounts may carry one,
  * how an override projects into the declaration's dynamic mapping, and the
  * name-based deviation hint the account dialog shows. The motivating chart
- * (Easy Online Stores evaluation brief 2026-09-16, F1) books EU-förvärv on
+ * (an agent evaluation brief 2026-09-16, F1) books EU-förvärv on
  * 2615, import on 2616 and tjänster utanför EU on 2617.
  */
 import { describe, it, expect } from 'vitest'

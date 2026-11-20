@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
   createMockRequest,
@@ -179,7 +179,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
 
   it('creates an unnumbered draft from a matched customer and links back', async () => {
     enqueue({ data: makeOrderRow() }) // order fetch
-    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'swedish_business' } }) // email match
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', default_payment_terms: 30 } }) // email match
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
     enqueue({ data: null }) // invoice_items insert
     enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
@@ -201,10 +201,51 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     expect((linkUpdate![0] as Record<string, unknown>).invoice_id).toBe('inv-1')
   })
 
+  it("puts the matched customer's Fakturareferens in Er referens over the buyer's name (crm#1200)", async () => {
+    enqueue({ data: makeOrderRow() }) // order fetch
+    enqueue({
+      data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', invoice_reference: 'KST 4410', default_payment_terms: 30 },
+    }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    expect((await postCreate()).status).toBe(200)
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input
+    expect(input.your_reference).toBe('KST 4410')
+  })
+
+  it("puts the matched customer's Märkning on the invoice (crm#1477)", async () => {
+    enqueue({ data: makeOrderRow() }) // order fetch
+    enqueue({
+      data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', invoice_marking: '4500012345', default_payment_terms: 30 },
+    }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    expect((await postCreate()).status).toBe(200)
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { invoice_marking?: string } }).input
+    expect(input.invoice_marking).toBe('4500012345')
+  })
+
+  it("keeps the buyer's name in Er referens for a customer without a Fakturareferens", async () => {
+    enqueue({ data: makeOrderRow() })
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', invoice_reference: null, default_payment_terms: 30 } })
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null })
+    enqueue({ data: [{ id: 'order-1' }] })
+
+    expect((await postCreate()).status).toBe(200)
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input
+    expect(input.your_reference).toBe(makeOrderRow().customer_name)
+  })
+
   it('creates a customer from the order billing data when none matches', async () => {
     enqueue({ data: makeOrderRow() }) // order fetch
     enqueue({ data: null }) // email match: none
-    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'swedish_business' } }) // customer insert
+    enqueue({ data: null }) // the company default for the new card
+    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'swedish_business', default_payment_terms: 30 } }) // customer insert
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items
     enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
@@ -236,7 +277,8 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
   ])('classifies a business order with country %s as %s', async (country, expected) => {
     enqueue({ data: makeOrderRow({ customer_country: country }) }) // order fetch
     enqueue({ data: null }) // email match: none
-    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: expected } })
+    enqueue({ data: null }) // the company default for the new card
+    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: expected, default_payment_terms: 30 } })
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items
     enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
@@ -249,7 +291,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
 
   it('rolls back the draft when the order link-back fails', async () => {
     enqueue({ data: makeOrderRow() })
-    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB' } })
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', default_payment_terms: 30 } })
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items insert ok
     enqueue({ data: null, error: { message: 'link failed' } }) // link-back DB error
@@ -282,7 +324,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
   it('creates the draft when the legacy feed transaction was ignored', async () => {
     enqueue({ data: makeOrderRow({ legacy_transaction_id: 'txn-1' }) })
     enqueue({ data: { id: 'txn-1', journal_entry_id: null, is_ignored: true } })
-    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB' } }) // email match
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', default_payment_terms: 30 } }) // email match
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items
     enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
@@ -292,7 +334,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
 
   it('returns 409 and rolls back when the link-back matches zero rows (raced)', async () => {
     enqueue({ data: makeOrderRow() })
-    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB' } })
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', default_payment_terms: 30 } })
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items insert ok
     enqueue({ data: [] }) // link-back matched ZERO rows
@@ -325,7 +367,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
         vat_breakdown: [{ rate: 25, net: 400, tax: 100 }],
       }),
     })
-    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB' } })
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', default_payment_terms: 30 } })
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null })
     enqueue({ data: [{ id: 'order-1' }] })
@@ -342,5 +384,314 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
       description: 'Produkt B (3 st)',
       vat_rate: 25,
     })
+  })
+})
+
+/*
+ * accounted#18: the invoice date is the Swedish calendar day and the due
+ * date counts the terms from it. 23:30 UTC is already the next day in
+ * Stockholm, in summer (UTC+2) and in winter (UTC+1).
+ */
+describe('POST /api/webshop-orders/[id]/create-invoice: dates on the Swedish day', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'test@test.se' }, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    mockBuildInvoiceWriteData.mockResolvedValue(okBuild)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['summer', '2026-07-01T23:30:00Z', '2026-07-02', '2026-07-12'],
+    ['winter', '2026-01-15T23:30:00Z', '2026-01-16', '2026-01-26'],
+  ])('%s: at %s the invoice is dated %s and due %s', async (_season, instant, invoiceDate, dueDate) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(instant))
+    enqueue({ data: makeOrderRow() }) // order fetch
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', default_payment_terms: 10 } }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    const { status } = await parseJsonResponse(await postCreate())
+    expect(status).toBe(200)
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ invoice_date: invoiceDate, due_date: dueDate }) }),
+    )
+  })
+})
+
+/**
+ * The terms an invoice from a webshop order is due by: the customer's, then
+ * the company default, then 30, also on the customer the route creates.
+ */
+describe('POST /api/webshop-orders/[id]/create-invoice: the terms', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'test@test.se' }, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    mockBuildInvoiceWriteData.mockResolvedValue(okBuild)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-01T10:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a found customer without terms takes the company default', async () => {
+    enqueue({ data: makeOrderRow() }) // order fetch
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', default_payment_terms: null } }) // email match
+    enqueue({ data: { invoice_default_days: 10 } }) // the company default
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    expect((await parseJsonResponse(await postCreate())).status).toBe(200)
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ due_date: '2026-08-11' }) }),
+    )
+  })
+
+  it('a customer the route creates carries the company default on its card', async () => {
+    enqueue({ data: makeOrderRow() }) // order fetch
+    enqueue({ data: null }) // no email match
+    enqueue({ data: { invoice_default_days: 10 } }) // the company default for the new card
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'swedish_business', default_payment_terms: 10 } }) // customers insert
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    expect((await parseJsonResponse(await postCreate())).status).toBe(200)
+    expect(findCall('customers', 'insert')?.[0]).toMatchObject({ default_payment_terms: 10 })
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ due_date: '2026-08-11' }) }),
+    )
+  })
+})
+
+/**
+ * A Shopify order row carries no names (crm#1032): the dialog fetches the
+ * billing contact from the store on demand and sends the customer the user
+ * confirmed. It only shapes a customer the route creates.
+ */
+describe('POST /api/webshop-orders/[id]/create-invoice: customer confirmed in the dialog', () => {
+  const shopifyRow = () =>
+    makeOrderRow({
+      platform: 'shopify',
+      external_id: 'shopify_minbutik.myshopify.com_order_1001',
+      customer_name: null,
+      customer_company: null,
+      customer_email: null,
+      customer_orgnr: null,
+      customer_country: 'DK',
+    })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'test@test.se' }, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    mockBuildInvoiceWriteData.mockResolvedValue(okBuild)
+  })
+
+  it.each([
+    ['neither a name nor a company', { email: 'kund@example.se' }],
+    ['only blank names', { name: '  ', company: '' }],
+    ['an invalid email', { name: 'Anna Andersson', email: 'inte-en-adress' }],
+    ['an unknown field', { name: 'Anna Andersson', org_number: '556677-8899' }],
+  ])('returns 400 for a customer with %s', async (_label, customer) => {
+    const { status } = await parseJsonResponse(await postCreate({ customer }))
+    expect(status).toBe(400)
+    expect(findCall('webshop_orders', 'select')).toBeUndefined()
+  })
+
+  it('creates the confirmed company customer with the person as contact', async () => {
+    enqueue({ data: shopifyRow() }) // order fetch
+    enqueue({ data: null }) // email match: none
+    enqueue({ data: null }) // the company default for the new card
+    enqueue({ data: { id: 'cust-new', name: 'Kund AB', customer_type: 'eu_business', default_payment_terms: 30 } }) // customer insert
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(
+      await postCreate({
+        customer: { name: 'Anna Andersson', company: 'Kund AB', email: 'kund@example.se' },
+      }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'ilike')).toEqual(['email', 'kund@example.se'])
+    expect(findCall('customers', 'insert')![0]).toMatchObject({
+      name: 'Kund AB',
+      contact_person: 'Anna Andersson',
+      email: 'kund@example.se',
+      // Classified by the order's country, as for the row's own snapshot.
+      customer_type: 'eu_business',
+      country: 'DK',
+    })
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input
+    expect(input.your_reference).toBe('Anna Andersson')
+    // The order row itself never receives the contact.
+    const linkUpdate = findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(Object.keys(linkUpdate)).toEqual(['invoice_id'])
+  })
+
+  it('creates a private customer from a name alone, without an email lookup', async () => {
+    enqueue({ data: shopifyRow() }) // order fetch
+    enqueue({ data: null }) // the company default for the new card
+    enqueue({ data: { id: 'cust-new', name: 'Anna Andersson', customer_type: 'individual', default_payment_terms: 30 } }) // customer insert
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(
+      await postCreate({ customer: { name: 'Anna Andersson', company: '', email: '' } }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'ilike')).toBeUndefined()
+    expect(findCall('customers', 'insert')![0]).toMatchObject({
+      name: 'Anna Andersson',
+      contact_person: null,
+      email: null,
+      customer_type: 'individual',
+    })
+  })
+
+  it('reuses an existing customer with the confirmed email instead of creating one', async () => {
+    enqueue({ data: shopifyRow() }) // order fetch
+    enqueue({ data: { id: 'cust-1', name: 'Kund AB', email: 'kund@example.se', customer_type: 'eu_business', default_payment_terms: 30 } }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(
+      await postCreate({ customer: { name: 'Anna Andersson', email: 'kund@example.se' } }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ customer: expect.objectContaining({ id: 'cust-1' }) }),
+    )
+  })
+
+  it('ignores the confirmed customer when a customer_id is chosen', async () => {
+    const chosenId = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+    enqueue({ data: shopifyRow() }) // order fetch
+    enqueue({ data: { id: chosenId, name: 'Befintlig kund', customer_type: 'individual', default_payment_terms: 30 } }) // customer by id
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(
+      await postCreate({
+        customer_id: chosenId,
+        customer: { name: 'Anna Andersson', email: 'kund@example.se' },
+      }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'eq')).toEqual(['id', chosenId])
+    expect(findCall('customers', 'ilike')).toBeUndefined()
+    expect(findCall('customers', 'insert')).toBeUndefined()
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input
+    expect(input.your_reference).toBeUndefined()
+  })
+})
+
+/**
+ * The customer is matched by email with a case-insensitive EXACT match. ILIKE
+ * reads `_` and `%` as wildcards, so an unescaped a_b@x.se matched axb@x.se
+ * and put one buyer's order on another person's customer.
+ */
+describe('POST /api/webshop-orders/[id]/create-invoice: the email match is exact', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'test@test.se' }, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    mockBuildInvoiceWriteData.mockResolvedValue(okBuild)
+  })
+
+  function enqueueCreatedCustomerAndInvoice(email: string) {
+    enqueue({ data: null }) // the company default for the new card
+    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'swedish_business', email, default_payment_terms: 30 } }) // customer insert
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+  }
+
+  it('escapes the underscore in an email confirmed in the dialog', async () => {
+    enqueue({
+      data: makeOrderRow({
+        platform: 'shopify',
+        customer_name: null,
+        customer_company: null,
+        customer_email: null,
+        customer_orgnr: null,
+      }),
+    }) // order fetch
+    enqueue({ data: null }) // email match: none
+    enqueueCreatedCustomerAndInvoice('anna_b@example.se')
+
+    const { status } = await parseJsonResponse(
+      await postCreate({ customer: { name: 'Anna Andersson', email: 'anna_b@example.se' } }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'ilike')).toEqual(['email', 'anna\\_b@example.se'])
+    expect(findCall('customers', 'insert')![0]).toMatchObject({ email: 'anna_b@example.se' })
+  })
+
+  it("escapes `%`, `_` and `\\` in the order row's billing email", async () => {
+    enqueue({ data: makeOrderRow({ customer_email: 'kund_50%\\x@example.se' }) }) // order fetch
+    enqueue({ data: null }) // email match: none
+    enqueueCreatedCustomerAndInvoice('kund_50%\\x@example.se')
+
+    const { status } = await parseJsonResponse(await postCreate())
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'ilike')).toEqual(['email', 'kund\\_50\\%\\\\x@example.se'])
+  })
+
+  it('never invoices a customer whose email only matched a wildcard', async () => {
+    // PostgREST reads `*` as `%` and it cannot be escaped, so the query can
+    // still return another customer; the route checks the email itself.
+    enqueue({ data: makeOrderRow({ customer_email: 'a*b@example.se' }) }) // order fetch
+    enqueue({ data: { id: 'cust-other', name: 'Annan kund', email: 'axyzb@example.se', default_payment_terms: 30 } }) // wildcard hit
+    enqueueCreatedCustomerAndInvoice('a*b@example.se')
+
+    const { status } = await parseJsonResponse(await postCreate())
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'insert')![0]).toMatchObject({ email: 'a*b@example.se' })
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ customer: expect.objectContaining({ id: 'cust-new' }) }),
+    )
+  })
+
+  it('still reuses an existing customer whose email differs only in case', async () => {
+    enqueue({ data: makeOrderRow({ customer_email: 'kund@example.se' }) }) // order fetch
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'Kund@Example.SE', default_payment_terms: 30 } }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(await postCreate())
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ customer: expect.objectContaining({ id: 'cust-1' }) }),
+    )
   })
 })

@@ -7,6 +7,8 @@ import {
   previewUnmarkVatPeriodFiled,
   recordVatFilingConfirmed,
   unmarkVatPeriodFiled,
+  vatPeriodDeadline,
+  vatPeriodTaxLabel,
 } from '../filing-record-store'
 
 /**
@@ -14,22 +16,45 @@ import {
  * the filters each query carried: the payload is where the persisted state
  * is observable, the filters are where the atomic guards are.
  */
-function createStoreSupabase(results: { data?: unknown; error?: unknown }[]) {
+function createStoreSupabase(
+  results: { data?: unknown; error?: unknown }[],
+  fiscalYears: { period_start: string; period_end: string }[] = [],
+  euTradeYears: string[] | 'unreadable' = [],
+) {
   const captured: {
     table: string
     insert?: Record<string, unknown>
     update?: Record<string, unknown>
     filters: unknown[][]
+    orders?: unknown[][]
   }[] = []
   let idx = 0
   const from = (table: string) => {
-    const result = results[idx++] ?? { data: null, error: null }
+    // The recorded räkenskapsår and the years the nightly job saw EU trade in
+    // are answered by table and left out of the record: a test states the
+    // company's years rather than a position in the queue.
+    const byTable =
+      table === 'fiscal_periods'
+        ? { data: fiscalYears, error: null }
+        : table === 'vat_eu_trade_fiscal_years'
+          ? euTradeYears === 'unreadable'
+            ? { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+            : {
+                data: euTradeYears.map((fiscal_year_end) => ({ company_id: COMPANY, fiscal_year_end, has_eu_trade: true, checked_at: '2026-09-01T02:00:00Z' })),
+                error: null,
+              }
+          : null
+    const result = byTable ?? (results[idx++] ?? { data: null, error: null })
     const entry: (typeof captured)[number] = { table, filters: [] }
-    captured.push(entry)
+    if (!byTable) captured.push(entry)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ['select', 'order', 'limit', 'maybeSingle', 'single']) {
+    for (const m of ['select', 'limit', 'maybeSingle', 'single', 'range']) {
       b[m] = () => b
+    }
+    b.order = (...args: unknown[]) => {
+      ;(entry.orders ??= []).push(args)
+      return b
     }
     for (const m of ['eq', 'in', 'is', 'or']) {
       b[m] = (...args: unknown[]) => {
@@ -94,6 +119,212 @@ const pendingYearRow = {
   notes: null,
   due_date: '2027-01-18',
 }
+
+describe('a stale settings month against the recorded räkenskapsår', () => {
+  // Settings say January, the books say July-June, as some helårsmoms filers have it.
+  const RECORDED = [
+    { period_start: '2024-07-01', period_end: '2025-06-30' },
+    { period_start: '2025-07-01', period_end: '2026-06-30' },
+  ]
+
+  it('marks the deadline row the generator built, under the recorded year\'s label', async () => {
+    const { supabase, captured } = createStoreSupabase(
+      [CALENDAR_AB, { data: pendingYearRow }, { data: { ...pendingYearRow, is_completed: true, completed_at: `${TODAY}T12:00:00.000Z`, status: 'submitted' } }],
+      RECORDED,
+    )
+    const result = await markVatPeriodFiled(
+      supabase,
+      COMPANY,
+      { periodType: 'yearly', year: 2026, period: 1, filedOn: TODAY },
+      { today: TODAY },
+    )
+    expect(result).toMatchObject({
+      ok: true,
+      created: false,
+      record: { tax_period: '2025/2026', period_start: '2025-07-01', period_end: '2026-06-30' },
+    })
+    expect(captured.find((c) => c.table === 'deadlines')?.filters).toContainEqual(['eq', 'tax_period', '2025/2026'])
+    expect(captured.some((c) => c.insert)).toBe(false)
+  })
+
+  it('ends the period with the recorded year, so a filing is not refused as not ended', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: pendingYearRow }], RECORDED)
+    const preview = await previewMarkVatPeriodFiled(
+      supabase,
+      COMPANY,
+      { periodType: 'yearly', year: 2026, period: 1, filedOn: TODAY },
+      { today: TODAY },
+    )
+    expect(preview).toMatchObject({
+      ok: true,
+      would_mark: { tax_period: '2025/2026', period_end: '2026-06-30' },
+    })
+  })
+
+  it('reads the period\'s due date off the recorded year', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], RECORDED)
+    const deadline = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })
+    expect(deadline).toMatchObject({ tax_period: '2025/2026', period_end: '2026-06-30', due_date: '2027-01-18' })
+  })
+
+  it('reads the earlier date for a year the nightly job saw EU trade in, as the generator writes it', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], RECORDED, ['2026-06'])
+    const deadline = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })
+    expect(deadline).toMatchObject({ tax_period: '2025/2026', due_date: '2026-08-26' })
+  })
+
+  it('reads the recorded EU trade whenever the setting is not on, as the generator does', async () => {
+    const unset = { data: { ...CALENDAR_AB.data, vat_has_eu_trade: null } }
+    const { supabase } = createStoreSupabase([unset, { data: null }], [], ['2026-12'])
+    await expect(
+      vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 }),
+    ).resolves.toMatchObject({ tax_period: '2026', due_date: '2027-02-26' })
+  })
+
+  it('places the date by the setting when the recorded EU trade cannot be read, rather than failing', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], RECORDED, 'unreadable')
+    const deadline = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })
+    expect(deadline).toMatchObject({ tax_period: '2025/2026', due_date: '2027-01-18' })
+  })
+
+  it('keys an enskild firma by the calendar year it declares, whatever its stored years say', async () => {
+    const ef = { data: { ...CALENDAR_AB.data, entity_type: 'enskild_firma' } }
+    const recorded = createStoreSupabase([ef, { data: null }], RECORDED, ['2025-12'])
+    await expect(
+      vatPeriodDeadline(recorded.supabase, COMPANY, { periodType: 'yearly', year: 2025, period: 1 }),
+    ).resolves.toMatchObject({ tax_period: '2025', due_date: '2026-02-26' })
+    const other = createStoreSupabase([ef, { data: null }], RECORDED, ['2025-06'])
+    await expect(
+      vatPeriodDeadline(other.supabase, COMPANY, { periodType: 'yearly', year: 2025, period: 1 }),
+    ).resolves.toMatchObject({ tax_period: '2025', due_date: '2026-05-12' })
+  })
+
+  it('labels the period for the Skatteverket panel the same way', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB], RECORDED)
+    await expect(vatPeriodTaxLabel(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })).resolves.toBe(
+      '2025/2026',
+    )
+  })
+
+  it('places a year not created yet on the chain, not on the settings month', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], RECORDED)
+    const deadline = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2027, period: 1 })
+    expect(deadline).toMatchObject({ tax_period: '2026/2027', period_start: '2026-07-01', period_end: '2027-06-30' })
+  })
+
+  it('reads a filed broken label off the recorded year', async () => {
+    const { supabase } = createStoreSupabase(
+      [
+        CALENDAR_AB,
+        { data: [{ ...pendingYearRow, is_completed: true, completed_at: '2026-09-01T12:00:00.000Z', status: 'submitted' }] },
+      ],
+      RECORDED,
+    )
+    const [record] = await listVatFilings(supabase, COMPANY)
+    expect(record).toMatchObject({ tax_period: '2025/2026', period_start: '2025-07-01', period_end: '2026-06-30' })
+  })
+})
+
+describe('a helårsmoms period is the räkenskapsår itself', () => {
+  const filedYear = { ...pendingYearRow, is_completed: true, completed_at: '2026-10-01T12:00:00.000Z', status: 'submitted' }
+
+  it('starts a filed extended first year on its own first day', async () => {
+    // What filed-period-changes reads: 18 months, not the last twelve of them.
+    const { supabase } = createStoreSupabase(
+      [BROKEN_AB, { data: [{ ...filedYear, tax_period: '2025/2026' }] }],
+      [{ period_start: '2025-03-01', period_end: '2026-08-31' }],
+    )
+    const [record] = await listVatFilings(supabase, COMPANY)
+    expect(record).toMatchObject({ period_start: '2025-03-01', period_end: '2026-08-31' })
+  })
+
+  it('starts a short first year on its own first day, also under a calendar label', async () => {
+    const { supabase } = createStoreSupabase(
+      [CALENDAR_AB, { data: [{ ...filedYear, tax_period: '2025' }] }],
+      [{ period_start: '2025-06-01', period_end: '2025-12-31' }],
+    )
+    const [record] = await listVatFilings(supabase, COMPANY)
+    expect(record).toMatchObject({ period_start: '2025-06-01', period_end: '2025-12-31' })
+  })
+
+  it('places a period before it is filed the same way', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], [{ period_start: '2025-03-01', period_end: '2026-08-31' }])
+    await expect(vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })).resolves.toMatchObject({
+      period_start: '2025-03-01',
+      period_end: '2026-08-31',
+    })
+  })
+
+  it('keeps twelve months when no year ends in that month', async () => {
+    const { supabase } = createStoreSupabase(
+      [CALENDAR_AB, { data: [{ ...filedYear, tax_period: '2024' }] }],
+      [{ period_start: '2025-03-01', period_end: '2026-08-31' }],
+    )
+    const [record] = await listVatFilings(supabase, COMPANY)
+    expect(record).toMatchObject({ period_start: '2024-01-01', period_end: '2024-12-31' })
+  })
+
+  it('leaves the quarters as they are', async () => {
+    const { supabase } = createStoreSupabase(
+      [CALENDAR_AB, { data: null }],
+      [{ period_start: '2026-05-10', period_end: '2026-12-31' }],
+    )
+    await expect(vatPeriodDeadline(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 2 })).resolves.toMatchObject({
+      period_start: '2026-04-01',
+      period_end: '2026-06-30',
+    })
+  })
+})
+
+describe('an enskild firma on recorded broken years', () => {
+  // The generator labels the form's helårsmoms by the calendar year whatever
+  // its stored years say, so the filing record has to find that row.
+  const ENSKILD_FIRMA = { data: { ...CALENDAR_AB.data, entity_type: 'enskild_firma' } }
+  const RECORDED = [
+    { period_start: '2024-09-01', period_end: '2025-08-31' },
+    { period_start: '2025-09-01', period_end: '2026-08-31' },
+  ]
+  const generatorRow = { ...pendingYearRow, id: 'd-ef', tax_period: '2025', due_date: '2026-08-17', status: 'overdue' }
+  const filedRow = { ...generatorRow, is_completed: true, completed_at: '2026-03-01T12:00:00.000Z', status: 'submitted' }
+  const period = { periodType: 'yearly' as const, year: 2025, period: 1 }
+
+  it('completes the row the generator built instead of adding a second one', async () => {
+    const { supabase, captured } = createStoreSupabase(
+      [ENSKILD_FIRMA, { data: generatorRow }, { data: filedRow }],
+      RECORDED,
+    )
+    const result = await markVatPeriodFiled(supabase, COMPANY, { ...period, filedOn: '2026-03-01' }, { today: TODAY })
+    expect(result).toMatchObject({ ok: true, created: false, record: { tax_period: '2025', period_end: '2025-12-31' } })
+    expect(captured.find((c) => c.table === 'deadlines')?.filters).toContainEqual(['eq', 'tax_period', '2025'])
+    expect(captured.some((c) => c.insert)).toBe(false)
+  })
+
+  it('reads the period as filed once that row is completed', async () => {
+    const { supabase } = createStoreSupabase([ENSKILD_FIRMA, { data: filedRow }], RECORDED)
+    await expect(vatPeriodDeadline(supabase, COMPANY, period)).resolves.toMatchObject({
+      tax_period: '2025',
+      due_date: '2026-08-17',
+      filed: true,
+    })
+  })
+
+  it('finds the mark again to undo it', async () => {
+    const { supabase, captured } = createStoreSupabase(
+      [ENSKILD_FIRMA, { data: filedRow }, { data: { id: 'd-ef', status: 'overdue' } }],
+      RECORDED,
+    )
+    await expect(unmarkVatPeriodFiled(supabase, COMPANY, period, { today: TODAY })).resolves.toEqual({
+      ok: true,
+      deadline_id: 'd-ef',
+    })
+    expect(captured.find((c) => c.table === 'deadlines')?.filters).toContainEqual(['eq', 'tax_period', '2025'])
+  })
+
+  it('labels the period for the Skatteverket panel the same way', async () => {
+    const { supabase } = createStoreSupabase([ENSKILD_FIRMA], RECORDED)
+    await expect(vatPeriodTaxLabel(supabase, COMPANY, period)).resolves.toBe('2025')
+  })
+})
 
 describe('listVatFilings', () => {
   it('maps completed moms deadlines of every cadence to records with their dates', async () => {
@@ -278,6 +509,30 @@ describe('markVatPeriodFiled', () => {
       'or',
       'is_completed.eq.false,status.is.null,status.neq.confirmed',
     ])
+  })
+
+  it('returns a confirmation that another writer inserted between its read and its insert', async () => {
+    const confirmed = { ...pendingRow, is_completed: true, completed_at: '2026-09-08T09:00:00.000Z', status: 'confirmed' }
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: null }, // read: no row for the period
+      {
+        error: {
+          code: '23505',
+          message: 'duplicate key value violates unique constraint "idx_deadlines_vat_filing_period_unique"',
+        },
+      },
+      CALENDAR_AB,
+      { data: confirmed }, // read again: the kvittens read won
+    ])
+    const result = await markVatPeriodFiled(
+      supabase,
+      COMPANY,
+      { periodType: 'quarterly', year: 2026, period: 2, filedOn: '2026-08-10' },
+      { today: TODAY },
+    )
+    expect(result).toMatchObject({ ok: true, created: false, changed: false, record: { source: 'skatteverket' } })
+    expect(captured.filter((c) => c.update)).toHaveLength(0)
   })
 
   it('yields to a Skatteverket confirmation that lands between the read and the write', async () => {
@@ -479,6 +734,22 @@ describe('markVatPeriodFiled for helårsmoms (#2786)', () => {
     })
   })
 
+  it('creates the row on the EU-trade date when the nightly job saw EU trade in that räkenskapsår', async () => {
+    const { supabase, captured } = createStoreSupabase(
+      [
+        BROKEN_AB,
+        { data: null },
+        { data: { ...pendingYearRow, id: 'd-new', is_completed: true, completed_at: '2026-08-20T12:00:00.000Z', status: 'submitted' } },
+      ],
+      [],
+      ['2026-06'],
+    )
+    const result = await markVatPeriodFiled(supabase, COMPANY, { ...yearly, filedOn: '2026-08-20' }, { today: TODAY })
+    expect(result).toMatchObject({ ok: true, created: true })
+    // With EU trade: the 26th of the second month after the räkenskapsår ends.
+    expect(captured.find((c) => c.insert)?.insert).toMatchObject({ tax_period: '2025/2026', due_date: '2026-08-26' })
+  })
+
   it('never relabels a Skatteverket-confirmed räkenskapsår', async () => {
     const confirmed = {
       ...pendingYearRow,
@@ -593,6 +864,16 @@ describe('unmarkVatPeriodFiled', () => {
     })
     expect(captured).toHaveLength(2)
     expect(captured.some((c) => c.update)).toBe(false)
+  })
+
+  it('a deadline due today goes back to upcoming, not overdue', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: { ...pendingRow, is_completed: true, completed_at: '2026-08-10T12:00:00.000Z', status: 'submitted', notes: null } },
+      { data: { id: 'd-q2' } },
+    ])
+    await unmarkVatPeriodFiled(supabase, COMPANY, input, { today: pendingRow.due_date })
+    expect(captured[2].update).toMatchObject({ status: 'upcoming' })
   })
 
   it('puts a manual mark back to pending and drops the reference line', async () => {
@@ -867,10 +1148,115 @@ describe('recordVatFilingConfirmed', () => {
     expect(captured).toHaveLength(2)
   })
 
+  const PERIOD_CONFLICT = {
+    error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_deadlines_vat_filing_period_unique"' },
+  }
+  const confirmedQ2 = {
+    ...pendingRow,
+    is_completed: true,
+    completed_at: '2026-09-08T09:00:00.000Z',
+    status: 'confirmed',
+  }
+  const submittedQ2 = {
+    ...pendingRow,
+    is_completed: true,
+    completed_at: '2026-08-10T12:00:00.000Z',
+    status: 'submitted',
+  }
+
+  it('returns the record unchanged when another kvittens read inserted it first', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: null }, // read: no row yet
+      PERIOD_CONFLICT, // insert: the other read won
+      CALENDAR_AB,
+      { data: confirmedQ2 }, // read again: its confirmation
+    ])
+    const result = await recordVatFilingConfirmed(
+      supabase,
+      COMPANY,
+      { periodType: 'quarterly', year: 2026, period: 2 },
+      { now: NOW },
+    )
+    expect(result).toMatchObject({ created: false, changed: false, record: { source: 'skatteverket' } })
+    expect(captured.filter((c) => c.insert)).toHaveLength(1)
+    expect(captured.filter((c) => c.update)).toHaveLength(0)
+  })
+
+  it('upgrades a manual mark that was inserted between its read and its insert', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: null },
+      PERIOD_CONFLICT,
+      CALENDAR_AB,
+      { data: submittedQ2 }, // read again: the manual mark won the insert
+      { data: { ...submittedQ2, status: 'confirmed' } },
+    ])
+    const result = await recordVatFilingConfirmed(
+      supabase,
+      COMPANY,
+      { periodType: 'quarterly', year: 2026, period: 2 },
+      { now: NOW },
+    )
+    expect(result).toMatchObject({ created: false, changed: true, record: { source: 'skatteverket' } })
+    // The user's filed-on date stays: the kvittens confirms that filing.
+    expect(captured[5].update).toMatchObject({
+      is_completed: true,
+      completed_at: '2026-08-10T12:00:00.000Z',
+      status: 'confirmed',
+    })
+  })
+
+  it('rethrows any other insert failure', async () => {
+    const { supabase } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: null },
+      { error: { code: '23505', message: 'duplicate key value violates unique constraint "some_other_index"' } },
+    ])
+    await expect(
+      recordVatFilingConfirmed(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 2 }, { now: NOW }),
+    ).rejects.toMatchObject({ code: '23505' })
+  })
+
+  it('reads the completed row first, so a stale pending duplicate never shadows the record', async () => {
+    const { supabase, captured } = createStoreSupabase([CALENDAR_AB, { data: confirmedQ2 }])
+    await recordVatFilingConfirmed(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 2 }, { now: NOW })
+    expect(captured[1].orders).toEqual([
+      ['is_completed', { ascending: false }],
+      ['created_at', { ascending: true }],
+    ])
+  })
+
   it('throws on a read error', async () => {
     const { supabase } = createStoreSupabase([{ error: { message: 'boom' } }])
     await expect(
       recordVatFilingConfirmed(supabase, COMPANY, { periodType: 'monthly', year: 2026, period: 7 }),
     ).rejects.toMatchObject({ message: 'boom' })
+  })
+})
+
+describe('vatPeriodDeadline', () => {
+  it('answers the deadline row\'s due date and whether the period is filed', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: { ...pendingRow, due_date: '2026-08-17', is_completed: true, completed_at: '2026-08-10T12:00:00.000Z', status: 'submitted' } },
+    ])
+    const result = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 2 })
+    expect(result).toMatchObject({ tax_period: '2026-Q2', period_end: '2026-06-30', due_date: '2026-08-17', filed: true })
+    expect(captured[1].filters).toContainEqual(['eq', 'tax_period', '2026-Q2'])
+  })
+
+  it('places the due date the way the generator would when the company has no row, on a banking day', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }])
+    // Q3 2026 is due 12 November 2026, a Thursday; Q4 2026 on 12 February 2027, a Friday.
+    expect(await vatPeriodDeadline(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 3 })).toMatchObject({
+      due_date: '2026-11-12',
+      filed: false,
+    })
+    const monthly = createStoreSupabase([CALENDAR_AB, { data: null }])
+    // July 2026 (small company) is due 12 September 2026, a Saturday: the next banking day.
+    expect(await vatPeriodDeadline(monthly.supabase, COMPANY, { periodType: 'monthly', year: 2026, period: 7 })).toMatchObject({
+      due_date: '2026-09-14',
+    })
   })
 })

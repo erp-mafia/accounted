@@ -26,12 +26,12 @@ export default function DashboardLoading() {
             must be a rail too: a 320px skeleton that snapped to 48px on hydrate
             was a visible layout jump on every /chat load. Mobile mounts the
             full-width list, so that shape stays there. */}
-        <aside className="hidden md:flex md:w-12 shrink-0 flex-col items-center border-r border-border bg-card/40 py-3 gap-2">
+        <aside className="hidden md:flex md:w-12 shrink-0 flex-col items-center border-r-hairline py-3 gap-2">
           <Skeleton className="h-8 w-8 rounded-full" />
           <Skeleton className="h-8 w-8" />
         </aside>
-        <aside className="flex w-full flex-col border-r border-border bg-card/40 md:hidden shrink-0">
-          <div className="space-y-3 border-b border-border px-5 py-4">
+        <aside className="flex w-full flex-col border-r-hairline md:hidden shrink-0">
+          <div className="space-y-3 border-b-hairline px-5 py-4">
             <div className="flex items-center gap-2">
               <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
               <div className="flex-1 space-y-1.5">
@@ -56,11 +56,11 @@ export default function DashboardLoading() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="animate-late space-y-8">
       <PageHeader title={<Skeleton className="h-4 w-24" />} />
-      <div>
+      <div className="-mx-2">
         {['w-44', 'w-52', 'w-40', 'w-48', 'w-44', 'w-56'].map((w, i) => (
-          <div key={i} className="flex items-center gap-3 border-b border-border px-1 py-3.5">
+          <div key={i} className="flex h-11 items-center gap-3 border-b-hairline px-2">
             <Skeleton className={`h-3.5 ${w}`} />
             <Skeleton className="ml-auto h-3.5 w-16" />
           </div>

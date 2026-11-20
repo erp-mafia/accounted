@@ -1,0 +1,616 @@
+{
+  "$comment": "Field names and types of the customer and supplier records each provider publishes, for provider-party-schemas.test.ts. Regenerate from the sources below when a provider changes its schema.",
+  "fortnox": {
+    "source": "https://api.fortnox.se/apidocs (OpenAPI), retrieved 2026-10-26",
+    "customers": {
+      "schemas": [
+        "Kf_CustomerListItem",
+        "Kf_CustomerSingleItem"
+      ],
+      "fields": {
+        "@url": "string",
+        "Active": "boolean",
+        "Address1": "string",
+        "Address2": "string",
+        "City": "string",
+        "Comments": "string",
+        "CostCenter": "string",
+        "Country": "string",
+        "CountryCode": "string",
+        "Currency": "string",
+        "CustomerNumber": "string",
+        "DefaultDeliveryTypes": "string",
+        "DefaultTemplates": "string",
+        "DeliveryAddress1": "string",
+        "DeliveryAddress2": "string",
+        "DeliveryCity": "string",
+        "DeliveryCountry": "string",
+        "DeliveryCountryCode": "string",
+        "DeliveryFax": "string",
+        "DeliveryName": "string",
+        "DeliveryPhone1": "string",
+        "DeliveryPhone2": "string",
+        "DeliveryZipCode": "string",
+        "Email": "string",
+        "EmailInvoice": "string",
+        "EmailInvoiceBCC": "string",
+        "EmailInvoiceCC": "string",
+        "EmailOffer": "string",
+        "EmailOfferBCC": "string",
+        "EmailOfferCC": "string",
+        "EmailOrder": "string",
+        "EmailOrderBCC": "string",
+        "EmailOrderCC": "string",
+        "ExternalReference": "string",
+        "Fax": "string",
+        "GLN": "string",
+        "GLNDelivery": "string",
+        "InvoiceAdministrationFee": "string",
+        "InvoiceDiscount": "number",
+        "InvoiceFreight": "string",
+        "InvoiceRemark": "string",
+        "Name": "string",
+        "OrganisationNumber": "string",
+        "OurReference": "string",
+        "Phone": "string",
+        "Phone1": "string",
+        "Phone2": "string",
+        "PriceList": "string",
+        "Project": "string",
+        "SalesAccount": "string",
+        "ShowPriceVATIncluded": "boolean",
+        "TermsOfDelivery": "string",
+        "TermsOfPayment": "string",
+        "Type": "string",
+        "VATNumber": "string",
+        "VATType": "string",
+        "VisitingAddress": "string",
+        "VisitingCity": "string",
+        "VisitingCountry": "string",
+        "VisitingCountryCode": "string",
+        "VisitingZipCode": "string",
+        "WWW": "string",
+        "WayOfDelivery": "string",
+        "YourReference": "string",
+        "ZipCode": "string"
+      }
+    },
+    "suppliers": {
+      "schemas": [
+        "Lf_SupplierListItem",
+        "Lf_SupplierSinglePayloadItem"
+      ],
+      "fields": {
+        "@url": "string",
+        "Active": "boolean",
+        "Address1": "string",
+        "Address2": "string",
+        "BG": "string",
+        "BIC": "string",
+        "Bank": "string",
+        "BankAccountNumber": "string",
+        "BranchCode": "string",
+        "City": "string",
+        "ClearingNumber": "string",
+        "Comments": "string",
+        "CostCenter": "string",
+        "Country": "string",
+        "CountryCode": "string",
+        "Currency": "string",
+        "DisablePaymentFile": "boolean",
+        "Email": "string",
+        "Fax": "string",
+        "IBAN": "string",
+        "Name": "string",
+        "OrganisationNumber": "string",
+        "OurCustomerNumber": "string",
+        "OurReference": "string",
+        "PG": "string",
+        "Phone": "string",
+        "Phone1": "string",
+        "Phone2": "string",
+        "PreDefinedAccount": "string",
+        "Project": "string",
+        "SupplierNumber": "string",
+        "TermsOfPayment": "string",
+        "VATNumber": "string",
+        "VATType": "string",
+        "VisitingAddress": "string",
+        "VisitingCity": "string",
+        "VisitingCountry": "string",
+        "VisitingCountryCode": "string",
+        "VisitingZipCode": "string",
+        "WWW": "string",
+        "WorkPlace": "string",
+        "YourReference": "string",
+        "ZipCode": "string"
+      }
+    }
+  },
+  "visma": {
+    "source": "https://eaccountingapi.vismaonline.com/openapi/v2.json, retrieved 2026-10-26",
+    "customers": {
+      "schemas": [
+        "CustomerApi"
+      ],
+      "fields": {
+        "AutoInvoiceActivationEmailSentDate": "string",
+        "AutoInvoiceRegistrationRequestSentDate": "string",
+        "ChangedUtc": "string",
+        "ContactPersonEmail": "string",
+        "ContactPersonMobile": "string",
+        "ContactPersonName": "string",
+        "ContactPersonPhone": "string",
+        "CorporateIdentityNumber": "string",
+        "CurrencyCode": "string",
+        "CustomerLabels": {
+          "array": {
+            "object": {
+              "Description": "string",
+              "Id": "string",
+              "Name": "string"
+            }
+          }
+        },
+        "CustomerNumber": "string",
+        "DeliveryAddress1": "string",
+        "DeliveryAddress2": "string",
+        "DeliveryBasedVat": "boolean",
+        "DeliveryCity": "string",
+        "DeliveryCountryCode": "string",
+        "DeliveryCustomerName": "string",
+        "DeliveryMethodId": "string",
+        "DeliveryPostalCode": "string",
+        "DeliveryTermId": "string",
+        "DirectDebitCustomerSettings": {
+          "object": {
+            "Bic": "string",
+            "EndDate": "string",
+            "LatestDirectDebit": "string",
+            "MandateId": "string",
+            "MandateType": "number",
+            "SequenceType": "number",
+            "SigningDate": "string"
+          }
+        },
+        "DiscountAgreementId": "string",
+        "DiscountPercentage": "number",
+        "EdiGlnNumber": "string",
+        "EdiServiceDelivererId": "string",
+        "ElectronicAddress": "string",
+        "ElectronicReference": "string",
+        "EmailAddress": "string",
+        "EmailAddressOrder": "string",
+        "EmailAddressQuote": "string",
+        "EmailAddresses": {
+          "array": "string"
+        },
+        "ForceBookkeepVat": "boolean",
+        "GLN": "string",
+        "Iban": "string",
+        "Id": "string",
+        "InvoiceAddress1": "string",
+        "InvoiceAddress2": "string",
+        "InvoiceCity": "string",
+        "InvoiceCountryCode": "string",
+        "InvoicePostalCode": "string",
+        "IsActive": "boolean",
+        "IsDirectDebitEnabled": "boolean",
+        "IsFutureInvoiceDateAllowed": "boolean",
+        "IsNorthernIreland": "boolean",
+        "IsPrivatePerson": "boolean",
+        "LastInvoiceDate": "string",
+        "MessageThreads": {
+          "array": "string"
+        },
+        "MobilePhone": "string",
+        "Name": "string",
+        "Note": "string",
+        "Notes": {
+          "array": "string"
+        },
+        "PayToAccountId": "string",
+        "PropertyReference": "string",
+        "PropertyType": "number",
+        "RequiresReferenceNumber": "boolean",
+        "ReverseChargeOnConstructionServices": "boolean",
+        "SalesDocumentLanguage": "string",
+        "SalesPriceListId": "string",
+        "TaxDeductionNumber": "string",
+        "Telephone": "string",
+        "TermsOfPayment": {
+          "object": {
+            "AvailableForPurchase": "boolean",
+            "AvailableForSales": "boolean",
+            "Id": "string",
+            "Name": "string",
+            "NameEnglish": "string",
+            "NumberOfDays": "number",
+            "TermsOfPaymentTypeId": "number",
+            "TermsOfPaymentTypeText": "string"
+          }
+        },
+        "TermsOfPaymentId": "string",
+        "UnpaidInvoicesAmount": "number",
+        "VatNumber": "string",
+        "WebshopCustomerNumber": "number",
+        "WwwAddress": "string"
+      }
+    },
+    "suppliers": {
+      "schemas": [
+        "SupplierApi"
+      ],
+      "fields": {
+        "AccountingTemplateId": "string",
+        "Address1": "string",
+        "Address2": "string",
+        "ApprovalOrderType": "number",
+        "Approvers": {
+          "array": {
+            "object": {
+              "ApproverId": "string",
+              "Name": "string",
+              "Priority": "number"
+            }
+          }
+        },
+        "AutomaticPaymentService": "boolean",
+        "BankAccountNumber": "string",
+        "BankBban": "string",
+        "BankBic": "string",
+        "BankCode": "string",
+        "BankCountryCode": "string",
+        "BankFeeCode": "number",
+        "BankIban": "string",
+        "BankName": "string",
+        "BankgiroNumber": "string",
+        "City": "string",
+        "Clearing": "string",
+        "ContactPersonEmail": "string",
+        "ContactPersonMobile": "string",
+        "ContactPersonName": "string",
+        "ContactPersonPhone": "string",
+        "CorporateIdentityNumber": "string",
+        "CountryCode": "string",
+        "CreatedUtc": "string",
+        "CurrencyCode": "string",
+        "EmailAddress": "string",
+        "ForeignPaymentCode": {
+          "object": {
+            "Code": "number",
+            "CountryCode": "string",
+            "Description": "string",
+            "Id": "string"
+          }
+        },
+        "ForeignPaymentCodeId": "string",
+        "GroupAccountNumber": "number",
+        "Id": "string",
+        "IsActive": "boolean",
+        "IsDraft": "boolean",
+        "LastInvoiceDate": "string",
+        "MessageThreads": {
+          "array": "string"
+        },
+        "MobilePhone": "string",
+        "ModifiedUtc": "string",
+        "Name": "string",
+        "Note": "string",
+        "Notes": {
+          "array": "string"
+        },
+        "OurCustomerNumber": "string",
+        "PayFromBankAccountId": "string",
+        "PlusgiroNumber": "string",
+        "PostalCode": "string",
+        "ProportionalVat": "boolean",
+        "PurchaseDocumentLanguage": "string",
+        "SelfEmployedWithoutFixedAddress": "boolean",
+        "SupplierNumber": "string",
+        "Telephone": "string",
+        "TermsOfPaymentId": "string",
+        "UnpaidInvoicesAmount": "number",
+        "UseGroupCompany": "boolean",
+        "UsesAutomaticInvoicePostToLedger": "boolean",
+        "UsesAutomaticSupplierInvoiceApproval": "boolean",
+        "UsesPaymentReferenceNumbers": "boolean",
+        "VatNumber": "string",
+        "WwwAddress": "string"
+      }
+    }
+  },
+  "bokio": {
+    "source": "Bokio company-api.yaml (https://docs.bokio.se), retrieved 2026-10-26",
+    "customers": {
+      "schemas": [
+        "customer"
+      ],
+      "fields": {
+        "address": {
+          "object": {
+            "city": "string",
+            "country": "string",
+            "countrySubdivision": "string",
+            "line1": "string",
+            "line2": "string",
+            "postalCode": "string"
+          }
+        },
+        "constructionReverseChargeEnabled": "boolean",
+        "contactsDetails": {
+          "array": {
+            "object": {
+              "email": "string",
+              "id": "string",
+              "isDefault": "boolean",
+              "name": "string",
+              "phone": "string"
+            }
+          }
+        },
+        "customerNumber": "string",
+        "id": "string",
+        "language": {
+          "enum": [
+            "sv",
+            "en"
+          ]
+        },
+        "modifiedDateTime": "string",
+        "name": "string",
+        "orgNumber": "string",
+        "paymentTerms": "string",
+        "type": {
+          "enum": [
+            "company",
+            "private"
+          ]
+        },
+        "vatNumber": "string"
+      }
+    },
+    "suppliers": {
+      "schemas": [
+        "supplier"
+      ],
+      "fields": {
+        "address": {
+          "object": {
+            "city": "string",
+            "country": "string",
+            "line1": "string",
+            "line2": "string",
+            "postalCode": "string"
+          }
+        },
+        "currency": "string",
+        "id": "string",
+        "name": "string",
+        "orgNumber": "string",
+        "paymentDetails": {
+          "object": {
+            "accountNumber": "string",
+            "bankgiroNumber": "string",
+            "bic": "string",
+            "clearingNumber": "string",
+            "iban": "string",
+            "plusgiroNumber": "string",
+            "type": {
+              "enum": [
+                "bankgiro",
+                "plusgiro",
+                "transfer",
+                "internationalPayment"
+              ]
+            }
+          }
+        },
+        "vatNumber": "string"
+      }
+    }
+  },
+  "wint": {
+    "source": "https://api.wint.se/swagger/v1/swagger.json, retrieved 2026-10-26",
+    "customers": {
+      "schemas": [
+        "Customer"
+      ],
+      "fields": {
+        "ApartmentNumber": "string",
+        "AutogiroPayerNumber": "string",
+        "BillingAddress": {
+          "object": {
+            "City": "string",
+            "CountryCode": "string",
+            "Street1": "string",
+            "Street2": "string",
+            "ZipCode": "string"
+          }
+        },
+        "CanRemove": "boolean",
+        "CanToggleActiveState": "boolean",
+        "DeliveryAddress": {
+          "object": {
+            "City": "string",
+            "CountryCode": "string",
+            "Street1": "string",
+            "Street2": "string",
+            "ZipCode": "string"
+          }
+        },
+        "EmailAddress": "string",
+        "GlnNumber": "string",
+        "Id": "number",
+        "Inactive": "boolean",
+        "IncludeVatNumberOnInvoice": "boolean",
+        "InvoiceDeliverySettings": {
+          "object": {
+            "CustomInvoiceMailTo": "string",
+            "DefaultInvoiceSendOption": {
+              "enum": [
+                "Email",
+                "Print",
+                "MarkAsSent"
+              ]
+            },
+            "EnableDeliverySettings": "boolean",
+            "InvoiceFileNameTemplate": "string",
+            "InvoiceMailToType": {
+              "enum": [
+                "CustomerCompany",
+                "ReferencePerson",
+                "Other"
+              ]
+            },
+            "InvoiceMessageTemplate": "string",
+            "InvoiceNotes": "string",
+            "InvoiceTitleTemplate": "string"
+          }
+        },
+        "InvoiceReminderSettings": {
+          "object": {
+            "AutomaticReminderAmountLimit": "number",
+            "AutomaticReminderCountLimit": "number",
+            "AutomaticReminderDelay": "number",
+            "AutomaticReminderPeriod": "number",
+            "CustomInvoiceReminderMailTo": "string",
+            "EnableReminderSettings": "boolean",
+            "InvoiceReminderFilenameTemplate": "string",
+            "InvoiceReminderMailToType": {
+              "enum": [
+                "CustomerCompany",
+                "ReferencePerson",
+                "Other"
+              ]
+            },
+            "InvoiceReminderMessageTemplate": "string",
+            "InvoiceReminderNotesTemplate": "string",
+            "InvoiceReminderSendOption": {
+              "enum": [
+                "Email",
+                "Print",
+                "MarkAsSent"
+              ]
+            },
+            "InvoiceReminderTitleTemplate": "string",
+            "IsAutomaticRemindersEnabled": "boolean",
+            "ReminderCost": "number"
+          }
+        },
+        "IsEUInvoiceCustomer": "boolean",
+        "IsRotEnabled": "boolean",
+        "IsRutEnabled": "boolean",
+        "Language": "string",
+        "Name": "string",
+        "NumOfInvoices": "number",
+        "NumOfRecurringInvoices": "number",
+        "OrgNumber": "string",
+        "PaymentTerms": "number",
+        "PenaltyInterest": {
+          "object": {
+            "Rate": "number",
+            "Type": {
+              "enum": [
+                "NoPenaltyInterest",
+                "Statutory",
+                "Prearranged"
+              ]
+            }
+          }
+        },
+        "PhoneNumber": "string",
+        "PropertyDesignation": "string",
+        "PurchasedAmount": "number",
+        "Rating": "number",
+        "ReferencePersons": {
+          "array": "number"
+        },
+        "ReferencePersonsList": {
+          "array": {
+            "object": {
+              "CustomerId": "number",
+              "EmailAddress": "string",
+              "Id": "number",
+              "IsDefault": "boolean",
+              "Name": "string",
+              "Phone": "string",
+              "ReferenceIdentifier": "string"
+            }
+          }
+        },
+        "ShowCurrencyCode": "boolean",
+        "Template": {
+          "enum": [
+            "Default",
+            "Classic"
+          ]
+        },
+        "TenantsOwnerAssociationOrgNumber": "string",
+        "Type": {
+          "enum": [
+            "Company",
+            "PrivatePerson"
+          ]
+        },
+        "UnpaidAmount": "number",
+        "VatNumber": "string",
+        "Warnings": {
+          "array": {
+            "object": {
+              "Category": {
+                "enum": [
+                  "EUVATWarnings",
+                  "AutogiroWarnings",
+                  "AutogiroWarningsWithReceipt",
+                  "AutogiroPaymentHandling",
+                  "OldInvoice",
+                  "Printing",
+                  "EInvoicing",
+                  "ForwardedCosts",
+                  "NotDefined"
+                ]
+              },
+              "Level": {
+                "enum": [
+                  "NotDefined",
+                  "Error",
+                  "Warning",
+                  "Info",
+                  "Success"
+                ]
+              },
+              "Message": "string",
+              "Type": {
+                "enum": [
+                  "EuCustomerWithNoVatNumberDisplay",
+                  "EuCustomerWithInvalidVatNumberForDeliveryAddress",
+                  "EuCustomerWithInvalidVatNumberForBillingAddress",
+                  "UncategorizedEuCustomerInvoiceItems",
+                  "EuCustomerInvoiceWithApplicableItemsButNoVatNumber",
+                  "EuCustomerInvoiceWithInvalidVatNumberForItemCategory",
+                  "EuCustomerInvoiceItemsWithCategoryUnknown",
+                  "AutogiroHandledByWint",
+                  "AutogiroNotHandledByWint",
+                  "AutogiroHandleByWintWithReceiptManualSend",
+                  "AutogiroHandleByWintWithReceiptAutomaticSend",
+                  "AutogiroNotHandleByWintWithReceiptManualSend",
+                  "AutogiroNotHandleByWintWithReceiptAutomaticSend",
+                  "AutogiroPaymentHandledByWint",
+                  "AutogiroPaymentNotHandledByWint",
+                  "CannotSendOldInvoice",
+                  "SendForPrint",
+                  "MissingCustomerReferenceCode",
+                  "MissingCustomerElectronicIdentifiers",
+                  "SendAsEInvoice",
+                  "ForwardedCostSourceDocumentCancelled",
+                  "WarningTypeNotDefined"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

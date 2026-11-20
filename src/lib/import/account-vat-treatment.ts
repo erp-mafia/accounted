@@ -1,10 +1,13 @@
 import type { BASAccount } from '@/types'
+import { RC_BASIS_BOXES, isReverseChargeBasisAccount } from '@/lib/bookkeeping/vat-entries'
 import {
   defaultRateForVatTreatment,
+  resolveVatTreatmentRuta,
   suggestVatTreatment,
   vatRateFromLabel,
   type AccountVatTreatment,
 } from '@/lib/vat/account-vat-treatment'
+import { rcBasisPairFinding, type RcBasisPairFinding } from './rc-basis-pairs'
 import type { AccountMapping } from './types'
 
 /**
@@ -59,6 +62,115 @@ function providerSuggestedRate(
 }
 
 /**
+ * Whether a debit on `account` reports a reverse-charge basis in ruta 20-24
+ * under `treatment`, its momskod: the momskod decides where there is one, and
+ * an account without one reports only as a BAS basis account. The
+ * declaration's own rule (fetchDynamicVatAccounts, costAccountRcBasisRate).
+ */
+function reportsRcBasis(account: string, treatment: AccountVatTreatment | null | undefined): boolean {
+  if (!treatment) return isReverseChargeBasisAccount(account)
+  const box = resolveVatTreatmentRuta(treatment, Number(account.charAt(0)), account)?.box
+  return box !== undefined && RC_BASIS_BOXES.has(box)
+}
+
+/**
+ * Whether `treatment` on a cost account counts twice the basis the file's
+ * vouchers already report on a pair beside it (`finding`): a reverse-charge
+ * purchase momskod reports each of those purchases in ruta 20-24 again
+ * (crm#1096). The mapping step warns on it, whoever set the momskod.
+ */
+export function countsRcBasisTwice(
+  account: string,
+  treatment: AccountVatTreatment | null | undefined,
+  finding: RcBasisPairFinding | null | undefined,
+): boolean {
+  return Boolean(finding && treatment) && reportsRcBasis(account, treatment)
+}
+
+/**
+ * Each row's RcBasisPairFinding within `mappings`, every leg judged by the
+ * momskod it lands with: a leg the file maps onto itself by its row's
+ * (`treatmentOf`), any other by the account it lands on (`chartTreatmentOf`,
+ * the company's kontoplan where the caller has it).
+ */
+function findingsIn(
+  mappings: readonly AccountMapping[],
+  treatmentOf: (mapping: AccountMapping) => AccountVatTreatment | null | undefined,
+  chartTreatmentOf: (account: string) => AccountVatTreatment | null | undefined = () => null,
+): (mapping: AccountMapping) => RcBasisPairFinding | null {
+  const bySource = new Map(mappings.map((mapping) => [mapping.sourceAccount, mapping]))
+  const legReports = (leg: string) => {
+    const row = bySource.get(leg)
+    if (row?.targetAccount === leg) return reportsRcBasis(leg, treatmentOf(row))
+    const account = row?.targetAccount || leg
+    return reportsRcBasis(account, chartTreatmentOf(account))
+  }
+  return (mapping) => rcBasisPairFinding(mapping.rcBasisPair, legReports)
+}
+
+/**
+ * Each row's RcBasisPairFinding as the rows stand, keyed by source account:
+ * every leg judged by the momskod its row carries now. What the mapping step
+ * shows.
+ */
+export function rcBasisPairFindings(mappings: readonly AccountMapping[]): Map<string, RcBasisPairFinding> {
+  const findingOf = findingsIn(mappings, (mapping) => mapping.defaultVatTreatment)
+  const findings = new Map<string, RcBasisPairFinding>()
+  for (const mapping of mappings) {
+    const finding = findingOf(mapping)
+    if (finding) findings.set(mapping.sourceAccount, finding)
+  }
+  return findings
+}
+
+/**
+ * A reverse-charge momskod the file rules out as a suggestion: it would count
+ * the basis twice and the file ends on the pair, so the periods still to be
+ * declared report through the pair. Where the file ends on the account's own
+ * basis instead, the momskod stays the suggestion and the row only carries
+ * the warning.
+ */
+function ruledOutByRcBasisPair(
+  mapping: AccountMapping,
+  treatment: AccountVatTreatment | null | undefined,
+  finding: RcBasisPairFinding | null,
+): boolean {
+  return Boolean(finding?.latest) && countsRcBasisTwice(mapping.sourceAccount, treatment, finding)
+}
+
+/**
+ * The reverse-charge momskod the prefill set aside on a row that now carries
+ * none, or null: the source system's code where it named one, else the label's
+ * suggestion, the one enrichAccountMappingsWithVat would otherwise make. What
+ * the mapping step explains in place of the source-code line.
+ */
+export function rcMomskodSetAside(
+  mapping: AccountMapping,
+  finding: RcBasisPairFinding | null | undefined,
+): AccountVatTreatment | null {
+  if (!finding?.latest || mapping.defaultVatTreatment) return null
+  const candidate = mapping.providerVatTreatment
+    || suggestVatTreatment(mapping.sourceAccount, mapping.sourceName)?.treatment
+  return candidate && ruledOutByRcBasisPair(mapping, candidate, finding) ? candidate : null
+}
+
+/**
+ * The row where a reverse-charge momskod was ruled out: no momskod suggested,
+ * still for the user to confirm, so it stays in the review list where the
+ * mapping step says why. `rate` is the booking rate the row already had.
+ */
+function withoutRcMomskod(mapping: AccountMapping, rate: number | null): AccountMapping {
+  return {
+    ...mapping,
+    defaultVatTreatment: null,
+    defaultVatRate: rate,
+    vatTreatmentSuggested: false,
+    vatTreatmentReviewed: false,
+    requiresVatTreatmentReview: true,
+  }
+}
+
+/**
  * Attach the momskod the source system has on each account to its identity
  * mapping. SIE4 carries no VAT code, so this runs server-side after the
  * provider's chart was fetched next to the SIE export (Fortnox /accounts);
@@ -103,21 +215,39 @@ export function applySourceVatCodes(
   codesByAccount: ReadonlyMap<string, string>,
   translate: (code: string, accountNumber: string) => AccountVatTreatment | null,
 ): AccountMapping[] {
-  return mappings.map((mapping) => {
-    if (!mapping.targetAccount || mapping.sourceAccount !== mapping.targetAccount) return mapping
+  // The code each row this file speaks for, translated: also what a leg of a
+  // pair beside another row is judged by, before the rule below.
+  const codedByAccount = new Map(mappings.map((mapping) => {
+    if (!mapping.targetAccount || mapping.sourceAccount !== mapping.targetAccount) return [mapping.sourceAccount, null]
     const accountClass = Number(mapping.sourceAccount.charAt(0))
-    if (accountClass < 3 || accountClass > 6) return mapping
-    if (mapping.vatTreatmentReviewed && mapping.requiresVatTreatmentReview) return mapping
-
+    if (accountClass < 3 || accountClass > 6) return [mapping.sourceAccount, null]
+    if (mapping.vatTreatmentReviewed && mapping.requiresVatTreatmentReview) return [mapping.sourceAccount, null]
     const code = codesByAccount.get(mapping.sourceAccount)?.trim()
-    if (!code) return mapping
+    return [mapping.sourceAccount, code ? { code, treatment: translate(code, mapping.sourceAccount) } : null]
+  }))
+  const findingOf = findingsIn(
+    mappings,
+    (mapping) => codedByAccount.get(mapping.sourceAccount)?.treatment || mapping.defaultVatTreatment,
+  )
 
-    const treatment = translate(code, mapping.sourceAccount)
+  return mappings.map((mapping) => {
+    const coded = codedByAccount.get(mapping.sourceAccount)
+    if (!coded) return mapping
+    const { code, treatment } = coded
+    const accountClass = Number(mapping.sourceAccount.charAt(0))
     const withFacts = { ...mapping, providerVatCode: code, providerVatTreatment: treatment }
     if (!treatment) return withFacts
     // The file agrees with the treatment the account already carries: record
     // that it spoke, and leave the row settled rather than asking again.
     if (mapping.vatTreatmentReviewed && mapping.defaultVatTreatment === treatment) return withFacts
+    // A reverse-charge code on a cost account does not say where the source
+    // reported the basis; the vouchers do, and a pair beside the account that
+    // reports ruta 20-24 means the code would count it twice (crm#1096). The
+    // code then says nothing usable: a row the company chart settled keeps
+    // the chart's answer, any other is left without a momskod to confirm.
+    if (ruledOutByRcBasisPair(mapping, treatment, findingOf(mapping))) {
+      return mapping.vatTreatmentReviewed ? withFacts : withoutRcMomskod(withFacts, mapping.defaultVatRate ?? null)
+    }
 
     return {
       ...withFacts,
@@ -137,13 +267,35 @@ export function applySourceVatCodes(
  * account label; either way it is not reviewed until the user confirms the
  * row or continues from the mapping step. A treatment the company already
  * set on the account in its chart outranks both and needs no review.
+ *
+ * On an account the file ends up booking beside a separate basis pair that
+ * reports ruta 20-24 (ruledOutByRcBasisPair), a reverse-charge momskod is not
+ * suggested from the source code or the label. One the chart already has
+ * stays, with the mapping step's warning: Accounted's own bookings on such an
+ * account report their basis through that momskod alone, and the file may be
+ * an older year.
+ *
+ * `context` is the whole mapping set when `mappings` is part of it: the legs
+ * of a pair beside a row are judged by their own rows.
  */
 export function enrichAccountMappingsWithVat(
   mappings: AccountMapping[],
   existingAccounts: BASAccount[],
+  context: readonly AccountMapping[] = mappings,
 ): AccountMapping[] {
   const existingByNumber = new Map(
     existingAccounts.map((account) => [account.account_number, account]),
+  )
+  // A leg is judged by the user's answer where its row has one, else by the
+  // momskod the row is about to get here, before the rule.
+  const findingOf = findingsIn(
+    context,
+    (mapping) => mapping.vatTreatmentReviewed && mapping.requiresVatTreatmentReview
+      ? mapping.defaultVatTreatment
+      : existingByNumber.get(mapping.targetAccount)?.default_vat_treatment
+        || mapping.providerVatTreatment
+        || suggestVatTreatment(mapping.sourceAccount, mapping.sourceName)?.treatment,
+    (account) => existingByNumber.get(account)?.default_vat_treatment,
   )
 
   return mappings.map((mapping) => {
@@ -172,6 +324,10 @@ export function enrichAccountMappingsWithVat(
       }
     }
 
+    const finding = findingOf(mapping)
+    if (ruledOutByRcBasisPair(mapping, mapping.providerVatTreatment, finding)) {
+      return withoutRcMomskod(mapping, existing?.default_vat_rate ?? null)
+    }
     if (mapping.providerVatTreatment) {
       return {
         ...mapping,
@@ -186,6 +342,9 @@ export function enrichAccountMappingsWithVat(
     }
 
     const suggestion = suggestVatTreatment(mapping.sourceAccount, mapping.sourceName)
+    if (ruledOutByRcBasisPair(mapping, suggestion?.treatment, finding)) {
+      return withoutRcMomskod(mapping, existing?.default_vat_rate ?? null)
+    }
     return {
       ...mapping,
       defaultVatTreatment: suggestion?.treatment ?? null,
@@ -236,7 +395,7 @@ export function enrichChangedAccountMappingWithVat(
 ): AccountMapping[] {
   return mappings.map((mapping) =>
     mapping.sourceAccount === sourceAccount
-      ? enrichAccountMappingsWithVat([mapping], existingAccounts)[0]
+      ? enrichAccountMappingsWithVat([mapping], existingAccounts, mappings)[0]
       : mapping
   )
 }

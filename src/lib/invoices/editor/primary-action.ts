@@ -1,5 +1,5 @@
 import type { InvoiceDocumentType } from '@/types'
-import type { ChannelOption, EditorChannel, EmailBlockReason } from './channel'
+import { isMailboxChannel, type ChannelBlockReason, type ChannelOption, type EditorChannel, type MailboxChannel } from './channel'
 
 /**
  * What the invoice editor's top-bar primary and its caret menu do, and what
@@ -21,6 +21,11 @@ export type EditorIntent =
   | { kind: 'save_changes' }
   /** Mottagen självfaktura: registered and booked at once. */
   | { kind: 'register_self_billed' }
+  /**
+   * Kontantfaktura (crm#1281): persist, then issue it already paid, as one
+   * cash verifikat, and hand the receipt over (through the confirm dialog).
+   */
+  | { kind: 'issue_paid' }
 
 /** i18n keys (namespace invoice_editor_shell) of the action labels. */
 export type EditorActionLabel =
@@ -30,13 +35,18 @@ export type EditorActionLabel =
   | 'action_mark_sent_book_download'
   | 'action_mark_sent_download'
   | 'action_send_peppol'
+  | 'action_send_kivra'
+  | 'action_send_billo'
   | 'action_save_changes'
   | 'action_register_self_billed'
   | 'action_create_without_sending'
   | 'action_save_as_draft'
+  | 'action_issue_paid'
   | 'channel_email'
   | 'channel_manual'
   | 'channel_peppol'
+  | 'channel_kivra'
+  | 'channel_billo'
 
 export interface BookingContext {
   accountingMethod: 'accrual' | 'cash'
@@ -60,10 +70,20 @@ export interface SendLabelContext {
   booksOnIssue: boolean
 }
 
-/** The label of a send on this channel: the primary's face and the confirm button. */
+const MAILBOX_SEND_LABEL: Record<MailboxChannel, EditorActionLabel> = {
+  kivra: 'action_send_kivra',
+  billo: 'action_send_billo',
+}
+
+/**
+ * The label of a send on this channel: the primary's face and the confirm
+ * button. Peppol and the mailboxes name where the faktura goes; the confirm
+ * dialog's verifikat says what is booked.
+ */
 export function resolveSendLabel(ctx: SendLabelContext): EditorActionLabel {
   const books = ctx.booksOnIssue && ctx.documentType === 'invoice'
   if (ctx.channel === 'peppol') return 'action_send_peppol'
+  if (isMailboxChannel(ctx.channel)) return MAILBOX_SEND_LABEL[ctx.channel]
   if (ctx.channel === 'email') {
     if (ctx.documentType === 'quote') return 'action_send_quote'
     return books ? 'action_send_and_book' : 'action_send'
@@ -98,7 +118,7 @@ export interface MenuChannelEntry extends EditorAction {
   /** The channel the primary currently uses (the menu's check mark). */
   selected: boolean
   available: boolean
-  reason: EmailBlockReason | null
+  reason: ChannelBlockReason | null
 }
 
 export interface EditorMenu {
@@ -112,10 +132,11 @@ export interface MenuContext extends PrimaryContext {
 
 /**
  * The caret menu: the channels (picking one sends on it, through the
- * confirm dialog), then "Spara som utkast" (a new faktura only: quotes and
- * delivery notes are numbered at insert, so a "draft" of one would already
- * hold a number) and "Skapa utan att skicka" (create mode). A received
- * självfaktura has no menu.
+ * confirm dialog), then "Kontantfaktura (redan betald)" (a faktura, in either
+ * mode: a Fortnox user looks for it next to the send), "Spara som utkast" (a
+ * new faktura only: quotes and delivery notes are numbered at insert, so a
+ * "draft" of one would already hold a number) and "Skapa utan att skicka"
+ * (create mode). A received självfaktura has no menu.
  */
 export function resolveEditorMenu(ctx: MenuContext): EditorMenu | null {
   if (ctx.isSelfBilled) return null
@@ -123,6 +144,8 @@ export function resolveEditorMenu(ctx: MenuContext): EditorMenu | null {
     email: 'channel_email',
     manual: 'channel_manual',
     peppol: 'channel_peppol',
+    kivra: 'channel_kivra',
+    billo: 'channel_billo',
   }
   const channels: MenuChannelEntry[] = ctx.channelOptions.map((option) => ({
     channel: option.channel,
@@ -134,6 +157,9 @@ export function resolveEditorMenu(ctx: MenuContext): EditorMenu | null {
     reason: option.reason,
   }))
   const actions: EditorAction[] = []
+  if (ctx.documentType === 'invoice') {
+    actions.push({ intent: { kind: 'issue_paid' }, label: 'action_issue_paid' })
+  }
   if (ctx.mode === 'create') {
     if (ctx.documentType === 'invoice') {
       actions.push({ intent: { kind: 'save_draft' }, label: 'action_save_as_draft' })

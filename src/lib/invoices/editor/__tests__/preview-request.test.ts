@@ -109,6 +109,17 @@ describe('buildEditorPreviewRequest', () => {
     }
   })
 
+  it("carries the invoice's own VAT statement so the preview prints its notice (crm#1007)", () => {
+    const request = buildEditorPreviewRequest(form(), {
+      ...options,
+      vatStatement: { vat_treatment: 'reverse_charge_domestic', delivery_country: null },
+    })
+    const parsed = InvoicePreviewSchema.safeParse(JSON.parse(JSON.stringify(request)))
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.vat_treatment).toBe('reverse_charge_domestic')
+    expect(buildEditorPreviewRequest(form(), options)).not.toHaveProperty('vat_treatment')
+  })
+
   it('survives a cleared number field (NaN serializes as null)', () => {
     const typing = form()
     typing.items[0] = { ...typing.items[0], quantity: Number.NaN, unit_price: Number.NaN }

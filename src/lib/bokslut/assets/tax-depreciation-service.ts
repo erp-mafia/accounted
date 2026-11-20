@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Asset, AssetCategory } from '@/types'
 import { roundOre } from '@/lib/money'
+import { pickPreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import { listAssets } from './asset-service'
 import {
   TAX_DEPRECIATION_CATEGORIES,
@@ -11,6 +12,7 @@ import {
   type TaxDepreciationResult,
   type TaxDepreciationRule,
 } from './tax-depreciation'
+import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 
 export interface TaxPeriodRow {
   id: string
@@ -311,7 +313,7 @@ export async function saveTaxDepreciationElection(
     .select('id')
     .maybeSingle()
   if (saveError) {
-    if (/locked for tax depreciation/i.test(saveError.message)) {
+    if (isPeriodLockRefusal(saveError)) {
       throw new TaxDepreciationPeriodLockedError('Fiscal period is locked')
     }
     if (
@@ -444,19 +446,12 @@ async function calculateWithElection(
   }
 }
 
+/** The year before `current` (pickPreviousFiscalPeriod in period-service). */
 export function findImmediatePreviousTaxPeriod(
   current: TaxPeriodRow,
   periods: TaxPeriodRow[],
 ): TaxPeriodRow | null {
-  if (current.previous_period_id) {
-    const linked = periods.find((period) => period.id === current.previous_period_id) ?? null
-    return linked && periodsAreAdjacent(linked, current) ? linked : null
-  }
-
-  const currentStart = new Date(`${current.period_start}T00:00:00Z`)
-  currentStart.setUTCDate(currentStart.getUTCDate() - 1)
-  const adjacentEnd = currentStart.toISOString().slice(0, 10)
-  return periods.find((period) => period.period_end === adjacentEnd) ?? null
+  return pickPreviousFiscalPeriod(current, periods)
 }
 
 export function resolveTaxDepreciationOpening(

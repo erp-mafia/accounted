@@ -3,7 +3,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -17,10 +16,12 @@ import {
 } from '@/components/ui/destructive-confirm-dialog'
 import { FyPicker } from '@/components/common/FyPicker'
 import { CloseImportedYearsOffer } from '@/components/import/CloseImportedYearsOffer'
+import { ImportWizardRail } from '@/components/import/ImportWizardRail'
 import { mapWithConcurrency } from '@/lib/concurrency'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
-import { FileUp, FolderUp, Loader2 } from 'lucide-react'
+import { DocumentArrowUpIcon, FolderOpenIcon, SpinnerIcon } from '@/components/icons'
 import type { FiscalPeriod } from '@/types'
 import type {
   UnderlagPlan,
@@ -96,11 +97,37 @@ function isPreselected(status: UnderlagPlanStatus): boolean {
   return status === 'matched'
 }
 
+type SelectableRow = Pick<ReviewRow, 'selected' | 'targetId'>
+
 /**
- * The source label, when it differs from our own. The SIE import renumbers
- * per series and skips empty or voided vouchers, so source A46 routinely lands
- * on A45 here. Matching is on the source number (the one the filename carries),
- * so showing only our number reads as "mapped one too low" (crm#122).
+ * The header box over "Ta med": all, some or none of the rows that have a
+ * verifikat are ticked. Rows without one (no match, locked year, ambiguous
+ * before a pick) cannot be ticked, so they do not count.
+ */
+export function includeAllState(rows: readonly SelectableRow[]): 'all' | 'some' | 'none' {
+  const selectable = rows.filter((row) => row.targetId)
+  const ticked = selectable.filter((row) => row.selected).length
+  if (selectable.length === 0 || ticked === 0) return 'none'
+  return ticked === selectable.length ? 'all' : 'some'
+}
+
+/**
+ * Tick or clear every row that has a verifikat in one click. A folder whose
+ * filenames carry no series lands every row on "Bekräfta", and users ticked
+ * them one at a time: up to ~450 clicks in one session. The verifikat stays
+ * in view on each row, and the run still asks before attaching.
+ */
+export function setIncludeAll<T extends SelectableRow>(rows: readonly T[], selected: boolean): T[] {
+  return rows.map((row) => (row.targetId && row.selected !== selected ? { ...row, selected } : row))
+}
+
+/**
+ * The source label, when it differs from our own. An SIE import written
+ * before crm#1599 skipped empty or voided vouchers without holding their
+ * numbers, so source A46 routinely landed on A45 here, and an append or a
+ * replacement continues the series. Matching is on the source number (the
+ * one the filename carries), so showing only our number reads as "mapped one
+ * too low" (crm#122).
  */
 function differingSourceLabel(candidate: UnderlagPlanCandidate): string | null {
   const source = candidate.source_voucher_label
@@ -121,7 +148,7 @@ function badgeVariant(status: UnderlagPlanStatus): 'secondary' | 'warning' | 'de
   return 'secondary'
 }
 
-export default function UnderlagImportWizard() {
+export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }) {
   const t = useTranslations('import')
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -153,8 +180,6 @@ export default function UnderlagImportWizard() {
     review: t('underlag_step_review'),
     result: t('underlag_step_result'),
   }
-  const currentStepIndex = steps.indexOf(step)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
 
   const anyRenumbered = useMemo(
     () => rows.some((row) => row.candidates.some((c) => differingSourceLabel(c) !== null)),
@@ -260,6 +285,16 @@ export default function UnderlagImportWizard() {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   }, [])
 
+  const includeAll = useMemo(() => includeAllState(rows), [rows])
+  const anySelectable = useMemo(() => rows.some((row) => row.targetId), [rows])
+  // `indeterminate` is a DOM property, not an attribute.
+  const includeAllRef = useCallback(
+    (node: HTMLInputElement | null) => {
+      if (node) node.indeterminate = includeAll === 'some'
+    },
+    [includeAll],
+  )
+
   /**
    * Resolve a reference the user typed for a row whose filename said nothing.
    * Goes through the same resolver as the automatic path: the user supplies the
@@ -341,7 +376,6 @@ export default function UnderlagImportWizard() {
       // counter still ticks, and mapWithConcurrency preserves plan order.
       results = await mapWithConcurrency(selectedRows, ATTACH_CONCURRENCY, async (row) => {
         const formData = new FormData()
-        formData.append('file', row.file)
         formData.append('journal_entry_id', row.targetId as string)
         // The year the plan was built against, echoed from the server. The
         // route refuses any target outside it, overrides included.
@@ -350,10 +384,9 @@ export default function UnderlagImportWizard() {
 
         let outcome: AttachOutcome
         try {
-          const res = await fetch('/api/import/documents/attach', {
-            method: 'POST',
-            body: formData,
-          })
+          // Over the hosted body cap the file goes straight to Storage first
+          // and the route reads it from there (postDocumentForm).
+          const res = await postDocumentForm('/api/import/documents/attach', formData, row.file)
           if (!res.ok) {
             const data = await res.json().catch(() => null)
             outcome = {
@@ -409,39 +442,13 @@ export default function UnderlagImportWizard() {
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                {t('underlag_step_counter', {
-                  current: currentStepIndex + 1,
-                  total: steps.length,
-                  label: stepLabels[step],
-                })}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
-                  )}
-                >
-                  {stepLabels[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail steps={steps} current={step} label={(s) => stepLabels[s]} onBack={onBack} />
 
       {error && <AttnLine>{error}</AttnLine>}
 
       {step === 'select' && (
         <Card>
-          <CardContent className="space-y-6 pt-6">
+          <CardContent className="space-y-6">
             <div className="space-y-2 text-sm text-muted-foreground">
               <p>{t('underlag_intro')}</p>
               <p>{t('underlag_intro_formats')}</p>
@@ -469,7 +476,7 @@ export default function UnderlagImportWizard() {
                 requireExplicitChoice
                 className={isLoading ? 'pointer-events-none opacity-60' : undefined}
               />
-              <p className="text-[12.5px] leading-5 text-muted-foreground">
+              <p className="text-xs leading-5 text-muted-foreground">
                 {t('underlag_year_help')}
               </p>
             </div>
@@ -500,7 +507,7 @@ export default function UnderlagImportWizard() {
                 disabled={!fiscalPeriodId}
                 loading={isLoading}
               >
-                {!isLoading && <FileUp className="h-4 w-4" />}
+                {!isLoading && <DocumentArrowUpIcon className="h-4 w-4" />}
                 {t('underlag_pick_files')}
               </Button>
               <Button
@@ -508,7 +515,7 @@ export default function UnderlagImportWizard() {
                 onClick={() => folderInputRef.current?.click()}
                 disabled={isLoading || !fiscalPeriodId}
               >
-                <FolderUp className="h-4 w-4" />
+                <FolderOpenIcon className="h-4 w-4" />
                 {t('underlag_pick_folder')}
               </Button>
             </div>
@@ -518,7 +525,7 @@ export default function UnderlagImportWizard() {
                 picker never becomes usable. Say why rather than leave two
                 dead controls on screen. */}
             {!fiscalPeriodId && (
-              <p className="text-[12.5px] leading-5 text-muted-foreground">
+              <p className="text-xs leading-5 text-muted-foreground">
                 {t('underlag_year_required')}
               </p>
             )}
@@ -543,22 +550,31 @@ export default function UnderlagImportWizard() {
             })}
           </p>
           {anyRenumbered && (
-            <p className="text-[12.5px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               {t('underlag_renumbered_hint')}
             </p>
           )}
           {anyManualInput && (
-            <p className="text-[12.5px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               {t('underlag_manual_hint')}
             </p>
           )}
 
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-10')}>
-                    <span className="sr-only">{t('underlag_col_include')}</span>
+                    <input
+                      ref={includeAllRef}
+                      type="checkbox"
+                      className="h-4 w-4 rounded-sm border-border"
+                      checked={includeAll === 'all'}
+                      disabled={!anySelectable || isLoading}
+                      aria-label={t('underlag_include_all')}
+                      title={t('underlag_include_all')}
+                      onChange={() => setRows((prev) => setIncludeAll(prev, includeAllState(prev) !== 'all'))}
+                    />
                   </th>
                   <th className={TH_CLASS}>{t('underlag_col_file')}</th>
                   <th className={TH_CLASS}>{t('underlag_col_ref')}</th>
@@ -629,7 +645,7 @@ export default function UnderlagImportWizard() {
 
       {step === 'result' && (
         <Card>
-          <CardContent className="space-y-6 pt-6">
+          <CardContent className="space-y-6">
             <p className="text-sm">
               {t('underlag_done_body', {
                 linked: outcomes.filter((o) => o.ok).length,
@@ -638,7 +654,7 @@ export default function UnderlagImportWizard() {
             </p>
 
             {outcomes.some((o) => !o.ok) ? (
-              <div className="overflow-x-auto">
+              <div className="-mx-2 overflow-x-auto">
                 <table className="w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
@@ -714,7 +730,7 @@ function TargetCell({
     return (
       <div className="flex items-center gap-2">
         <select
-          className="h-8 rounded-lg border border-border bg-background px-2 text-[13px]"
+          className="h-8 rounded-lg px-2 text-[13px] bg-control shadow-raised"
           value={row.targetId ?? ''}
           aria-label={t('underlag_col_target')}
           onChange={(e) => {
@@ -759,7 +775,7 @@ function TargetCell({
         }}
       />
       {row.resolving ? (
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" />
       ) : (
         <Badge variant={badgeVariant(row.status)} className="font-normal">
           {t(STATUS_KEY[row.status])}

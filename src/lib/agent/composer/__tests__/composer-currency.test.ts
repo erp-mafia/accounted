@@ -36,7 +36,7 @@ interface TxRow {
 
 function buildSupabase(rows: TxRow[]) {
   const chain: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'gte', 'order', 'limit']) {
+  for (const m of ['select', 'eq', 'gte', 'order', 'limit', 'range']) {
     chain[m] = () => chain
   }
   chain.then = (resolve: (v: unknown) => void) => resolve({ data: rows, error: null })

@@ -9,6 +9,7 @@ import {
 } from '../oauth-allowlist'
 import { ALL_SCOPES, type ApiKeyScope } from '../scope-catalog'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { FLYTT_EXTENSION_ID, FLYTT_EXTENSION_REDIRECT_URI } from '../flytt-extension'
 
 describe('isBuiltInRedirectUri', () => {
   it.each([
@@ -49,6 +50,61 @@ describe('isBuiltInRedirectUri', () => {
     ['https://cursor.com/agents/mcp/oauth/callback', false],
     ['https://www.cursor.com.evil.com/agents/mcp/oauth/callback', false],
     ['http://www.cursor.com/agents/mcp/oauth/callback', false],
+    ['https://squidler.io/api/oauth/callback/accounted', true],
+    ['https://dev.squidler.io/api/oauth/callback/accounted', true],
+    // Exact paths on Squidler's own two hosts: nothing else on the domain,
+    // no other subdomain and no look-alike host rides on the entry.
+    ['https://squidler.io/api/oauth/callback/accounted/', false],
+    ['https://squidler.io/api/oauth/callback/accounted?next=x', false],
+    ['https://squidler.io/api/oauth/callback/accounted/extra', false],
+    ['https://squidler.io/api/oauth/callback/other', false],
+    ['https://squidler.io/', false],
+    ['https://www.squidler.io/api/oauth/callback/accounted', false],
+    ['https://staging.squidler.io/api/oauth/callback/accounted', false],
+    ['https://squidler.io.evil.com/api/oauth/callback/accounted', false],
+    ['https://evilsquidler.io/api/oauth/callback/accounted', false],
+    ['http://squidler.io/api/oauth/callback/accounted', false],
+    ['http://dev.squidler.io/api/oauth/callback/accounted', false],
+    ['https://celemine.com/upstream/accounted/callback', true],
+    ['https://celemine.com/upstream/3f2c9a1e-8b4d-4c2a-9e7f-1a2b3c4d5e6f/oauth/callback', true],
+    ['https://celemine.com/upstream/callback', true],
+    ['https://celemine.com/upstream/callback/', true],
+    ['https://celemine.com/upstream/v1.2/cb_x-y', true],
+    // A prefix on Celemine's own host, hardened: the bare prefix, dot
+    // segments, percent-encoding, query, fragment, empty segments, a
+    // backslash, other paths, subdomains, ports, userinfo, look-alike hosts
+    // and plain http never match.
+    ['https://celemine.com/upstream', false],
+    ['https://celemine.com/upstream/', false],
+    ['https://celemine.com/upstream/../evil', false],
+    ['https://celemine.com/upstream/a/../../evil', false],
+    ['https://celemine.com/upstream/./a', false],
+    ['https://celemine.com/upstream/%2e%2e/evil', false],
+    ['https://celemine.com/upstream/a%2Fb', false],
+    ['https://celemine.com/upstream/callback?next=https://evil.com', false],
+    ['https://celemine.com/upstream/callback#x', false],
+    ['https://celemine.com/upstream//evil.com', false],
+    ['https://celemine.com/upstream/a\\evil', false],
+    ['https://celemine.com/upstreamx/callback', false],
+    ['https://celemine.com/callback', false],
+    ['https://www.celemine.com/upstream/callback', false],
+    ['https://app.celemine.com/upstream/callback', false],
+    ['https://celemine.com:8443/upstream/callback', false],
+    ['https://user@celemine.com/upstream/callback', false],
+    ['https://celemine.com@evil.com/upstream/callback', false],
+    ['https://celemine.com.evil.com/upstream/callback', false],
+    ['https://evilcelemine.com/upstream/callback', false],
+    ['http://celemine.com/upstream/callback', false],
+    // The browser extension's chrome.identity redirect: the one id, the
+    // exact root path, https only.
+    [FLYTT_EXTENSION_REDIRECT_URI, true],
+    [`${FLYTT_EXTENSION_REDIRECT_URI}oauth`, false],
+    [`${FLYTT_EXTENSION_REDIRECT_URI}?next=x`, false],
+    [FLYTT_EXTENSION_REDIRECT_URI.replace(/\/$/, ''), false],
+    [FLYTT_EXTENSION_REDIRECT_URI.replace('https://', 'http://'), false],
+    ['https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.chromiumapp.org/', false],
+    [`https://x${FLYTT_EXTENSION_ID}.chromiumapp.org/`, false],
+    [`https://${FLYTT_EXTENSION_ID}.chromiumapp.org.evil.com/`, false],
     ['http://localhost:8787/callback', true],
     ['http://localhost:3000/cb', true],
     ['http://localhost/cb', true],
@@ -74,6 +130,12 @@ describe('builtInRedirectProvider', () => {
     ['https://oauth-redirect.googleusercontent.com/r/some-cloud-project', null],
     ['cursor://anysphere.cursor-mcp/oauth/callback', 'cursor_deeplink'],
     ['https://www.cursor.com/agents/mcp/oauth/callback', 'cursor'],
+    ['https://squidler.io/api/oauth/callback/accounted', 'squidler'],
+    ['https://dev.squidler.io/api/oauth/callback/accounted', 'squidler'],
+    ['https://squidler.io/api/oauth/callback/other', null],
+    ['https://celemine.com/upstream/accounted/callback', 'celemine'],
+    ['https://celemine.com/upstream/../evil', null],
+    [FLYTT_EXTENSION_REDIRECT_URI, 'flytt_extension'],
     ['http://localhost:8787/callback', 'local'],
     ['http://localhost:3000/cb', 'local'],
     ['http://127.0.0.1:8080/cb', 'local'],
@@ -87,7 +149,7 @@ describe('builtInRedirectProvider', () => {
 type Row = Record<string, unknown>
 
 /**
- * Minimal PostgREST-shaped fake over in-memory tables: eq/is filters are
+ * Minimal PostgREST-shaped fake over in-memory tables: eq/is/in filters are
  * applied, everything else is a no-op, and the chain resolves to the filtered
  * rows (all rows when awaited, first row via maybeSingle). `failTable` makes
  * every query against that table return a DB error.
@@ -95,9 +157,12 @@ type Row = Record<string, unknown>
 function fakeClient(tables: Record<string, Row[]>, failTable?: string) {
   const from = vi.fn((table: string) => {
     const filters: [string, unknown][] = []
+    const inFilters: [string, unknown[]][] = []
     const run = () =>
-      (tables[table] ?? []).filter((row) =>
-        filters.every(([col, val]) => (val === null ? row[col] == null : row[col] === val)),
+      (tables[table] ?? []).filter(
+        (row) =>
+          filters.every(([col, val]) => (val === null ? row[col] == null : row[col] === val)) &&
+          inFilters.every(([col, vals]) => vals.includes(row[col])),
       )
     const result = () =>
       table === failTable
@@ -111,6 +176,10 @@ function fakeClient(tables: Record<string, Row[]>, failTable?: string) {
     }
     chain.is = (col: string, val: unknown) => {
       filters.push([col, val])
+      return chain
+    }
+    chain.in = (col: string, vals: unknown[]) => {
+      inFilters.push([col, vals])
       return chain
     }
     chain.maybeSingle = async () => {
@@ -128,6 +197,11 @@ const REGISTRATIONS: Row[] = [
   { id: 'reg-2', user_id: 'user-9', client_name: 'Evil', redirect_uri: 'https://evil.example/cb', revoked_at: null },
   { id: 'reg-3', user_id: 'user-1', client_name: 'Min egen app', redirect_uri: 'https://mine.example/cb', revoked_at: null },
   { id: 'reg-4', user_id: 'user-1', client_name: 'Gammal app', redirect_uri: 'https://old.example/cb', revoked_at: '2026-01-01T00:00:00Z' },
+  // One fixed callback shared by a third-party tool, registered by two
+  // unrelated customers (crm#1654), oldest first.
+  { id: 'reg-5', user_id: 'user-9', client_name: 'Verktyg (kund 9)', redirect_uri: 'https://tool.example/cb', revoked_at: null },
+  { id: 'reg-6', user_id: 'user-2', client_name: 'Verktyg (byrån)', redirect_uri: 'https://tool.example/cb', revoked_at: null },
+  { id: 'reg-7', user_id: 'user-1', client_name: 'Verktyg (mitt)', redirect_uri: 'https://tool.example/cb', revoked_at: null },
 ]
 
 const MEMBERSHIPS: Row[] = [
@@ -169,6 +243,7 @@ describe('resolveRedirectUri', () => {
     expect(result).toEqual({
       allowed: true,
       kind: 'registered',
+      registrationId: 'reg-3',
       clientName: 'Min egen app',
       registeredByConsentingUser: true,
     })
@@ -181,6 +256,7 @@ describe('resolveRedirectUri', () => {
     expect(result).toEqual({
       allowed: true,
       kind: 'registered',
+      registrationId: 'reg-1',
       clientName: 'Byråns bot',
       registeredByConsentingUser: false,
     })
@@ -200,8 +276,45 @@ describe('resolveRedirectUri', () => {
     expect(result).toEqual({
       allowed: true,
       kind: 'registered',
+      registrationId: 'reg-2',
       clientName: 'Evil',
       registeredByConsentingUser: false,
+    })
+  })
+
+  describe('one URI registered by several users (crm#1654)', () => {
+    const URI = 'https://tool.example/cb'
+
+    it("takes the consenting user's own registration over older ones by others", async () => {
+      expect(await resolveRedirectUri(URI, fakeClient(DB), { consentingUserId: 'user-1' })).toMatchObject({
+        allowed: true, registrationId: 'reg-7', registeredByConsentingUser: true,
+      })
+      expect(await resolveRedirectUri(URI, fakeClient(DB), { consentingUserId: 'user-9' })).toMatchObject({
+        allowed: true, registrationId: 'reg-5', registeredByConsentingUser: true,
+      })
+    })
+
+    it("falls back to a colleague's registration, never an unrelated user's", async () => {
+      // user-3 shares company-2 with user-2 only: user-9's older row must not count.
+      const db = {
+        oauth_client_registrations: REGISTRATIONS.filter((r) => r.id !== 'reg-7'),
+        company_members: [...MEMBERSHIPS, { id: 'm5', user_id: 'user-3', company_id: 'company-2', role: 'member' }],
+      }
+      expect(await resolveRedirectUri(URI, fakeClient(db), { consentingUserId: 'user-3' })).toMatchObject({
+        allowed: true, registrationId: 'reg-6', registeredByConsentingUser: false,
+      })
+    })
+
+    it('rejects a user with no registration and no colleague among the registrants', async () => {
+      const db = {
+        oauth_client_registrations: REGISTRATIONS,
+        company_members: [...MEMBERSHIPS, { id: 'm6', user_id: 'user-4', company_id: 'company-4', role: 'owner' }],
+      }
+      expect(await resolveRedirectUri(URI, fakeClient(db), { consentingUserId: 'user-4' })).toEqual({ allowed: false })
+    })
+
+    it('accepts the oldest registration for the anonymous /register lookup', async () => {
+      expect(await resolveRedirectUri(URI, fakeClient(DB))).toMatchObject({ allowed: true, registrationId: 'reg-5' })
     })
   })
 
@@ -276,6 +389,19 @@ describe('capScopesForRole', () => {
     expect(capScopesForRole(mixed, 'viewer')).toEqual(['transactions:read', 'reports:read'])
   })
 
+  it('caps an invoicer to the customer, invoice and article scopes, read and write', () => {
+    expect([...capScopesForRole(ALL_SCOPES, 'invoicer')].sort()).toEqual([
+      'articles:read',
+      'articles:write',
+      'customers:read',
+      'customers:write',
+      'invoices:draft',
+      'invoices:read',
+      'invoices:write',
+    ])
+    expect(capScopesForRole(mixed, 'invoicer')).toEqual([])
+  })
+
   it('caps an unknown role and a missing membership to :read scopes', () => {
     expect(capScopesForRole(mixed, 'superuser')).toEqual(['transactions:read', 'reports:read'])
     expect(capScopesForRole(mixed, null)).toEqual(['transactions:read', 'reports:read'])
@@ -308,5 +434,20 @@ describe('lookupCompanyRole', () => {
     const result = await lookupCompanyRole(fakeClient(DB, 'company_members'), 'user-1', 'company-1')
     expect(result.role).toBeNull()
     expect(result.error).toBe('db down')
+  })
+})
+
+describe('builtInOnwardOrigins', () => {
+  it("names cursor.com for Cursor's web callback, which forwards there", async () => {
+    const { builtInOnwardOrigins } = await import('../oauth-allowlist')
+    expect(builtInOnwardOrigins('https://www.cursor.com/agents/mcp/oauth/callback')).toEqual(['https://cursor.com'])
+  })
+
+  it('names nothing for other callbacks, or for a www.cursor.com path that is not allowlisted', async () => {
+    const { builtInOnwardOrigins } = await import('../oauth-allowlist')
+    expect(builtInOnwardOrigins('https://claude.ai/api/mcp/auth_callback')).toEqual([])
+    expect(builtInOnwardOrigins('cursor://anysphere.cursor-mcp/oauth/callback')).toEqual([])
+    expect(builtInOnwardOrigins('https://www.cursor.com/other')).toEqual([])
+    expect(builtInOnwardOrigins('not a url')).toEqual([])
   })
 })

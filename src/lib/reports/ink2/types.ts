@@ -1,3 +1,5 @@
+import type { EntityType } from '@/types'
+
 /**
  * INK2R: Räkenskapsschema (balance sheet + income statement)
  * Field codes per Skatteverket spec and bas.se/kontoplaner/sru/
@@ -118,9 +120,43 @@ export interface INK2SRutor {
   '7651': number  // 4.3a Skatt på årets resultat (ej avdragsgill)
   '7653': number  // 4.3c Andra ej avdragsgilla kostnader
   '7754': number  // 4.5c Andra ej skattepliktiga intäkter
+  '7654': number  // 4.6a Schablonintäkt på periodiseringsfonder vid beskattningsårets ingång
   '7763': number  // 4.14a Outnyttjat underskott från föregående beskattningsår
+  '7666': number  // 4.9 (+) Skattemässig justering för avskrivning på byggnader och annan fast egendom
+  '7765': number  // 4.9 (-) Skattemässig justering för avskrivning på byggnader och annan fast egendom
   '7670': number  // 4.15 Överskott, flyttas till punkt 1.1 (INK2 7104)
   '7770': number  // 4.16 Underskott, flyttas till punkt 1.2 (INK2 7114)
+}
+
+/**
+ * The INK2S 4.9 rows as the form names them (Skatteverket's label, Swedish
+ * in every locale): the book depreciation on fast egendom against the tax
+ * plan, filed net.
+ */
+export function ink2sBuildingRows(
+  ink2s: Pick<INK2SRutor, '7666' | '7765'>,
+): { field: '7666' | '7765'; label: string; amount: number }[] {
+  return ([
+    ['7666', 'Skattemässig justering för avskrivning på byggnader och annan fast egendom (+)'],
+    ['7765', 'Skattemässig justering för avskrivning på byggnader och annan fast egendom (-)'],
+  ] as const)
+    .filter(([field]) => ink2s[field] > 0)
+    .map(([field, label]) => ({ field, label, amount: ink2s[field] }))
+}
+
+/**
+ * The INK2S 4.6a row as the form names it (Skatteverket's label, Swedish in
+ * every locale); empty when there is no schablonintäkt to show.
+ */
+export function ink2sSchablonintaktRows(
+  ink2s: Pick<INK2SRutor, '7654'>,
+): { field: '7654'; label: string; amount: number }[] {
+  if (!(ink2s['7654'] > 0)) return []
+  return [{
+    field: '7654',
+    label: 'Beräknad schablonintäkt på periodiseringsfonder vid beskattningsårets ingång',
+    amount: ink2s['7654'],
+  }]
 }
 
 // Account mapping configuration for INK2R
@@ -140,6 +176,7 @@ export interface INK2AccountMapping {
 export interface INK2CompanyInfo {
   companyName: string
   orgNumber: string | null
+  entityType: EntityType
   addressLine1: string | null
   postalCode: string | null
   city: string | null

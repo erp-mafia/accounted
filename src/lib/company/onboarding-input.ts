@@ -1,8 +1,10 @@
 import { z } from 'zod'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
+import { checkPeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
+import { fiscalYearStartMonthFor } from '@/lib/company/fiscal-year'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import { deriveSwedishVatNumber, vatRegisteredWithoutOrgNumber } from '@/lib/vat/vat-number'
 import {
   ENTITY_TYPES,
   defaultAccountingMethod,
@@ -36,7 +38,7 @@ export const CompanySetupSchema = z
     vat_registered: z.boolean(),
     moms_period: z.enum(['monthly', 'quarterly', 'yearly']).nullable().optional(),
     /**
-     * Optional since 2026-08-26 (founder call: minimal onboarding input is
+     * Optional since 2026-08-26 (product call: minimal onboarding input is
      * orgnr + moms period). When omitted it defaults by form in
      * planCompanySetup: aktiebolag → 'accrual' (the norm; kontantmetoden is
      * rare for AB), enskild firma → 'cash' (the common small-EF choice;
@@ -87,7 +89,7 @@ export const CompanySetupSchema = z
         message: 'moms_period must be omitted when the company is not VAT-registered.',
       })
     }
-    if (value.vat_registered && !value.org_number) {
+    if (vatRegisteredWithoutOrgNumber(value.vat_registered, value.org_number)) {
       ctx.addIssue({
         code: 'custom',
         path: ['org_number'],
@@ -96,9 +98,11 @@ export const CompanySetupSchema = z
       })
     }
     if (
-      value.entity_type === 'enskild_firma' &&
       value.first_fiscal_year &&
-      !value.first_fiscal_year.end.endsWith('-12-31')
+      checkPeriodDuration(value.first_fiscal_year.start, value.first_fiscal_year.end, {
+        isFirstPeriod: true,
+        calendarYearOnly: fiscalYearLockedToCalendar(value.entity_type),
+      })?.rule === 'not_calendar_year_end'
     ) {
       ctx.addIssue({
         code: 'custom',
@@ -136,7 +140,7 @@ export type CompanySetupPlan =
 export function planCompanySetup(setup: CompanySetup): CompanySetupPlan {
   const calendarYearOnly = fiscalYearLockedToCalendar(setup.entity_type)
   const firstYear = setup.first_fiscal_year
-  const startMonth = calendarYearOnly ? 1 : (setup.fiscal_year_start_month ?? 1)
+  const startMonth = fiscalYearStartMonthFor(setup)
   const accountingMethod = setup.accounting_method ?? defaultAccountingMethod(setup.entity_type)
 
   const settings: Record<string, unknown> = {

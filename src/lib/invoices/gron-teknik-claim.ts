@@ -16,7 +16,7 @@ import {
   GRON_TEKNIK_WORK_TYPES,
   deductionSekConverter,
   gronTeknikWorkType,
-} from './rot-rut-rules'
+} from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * Skattereduktion för grön teknik: what the payout claim for one invoice is.

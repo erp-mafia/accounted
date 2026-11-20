@@ -7,11 +7,8 @@
  * Contract, docs and rules live in src/lib/operations/documents.ts. The
  * delete emits document.deleted, so the event bus is wired first.
  */
-import { ensureInitialized } from '@/lib/init'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { documentsDelete, documentsGet } from '@/lib/operations/documents'
-
-ensureInitialized()
 
 export const GET = v1OperationHandler(documentsGet)
 export const DELETE = v1OperationHandler(documentsDelete)

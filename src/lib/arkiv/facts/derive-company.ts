@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
 import { getCompanyGraph, markCompanyGraphStale } from '@/lib/arkiv/graph/snapshot'
 import { listLiveFacts, recordFact, revertFact } from './store'
 
@@ -7,7 +9,7 @@ import { listLiveFacts, recordFact, revertFact } from './store'
  * Company facts from the sources of record that need no document: the
  * ledger (what was paid and earned, what stands on the balance sheet), the
  * registers (employees, bank connections, the company settings) and the
- * Bolagsverket snapshot. The brain (dev_docs/arkiv_plan.md, the company
+ * Bolagsverket snapshot. The brain (the company
  * profile plan of 2026-09-21) reads facts, not prose, and most companies
  * have a ledger long before they upload an agreement.
  *
@@ -27,8 +29,14 @@ export interface LedgerLine {
 
 export interface CompanyFactInputs {
   today: string
-  /** Posted lines of the last twelve months on the accounts read here, plus every balance-account line. */
+  /** Posted lines of the last twelve months on the result accounts read here. */
   lines: LedgerLine[]
+  /**
+   * What stands on each loan account today, credit minus debit, read as
+   * every balance is (accountBalanceThrough): the latest ingående balans plus
+   * what is booked after it, never the sum of every posting.
+   */
+  loanBalances: Array<{ account: string; balance: number }>
   accountName: (account: string) => string | null
   activeEmployees: number | null
   accountingMethod: 'accrual' | 'cash' | null
@@ -106,16 +114,11 @@ export function companyFactsFrom(inputs: CompanyFactInputs): FactDraft[] {
   const revenue = recent.filter((l) => inRange(l.account_number, '3000', '3799')).reduce((n, l) => n + l.credit - l.debit, 0)
   if (revenue !== 0) add({ predicate: 'revenue_12m', value: roundOre(revenue), valueText: `${kr(revenue)} (12 mån)`, sourceKind: 'ledger', singleValued: true, evidence: { accounts: '3000-3799', ...period } })
 
-  // Loans: what stands on the balance sheet, from every posting. 2310-2399 is every long-term loan in BAS
+  // Loans: what stands on the balance sheet today. 2310-2399 is every long-term loan in BAS
   // (bonds and convertibles, overdrafts, credit institutions, group and other loans); 2840-2849 the short-term ones.
-  const byLoanAccount = new Map<string, number>()
-  for (const l of inputs.lines) {
-    if (!inRange(l.account_number, '2310', '2399') && !inRange(l.account_number, '2840', '2849')) continue
-    byLoanAccount.set(l.account_number, (byLoanAccount.get(l.account_number) ?? 0) + l.credit - l.debit)
-  }
-  const loanBalance = [...byLoanAccount.values()].reduce((n, v) => n + v, 0)
+  const loanBalance = inputs.loanBalances.reduce((n, l) => n + l.balance, 0)
   if (Math.abs(loanBalance) >= 1) {
-    const accounts = [...byLoanAccount.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([account, balance]) => ({ account, balance: roundOre(balance) }))
+    const accounts = [...inputs.loanBalances].sort((a, b) => a.account.localeCompare(b.account)).map(({ account, balance }) => ({ account, balance: roundOre(balance) }))
     const breakdown = accounts.length > 1 ? accounts.map((a) => `${a.account}: ${kr(a.balance)}`).join('; ') : accounts[0].account
     add({ predicate: 'loan_balance', value: roundOre(loanBalance), valueText: `${kr(loanBalance)} (${breakdown})`, sourceKind: 'ledger', singleValued: true, evidence: { accounts, as_of: inputs.today } })
   }
@@ -213,16 +216,22 @@ export async function deriveCompanyFacts(supabase: SupabaseClient, companyId: st
       // A reversed original stays in the ledger and its storno cancels it; the reports sum both, so must the facts.
       .in('journal_entries.status', ['posted', 'reversed'])
   // Literal on purpose: the phantom-column guard can only check what it can read.
+  // Both line reads paged: revenue and salary cost are sums over a year of postings, the loan read names
+  // every loan account ever posted on, and PostgREST cuts a single read at 1000 rows without saying so.
   const [recent, balance, employees, settings, company, banks, held] = await Promise.all([
-    base().gte('journal_entries.entry_date', from).or('and(account_number.gte.3000,account_number.lte.3799),and(account_number.gte.4000,account_number.lte.7999)').limit(20000),
-    base().or('and(account_number.gte.2310,account_number.lte.2399),and(account_number.gte.2840,account_number.lte.2849)').limit(5000),
+    fetchAllRows((range) =>
+      base().gte('journal_entries.entry_date', from).or('and(account_number.gte.3000,account_number.lte.3799),and(account_number.gte.4000,account_number.lte.7999)').order('id', { ascending: true }).range(range.from, range.to),
+    ),
+    fetchAllRows((range) =>
+      base().or('and(account_number.gte.2310,account_number.lte.2399),and(account_number.gte.2840,account_number.lte.2849)').order('id', { ascending: true }).range(range.from, range.to),
+    ),
     supabase.from('employees').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('is_active', true),
     supabase.from('company_settings').select('accounting_method, fiscal_year_start_month').eq('company_id', companyId).maybeSingle(),
     supabase.from('companies').select('tic_snapshot').eq('id', companyId).maybeSingle(),
     supabase.from('bank_connections').select('bank_name, created_at').eq('company_id', companyId).eq('status', 'active').is('superseded_by', null).limit(20),
     listLiveFacts(supabase, companyId, { kind: 'company', id: companyId }),
   ])
-  for (const r of [recent, balance, employees, settings, company, banks]) if (r.error) throw new Error(`company facts input failed: ${r.error.message}`)
+  for (const r of [employees, settings, company, banks]) if (r.error) throw new Error(`company facts input failed: ${r.error.message}`)
   const toLine = (r: { account_number: string | number; debit_amount: number | string | null; credit_amount: number | string | null; journal_entries: { entry_date: string } | Array<{ entry_date: string }> }): LedgerLine => {
     const je = Array.isArray(r.journal_entries) ? r.journal_entries[0] : r.journal_entries
     return { account_number: String(r.account_number), entry_date: je?.entry_date ?? '', debit: Number(r.debit_amount ?? 0), credit: Number(r.credit_amount ?? 0) }
@@ -231,9 +240,21 @@ export async function deriveCompanyFacts(supabase: SupabaseClient, companyId: st
   // The graph's flow counts both sides of every voucher (debits and credits); the money that moved is half of it.
   const counterparties = graph.nodes.filter((n) => n.kind === 'party' || n.kind === 'merchant').map((n) => ({ name: n.label, flow: Number((n.meta as { flow?: number }).flow ?? 0) / 2, ref: n.ref }))
   const s = (settings.data ?? null) as { accounting_method: 'accrual' | 'cash' | null; fiscal_year_start_month: number | null } | null
+  // A loan's balance is its latest IB plus what came after: the sum of every posting counted the
+  // loan once more for each year-end. A balance that cannot be read stops the run instead of
+  // recording, or retiring, a loan fact on a guess.
+  const loanAccounts = [...new Set((balance as Array<{ account_number: string | number }>).map((r) => String(r.account_number)))]
+  const loanBalances = await Promise.all(
+    loanAccounts.map(async (account) => {
+      const debitMinusCredit = await accountBalanceThrough(supabase, companyId, account, today)
+      if (debitMinusCredit === null) throw new Error(`company facts input failed: balance of ${account}`)
+      return { account, balance: -debitMinusCredit }
+    }),
+  )
   const inputs: CompanyFactInputs = {
     today,
-    lines: [...((recent.data ?? []) as unknown[]), ...((balance.data ?? []) as unknown[])].map((r) => toLine(r as never)),
+    lines: (recent as unknown[]).map((r) => toLine(r as never)),
+    loanBalances: loanBalances.filter((l) => l.balance !== 0),
     accountName,
     activeEmployees: employees.count ?? null,
     accountingMethod: s?.accounting_method ?? null,

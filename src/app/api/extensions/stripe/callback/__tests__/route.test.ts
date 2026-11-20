@@ -23,6 +23,11 @@ vi.mock('@/lib/supabase/server', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
+const registryGet = vi.fn((..._args: unknown[]) => ({ id: 'stripe' }) as unknown)
+vi.mock('@/lib/extensions/registry', () => ({
+  extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
+}))
+
 vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000')
 
 import { GET } from '../route'
@@ -44,6 +49,9 @@ function mockChain(result: { data?: unknown; error?: unknown }) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
   chain.single = vi
+    .fn()
+    .mockResolvedValue({ data: result.data ?? null, error: result.error ?? null })
+  chain.maybeSingle = vi
     .fn()
     .mockResolvedValue({ data: result.data ?? null, error: result.error ?? null })
   // For chains ending without .single() (the insert and the error-path updates)
@@ -106,6 +114,48 @@ describe('GET /api/extensions/stripe/callback', () => {
     // from the bank side (issue #2631).
     expect(activatePayload.last_balance_txn_synced_at).toBe(activatePayload.connected_at)
     expect(typeof activatePayload.last_balance_txn_synced_at).toBe('string')
+
+    // Compare-and-set: only the pending row that still carries this state.
+    const eqCalls = (activateChain.eq as ReturnType<typeof vi.fn>).mock.calls
+    expect(eqCalls).toEqual([
+      ['id', CONNECTION_ID],
+      ['status', 'pending'],
+      ['oauth_state', OAUTH_STATE],
+    ])
+  })
+
+  it('refuses activation when /connect superseded the pending row mid-callback', async () => {
+    // Before the shared callback the activation matched the id alone, so an
+    // abandoned flow could revive a row a newer /connect had already retired.
+    mockFrom
+      .mockReturnValueOnce(
+        mockChain({ data: { id: CONNECTION_ID, user_id: 'user-1', company_id: 'company-1' } }),
+      )
+      .mockReturnValueOnce(mockChain({ error: null }))
+      .mockReturnValueOnce(mockChain({ data: null, error: null }))
+
+    const emitted: unknown[] = []
+    eventBus.on('stripe.connected', async (event) => {
+      emitted.push(event)
+    })
+
+    const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/import?mode=stripe&stripe_error=invalid_state',
+    )
+    expect(emitted).toHaveLength(0)
+    expect(mockFrom).toHaveBeenCalledTimes(3)
+  })
+
+  it('refuses with 503 when the stripe extension is not enabled', async () => {
+    registryGet.mockReturnValueOnce(undefined)
+
+    const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+    expect(response.status).toBe(503)
+    expect(mockFrom).not.toHaveBeenCalled()
+    expect(mockExchangeCodeForAccount).not.toHaveBeenCalled()
   })
 
   it('redirects with an error and never activates when the state is unknown', async () => {

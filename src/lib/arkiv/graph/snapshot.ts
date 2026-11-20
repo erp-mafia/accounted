@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { buildCompanyGraph, GRAPH_VERSION } from './build'
 import type { CompanyGraph } from './types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * One snapshot per company, so the page and the agent read the same picture
@@ -19,7 +20,7 @@ interface SnapshotRow {
   stale: boolean
 }
 
-export async function refreshCompanyGraph(supabase: SupabaseClient, companyId: string, today = new Date().toISOString().slice(0, 10)): Promise<CompanyGraph> {
+export async function refreshCompanyGraph(supabase: SupabaseClient, companyId: string, today = todayIsoStockholm()): Promise<CompanyGraph> {
   const graph = await buildCompanyGraph(supabase, companyId, today)
   const { error } = await supabase
     .from('arkiv_graph_snapshots')
@@ -53,7 +54,7 @@ export async function markCompanyGraphStale(supabase: SupabaseClient, companyId:
  * first, up to a budget. Reads rebuild lazily anyway; this keeps the first
  * read of the day fast.
  */
-export async function refreshStaleGraphs(supabase: SupabaseClient, companyIds: string[], limit: number, today = new Date().toISOString().slice(0, 10)): Promise<{ refreshed: number; failed: number }> {
+export async function refreshStaleGraphs(supabase: SupabaseClient, companyIds: string[], limit: number, today = todayIsoStockholm()): Promise<{ refreshed: number; failed: number }> {
   if (companyIds.length === 0) return { refreshed: 0, failed: 0 }
   const { data, error } = await supabase.from('arkiv_graph_snapshots').select('company_id, stale, computed_at').in('company_id', companyIds)
   if (error) throw new Error(`graph snapshot list failed: ${error.message}`)

@@ -1,0 +1,531 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CustomerDto, SupplierDto } from '@/lib/providers/dto'
+import { mapFortnoxToCustomer, mapFortnoxToSupplier } from '@/lib/providers/fortnox/mapper'
+import { mapVismaToCustomer } from '@/lib/providers/visma/mapper'
+import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import { createTableMockSupabase } from '@/tests/helpers'
+import { executionBudgetSignal } from '@/lib/http/execution-budget'
+
+const logError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: logError, child: (): unknown => logger }
+  return { ...actual, createLogger: () => logger }
+})
+
+import {
+  applyRegisterRepairs,
+  customerRepair,
+  matchRecords,
+  planRegisterRepair,
+  registerRepairTrail,
+  runRegisterRepair,
+  sourceRecord,
+  supplierRepair,
+  type CustomerRow,
+  type SupplierRow,
+} from '../repair-imported-registers'
+
+/**
+ * crm#1436: the one-off repair of the cards older imports wrote. Each card
+ * gets what the import writes today from its provider's record, only where it
+ * is still empty or still holds the old import's value, and a sole trader
+ * whose org number is a personnummer stays a company: the provider's own type
+ * decides, never the number.
+ */
+
+const NOW = '2026-10-27T08:00:00.000Z'
+
+beforeEach(() => { vi.clearAllMocks(); vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'register-repair-test-only') })
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
+
+const customerRow = (extra: Partial<CustomerRow> = {}): CustomerRow => ({
+  id: 'c1', name: 'Anna Andersson', customer_number: '1', customer_type: 'swedish_business', org_number: '19121212-1212',
+  personal_number: null, vat_number: null, contact_person: null, invoice_email_cc_addresses: null,
+  invoice_email_bcc_addresses: null, email: null, phone: null, address_line1: null, address_line2: null, postal_code: null,
+  city: null, country: null, notes: null, default_payment_terms: 30, ...extra,
+})
+
+const supplierRow = (extra: Partial<SupplierRow> = {}): SupplierRow => ({
+  id: 's1', name: 'Lieferant GmbH', supplier_type: 'swedish_business', org_number: null, vat_number: null, email: null,
+  phone: null, address_line1: null, address_line2: null, postal_code: null, city: null, country: null, bankgiro: null,
+  plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null, bic: null, notes: null,
+  default_payment_terms: 30, default_currency: 'SEK', ...extra,
+})
+
+const fortnoxCustomer = (extra: Record<string, unknown> = {}) =>
+  mapFortnoxToCustomer({ CustomerNumber: '1', Name: 'Anna Andersson', OrganisationNumber: '19121212-1212', Active: true, ...extra })
+
+describe('customerRepair', () => {
+  it('makes the private person Fortnox names a private customer, the personnummer encrypted and no org number', () => {
+    const repair = customerRepair(customerRow(), fortnoxCustomer({ Type: 'PRIVATE', Phone1: '070-123 45 67', CountryCode: 'SE' }), false, NOW)!
+    expect(repair.kinds).toEqual(expect.arrayContaining(['private', 'filled']))
+    expect(repair.correct).toMatchObject({ customer_type: 'individual', org_number: null })
+    expect(revealStoredCustomerPersonalNumber(repair.correct.personal_number as string)).toBe('19121212-1212')
+    expect(repair.guard).toEqual({ customer_type: 'swedish_business', org_number: '19121212-1212', personal_number: null })
+    // The revert reads the personnummer back from the card; it is never kept twice.
+    expect(JSON.stringify(repair.was)).not.toContain('1212')
+    expect(repair.fill).toMatchObject({ phone: '070-123 45 67', country: 'SE' })
+  })
+
+  it('leaves a sole trader a company: Fortnox calls it one, whatever its number looks like', () => {
+    expect(customerRepair(customerRow(), fortnoxCustomer({ Type: 'COMPANY' }), false, NOW)?.kinds ?? []).not.toContain('private')
+  })
+
+  it('never re-types a card someone gave a real org number or a personal number', () => {
+    expect(customerRepair(customerRow({ org_number: '556677-8899' }), fortnoxCustomer({ Type: 'PRIVATE' }), false, NOW)?.kinds ?? [])
+      .not.toContain('private')
+    expect(customerRepair(customerRow({ personal_number: 'sealed' }), fortnoxCustomer({ Type: 'PRIVATE' }), false, NOW)?.kinds ?? [])
+      .not.toContain('private')
+  })
+
+  it('makes a Swedish card without a country the EU business its record names, with the terms Fortnox states', () => {
+    const repair = customerRepair(customerRow({ name: 'Kunde GmbH', org_number: null }),
+      fortnoxCustomer({ Name: 'Kunde GmbH', Type: 'COMPANY', OrganisationNumber: '', CountryCode: 'DE', VATNumber: 'DE123456788', TermsOfPayment: '10' }),
+      false, NOW)!
+    expect(repair.correct).toEqual({ customer_type: 'eu_business', default_payment_terms: 10 })
+    expect(repair.guard).toEqual({ customer_type: 'swedish_business', default_payment_terms: 30 })
+    expect(repair.fill).toMatchObject({ country: 'DE', vat_number: 'DE123456788' })
+  })
+
+  it('archives only a card the import made from a record marked inactive', () => {
+    expect(customerRepair(customerRow(), fortnoxCustomer({ Type: 'COMPANY', Active: false }), true, NOW)?.correct)
+      .toMatchObject({ archived_at: NOW })
+    expect(customerRepair(customerRow(), fortnoxCustomer({ Type: 'COMPANY', Active: false }), false, NOW)?.kinds ?? [])
+      .not.toContain('archived')
+  })
+
+  it('answers nothing for a card that is already right', () => {
+    const card = customerRow({ customer_type: 'individual', org_number: null, personal_number: 'sealed', country: 'SE', phone: '070-1' })
+    expect(customerRepair(card, fortnoxCustomer({ Type: 'PRIVATE', CountryCode: 'SE', Phone1: '070-1' }), false, NOW)).toBeNull()
+  })
+
+  it('reads Visma\'s private flag the same way', () => {
+    const dto = mapVismaToCustomer({ Id: 'v-1', CustomerNumber: '1', Name: 'Anna Andersson', IsPrivatePerson: true, IsActive: true,
+      CorporateIdentityNumber: '19121212-1212' })
+    expect(customerRepair(customerRow(), dto, false, NOW)?.kinds).toContain('private')
+  })
+})
+
+describe('supplierRepair', () => {
+  it('gives a foreign supplier its country, VAT number, IBAN and BIC, its EU type and its currency', () => {
+    const repair = supplierRepair(supplierRow(), mapFortnoxToSupplier({
+      SupplierNumber: '7', Name: 'Lieferant GmbH', Active: true, CountryCode: 'DE', VATNumber: 'DE812345673',
+      IBAN: 'DE89370400440532013000', BIC: 'COBADEFFXXX', Currency: 'EUR',
+    }), false, NOW)!
+    expect(repair.fill).toMatchObject({ country: 'DE', vat_number: 'DE812345673', iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' })
+    expect(repair.correct).toEqual({ supplier_type: 'eu_business', default_currency: 'EUR' })
+    expect(repair.guard).toEqual({ supplier_type: 'swedish_business', default_currency: 'SEK' })
+  })
+
+  it('never replaces a currency or type someone set', () => {
+    const repair = supplierRepair(supplierRow({ supplier_type: 'non_eu_business', country: 'DE', default_currency: 'USD' }),
+      mapFortnoxToSupplier({ SupplierNumber: '7', Name: 'Lieferant GmbH', Active: true, CountryCode: 'DE', Currency: 'EUR' }), false, NOW)
+    expect(repair?.correct ?? {}).toEqual({})
+  })
+})
+
+describe('matchRecords', () => {
+  const record = (number: string, extra: Record<string, unknown> = {}) =>
+    sourceRecord('fortnox', 'customers', fortnoxCustomer({ CustomerNumber: number, Name: `Kund ${number}`, OrganisationNumber: '', ...extra }))!
+
+  it('finds the card through the source map, else by identity, and never looks for an inactive record the import left out', () => {
+    const matches = matchRecords(
+      [record('1'), record('2', { OrganisationNumber: '556677-8899' }), record('3', { Active: false, Name: 'Anna' })],
+      { customers: [
+        { id: 'c1', identities: [] },
+        { id: 'c2', identities: ['5566778899'] },
+        { id: 'c3', identities: [], name: 'anna' },
+      ], suppliers: [] },
+      new Map([['customers:1', ['c1']]]),
+    )
+    expect(matches.map((m) => [m.key, m.cardId, m.sourceMapped])).toEqual([['customers:1', 'c1', true], ['customers:2', 'c2', false]])
+  })
+})
+
+describe('planRegisterRepair', () => {
+  const tables = () => createTableMockSupabase({
+    provider_consents: { data: [{ id: 'consent-1' }] },
+    customers: { data: [customerRow()] },
+    suppliers: { data: [] },
+    migration_source_records: { data: [{ resource: 'customers', source_id: '1', target_id: 'c1' }] },
+  })
+
+  // Fortnox's detail form for every customer, except on a token it refuses.
+  const hydrated = (refused: (token: string) => boolean) =>
+    vi.fn(async (_p: unknown, token: string, _c: unknown, dtos: CustomerDto[]) => refused(token)
+      ? { customers: dtos, unhydratedIds: new Set(dtos.map((d) => d.id)), authError: { statusCode: 401 },
+          hydration: { needed: dtos.length, hydrated: 0, failed: 1, skippedForBudget: dtos.length - 1, abortedBy: 'auth' as const } }
+      : { customers: dtos.map(() => fortnoxCustomer({ Type: 'PRIVATE' })), unhydratedIds: new Set<string>(),
+          hydration: { needed: dtos.length, hydrated: dtos.length, failed: 0, skippedForBudget: 0 } })
+  // A stored token that aged out; a refresh after its 401 hands out a fresh one.
+  const resolved = () => vi.fn(async (_company: string, _consent: string, options?: { rejectedAccessToken?: string }) =>
+    ({ accessToken: options?.rejectedAccessToken === 'aged' ? 'fresh' : 'aged', consent: {} }))
+  const planFortnox = (hydrateCustomers: unknown, resolveConsent: unknown) =>
+    planRegisterRepair(tables().supabase as unknown as SupabaseClient, 'company-1', 'fortnox',
+      { from: null, deadline: Date.now() + 60_000, now: NOW }, {
+        resolveConsent: resolveConsent as never,
+        fetchMigrationPage: vi.fn(async (_p: unknown, _t: unknown, _c: unknown, resource: string) =>
+          ({ items: resource === 'customers' ? [fortnoxCustomer()] : [], nextPage: null, total: 1 })) as never,
+        hydrateCustomers: hydrateCustomers as never,
+        hydrateSuppliers: vi.fn() as never,
+      })
+
+  it('reads Fortnox\'s own record for every matched card and plans the repair from it', async () => {
+    const hydrateCustomers = hydrated(() => false)
+    const plan = await planFortnox(hydrateCustomers, vi.fn().mockResolvedValue({ accessToken: 'token', consent: {} }))
+    expect(hydrateCustomers).toHaveBeenCalledOnce()
+    expect(plan.state).toBe('fetched')
+    expect(plan.repairs.map((r) => [r.id, r.kinds.includes('private')])).toEqual([['c1', true]])
+  })
+
+  it('refreshes a token Fortnox retired partway through once, and reads on with the fresh one', async () => {
+    const resolveConsent = resolved()
+    const plan = await planFortnox(hydrated((token) => token === 'aged'), resolveConsent)
+    expect(resolveConsent).toHaveBeenLastCalledWith('company-1', 'consent-1', { rejectedAccessToken: 'aged' })
+    expect(plan.state).toBe('fetched')
+    expect(plan.repairs.map((r) => [r.id, r.kinds.includes('private')])).toEqual([['c1', true]])
+  })
+
+  it('calls the connection expired when Fortnox refuses the fresh token too', async () => {
+    const resolveConsent = resolved()
+    const plan = await planFortnox(hydrated(() => true), resolveConsent)
+    expect(resolveConsent).toHaveBeenCalledTimes(2)
+    expect(plan).toMatchObject({ state: 'consent_expired', repairs: [], next: null })
+  })
+
+  it('stops listing at the deadline and keeps the cursor: nothing is decided from half a register', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const deadline = Date.now() + 60_000
+    // A register of many pages; the second one would start after the deadline.
+    const fetchMigrationPage = vi.fn(async () => {
+      vi.setSystemTime(deadline + 1)
+      return { items: [fortnoxCustomer()], nextPage: 2, total: 5000 }
+    })
+    const hydrateCustomers = vi.fn()
+    const plan = await planRegisterRepair(tables().supabase as unknown as SupabaseClient, 'company-1', 'fortnox',
+      { from: 'customers:120', deadline, now: NOW }, {
+        resolveConsent: vi.fn().mockResolvedValue({ accessToken: 'token', consent: {} }) as never,
+        fetchMigrationPage: fetchMigrationPage as never,
+        hydrateCustomers: hydrateCustomers as never,
+        hydrateSuppliers: vi.fn() as never,
+      })
+    expect(fetchMigrationPage).toHaveBeenCalledTimes(1)
+    expect(hydrateCustomers).not.toHaveBeenCalled()
+    expect(plan).toEqual({ state: 'out_of_time', repairs: [], next: 'customers:120' })
+  })
+
+  it('aborts a register page still in flight at the deadline instead of letting it run on, and keeps the cursor', async () => {
+    // A provider page that only ends when its request is aborted.
+    const fetchMigrationPage = vi.fn(() => new Promise((_resolve, reject) => {
+      const signal = executionBudgetSignal()!
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    }))
+    const plan = await planRegisterRepair(tables().supabase as unknown as SupabaseClient, 'company-1', 'fortnox',
+      { from: 'customers:120', deadline: Date.now() + 50, now: NOW }, {
+        resolveConsent: vi.fn().mockResolvedValue({ accessToken: 'token', consent: {} }) as never,
+        fetchMigrationPage: fetchMigrationPage as never,
+        hydrateCustomers: vi.fn() as never,
+        hydrateSuppliers: vi.fn() as never,
+      })
+    expect(fetchMigrationPage).toHaveBeenCalledTimes(1)
+    expect(plan).toEqual({ state: 'out_of_time', repairs: [], next: 'customers:120' })
+  })
+
+  it('names the record each repair was decided from, so a run that stops writing knows where to resume', async () => {
+    const plan = await planFortnox(hydrated(() => false), vi.fn().mockResolvedValue({ accessToken: 'token', consent: {} }))
+    expect(plan.repairs.map((r) => r.key)).toEqual(['customers:1'])
+  })
+
+  it('plans nothing for a company whose connection is gone', async () => {
+    const { supabase } = createTableMockSupabase({ provider_consents: { data: [] } })
+    const plan = await planRegisterRepair(supabase as unknown as SupabaseClient, 'company-1', 'visma',
+      { from: null, deadline: Date.now() + 60_000 })
+    expect(plan).toEqual({ state: 'no_consent', repairs: [], next: null })
+  })
+})
+
+/**
+ * The customers table for a run where one card's correction fails: reads
+ * answer `rows`, every write lands except the payment-terms correction of
+ * `failing`, which the database refuses.
+ */
+const customersFailingOne = (failing: string, rows: CustomerRow[] = []) => (chain: { method: string; args: unknown[] }[]) => {
+  const update = chain.find((call) => call.method === 'update')
+  if (!update) return { data: rows }
+  const id = chain.find((call) => call.method === 'eq' && call.args[0] === 'id')?.args[1]
+  const correcting = 'default_payment_terms' in (update.args[0] as Record<string, unknown>)
+  if (correcting && id === failing) return { error: { message: 'statement timeout' } }
+  return { data: correcting ? [{ id }] : { id } }
+}
+/** A card that gets a phone filled and its payment terms corrected. */
+const fillAndCorrect = (id: string) => ({
+  ...customerRepair(customerRow({ id }), fortnoxCustomer({ Type: 'COMPANY', TermsOfPayment: '10', Phone1: '070-1' }), false, NOW)!,
+  key: `customers:${id}`,
+})
+
+describe('applyRegisterRepairs', () => {
+  it('writes each correction only while the card still holds what it was decided on, and never archives an invoiced card', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      customers: { data: [{ id: 'c1' }] },
+      invoices: { data: [{ party: 'c2' }] },
+    })
+    const repairs = [
+      customerRepair(customerRow(), fortnoxCustomer({ Type: 'PRIVATE' }), false, NOW)!,
+      customerRepair(customerRow({ id: 'c2', org_number: '556677-8899' }), fortnoxCustomer({ Type: 'COMPANY', Active: false }), true, NOW)!,
+    ]
+    const { changed, stoppedAt } = await applyRegisterRepairs(supabase as unknown as SupabaseClient, 'company-1', repairs, { concurrency: 1 })
+    expect(stoppedAt).toBeNull()
+    const guards = calls.filter((c) => c.table === 'customers' && (c.method === 'eq' || c.method === 'is')).map((c) => c.args)
+    expect(guards).toEqual(expect.arrayContaining([
+      ['customer_type', 'swedish_business'], ['org_number', '19121212-1212'], ['personal_number', null],
+    ]))
+    const updates = calls.filter((c) => c.table === 'customers' && c.method === 'update').map((c) => c.args[0] as Record<string, unknown>)
+    expect(updates.some((u) => 'archived_at' in u)).toBe(false)
+    expect(changed.map((c) => [c.id, c.kinds])).toEqual([['c1', ['private']]])
+  })
+
+  it('answers a failed write only once every other writer has finished the card in hand, and hands every changed card over', async () => {
+    const { supabase } = createTableMockSupabase({ customers: customersFailingOne('c2'), invoices: { data: [] } })
+    // c1's hand-over is still running when c2's correction fails.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const handedOver: { id: string; kinds: string[] }[] = []
+    const outcome = applyRegisterRepairs(supabase as unknown as SupabaseClient, 'company-1',
+      ['c1', 'c2', 'c3'].map(fillAndCorrect), {
+        concurrency: 3,
+        onChanged: async (card) => {
+          if (card.id === 'c1') await gate
+          handedOver.push({ id: card.id, kinds: card.kinds })
+        },
+      }).then(() => 'resolved', (error: Error) => error.message)
+    let answered = false
+    void outcome.then(() => { answered = true })
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(answered).toBe(false)
+
+    release()
+    expect(await outcome).toBe('customers: statement timeout')
+    // c2's phone was filled before its correction failed: that is a change too.
+    expect(handedOver.sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { id: 'c1', kinds: ['filled', 'terms'] },
+      { id: 'c2', kinds: ['filled'] },
+      { id: 'c3', kinds: ['filled', 'terms'] },
+    ])
+  })
+
+  it('hands over each changed card as it is written, starts none after the deadline, and says where it stopped', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const deadline = Date.now() + 60_000
+    const { supabase, payloads } = createTableMockSupabase({ customers: { data: [{ id: 'written' }] }, invoices: { data: [] } })
+    // Other payment terms than the import default: a correction with no key derivation behind it.
+    const repairs = ['c1', 'c2', 'c3'].map((id, i) => ({
+      ...customerRepair(customerRow({ id }), fortnoxCustomer({ Type: 'COMPANY', TermsOfPayment: '10' }), false, NOW)!,
+      key: `customers:${i + 1}`,
+    }))
+    const recorded: string[] = []
+    const applied = await applyRegisterRepairs(supabase as unknown as SupabaseClient, 'company-1', repairs, {
+      concurrency: 1,
+      deadline,
+      onChanged: async (card) => {
+        recorded.push(card.id)
+        // The run's time is up once the second card is on the trail.
+        if (card.id === 'c2') vi.setSystemTime(deadline)
+      },
+    })
+    expect(recorded).toEqual(['c1', 'c2'])
+    expect(applied.changed.map((c) => c.id)).toEqual(['c1', 'c2'])
+    expect(applied.stoppedAt).toBe('customers:3')
+    // c3 was never written.
+    expect((payloads('customers', 'update') as Record<string, unknown>[]).filter((u) => u.default_payment_terms === 10)).toHaveLength(2)
+  })
+})
+
+describe('registerRepairTrail', () => {
+  const card = (id: string) => ({ resource: 'customers' as const, id, kinds: ['terms' as const] })
+  const trailOf = (answer: { data?: unknown; error?: unknown } = { data: null }) => {
+    const mock = createTableMockSupabase({ 'rpc:append_register_repair_changed': answer })
+    let clock = 0
+    const trail = registerRepairTrail(mock.supabase as unknown as SupabaseClient, 'company-1', 'fortnox', () => clock)
+    const appended = () => mock.findCalls('rpc:append_register_repair_changed', 'rpc')
+      .map(([args]) => (args as { p_cards: { id: string }[] }).p_cards.map((c) => c.id))
+    return { trail, appended, tick: (ms: number) => { clock += ms } }
+  }
+
+  it('appends in batches of 25 and the rest when the company is done: one call per batch, not per card', async () => {
+    const { trail, appended } = trailOf()
+    for (let i = 1; i <= 30; i++) await trail.add(card(`c${i}`))
+    // A run ended now would lose the 5 cards since the last append.
+    expect(appended().map((ids) => ids.length)).toEqual([25])
+    await trail.flush()
+    expect(appended().map((ids) => ids.length)).toEqual([25, 5])
+    expect(appended().flat()).toEqual(Array.from({ length: 30 }, (_, i) => `c${i + 1}`))
+    expect(trail.unrecorded).toEqual([])
+  })
+
+  it('appends what it holds once a second has passed, so a slow run keeps its trail too', async () => {
+    const { trail, appended, tick } = trailOf()
+    await trail.add(card('c1'))
+    tick(1_001)
+    await trail.add(card('c2'))
+    expect(appended()).toEqual([['c1', 'c2']])
+  })
+
+  it('keeps the cards for the end of the run, and stops calling, while the function is not deployed', async () => {
+    const { trail, appended } = trailOf({ error: { code: 'PGRST202', message: 'not found' } })
+    for (let i = 1; i <= 26; i++) await trail.add(card(`c${i}`))
+    await trail.flush()
+    expect(appended()).toHaveLength(1)
+    expect(trail.unrecorded.map((c) => c.id)).toEqual(Array.from({ length: 26 }, (_, i) => `c${i + 1}`))
+  })
+})
+
+describe('the suppliers a card dto names', () => {
+  it('builds a source record for a supplier with its keys', () => {
+    const record = sourceRecord('fortnox', 'suppliers', mapFortnoxToSupplier({ SupplierNumber: '7', Name: 'Leverantör AB',
+      OrganisationNumber: '556677-8899', Active: true }) as SupplierDto)
+    expect(record?.facts).toMatchObject({ identity: '5566778899', name: 'leverantör ab' })
+  })
+})
+
+describe('runRegisterRepair', () => {
+  type Answer = { data?: unknown; error?: unknown }
+  const database = (options: { append?: Answer; upsert?: Answer; attempts?: number; nextKey?: string | null } = {}) =>
+    createTableMockSupabase({
+      provider_consents: (chain) => chain[0]?.args[0] === 'company_id, provider'
+        ? { data: [{ company_id: 'company-1', provider: 'fortnox' }] }
+        : { data: [{ id: 'consent-1' }] },
+      register_repair_progress: (chain) => {
+        if (chain[0]?.method === 'upsert') return options.upsert ?? { data: null }
+        if (chain[0]?.method !== 'select') return { data: null }
+        return chain[0].args[0] === 'changed'
+          ? { data: { changed: [{ resource: 'customers', id: 'c0', kinds: ['terms'] }] } }
+          : { data: [{ company_id: 'company-1', provider: 'fortnox', next_key: options.nextKey ?? null, outcome: null,
+              attempts: options.attempts ?? 1, counts: { terms: 1 } }] }
+      },
+      'rpc:append_register_repair_changed': options.append ?? { data: null },
+      companies: { data: { archived_at: null } },
+      company_migration_resets: { data: [] },
+      customers: { data: [customerRow()] },
+      suppliers: { data: [] },
+      migration_source_records: { data: [{ resource: 'customers', source_id: '1', target_id: 'c1' }] },
+      invoices: { data: [] },
+    })
+  const deps = (hydrated: CustomerDto, fetchMigrationPage?: unknown) => ({
+    resolveConsent: vi.fn().mockResolvedValue({ accessToken: 'token', consent: {} }),
+    fetchMigrationPage: (fetchMigrationPage ?? vi.fn(async (_p: unknown, _t: unknown, _c: unknown, resource: string) =>
+      ({ items: resource === 'customers' ? [fortnoxCustomer()] : [], nextPage: null, total: 1 }))) as never,
+    hydrateCustomers: vi.fn(async (_p: unknown, _t: unknown, _c: unknown, dtos: CustomerDto[]) => ({
+      customers: dtos.map(() => hydrated), unhydratedIds: new Set<string>(),
+      hydration: { needed: dtos.length, hydrated: dtos.length, failed: 0, skippedForBudget: 0 },
+    })) as never,
+    hydrateSuppliers: vi.fn() as never,
+  })
+  const run = async (hydrated: CustomerDto, options: Parameters<typeof database>[0] = {}) => {
+    const mock = database(options)
+    const summary = await runRegisterRepair(mock.supabase as unknown as SupabaseClient, Date.now() + 120_000, deps(hydrated))
+    return { summary, ...mock }
+  }
+
+  it('puts the changed cards on the trail by the append function, then records the outcome without touching the trail', async () => {
+    const { summary, payloads, findCalls } = await run(fortnoxCustomer({ Type: 'PRIVATE' }))
+    expect(summary).toEqual({ pending: 1, worked: 1, finished: 1, changed: 1, errors: 0 })
+    const appended = findCalls('rpc:append_register_repair_changed', 'rpc').map(([args]) => args as {
+      p_company_id: string; p_provider: string; p_cards: { id: string; kinds: string[]; was?: unknown }[] })
+    expect(appended).toHaveLength(1)
+    expect(appended[0]).toMatchObject({ p_company_id: 'company-1', p_provider: 'fortnox' })
+    expect(appended[0].p_cards.map((c) => [c.id, c.kinds, c.was])).toEqual([['c1', ['private'], { customer_type: 'swedish_business' }]])
+    const [progress] = payloads('register_repair_progress', 'upsert') as Record<string, unknown>[]
+    expect(progress).toMatchObject({ company_id: 'company-1', provider: 'fortnox', outcome: 'done', attempts: 1, counts: { terms: 1, private: 1 } })
+    expect(progress).not.toHaveProperty('changed')
+    expect(payloads('register_repair_progress', 'update')).toEqual([])
+  })
+
+  it('appends at the end of the run, as before, while the append function is not deployed yet', async () => {
+    const { summary, payloads } = await run(fortnoxCustomer({ Type: 'PRIVATE' }), { append: { error: { code: 'PGRST202', message: 'not found' } } })
+    expect(summary.changed).toBe(1)
+    const appended = payloads('register_repair_progress', 'update') as { changed: { id: string; kinds: string[] }[] }[]
+    expect(appended.map((u) => u.changed.map((c) => [c.id, c.kinds]))).toEqual([[['c0', ['terms']], ['c1', ['private']]]])
+  })
+
+  it('leaves the trail alone when a run changed nothing', async () => {
+    const { summary, payloads, findCalls } = await run(fortnoxCustomer())
+    expect(summary.changed).toBe(0)
+    expect(payloads('register_repair_progress', 'upsert')).toHaveLength(1)
+    expect(payloads('register_repair_progress', 'update')).toEqual([])
+    expect(findCalls('rpc:append_register_repair_changed', 'rpc')).toEqual([])
+  })
+
+  it('puts every card a failed run changed on the trail, the partly written one too, and counts the attempt', async () => {
+    const rows = ['c1', 'c2', 'c3'].map((id) => customerRow({ id }))
+    const mock = createTableMockSupabase({
+      provider_consents: (chain) => chain[0]?.args[0] === 'company_id, provider'
+        ? { data: [{ company_id: 'company-1', provider: 'fortnox' }] }
+        : { data: [{ id: 'consent-1' }] },
+      register_repair_progress: (chain) => chain[0]?.method === 'select' && chain[0].args[0] !== 'changed'
+        ? { data: [] }
+        : { data: null },
+      'rpc:append_register_repair_changed': { data: null },
+      companies: { data: { archived_at: null } },
+      company_migration_resets: { data: [] },
+      customers: customersFailingOne('c2', rows),
+      suppliers: { data: [] },
+      migration_source_records: { data: ['1', '2', '3'].map((n) => ({ resource: 'customers', source_id: n, target_id: `c${n}` })) },
+      invoices: { data: [] },
+    })
+    const record = (n: string) => fortnoxCustomer({ CustomerNumber: n, Name: `Kund ${n}`, OrganisationNumber: '' })
+    const summary = await runRegisterRepair(mock.supabase as unknown as SupabaseClient, Date.now() + 120_000, {
+      resolveConsent: vi.fn().mockResolvedValue({ accessToken: 'token', consent: {} }),
+      fetchMigrationPage: vi.fn(async (_p: unknown, _t: unknown, _c: unknown, resource: string) =>
+        ({ items: resource === 'customers' ? ['1', '2', '3'].map(record) : [], nextPage: null, total: 3 })) as never,
+      hydrateCustomers: vi.fn(async (_p: unknown, _t: unknown, _c: unknown, dtos: CustomerDto[]) => ({
+        customers: dtos.map((dto) => fortnoxCustomer({ CustomerNumber: dto.id, Name: `Kund ${dto.id}`, OrganisationNumber: '',
+          Type: 'COMPANY', TermsOfPayment: '10', Phone1: '070-1' })),
+        unhydratedIds: new Set<string>(),
+        hydration: { needed: dtos.length, hydrated: dtos.length, failed: 0, skippedForBudget: 0 },
+      })) as never,
+      hydrateSuppliers: vi.fn() as never,
+    })
+
+    const trail = mock.findCalls('rpc:append_register_repair_changed', 'rpc')
+      .flatMap(([args]) => (args as { p_cards: { id: string; kinds: string[]; filled?: string[]; was?: unknown }[] }).p_cards)
+      .sort((a, b) => a.id.localeCompare(b.id))
+    expect(trail).toEqual([
+      expect.objectContaining({ id: 'c1', kinds: ['filled', 'terms'], was: { default_payment_terms: 30 } }),
+      { resource: 'customers', id: 'c2', kinds: ['filled'], filled: ['phone'] },
+      expect.objectContaining({ id: 'c3', kinds: ['filled', 'terms'], was: { default_payment_terms: 30 } }),
+    ])
+    const [progress] = mock.payloads('register_repair_progress', 'upsert') as Record<string, unknown>[]
+    expect(progress).toMatchObject({ outcome: null, attempts: 1, last_error: 'customers: statement timeout',
+      counts: { filled: 3, terms: 2 } })
+    expect(summary).toMatchObject({ worked: 1, changed: 3, errors: 0 })
+  })
+
+  it('does not fail the run when one company\'s progress cannot be saved: it is counted and logged', async () => {
+    const { summary } = await run(fortnoxCustomer({ Type: 'PRIVATE' }), { upsert: { error: { message: 'statement timeout' } } })
+    expect(summary).toEqual({ pending: 1, worked: 1, finished: 0, changed: 0, errors: 1 })
+    expect(logError).toHaveBeenCalledWith('register repair could not save a company\'s progress', expect.any(Error),
+      { companyId: 'company-1', provider: 'fortnox' })
+  })
+
+  it('says so, once, when it gives a company up as stuck', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const deadline = Date.now() + 120_000
+    const mock = database({ attempts: 2, nextKey: 'customers:1' })
+    // The listing never ends inside the run, the third run in a row.
+    const endless = vi.fn(async () => {
+      vi.setSystemTime(deadline + 1)
+      return { items: [fortnoxCustomer()], nextPage: 2, total: 9000 }
+    })
+    const summary = await runRegisterRepair(mock.supabase as unknown as SupabaseClient, deadline, deps(fortnoxCustomer(), endless))
+    expect(summary).toMatchObject({ worked: 1, finished: 1, changed: 0, errors: 0 })
+    const [progress] = mock.payloads('register_repair_progress', 'upsert') as Record<string, unknown>[]
+    // Started first, with the whole run, and still out of time: a miss. The cursor stays.
+    expect(progress).toMatchObject({ outcome: 'stuck', attempts: 3, next_key: 'customers:1' })
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('register repair gave up on a company', undefined,
+      expect.objectContaining({ companyId: 'company-1', provider: 'fortnox', outcome: 'stuck', attempts: 3 }))
+  })
+})

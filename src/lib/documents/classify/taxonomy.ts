@@ -1,5 +1,5 @@
 /**
- * Taxonomy v1 (dev_docs/arkiv_plan.md, section 3). Flat at the top and
+ * Taxonomy v1. Flat at the top and
  * finance-native. `other` is a first-class outcome: it carries a free-text
  * suggested type so new classes are mined from what actually arrives.
  * Labels live in messages/{sv,en}.json under `arkiv.types`.
@@ -33,18 +33,15 @@ export const DOC_TYPES = [
 
 export type DocType = (typeof DOC_TYPES)[number]
 
+/**
+ * The types Underlag books from: a person's type of one of these queues the
+ * document there (invoice-inbox route-from-arkiv.ts); any other type files it
+ * on its shelf in Dokument.
+ */
+export const UNDERLAG_DOC_TYPES: readonly DocType[] = ['receipt', 'supplier_invoice', 'credit_note']
+
 export function isDocType(value: unknown): value is DocType {
   return typeof value === 'string' && (DOC_TYPES as readonly string[]).includes(value)
-}
-
-/** Groups used by the Arkiv filters. */
-export function docTypeGroup(type: DocType | null | undefined): 'agreement' | 'authority' | 'invoice_receipt' | 'minutes' | 'other' {
-  if (!type) return 'other'
-  if (type.startsWith('agreement.')) return 'agreement'
-  if (type.startsWith('registration.') || type.startsWith('filing.') || type.startsWith('decision.')) return 'authority'
-  if (type.startsWith('minutes.') || type === 'share_subscription_list' || type === 'annual_report') return 'minutes'
-  if (['supplier_invoice', 'receipt', 'credit_note', 'customer_invoice', 'bank_statement', 'tax_account_statement'].includes(type)) return 'invoice_receipt'
-  return 'other'
 }
 
 /** One paragraph per class, written the way the classifier reads it. */

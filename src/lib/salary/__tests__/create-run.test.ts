@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createSalaryRunWithEmployees, SalaryRunExistsError } from '../create-run'
+import {
+  createSalaryRunWithEmployees,
+  resolveSalaryRunSeries,
+  SalaryRunExistsError,
+} from '../create-run'
 
-vi.mock('../account-mapping', () => ({
-  getLineItemAccount: vi.fn(() => '7210'),
-}))
+const mockEmit = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/events', () => ({ eventBus: { emit: (...a: unknown[]) => mockEmit(...a) } }))
+
+/** The company_settings column default since the standard series set: lön in K. */
+const STANDARD_SETTINGS = {
+  default_voucher_series_per_source_type: { salary_payment: 'K', invoice_created: 'B' },
+}
 
 /** Thenable builder chain: every filter returns the chain, awaiting it (or
  * .single()/.maybeSingle()) yields the configured result. */
@@ -80,7 +88,10 @@ const monthlyEmployee = {
 }
 
 describe('createSalaryRunWithEmployees', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockEmit.mockResolvedValue(undefined)
+  })
 
   it('passes voucher_series and notes through to the run insert', async () => {
     const { client, inserts } = mockDb({ employees: [monthlyEmployee] })
@@ -101,8 +112,8 @@ describe('createSalaryRunWithEmployees', () => {
     })
   })
 
-  it('omits voucher_series/notes when not provided (DB defaults apply — MCP path unchanged)', async () => {
-    const { client, inserts } = mockDb({ employees: [monthlyEmployee] })
+  it("books an omitted series into the company's salary series, not the DB default 'A'", async () => {
+    const { client, inserts } = mockDb({ employees: [monthlyEmployee], settings: STANDARD_SETTINGS })
 
     await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
       periodYear: 2026,
@@ -110,8 +121,95 @@ describe('createSalaryRunWithEmployees', () => {
       paymentDate: '2026-06-25',
     })
 
-    expect(inserts.salary_runs[0]).not.toHaveProperty('voucher_series')
+    expect(inserts.salary_runs[0]).toMatchObject({ voucher_series: 'K' })
     expect(inserts.salary_runs[0]).not.toHaveProperty('notes')
+  })
+
+  it("falls back to 'A' for a company without a series map, and an explicit series wins", async () => {
+    const bare = mockDb({ employees: [monthlyEmployee] })
+    await createSalaryRunWithEmployees(bare.client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 6,
+      paymentDate: '2026-06-25',
+    })
+    expect(bare.inserts.salary_runs[0]).toMatchObject({ voucher_series: 'A' })
+
+    const explicit = mockDb({ employees: [monthlyEmployee], settings: STANDARD_SETTINGS })
+    await createSalaryRunWithEmployees(explicit.client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 6,
+      paymentDate: '2026-06-25',
+      voucherSeries: 'L',
+    })
+    expect(explicit.inserts.salary_runs[0]).toMatchObject({ voucher_series: 'L' })
+  })
+
+  it('seeds an hourly employee without a monthly salary, even with one left on the employee (crm#1337)', async () => {
+    const hourlyEmployee = { ...monthlyEmployee, id: 'emp-2', salary_type: 'hourly', monthly_salary: 28000, hourly_rate: 185 }
+    const { client, inserts } = mockDb({ employees: [monthlyEmployee, hourlyEmployee] })
+
+    await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 6,
+      paymentDate: '2026-06-25',
+    })
+
+    expect(inserts.salary_run_employees).toEqual([
+      expect.objectContaining({ employee_id: 'emp-1', salary_type: 'monthly', monthly_salary: 35000 }),
+      expect.objectContaining({ employee_id: 'emp-2', salary_type: 'hourly', monthly_salary: 0 }),
+    ])
+  })
+
+  it('leaves the run empty when seedEmployees is false (the v1 contract)', async () => {
+    const { client, inserts } = mockDb({ employees: [monthlyEmployee], settings: STANDARD_SETTINGS })
+
+    const result = await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 6,
+      paymentDate: '2026-06-25',
+      seedEmployees: false,
+    })
+
+    expect(result.employeeCount).toBe(0)
+    expect(inserts.salary_runs).toHaveLength(1)
+    expect(inserts.salary_run_employees).toBeUndefined()
+    expect(inserts.salary_line_items).toBeUndefined()
+  })
+
+  it('emits salary_run.created once, whatever door created the run', async () => {
+    const { client } = mockDb({ employees: [monthlyEmployee] })
+
+    const result = await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 6,
+      paymentDate: '2026-06-25',
+    })
+
+    expect(mockEmit).toHaveBeenCalledTimes(1)
+    expect(mockEmit).toHaveBeenCalledWith({
+      type: 'salary_run.created',
+      payload: {
+        salaryRunId: result.run.id,
+        periodYear: 2026,
+        periodMonth: 6,
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })
+  })
+
+  it('keeps the created run when the event emit fails', async () => {
+    mockEmit.mockRejectedValueOnce(new Error('bus down'))
+    const { client, deletes } = mockDb({ employees: [monthlyEmployee] })
+
+    const result = await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 6,
+      paymentDate: '2026-06-25',
+    })
+
+    expect(result.employeeCount).toBe(1)
+    expect(deletes).toEqual([])
   })
 
   it('snapshots the pay month as the avvikelseperiod when the company has no setting', async () => {
@@ -225,6 +323,22 @@ describe('createSalaryRunWithEmployees', () => {
     ).rejects.toThrow('line item boom')
 
     expect(deletes).toContain('salary_runs')
+    expect(mockEmit).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveSalaryRunSeries', () => {
+  it("answers the company's salary series, an explicit letter, or 'A' without settings", async () => {
+    expect(await resolveSalaryRunSeries(mockDb({ settings: STANDARD_SETTINGS }).client, 'company-1')).toBe('K')
+    expect(await resolveSalaryRunSeries(mockDb({ settings: STANDARD_SETTINGS }).client, 'company-1', 'L')).toBe('L')
+    expect(await resolveSalaryRunSeries(mockDb({}).client, 'company-1')).toBe('A')
+  })
+
+  it('fails closed when the settings read errors instead of guessing a series', async () => {
+    const client = {
+      from: () => ({ select: () => chain({ data: null, error: { message: 'timeout' } }) }),
+    } as unknown as SupabaseClient
+    await expect(resolveSalaryRunSeries(client, 'company-1')).rejects.toThrow(/timeout/)
   })
 })
 

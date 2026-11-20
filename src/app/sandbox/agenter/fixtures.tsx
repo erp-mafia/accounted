@@ -9,15 +9,19 @@
 
 import { analysisSkills } from '@/lib/agent-skills/analyses'
 import { useState, type ReactNode } from 'react'
+import { SWRConfig } from 'swr'
 import { CompanyProvider } from '@/contexts/CompanyContext'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
+import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
+import { FiscalScopeProvider } from '@/components/providers/FiscalScopeProvider'
+import type { FiscalPeriod } from '@/types'
 import { AGENTS, OWN_AGENT_KNOWLEDGE, type Area } from '@/lib/agent-skills/agents'
 import { REGISTRY_SKILLS } from '@/lib/agent-skills/registry'
 import type { AgentsOverview, ConnectionStatus } from '@/lib/agent-skills/agent-bundle'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 
-// Titles and versions as agent_atom_registry holds them on prod (2026-09-24).
+// Titles and versions as agent_atom_registry holds them in production (2026-09-24).
 const PACKS: Record<string, { title: string; version: number }> = {
   'horizontal/swedish-accounting-compliance': { title: 'Swedish Accounting Compliance', version: 5 },
   'horizontal/swedish-asset-accounting': { title: 'Swedish Asset Accounting', version: 4 },
@@ -35,7 +39,7 @@ const SETTINGS: Record<string, string> = { bank: '/settings/banking', skatteverk
 // Company facts the demo company holds (predicates from lib/arkiv/facts/predicates.ts).
 const KNOWN_FACTS = new Set(['legal_name', 'org_number', 'fiscal_year', 'vat_registered', 'vat_period', 'vat_method', 'accounting_method', 'f_skatt', 'sni_codes', 'board', 'share_capital', 'bank_connection', 'monthly_cost_baseline', 'top_counterparty'])
 
-// Every pack a company can choose, as the registry lists them on prod (titles, 2026-09-24).
+// Every pack a company can choose, as the registry lists them in production (titles, 2026-09-24).
 const OPTIONS: KnowledgeOption[] = [
   ...Object.entries(PACKS).map(([id, p]) => ({ id, tier: 'horizontal' as const, title: p.title, summary: '', version: p.version, reviewed_at: null })),
   { id: 'horizontal/swedish-e-invoicing', tier: 'horizontal', title: 'Swedish E Invoicing', summary: 'Peppol, e-faktura och krav vid offentlig sektor.', version: 7, reviewed_at: null },
@@ -166,11 +170,22 @@ function json(data: unknown): Response {
   return new Response(JSON.stringify({ data }), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }
 
+/** Another demo's own answers, asked before these: the first that answers wins (the wiki demo). */
+type SandboxApi = (url: URL, init?: RequestInit) => Response | null
+const extraApis: SandboxApi[] = []
+export function addSandboxApi(api: SandboxApi) {
+  if (!extraApis.includes(api)) extraApis.push(api)
+}
+
 function installFixtures() {
   const real = window.fetch.bind(window)
   window.fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, window.location.origin)
     if (url.origin !== window.location.origin || !url.pathname.startsWith('/api/')) return real(input, init)
+    for (const api of extraApis) {
+      const answer = api(url, init)
+      if (answer) return answer
+    }
     if (url.pathname === '/api/agents/knowledge' && init?.method === 'PATCH') { applyChoice(JSON.parse(String(init.body))); return json({ ok: true }) }
     // Votes and "fungerar" answers are kept by the page itself in the demo.
     if (url.pathname === '/api/agents/community/feedback') return json({ ok: true })
@@ -226,14 +241,22 @@ const COMPANY = {
 }
 
 
+// The demo company's räkenskapsår, seeded as the dashboard layout seeds the real ones: the sidebar's year chip reads it.
+const PERIODS = [{
+  id: 'demo-fy-2026', user_id: 'demo-user', company_id: 'demo-company', name: 'FY 2026',
+  period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, closed_at: null, locked_at: null,
+  retention_expires_at: null, opening_balances_set: true, closing_entry_id: null, opening_balance_entry_id: null,
+  previous_period_id: null,
+}] as FiscalPeriod[]
+
 let installed = false
 
 /** The demo company around a page, with the fixture API installed once. */
-// The dashboard panel's classes (app/(dashboard)/layout.tsx MAIN_PANEL_CLASS), copied: that layout is a server module.
+// The dashboard's frame and page classes (app/(dashboard)/layout.tsx SHELL_FRAME_CLASS and MAIN_PANEL_CLASS), copied: that layout is a server module.
+const SHELL_FRAME_CLASS = 'min-h-dvh bg-frame md:flex md:h-dvh md:flex-col md:overflow-hidden'
 const MAIN_PANEL_CLASS =
   'safe-area-main-padding md:!pb-0 relative bg-background min-h-dvh ' +
-  'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[var(--agent-dock-w)] md:h-[calc(100vh-20px)] ' +
-  'md:overflow-y-auto md:rounded-xl md:border md:border-border'
+  'md:min-h-0 md:min-w-0 md:flex-1 md:overflow-y-auto'
 
 // The real texts of packs, read from the repo by the item page on the server.
 const PACK_TEXTS = new Map<string, string>()
@@ -251,17 +274,34 @@ export function SandboxShell({ children }: { children: ReactNode }) {
   }
   return (
     <CompanyProvider value={company as never}>
+      {/* Seeded reference data stays as seeded: a refresh would ask Supabase about a company that does not exist. */}
+      <SWRConfig value={{ revalidateIfStale: false }}>
+      <ReferenceDataSeed companyId="demo-company" fiscalPeriods={PERIODS} cashAccounts={[]}>
+      <FiscalScopeProvider>
       <AgentSheetProvider>
-        {/* The dashboard's own frame (app/(dashboard)/layout.tsx): the real sidebar and the rounded panel, so the demo reads as the page will in the app. */}
-        <div className="min-h-dvh bg-frame md:flex md:flex-col">
-          <DashboardNav companyName={state.firm ? 'Exempelfirman' : 'Exempelbolaget AB'} entityType={state.firm ? 'enskild_firma' : 'aktiebolag'} agentsEnabled userName="Demo, inget sparas" />
-          <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
-            <div className="px-4 pb-8 pt-4 md:px-6">
-              {children}
-            </div>
-          </main>
+        {/* The dashboard's own frame (app/(dashboard)/layout.tsx): the real rail, sidebar and rounded panel, so the demo reads as the page will in the app. */}
+        <div className={SHELL_FRAME_CLASS}>
+          <DashboardNav
+            // The demo company's resolved capabilities (lib/modules/capabilities.ts):
+            // every package on; the enskild firma does not pay salaries, so no payroll.
+            navGate={{
+              entityType: state.firm ? 'enskild_firma' : 'aktiebolag',
+              surface: { hidden: [], notForLegalForm: state.firm ? ['payroll'] : [] },
+              agentsEnabled: true,
+            }}
+            userName="Demo, inget sparas"
+          >
+            <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
+              <div className="px-4 pb-8 pt-4 md:px-6">
+                {children}
+              </div>
+            </main>
+          </DashboardNav>
         </div>
       </AgentSheetProvider>
+      </FiscalScopeProvider>
+      </ReferenceDataSeed>
+      </SWRConfig>
     </CompanyProvider>
   )
 }

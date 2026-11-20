@@ -39,10 +39,34 @@ describe('supplierInvoiceEditorAmounts', () => {
     })
   })
 
-  it('matches the endpoint per-line VAT normalization at a half-öre', () => {
+  it('matches the endpoint at a half-öre: 4,02 x 25 % = 1,005 books 1,01 (roundOre), not a float 1,00', () => {
     expect(supplierInvoiceEditorAmounts([{ ...item, amount: 4.02 }], 'SEK', false, true)).toMatchObject({
-      totalVat: 1,
-      roundingItem: { amount: -0.02 },
+      totalVat: 1.01,
+      roundingItem: { amount: -0.03 },
     })
+  })
+
+  // crm#1367: the editor shows the VAT the create endpoints book, per rate on
+  // the summed base (SF-CE-202608: 3 864,11, not 3 864,12 line by line).
+  it('computes VAT per rate on the summed base, as the endpoints book it', () => {
+    const lines = [
+      { ...item, amount: 17564.15 },
+      { ...item, amount: -2107.7 },
+    ]
+    const amounts = supplierInvoiceEditorAmounts(lines, 'SEK', false, false)
+    expect(amounts.totalVat).toBe(3864.11)
+    expect(amounts.itemTotals.map((t) => t.vatAmount).reduce((a, b) => a + b, 0)).toBeCloseTo(3864.11, 2)
+    expect(amounts.statedVatAccepted).toBe(false)
+  })
+
+  it('shows the invoice\'s own VAT when it fits the lines, and the summed base when it does not', () => {
+    const lines = [
+      { ...item, amount: 17564.15 },
+      { ...item, amount: -2107.7 },
+    ]
+    const fits = supplierInvoiceEditorAmounts(lines, 'SEK', false, false, [{ rate: 0.25, vatAmount: 3864.12 }])
+    expect(fits).toMatchObject({ totalVat: 3864.12, statedVatAccepted: true })
+    const off = supplierInvoiceEditorAmounts(lines, 'SEK', false, false, [{ rate: 0.25, vatAmount: 3870 }])
+    expect(off).toMatchObject({ totalVat: 3864.11, statedVatAccepted: false })
   })
 })

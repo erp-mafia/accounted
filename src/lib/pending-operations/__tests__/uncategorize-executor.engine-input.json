@@ -1,0 +1,49 @@
+[
+  {
+    "name": "uncategorize_transaction: the bank line's verifikat is stornoed and the line reset",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-00000000e201"
+      ]
+    ],
+    "transactionUpdates": [
+      {
+        "is_business": null,
+        "category": null,
+        "journal_entry_id": null
+      }
+    ],
+    "outcome": {
+      "status": "committed",
+      "data": {
+        "transaction_id": "00000000-0000-4000-8000-00000000b201",
+        "reversed_journal_entry_id": "00000000-0000-4000-8000-00000000e201"
+      },
+      "error": null,
+      "code": null
+    }
+  },
+  {
+    "name": "uncategorize_transaction: the engine refuses",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-00000000e201"
+      ]
+    ],
+    "transactionUpdates": [],
+    "outcome": {
+      "status": "failed",
+      "data": null,
+      "error": "Can only reverse posted entries",
+      "code": null
+    }
+  }
+]

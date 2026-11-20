@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "accounted": {
+      "type": "streamable-http",
+      "url": "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted"
+    }
+  }
+}

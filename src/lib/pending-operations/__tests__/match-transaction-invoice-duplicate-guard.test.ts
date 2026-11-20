@@ -42,6 +42,23 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: vi.fn(async () => undefined),
 }))
 
+// Open: the gate has its own suites (is-booked.test.ts, and every shape on real
+// Postgres in tests/pg/customer-bank-match-doors.pg.test.ts). Mocked with the
+// chart check so neither consumes a slot in the queued Supabase mock.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: vi.fn(async () => ({ outcome: 'open' })),
+}))
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn(async () => []),
+}))
+// No invoice here needs its sale booked first; that rule has its own suites.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+}))
+
 import { commitPendingOperation } from '../commit'
 
 const JE_MANUAL = '55555555-5555-4555-8555-555555555555'
@@ -77,8 +94,7 @@ const transaction = {
   exchange_rate: null,
   date: '2026-05-15',
   invoice_id: null,
-  // A prior categorization: the storno must never run before the guard.
-  journal_entry_id: 'je-old',
+  journal_entry_id: null,
   cash_account_id: null,
 }
 
@@ -113,6 +129,7 @@ function enqueuePreGuard(enqueue: (r: { data?: unknown; error?: unknown }) => vo
   enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
   enqueue({ data: transaction, error: null }) // transaction fetch
   enqueue({ data: invoice, error: null }) // invoice fetch
+  enqueue({ data: [], error: null }) // hard-duplicate check
 }
 
 beforeEach(() => {
@@ -126,7 +143,7 @@ beforeEach(() => {
 })
 
 describe('commitPendingOperation: match_transaction_invoice soft-duplicate guard', () => {
-  it('auto-rejects (409) with the candidate before the storno when a manual voucher already books the receipt', async () => {
+  it('auto-rejects (409) with the candidate when a manual voucher already books the receipt', async () => {
     mockDetectCandidate.mockResolvedValue(candidate)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueuePreGuard(enqueue)
@@ -144,7 +161,7 @@ describe('commitPendingOperation: match_transaction_invoice soft-duplicate guard
     expect(result.code).toBe('MATCH_INVOICE_POSSIBLE_DUPLICATE')
     expect(result.error).toContain('A12')
     expect((result.data as { candidate: { journal_entry_id: string } }).candidate.journal_entry_id).toBe(JE_MANUAL)
-    // Nothing irreversible happened: no storno, no payment voucher.
+    // Nothing irreversible happened: no payment voucher.
     expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
@@ -156,10 +173,9 @@ describe('commitPendingOperation: match_transaction_invoice soft-duplicate guard
     enqueuePreGuard(enqueue)
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: null, error: null }) // transactions unlink after storno
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const result = await commitPendingOperation(
@@ -187,7 +203,7 @@ describe('commitPendingOperation: match_transaction_invoice soft-duplicate guard
     })
   })
 
-  it('refuses a stale force id as MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH, still before the storno', async () => {
+  it('refuses a stale force id as MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH', async () => {
     mockDetectCandidate.mockResolvedValue(candidate)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueuePreGuard(enqueue)
@@ -214,10 +230,9 @@ describe('commitPendingOperation: match_transaction_invoice soft-duplicate guard
     enqueuePreGuard(enqueue)
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount
-    enqueue({ data: null, error: null }) // transactions unlink after storno
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const result = await commitPendingOperation(

@@ -75,7 +75,16 @@ describe('userFacing', () => {
   it('leaves an unmarked error alone, so nothing leaks by default', async () => {
     const { status, body } = await envelope(new Error('connect ECONNREFUSED 127.0.0.1:5432'))
     expect(body.error.message).not.toContain('ECONNREFUSED')
+    // A refused connection is transient: the same request may succeed later.
+    expect(status).toBe(503)
+    expect(body.error.code).toBe('TRANSIENT_ERROR')
+  })
+
+  it('keeps an unidentified failure the 500 it always was', async () => {
+    const { status, body } = await envelope(new Error('Cannot read properties of undefined'))
+    expect(body.error.message).not.toContain('undefined')
     expect(status).toBe(500)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
   })
 
   it('refuses an empty sentence, which is worse than the canned one', async () => {

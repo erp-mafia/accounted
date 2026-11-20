@@ -11,13 +11,19 @@ import { generateMonthlyBreakdown } from '../monthly-breakdown'
 // invariant) so the tests don't hardcode the exact method chain.
 function chain(result: unknown) {
   const c: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'order']) {
+  for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'order', 'contains']) {
     c[m] = () => c
   }
   c.single = () => Promise.resolve(result)
+  c.maybeSingle = () => Promise.resolve(result)
   c.range = () => Promise.resolve(result)
   return c
 }
+
+// A dimension filter keeps the line-level path (the daily sums the RPC reads
+// cannot be split by dimension); without one the months come from
+// get_kpi_report_aggregates.
+const DIMS = { dimensions: { '6': 'P001' } }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -25,10 +31,34 @@ beforeEach(() => {
 
 describe('generateMonthlyBreakdown', () => {
   it('returns empty months when no fiscal period found', async () => {
-    mockResult({ data: null, error: { message: 'not found' } })
+    supabase.from.mockImplementation(() => chain({ data: null, error: null }))
 
     const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
     expect(result.months).toEqual([])
+  })
+
+  // A failed read used to come back as { months: [] }: an empty chart that
+  // looked like a company without bookings.
+  it('throws when the fiscal period read fails', async () => {
+    supabase.from.mockImplementation(() => chain({ data: null, error: { message: 'timeout', code: '57014' } }))
+
+    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')).rejects.toMatchObject({
+      code: '57014',
+    })
+  })
+
+  it('throws when the journal line read fails', async () => {
+    let callCount = 0
+    supabase.from.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return chain({ data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null })
+      }
+      return chain({ data: null, error: { message: 'timeout', code: '57014' } })
+    })
+    supabase.rpc.mockResolvedValueOnce({ data: [], error: null })
+
+    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)).rejects.toThrow()
   })
 
   it('returns empty months when no journal entries exist', async () => {
@@ -51,8 +81,9 @@ describe('generateMonthlyBreakdown', () => {
         ? chain({ data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null })
         : chain({ data: [], error: null })
     })
+    supabase.rpc.mockResolvedValueOnce({ data: [], error: null })
 
-    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
     expect(result.months.length).toBe(12)
     expect(result.months[0].label).toBe('Jan')
     expect(result.months[0].income).toBe(0)
@@ -61,9 +92,9 @@ describe('generateMonthlyBreakdown', () => {
   })
 
   it('correctly classifies revenue (class 3) and expense (class 4-7) accounts', async () => {
-    // call 1 = fiscal period, call 2 = reversed year_end ids (the year-end
-    // exclusion chain), then the two-step entry-lines fetch
-    // (lib/bookkeeping/entry-lines.ts): call 3 = journal_entries, call 4 =
+    // call 1 = fiscal period, then the year-end set (year_end_chain_entry_ids,
+    // an RPC: none here), then the two-step entry-lines fetch
+    // (lib/bookkeeping/entry-lines.ts): call 2 = journal_entries, call 3 =
     // lines by entry id (the parent entry is reattached under `journal_entry`).
     let callCount = 0
     supabase.from.mockImplementation(() => {
@@ -72,10 +103,6 @@ describe('generateMonthlyBreakdown', () => {
         return chain({ data: { period_start: '2024-01-01', period_end: '2024-03-31' }, error: null })
       }
       if (callCount === 2) {
-        // No undone bokslut in these fixtures.
-        return chain({ data: [], error: null })
-      }
-      if (callCount === 3) {
         return chain({
           data: [
             { id: 'e1', entry_date: '2024-01-15', status: 'posted', company_id: 'company-1', fiscal_period_id: 'period-1' },
@@ -97,7 +124,8 @@ describe('generateMonthlyBreakdown', () => {
       })
     })
 
-    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    supabase.rpc.mockResolvedValueOnce({ data: [], error: null })
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
 
     // January
     const jan = result.months.find((m) => m.label === 'Jan')!
@@ -127,10 +155,6 @@ describe('generateMonthlyBreakdown', () => {
         return chain({ data: { period_start: '2024-01-01', period_end: '2024-01-31' }, error: null })
       }
       if (callCount === 2) {
-        // No undone bokslut in these fixtures.
-        return chain({ data: [], error: null })
-      }
-      if (callCount === 3) {
         return chain({
           data: [
             { id: 'e1', entry_date: '2024-01-15', status: 'posted', company_id: 'company-1', fiscal_period_id: 'period-1' },
@@ -151,7 +175,8 @@ describe('generateMonthlyBreakdown', () => {
       })
     })
 
-    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    supabase.rpc.mockResolvedValueOnce({ data: [], error: null })
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
     const jan = result.months.find((m) => m.label === 'Jan')!
     // Class 1 and 2 are ignored
     // Class 8 debit (8400 interest expense) → expense
@@ -159,14 +184,54 @@ describe('generateMonthlyBreakdown', () => {
     // Class 8 credit (8300 interest income) → income
     expect(jan.income).toBe(200)
   })
+
+  it('leaves årets resultat (8990-8999) out of the month, whichever account the omföring used', async () => {
+    let callCount = 0
+    supabase.from.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return chain({ data: { period_start: '2024-01-01', period_end: '2024-01-31' }, error: null })
+      }
+      if (callCount === 2) {
+        return chain({
+          data: [
+            { id: 'e1', entry_date: '2024-01-15', status: 'posted', company_id: 'company-1', fiscal_period_id: 'period-1' },
+            { id: 'e2', entry_date: '2024-01-31', status: 'posted', company_id: 'company-1', fiscal_period_id: 'period-1' },
+          ],
+          error: null,
+        })
+      }
+      return chain({
+        data: [
+          { account_number: '1930', debit_amount: 10000, credit_amount: 0, journal_entry_id: 'e1' },
+          { account_number: '3041', debit_amount: 0, credit_amount: 10000, journal_entry_id: 'e1' },
+          // The previous system's omföring through 8990, and a rest through 8999.
+          { account_number: '8990', debit_amount: 9999.5, credit_amount: 0, journal_entry_id: 'e2' },
+          { account_number: '8999', debit_amount: 0.5, credit_amount: 0, journal_entry_id: 'e2' },
+          { account_number: '2099', debit_amount: 0, credit_amount: 10000, journal_entry_id: 'e2' },
+        ],
+        error: null,
+      })
+    })
+
+    // The line path (a dimension filter); without one the same predicate is
+    // get_kpi_report_aggregates' (20261023081500), pinned by its pg test.
+    supabase.rpc.mockResolvedValueOnce({ data: [], error: null })
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
+    const jan = result.months.find((m) => m.label === 'Jan')!
+    expect(jan.income).toBe(10000)
+    expect(jan.expenses).toBe(0)
+  })
 })
 
 describe('generateMonthlyBreakdown: year-end exclusion', () => {
-  it('excludes year_end entries and the undone-bokslut chain', async () => {
+  it("leaves out the period's 'exclude-all-year-end' set, read from year_end_chain_entry_ids", async () => {
     // Regression: the resultatavslut posts the mirror image of every P&L
     // account, so the fiscal-year-end month reported the whole year's revenue
-    // as negative income. Measured on production as 28 companies affected,
-    // worst case a month understated by 10 347 472 kr.
+    // as negative income. Measured in real ledgers,
+    // worst case a month understated by millions. The set holds the
+    // year_end entries, the storno chain of an undone bokslut and a
+    // resultatavslut booked in a previous system or by hand (20261024140100).
     const filters: Array<{ method: string; args: unknown[] }> = []
     let callCount = 0
     supabase.from.mockImplementation(() => {
@@ -174,12 +239,9 @@ describe('generateMonthlyBreakdown: year-end exclusion', () => {
       if (callCount === 1) {
         return chain({ data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null })
       }
-      if (callCount === 2) {
-        return chain({ data: [{ id: 'reversed-ye-1' }], error: null })
-      }
       // Record the entry-side filters so the exclusion is asserted, not assumed.
       const c: Record<string, unknown> = {}
-      for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'order', 'or']) {
+      for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'not', 'order', 'or', 'contains']) {
         c[m] = (...args: unknown[]) => {
           filters.push({ method: m, args })
           return c
@@ -189,14 +251,71 @@ describe('generateMonthlyBreakdown: year-end exclusion', () => {
       c.range = () => Promise.resolve({ data: [], error: null })
       return c
     })
+    supabase.rpc.mockResolvedValueOnce({ data: ['ye-1', 'ye-storno-1', 'imported-closing-1'], error: null })
 
-    await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
 
-    expect(filters).toContainEqual({ method: 'neq', args: ['source_type', 'year_end'] })
-    // The storno/correction chain of a REVERSED year-end entry must go too, or
-    // an undone bokslut leaves half the pair behind.
-    const orFilters = filters.filter((f) => f.method === 'or').map((f) => String(f.args[0]))
-    expect(orFilters.some((f) => f.includes('reverses_id') && f.includes('reversed-ye-1'))).toBe(true)
-    expect(orFilters.some((f) => f.includes('correction_of_id') && f.includes('reversed-ye-1'))).toBe(true)
+    expect(supabase.rpc).toHaveBeenCalledWith('year_end_chain_entry_ids', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+    })
+    expect(filters).toContainEqual({ method: 'not', args: ['id', 'in', '(ye-1,ye-storno-1,imported-closing-1)'] })
+  })
+
+  it('fails instead of charting the year-end entries when the set cannot be read', async () => {
+    supabase.from.mockImplementation(() =>
+      chain({ data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null }),
+    )
+    supabase.rpc.mockResolvedValueOnce({ data: null, error: { message: 'timeout', code: '57014' } })
+
+    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)).rejects.toMatchObject({
+      code: '57014',
+    })
+  })
+})
+
+describe('generateMonthlyBreakdown: no dimension filter', () => {
+  it('reads the months from get_kpi_report_aggregates with no IB entry left out', async () => {
+    supabase.from.mockImplementation(() =>
+      chain({ data: { period_start: '2024-01-01', period_end: '2024-03-31' }, error: null }),
+    )
+    supabase.rpc.mockResolvedValueOnce({
+      data: {
+        tb: [],
+        tb_ex_year_end: [],
+        ob: [],
+        monthly: [
+          { year: 2024, month: 1, income: 10000, expenses: 3000 },
+          { year: 2024, month: 2, income: 5000.004, expenses: 1500 },
+        ],
+      },
+      error: null,
+    })
+
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_kpi_report_aggregates', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+      p_ob_entry_id: null,
+    })
+    expect(result.months).toEqual([
+      { label: 'Jan', income: 10000, expenses: 3000, net: 7000 },
+      { label: 'Feb', income: 5000, expenses: 1500, net: 3500 },
+      { label: 'Mar', income: 0, expenses: 0, net: 0 },
+    ])
+    // No line reads: only the fiscal period comes from a table.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('throws when the aggregates read fails, instead of drawing an empty chart', async () => {
+    supabase.from.mockImplementation(() =>
+      chain({ data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null }),
+    )
+    supabase.rpc.mockResolvedValueOnce({ data: null, error: { message: 'timeout', code: '57014' } })
+
+    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')).rejects.toMatchObject({
+      code: '57014',
+    })
   })
 })

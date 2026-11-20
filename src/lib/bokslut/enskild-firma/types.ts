@@ -30,3 +30,37 @@ export interface EfDeclarationItem {
   /** Soft warnings. Never blockers. */
   warnings: string[]
 }
+
+/**
+ * NE-bilaga sida 2 (SKV 2161) as the preview fills it, whole kronor, one
+ * definition per ruta. The sums follow the form: R29 = R12 + R13..R28,
+ * R33 = R29 - R30 + R31 + R32, R35 = R33 - R34,
+ * R42 = R35 - R36 + R37 - R38 - R39 + R40 - R41. R12-R28 and R38-R39 are
+ * not computed, so R29 is the booked result (R11) and R38-R39 are 0.
+ */
+export interface EfNeRutor {
+  R29: number
+  R30: number
+  R31: number
+  R32: number
+  R33: number
+  R34: number
+  R35: number
+  R36: number
+  R37: number
+  R40: number
+  R41: number
+  R42: number
+  R43: number
+}
+
+/**
+ * A field under "Övriga uppgifter" on NE-bilagan. Named by its SRU fältkod,
+ * which is the same in the 2025P4 and 2026P4 packages, while the punkt
+ * number on the form shifts between years.
+ */
+export interface EfOvrigUppgift {
+  faltkod: '8009' | '8010' | '8011' | '8012'
+  label: string
+  amount: number
+}

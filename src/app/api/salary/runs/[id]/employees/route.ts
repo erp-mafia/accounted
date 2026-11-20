@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { AddEmployeeToRunSchema } from '@/lib/api/schemas'
 import { addEmployeeToRun } from '@/lib/salary/run-employees'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-
-ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.employee.add',

@@ -24,6 +24,12 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/vat/filing-record-store', () => store)
 
+const changes = vi.hoisted(() => ({ listVatFilingsWithChanges: vi.fn() }))
+vi.mock('@/lib/vat/filed-period-changes', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/vat/filed-period-changes')>()),
+  listVatFilingsWithChanges: changes.listVatFilingsWithChanges,
+}))
+
 import { isDefaultCatalogTool, tools } from '../server'
 
 const tool = (name: string) => tools.find((t) => t.name === name)!
@@ -43,6 +49,9 @@ const YEARLY_RECORD = {
   source: 'manual',
   reference: null,
 }
+
+/** The räkenskapsår the yearly record declares: 2025-07-01 to 2026-06-30, not closed. */
+const OPEN_FY_2526 = { id: 'fy-2526', period_start: '2025-07-01', period_end: '2026-06-30', is_closed: false, locked_at: null }
 
 /** Records every insert with its table, over the queued mock. */
 function captureInserts(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) {
@@ -110,12 +119,13 @@ describe('registration', () => {
 })
 
 describe('gnubok_list_vat_filings', () => {
-  it('lists the filed periods of every cadence from the store', async () => {
-    store.listVatFilings.mockResolvedValue([YEARLY_RECORD])
+  it('lists the filed periods of every cadence with what changed each one after filing', async () => {
+    const record = { ...YEARLY_RECORD, changed_after_filing: null }
+    changes.listVatFilingsWithChanges.mockResolvedValue([record])
     const supabase = {} as never
     const result = await listTool().execute({}, 'company-1', 'user-1', supabase)
-    expect(result).toEqual({ filings: [YEARLY_RECORD] })
-    expect(store.listVatFilings).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(result).toEqual({ filings: [record] })
+    expect(changes.listVatFilingsWithChanges).toHaveBeenCalledWith(supabase, 'company-1')
   })
 })
 
@@ -125,6 +135,8 @@ describe('gnubok_mark_vat_period_filed', () => {
   it('stages the mark with the store preview and writes nothing else', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
+    enqueue({ data: { bookkeeping_locked_through: '2026-06-30' } }) // the books are locked through the period
+    enqueue({ data: [OPEN_FY_2526] }) // the company's räkenskapsår
     enqueue({ data: { id: 'op-mark-1' }, error: null }) // pending_operations insert
     const preview = {
       ok: true,
@@ -141,7 +153,13 @@ describe('gnubok_mark_vat_period_filed', () => {
     expect(result.staged).toBe(true)
     expect(result.operation_id).toBe('op-mark-1')
     expect(result.risk_level).toBe('low')
-    expect(result.preview).toMatchObject({ would_mark: { tax_period: '2025/2026' }, effect: 'update' })
+    expect(result.preview).toMatchObject({
+      would_mark: { tax_period: '2025/2026' },
+      effect: 'update',
+      lock_offer: null,
+    })
+    // Locked through the period's last day already: no lock to offer.
+    expect(result).not.toHaveProperty('next')
     expect(store.previewMarkVatPeriodFiled).toHaveBeenCalledWith(supabase, 'company-1', {
       periodType: 'yearly',
       year: 2026,
@@ -156,6 +174,82 @@ describe('gnubok_mark_vat_period_filed', () => {
       params: args,
       title: 'Markera momsdeklaration Helår 2026 som inlämnad',
     })
+  })
+
+  /**
+   * Stages the mark of the yearly period (it ends 2026-06-30) for a company
+   * whose lock date and räkenskapsår read as given.
+   */
+  async function stageMark(lockDate: { data?: unknown; error?: unknown }, years: unknown[]) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const inserts = captureInserts(supabase)
+    enqueue(lockDate) // company_settings: the lock date
+    enqueue({ data: years }) // fiscal_periods: the company's räkenskapsår
+    enqueue({ data: { id: 'op-mark' }, error: null }) // pending_operations insert
+    store.previewMarkVatPeriodFiled.mockResolvedValue({
+      ok: true,
+      would_mark: { ...YEARLY_RECORD, reference: 'KV-7' },
+      effect: 'create',
+      current: null,
+    })
+    const result = (await markTool().execute(args, 'company-1', 'user-1', supabase as never, {
+      type: 'api_key',
+    })) as {
+      staged: boolean
+      preview: Record<string, unknown>
+      next?: { description: string; tool: string; args: Record<string, unknown> }
+    }
+    return { result, inserts }
+  }
+
+  // Marking locks nothing, and the lock date was only ever offered on a
+  // settings page: while the period's last day is open, the staged answer
+  // tells the agent to ask the person about the existing lock tool.
+  it('offers to lock the books through the period once the mark is approved, while its last day is open', async () => {
+    const { result, inserts } = await stageMark(
+      { data: { bookkeeping_locked_through: '2026-03-31' } }, // locked, but short of the period's last day
+      [{ ...OPEN_FY_2526, period_end: '2026-12-31' }], // the period lies in a year that runs on past it
+    )
+
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject({ lock_offer: { through: '2026-06-30', open_year_end: null } })
+    expect(result.next).toMatchObject({
+      tool: 'gnubok_update_bookkeeping_lock',
+      args: { bookkeeping_locked_through: '2026-06-30' },
+    })
+    expect(result.next?.description).toContain(
+      'Once this is approved the period is on record as filed: then ask the user whether to lock the books through 2026-06-30',
+    )
+    expect(result.next?.description).not.toContain('bokslut')
+    // The offer is words to the agent: staging the mark stages the mark only.
+    expect(inserts.map((i) => i.payload.operation_type)).toEqual(['mark_vat_period_filed'])
+  })
+
+  // The lock date holds every earlier day too: a year that is not closed yet
+  // cannot get its bokslut booked behind it, and the person hears that first.
+  it('says so when the lock would also hold the last day of a räkenskapsår that is not closed', async () => {
+    // The helårsmoms period is the unclosed year itself.
+    const { result } = await stageMark({ data: { bookkeeping_locked_through: null } }, [OPEN_FY_2526])
+
+    expect(result.preview).toMatchObject({ lock_offer: { through: '2026-06-30', open_year_end: '2026-06-30' } })
+    expect(result.next?.description).toContain(
+      'the räkenskapsår ending 2026-06-30 is not closed, so its bokslut cannot be booked until the lock date is moved back',
+    )
+  })
+
+  it('offers nothing when the lock could not be read: an unread lock is never taken as open', async () => {
+    const { result } = await stageMark({ data: null, error: { message: 'connection reset' } }, [OPEN_FY_2526])
+
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject({ lock_offer: null })
+    expect(result).not.toHaveProperty('next')
+  })
+
+  it('names a lock tool that exists, staged and high risk as ever', () => {
+    const lock = tool('gnubok_update_bookkeeping_lock')
+    expect(lock).toBeDefined()
+    expect(OPERATION_RISK_TIERS.update_bookkeeping_lock).toBe('high')
+    expect(Object.keys(lock.inputSchema.properties as object)).toContain('bookkeeping_locked_through')
   })
 
   it('refuses at staging what the approval would refuse, staging nothing', async () => {

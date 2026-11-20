@@ -1,5 +1,3 @@
-import type { ResourceType } from './dto';
-
 export type ProviderName = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | 'wint';
 
 export interface RateLimitConfig {

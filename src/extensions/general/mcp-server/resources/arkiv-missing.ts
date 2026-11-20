@@ -1,6 +1,7 @@
 import type { McpResource } from './types'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { EXPECTATION_RULES } from '@/lib/arkiv/lint/checks'
+import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 
 /**
  * Arkiv phase 9, the agent door. What the books say should exist in the
@@ -24,7 +25,7 @@ export const arkivMissingResource: McpResource = {
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
     if (!isArkivBrainEnabled(companyId)) return { enabled: false, reason: 'Arkiv is not switched on for this company.' }
-    const [findings, inbox] = await Promise.all([
+    const [findings, inboxAddress] = await Promise.all([
       supabase
         .from('arkiv_findings')
         .select('id, key, detail, first_seen_at')
@@ -33,17 +34,15 @@ export const arkivMissingResource: McpResource = {
         .eq('status', 'open')
         .order('first_seen_at', { ascending: true })
         .limit(50),
-      supabase.from('company_inboxes').select('local_part').eq('company_id', companyId).eq('status', 'active').maybeSingle(),
+      resolveInboxAddress(supabase, companyId),
     ])
     if (findings.error) throw new Error(`findings fetch failed: ${findings.error.message}`)
-    const domain = process.env.RESEND_INBOUND_DOMAIN
-    const localPart = (inbox.data as { local_part: string } | null)?.local_part ?? null
     const rows = (findings.data ?? []) as ExpectedRow[]
     return {
       company: { record_ref: `company:${companyId}` },
       intake: {
         // Forwarding a document here walks the same pipe as an upload: read, classified, landed.
-        email: domain && localPart ? `${localPart}@${domain}` : null,
+        email: inboxAddress,
       },
       missing: rows.map((r) => {
         const rule = EXPECTATION_RULES.find((x) => x.id === r.detail.rule)

@@ -4,10 +4,12 @@
  * Both the internal dashboard route (`GET /api/salary/runs/{id}/agi/xml`)
  * and the v1 public route (`POST /api/v1/companies/{companyId}/salary-runs/{id}/generate-agi`)
  * call this helper. It loads the salary run + employees + per-day absence
- * records, builds the Skatteverket AGI XML, upserts the agi_declarations
- * row (correction-aware), updates `salary_runs.agi_generated_at`, emits
- * `agi.generated`, and auto-completes the `arbetsgivardeklaration` deadline
- * for the period.
+ * records, builds the Skatteverket AGI XML, writes the agi_declarations
+ * row (correction-aware: a correction run taking over the period's row
+ * resets its filing state), updates `salary_runs.agi_generated_at` and emits
+ * `agi.generated`. What it may write is decided once, by decideAgiWrite, on
+ * checked reads: a filed declaration is never rewritten (the stored XML comes
+ * back), and every write compares and sets on the row it read.
  *
  * Returns a discriminated result so callers can wrap it in their own
  * response envelope (internal uses raw `Response`; v1 uses the JSON `ok`
@@ -28,9 +30,11 @@ import {
   buildIndividuppgifterSnapshot,
   AGIIncompleteDataError,
   AGIPayloadTooLargeError,
+  findMissingCompanyData,
 } from './xml-generator'
-import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
+import type { AGIEmployeeData, AGICompanyData, AGITotals, AGIUnderlag } from './xml-generator'
 import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
+import { runCalculationState } from '../calculation-state'
 import { runDeviationWindow } from '../deviation-period'
 import { VAXA_STOD_AGI_FIELDS_RETIRED_FROM } from '../vaxa-stod'
 import {
@@ -41,12 +45,18 @@ import {
 } from '../benefit-payments'
 import { eventBus } from '@/lib/events'
 import { truncateToWholeKronor } from '@/lib/money'
-import {
-  computeDeclaredAvgifterWithOverrides,
-  isFSkattStatus,
-  resolveDeclaredAvgifterParams,
-} from '../declared-avgifter'
+import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
+import { regionalSupportForRun } from '../regional-support'
+import { agiFiledForRun } from '../agi-submission-state'
 import type { Logger } from '@/lib/logger'
+import { stockholmYearMonth } from '@/lib/dates/iso'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
+import { parseEntityType } from '@/lib/company/entity-type'
+import {
+  AGI_ELIGIBLE_RUN_STATUSES,
+  agiPeriodConflictDetails,
+  readOtherRunsPaidInPeriod,
+} from '@/lib/deadlines/agi-period-runs'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
 // this, columns added by recent migrations (removed_from_agi,
@@ -69,6 +79,7 @@ const LineItemSchema = z
     item_type: z.string(),
     amount: z.number().nullable().optional(),
     quantity: z.number().nullable().optional(),
+    benefit_type: z.string().nullable().optional(),
   })
   .passthrough()
 
@@ -103,8 +114,6 @@ const SalaryRunEmployeeRowSchema = z
 
 type SalaryRunEmployeeRow = z.infer<typeof SalaryRunEmployeeRowSchema>
 
-const ELIGIBLE_STATUSES = ['review', 'approved', 'paid', 'booked', 'corrected'] as const
-
 export interface GenerateAgiDeclarationArgs {
   supabase: SupabaseClient
   companyId: string
@@ -114,6 +123,16 @@ export interface GenerateAgiDeclarationArgs {
   salaryRunId: string
   log: Logger
   requestId: string
+  /**
+   * Submit-time regeneration (refreshAgiUnderlag in the Skatteverket
+   * extension). When the run's stored declaration already says exactly what
+   * this generation says (same XML apart from its Skapad timestamp, same
+   * stored totals), nothing is written and the stored XML comes back with
+   * `unchanged: true`: a submit that changes nothing must not restamp
+   * agi_generated_at, which would mark an open signing draft as stale, or
+   * emit agi.generated again.
+   */
+  writeOnlyIfChanged?: boolean
 }
 
 export type GenerateAgiDeclarationResult =
@@ -127,6 +146,13 @@ export type GenerateAgiDeclarationResult =
       isCorrection: boolean
       totals: AGITotals
       orgNumber: string
+      /**
+       * Nothing was written and `xml` is the stored declaration: it is filed
+       * (never rewritten), or writeOnlyIfChanged found it already matching.
+       */
+      unchanged?: boolean
+      /** With `unchanged`: the stored declaration is filed, so nothing may replace it. */
+      filed?: boolean
     }
   | {
       ok: false
@@ -142,7 +168,7 @@ const NO_BENEFITS: TaxableBenefits = {
   grossTotal: 0,
   paid: 0,
   reduction: 0,
-  reducedType: null,
+  reducedTypes: [],
   taxableTotal: 0,
 }
 
@@ -160,15 +186,371 @@ function sumLineItemAmounts(
 // overrides included. The calculation engine already stores
 // avgifter_basis/avgifter_amount = 0 for these rows; a manual advanced-mode
 // override must not resurrect them, or the filing would claim social charges
-// on pay whose IU simultaneously asserts FK131 (not subject to them).
+// on pay whose IU simultaneously declares it in FK125 (underlag for the
+// recipient's egenavgifter, not the payer's arbetsgivaravgifter).
 function isFSkattRow(sre: SalaryRunEmployeeRow): boolean {
   return isFSkattStatus(sre.employee?.f_skatt_status)
+}
+
+/**
+ * A reviewer's avgiftsunderlag override of 0 kr (avancerat läge) on a
+ * payslip that is not an F-skatt payee's: the pay is no underlag for
+ * socialavgifter, so the IU declares it in the ej-underlag fields (FK131
+ * cash, FK132-FK134 benefits). The common case is ersättning to a person
+ * that stays under 1 000 kr in the year (SAL 2 kap. 14 §; Teknisk
+ * beskrivning 1.1.18.2 avsnitt 5.4), crm#1372: the override used to reach
+ * the booking only, while the IU still declared the pay in FK011/FK012 and
+ * Skatteverket charged avgifter on it. A partial override (above 0) has no
+ * field it could be declared in: the save refuses it, and a row stored
+ * before that is refused here (hasPartialAvgiftUnderlag, #91).
+ */
+function declaresNoAvgiftUnderlag(sre: SalaryRunEmployeeRow): boolean {
+  return !isFSkattRow(sre) && sre.avgifter_basis_override === 0
+}
+
+/**
+ * An avgiftsunderlag override above 0 on a payslip that is not an F-skatt
+ * payee's (#91). The IU can only leave pay out of the underlag through a
+ * field that says why (FK131 for pay that is no underlag for socialavgifter,
+ * FK019 for utgifter i arbetet by beslut or schablon; Bilaga Fältlista
+ * 1.1.18.1), and a bare number says neither, so the IU would declare the
+ * full pay in FK011 while the booking and FK487 carry the reduced one.
+ * F-skatt rows ignore every avgifter override (isFSkattRow invariant).
+ */
+function hasPartialAvgiftUnderlag(sre: SalaryRunEmployeeRow): boolean {
+  return (
+    !isFSkattRow(sre) &&
+    sre.avgifter_basis_override != null &&
+    sre.avgifter_basis_override !== 0
+  )
+}
+
+/**
+ * The XML without its Avsandare/Skapad stamp, the one element two generations
+ * from the same data always disagree on.
+ */
+function agiXmlWithoutCreatedStamp(xml: string): string {
+  return xml.replace(/<gem:Skapad>[^<]*<\/gem:Skapad>/, '')
+}
+
+/** The period's stored declaration: what the write decision and the writeOnlyIfChanged comparison read. */
+interface StoredAgiDeclaration {
+  id: string
+  salary_run_id: string | null
+  status: string
+  submitted_at: string | null
+  xml_content?: string | null
+  total_gross?: number | string | null
+  total_tax?: number | string | null
+  total_avgifter_basis?: number | string | null
+  total_avgifter?: number | string | null
+  employee_count?: number | null
+}
+
+/** True when the stored row holds exactly what this generation would write. */
+function storedDeclarationMatches(
+  stored: StoredAgiDeclaration,
+  fresh: { xml: string; totals: AGITotals; employeeCount: number; totalGross: unknown },
+): boolean {
+  return (
+    typeof stored.xml_content === 'string' &&
+    agiXmlWithoutCreatedStamp(stored.xml_content) === agiXmlWithoutCreatedStamp(fresh.xml) &&
+    Number(stored.total_tax) === fresh.totals.totalTax &&
+    Number(stored.total_avgifter) === fresh.totals.totalAvgifterAmount &&
+    Number(stored.total_avgifter_basis) === fresh.totals.totalAvgifterBasis &&
+    Number(stored.employee_count) === fresh.employeeCount &&
+    Number(stored.total_gross) === Number(fresh.totalGross)
+  )
+}
+
+/** What a generation may do with its period's one agi_declarations row. */
+export type AgiWriteDecision = 'insert' | 'update_own' | 'take_over' | 'conflict' | 'filed'
+
+/** The run fields the write decision reads (salary_runs row). */
+export interface AgiWriteRun {
+  id: string
+  corrects_run_id?: string | null
+  agi_generated_at?: string | null
+  agi_submitted_at?: string | null
+}
+
+/**
+ * The one decision on what a generation may write over its period's
+ * declaration (#58). It used to be spread over unchecked reads and callers:
+ * the filed rule lived only in the Skatteverket submit path, so the
+ * dashboard download, v1 and MCP rewrote a filed XML, and a failed read
+ * looked like "no row" or "no live run".
+ *
+ * - no row: insert one.
+ * - the run's own row: `filed` when it carries the run's kvittens
+ *   (agiFiledForRun), answered with the stored XML and never rewritten;
+ *   otherwise `update_own`.
+ * - the row of the run this one corrects, of a corrected run, or of no run:
+ *   `take_over` (the row starts unfiled under this run).
+ * - any other run's row, including one whose run cannot be found: `conflict`.
+ *   Two live runs paid out in one month would have to be merged into one
+ *   declaration, which the generator cannot do; overwriting would file the
+ *   wrong amounts. Reachable since the period follows payment_date (#2191):
+ *   an August run paid 25 Sept and a September run paid 30 Sept both land
+ *   in 202609. The month's first generation has no row to conflict with;
+ *   the generator refuses that one on readOtherRunsPaidInPeriod (crm#1768).
+ *
+ * `holder` is the run holding the row when that is neither this run nor the
+ * one it corrects (null when not found); only then is it read.
+ */
+export function decideAgiWrite(
+  row: Pick<StoredAgiDeclaration, 'salary_run_id' | 'status' | 'submitted_at'> | null,
+  run: AgiWriteRun,
+  holder: { status: string } | null,
+): AgiWriteDecision {
+  if (!row) return 'insert'
+  if (row.salary_run_id === run.id) return agiFiledForRun(run, row) ? 'filed' : 'update_own'
+  if (
+    row.salary_run_id === null ||
+    (run.corrects_run_id != null && row.salary_run_id === run.corrects_run_id) ||
+    holder?.status === 'corrected'
+  ) {
+    return 'take_over'
+  }
+  return 'conflict'
+}
+
+/** The run holding the period's row, for the conflict answer. */
+interface AgiHolderRun {
+  id: string
+  status: string
+  period_year: number
+  period_month: number
+}
+
+type AgiPeriodRead =
+  | { ok: true; row: StoredAgiDeclaration | null; holder: AgiHolderRun | null }
+  | { ok: false; error: unknown }
+
+/**
+ * Reads the period's declaration and, when another run holds it, that run.
+ * A read error is an error, never "no row" or "no live run": either would
+ * let the generation insert or take over on a guess.
+ */
+async function readAgiPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: { periodYear: number; periodMonth: number },
+  run: AgiWriteRun,
+): Promise<AgiPeriodRead> {
+  // maybeSingle: no row is the first generation, not an error. The stored
+  // XML and totals are read too, for the filed answer and writeOnlyIfChanged
+  // (one literal select, so the column guard can check it).
+  const { data, error } = await supabase
+    .from('agi_declarations')
+    .select('id, salary_run_id, status, submitted_at, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
+    .eq('company_id', companyId)
+    .eq('period_year', period.periodYear)
+    .eq('period_month', period.periodMonth)
+    .maybeSingle()
+  if (error) return { ok: false, error }
+  const row = data as StoredAgiDeclaration | null
+  const holderId = row?.salary_run_id
+  if (!holderId || holderId === run.id || holderId === run.corrects_run_id) {
+    return { ok: true, row, holder: null }
+  }
+  const { data: holder, error: holderError } = await supabase
+    .from('salary_runs')
+    .select('id, status, period_year, period_month')
+    .eq('id', holderId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (holderError) return { ok: false, error: holderError }
+  return { ok: true, row, holder: holder as AgiHolderRun | null }
+}
+
+/** The declaration columns a generation writes, whichever way it writes them. */
+interface AgiDeclarationContent {
+  xml_content: string
+  individuppgifter: unknown
+  total_gross: unknown
+  total_tax: number
+  total_avgifter_basis: number
+  total_avgifter: number
+  employee_count: number
+}
+
+/** A decision that writes, with the row it was made on. */
+type AgiWriteTarget =
+  | { decision: 'insert'; row: null }
+  | { decision: 'update_own' | 'take_over'; row: StoredAgiDeclaration }
+
+/** The identity columns of a new declaration: whose it is and for which period. */
+interface AgiDeclarationKeys {
+  company_id: string
+  user_id: string
+  salary_run_id: string
+  period_year: number
+  period_month: number
+}
+
+/**
+ * One write of the decided kind. An update only lands on the row as it was
+ * read (same salary run, same status): a submission, a kvittens or another
+ * run's takeover in between makes it miss. A miss (or an insert that lost
+ * the race to the unique period key, 23505) comes back as `id: null` for the
+ * caller to read and decide again.
+ */
+async function writeAgiDeclaration(
+  supabase: SupabaseClient,
+  target: AgiWriteTarget,
+  keys: AgiDeclarationKeys,
+  content: AgiDeclarationContent,
+): Promise<{ ok: true; id: string | null } | { ok: false; error: unknown }> {
+  if (target.decision === 'insert') {
+    const { data, error } = await supabase
+      .from('agi_declarations')
+      // Literal payloads, here and below: the phantom-column guard checks
+      // every column of a literal and none of a spread.
+      .insert({
+        company_id: keys.company_id,
+        user_id: keys.user_id,
+        salary_run_id: keys.salary_run_id,
+        period_year: keys.period_year,
+        period_month: keys.period_month,
+        xml_content: content.xml_content,
+        individuppgifter: content.individuppgifter,
+        total_gross: content.total_gross,
+        total_tax: content.total_tax,
+        total_avgifter_basis: content.total_avgifter_basis,
+        total_avgifter: content.total_avgifter,
+        employee_count: content.employee_count,
+      })
+      .select('id')
+      .single()
+    if ((error as { code?: string } | null)?.code === '23505') return { ok: true, id: null }
+    if (error || !data) return { ok: false, error }
+    return { ok: true, id: (data as { id: string }).id }
+  }
+
+  const { row } = target
+  const update = (
+    target.decision === 'take_over'
+      ? supabase.from('agi_declarations').update({
+          xml_content: content.xml_content,
+          individuppgifter: content.individuppgifter,
+          total_gross: content.total_gross,
+          total_tax: content.total_tax,
+          total_avgifter_basis: content.total_avgifter_basis,
+          total_avgifter: content.total_avgifter,
+          employee_count: content.employee_count,
+          is_correction: true,
+          salary_run_id: keys.salary_run_id,
+          // A takeover clears the filing state. The period's one row then
+          // takes another run's declaration: the run this one corrects (or a
+          // corrected one before it). That declaration's filing state does
+          // not carry over: this XML has not been sent, so the row starts
+          // unfiled, and the submit flips it to pending_signature and the
+          // kvittens reconciliation promotes it on the correction's OWN
+          // kvittens. The original's receipt is not lost: agi_kvittenser
+          // keeps every kvittens and its run keeps agi_submitted_at.
+          status: 'generated',
+          kvittensnummer: null,
+          submitted_at: null,
+          submitted_by: null,
+          response_data: null,
+        })
+      : supabase.from('agi_declarations').update({
+          xml_content: content.xml_content,
+          individuppgifter: content.individuppgifter,
+          total_gross: content.total_gross,
+          total_tax: content.total_tax,
+          total_avgifter_basis: content.total_avgifter_basis,
+          total_avgifter: content.total_avgifter,
+          employee_count: content.employee_count,
+          is_correction: true,
+          salary_run_id: keys.salary_run_id,
+        })
+  )
+    .eq('id', row.id)
+    .eq('status', row.status)
+  const { data, error } = await (row.salary_run_id === null
+    ? update.is('salary_run_id', null)
+    : update.eq('salary_run_id', row.salary_run_id)
+  ).select('id')
+  if (error) return { ok: false, error }
+  const updated = (data ?? []) as Array<{ id: string }>
+  return { ok: true, id: updated[0]?.id ?? null }
+}
+
+/** The employer identity and kontaktperson an AGI files with, before its period is known. */
+type AgiCompanyIdentity = Omit<AGICompanyData, 'periodYear' | 'periodMonth'>
+
+/**
+ * Reads the employer identity and kontaktperson the AGI files with: one
+ * reader for generation and for the staging pre-check, so the check can
+ * neither pass a company generation refuses nor refuse one it accepts
+ * (crm#1435). Null when the company row is missing.
+ */
+async function readAgiCompanyIdentity(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  userEmail: string | null,
+): Promise<AgiCompanyIdentity | null> {
+  const { data: company } = await supabase
+    .from('companies')
+    .select('name, org_number, entity_type')
+    .eq('id', companyId)
+    .single()
+
+  if (!company) return null
+
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('company_name, org_number, entity_type, phone, email, tax_contact_name, tax_contact_phone, tax_contact_email')
+    .eq('company_id', companyId)
+    .single()
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('full_name, email')
+    .eq('id', userId)
+    .single()
+
+  // Employer name on the arbetsgivardeklaration follows the current company
+  // name (company_settings.company_name), not the frozen onboarding companies.name.
+  const companyName = settings?.company_name || company.name
+  return {
+    orgNumber: effectiveOrgNumber(settings?.org_number, company.org_number) ?? '',
+    entityType: parseEntityType(settings?.entity_type || company.entity_type),
+    companyName,
+    // The AGI kontaktperson is the company's tax contact when one is set
+    // (company_settings.tax_contact_*, the same contact the periodisk
+    // sammanställning files with); each field falls back on its own to the
+    // company contact details and then the signed-in user.
+    contactName: (settings?.tax_contact_name?.trim() || profile?.full_name || companyName || '').trim(),
+    contactPhone: (settings?.tax_contact_phone?.trim() || settings?.phone || '').trim(),
+    contactEmail: (settings?.tax_contact_email?.trim() || settings?.email || profile?.email || userEmail || '').trim(),
+  }
+}
+
+/**
+ * The staging pre-check: the AGI_INCOMPLETE_DATA refusal generation would
+ * answer for missing company data, read and judged exactly as generation
+ * does, so an agent learns what to fill in before anyone approves a
+ * generation that cannot succeed (crm#1435). Null when nothing is missing,
+ * or when the company row is missing (generation answers that itself).
+ */
+export async function findAgiCompanyDataGap(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  userEmail: string | null,
+): Promise<AGIIncompleteDataError | null> {
+  const identity = await readAgiCompanyIdentity(supabase, companyId, userId, userEmail)
+  return identity ? findMissingCompanyData(identity) : null
 }
 
 export async function generateAgiDeclaration(
   args: GenerateAgiDeclarationArgs,
 ): Promise<GenerateAgiDeclarationResult> {
-  const { supabase, companyId, userId, userEmail, salaryRunId, log, requestId } = args
+  const { supabase, companyId, userId, userEmail, salaryRunId, log, requestId, writeOnlyIfChanged } = args
   const opLog = log.child({ salaryRunId })
 
   // 1. Run + status precheck.
@@ -182,11 +564,11 @@ export async function generateAgiDeclaration(
   if (runError || !run) {
     return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
   }
-  if (!ELIGIBLE_STATUSES.includes((run.status as typeof ELIGIBLE_STATUSES[number]))) {
+  if (!AGI_ELIGIBLE_RUN_STATUSES.includes((run.status as typeof AGI_ELIGIBLE_RUN_STATUSES[number]))) {
     return {
       ok: false,
       code: 'AGI_GENERATE_NOT_BOOKABLE',
-      details: { current_status: run.status, eligible_statuses: ELIGIBLE_STATUSES },
+      details: { current_status: run.status, eligible_statuses: AGI_ELIGIBLE_RUN_STATUSES },
     }
   }
 
@@ -195,27 +577,10 @@ export async function generateAgiDeclaration(
   const agiPeriod = agiReportingPeriod(run)
 
   // 2. Company + settings + profile (for contact info).
-  const { data: company } = await supabase
-    .from('companies')
-    .select('name, org_number')
-    .eq('id', companyId)
-    .single()
-
-  if (!company) {
+  const identity = await readAgiCompanyIdentity(supabase, companyId, userId, userEmail)
+  if (!identity) {
     return { ok: false, code: 'COMPANY_NOT_FOUND' }
   }
-
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('company_name, org_number, phone, email')
-    .eq('company_id', companyId)
-    .single()
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('full_name, email')
-    .eq('id', userId)
-    .single()
 
   // 3. Roster + line items + per-day absence.
   const { data: runEmployees } = await supabase
@@ -231,19 +596,18 @@ export async function generateAgiDeclaration(
   if (!runEmployees) {
     return { ok: false, code: 'SALARY_RUN_NO_EMPLOYEES' }
   }
+  // A run in review whose inputs moved after its calculation would declare
+  // figures the engine did not produce for them (calculation-state.ts). A filed
+  // declaration declares nothing new: it is answered from the stored XML below.
+  if (!run.agi_submitted_at && runCalculationState(run, runEmployees) === 'stale') {
+    return { ok: false, code: 'SALARY_RUN_NOT_CALCULATED' }
+  }
 
   // 4. Build AGI input shapes.
-  // Employer name on the arbetsgivardeklaration follows the current company
-  // name (company_settings.company_name), not the frozen onboarding companies.name.
-  const companyName = settings?.company_name || company.name
   const companyData: AGICompanyData = {
-    orgNumber: (settings?.org_number || company.org_number || '').trim(),
-    companyName,
+    ...identity,
     periodYear: agiPeriod.periodYear,
     periodMonth: agiPeriod.periodMonth,
-    contactName: (profile?.full_name || companyName || '').trim(),
-    contactPhone: (settings?.phone || '').trim(),
-    contactEmail: (settings?.email || profile?.email || userEmail || '').trim(),
   }
 
   // Load per-day absence (VAB + parental only: sick days go to FK separately).
@@ -265,7 +629,7 @@ export async function generateAgiDeclaration(
     }>
   >()
   if (employeeIds.length > 0) {
-    const { data: absenceRows } = await supabase
+    const { data: absenceRows, error: absenceError } = await supabase
       .from('salary_absence_days')
       .select('employee_id, absence_date, absence_type, hours, franvaro_specifikationsnummer')
       .eq('company_id', companyId)
@@ -273,6 +637,11 @@ export async function generateAgiDeclaration(
       .gte('absence_date', periodStart)
       .lte('absence_date', periodEnd)
       .in('employee_id', employeeIds)
+    // An unread absence list is not an empty one: filing on it would drop
+    // the frånvarouppgifter (FK821-FK827) Försäkringskassan reads.
+    if (absenceError) {
+      return { ok: false, code: 'DATABASE_ERROR', details: absenceError }
+    }
     for (const row of (absenceRows ?? []) as Array<{
       employee_id: string
       absence_date: string
@@ -289,7 +658,7 @@ export async function generateAgiDeclaration(
       list.push({
         date: row.absence_date,
         type: row.absence_type,
-        hours: Number(row.hours ?? 8),
+        hours: Number(row.hours),
         specifikationsnummer: row.franvaro_specifikationsnummer,
       })
       absenceByEmployee.set(row.employee_id, list)
@@ -354,7 +723,7 @@ export async function generateAgiDeclaration(
       }
     }
     const resolution = resolveTaxableBenefits(
-      (sre.line_items ?? []).map((li) => ({ itemType: li.item_type, amount: li.amount ?? 0 })),
+      (sre.line_items ?? []).map((li) => ({ itemType: li.item_type, amount: li.amount ?? 0, benefitType: li.benefit_type })),
     )
     if (!resolution.ok) {
       return {
@@ -381,6 +750,42 @@ export async function generateAgiDeclaration(
         details: { missing_fields: ['benefit_values'], message: stale },
       }
     }
+    // An underlag of 0 with an avgift above 0 contradicts itself: the IU
+    // declares the pay as no underlag (Skatteverket charges nothing on it)
+    // while the booking and FK487 would carry the avgift. The override
+    // route refuses to save that pair; a row stored some other way is
+    // refused here rather than filed.
+    if (
+      declaresNoAvgiftUnderlag(sre) &&
+      (sre.avgifter_amount_override ?? sre.avgifter_amount) !== 0
+    ) {
+      return {
+        ok: false,
+        code: 'AGI_INCOMPLETE_DATA',
+        details: {
+          missing_fields: ['avgifter_amount_override'],
+          message:
+            `${who}: avgiftsunderlaget är justerat till 0 kr men arbetsgivaravgiften inte. ` +
+            'Ett underlag på 0 kr redovisas som ersättning som inte är underlag för socialavgifter (ruta 131-134), ' +
+            'så sätt även arbetsgivaravgiften till 0 kr i avancerat läge, eller rensa justeringen.',
+        },
+      }
+    }
+    // A partial underlag cannot be declared (hasPartialAvgiftUnderlag): the
+    // save refuses it since #91, and a row stored before that is refused
+    // here rather than filed with an IU that contradicts the booking.
+    if (hasPartialAvgiftUnderlag(sre)) {
+      return {
+        ok: false,
+        code: 'AGI_INCOMPLETE_DATA',
+        details: {
+          missing_fields: ['avgifter_basis_override'],
+          message:
+            `${who}: avgiftsunderlaget är justerat till ett delvis belopp, som inte går att redovisa i arbetsgivardeklarationen. ` +
+            'Rensa justeringen i avancerat läge, eller markera att ersättningen inte är underlag för arbetsgivaravgifter.',
+        },
+      }
+    }
     rowBenefits.push(resolution.benefits)
   }
 
@@ -393,28 +798,45 @@ export async function generateAgiDeclaration(
       const reduced = (type: BenefitItemType, historical: number): number =>
         reduction > 0 && taxableByType[type] !== undefined ? (taxableByType[type] as number) : historical
 
-      const benefitCar = reduced('benefit_car', sumLineItemAmounts(lineItems, ['benefit_car']))
+      // A benefit is declared when the payslip HAS it (its förmånsvärde as
+      // entered is above 0), at the value after the employee's payment: a
+      // benefit paid in full by nettolöneavdrag is still reported, as 0
+      // (Teknisk beskrivning 1.1.18.2 avsnitt 5.3; Skatteverket's guidance
+      // for rutor 012 and 013: "Om värdet blir noll (0) efter avdrag ska du
+      // fylla i en nolla (0)").
+      const grossCar = sumLineItemAmounts(lineItems, ['benefit_car'])
+      const grossHousing = sumLineItemAmounts(lineItems, ['benefit_housing'])
+      const benefitCar = reduced('benefit_car', grossCar)
       const benefitFuel = sumLineItemAmounts(lineItems, ['benefit_fuel'])
-      const benefitHousing = reduced('benefit_housing', sumLineItemAmounts(lineItems, ['benefit_housing']))
-      // FK015 kostförmån has its own field: never fold into FK012.
-      // Skatteverket cross-checks the krona-amount against the PBB-schablon.
-      const benefitMeals = reduced('benefit_meals', sumLineItemAmounts(lineItems, ['benefit_meals']))
-      // FK012 SkatteplOvrigaFormanerUlagAG is the catch-all for taxable
-      // benefits without their own FK code (bike, wellness, "other") PLUS
-      // the krona-amount for housing (since FK041/FK043 carry only the flag).
-      const FK012_TYPES = ['benefit_bike', 'benefit_wellness', 'benefit_other'] as const
+      const benefitHousing = reduced('benefit_housing', grossHousing)
+      // FK012 SkatteplOvrigaFormanerUlagAG carries every taxable benefit
+      // except bil and drivmedel: kost, bike, wellness, "other" PLUS the
+      // krona-amount for housing (FK041/FK043 carry only the flag).
+      // Kostförmån has no field of its own in Skatteverket's schema (#81).
+      const FK012_TYPES = ['benefit_meals', 'benefit_bike', 'benefit_wellness', 'benefit_other'] as const
+      const grossFk012Types = sumLineItemAmounts(lineItems, [...FK012_TYPES])
+      const grossOther = grossFk012Types + grossHousing
       const benefitOther =
         (reduction > 0
           ? FK012_TYPES.reduce((sum, type) => sum + (taxableByType[type] ?? 0), 0)
-          : sumLineItemAmounts(lineItems, [...FK012_TYPES])) + benefitHousing
+          : grossFk012Types) + benefitHousing
 
       // Default housing type: if the employee got a housing benefit line
       // item but no housing_benefit_type is set, treat as 'ej_smahus' (the
       // more common case). NULL with no benefit line item → no flag emitted.
+      // A housing benefit paid in full keeps its flag next to FK012 = 0
+      // (kontroll S_155 wants FK012 whenever FK041/FK043 is there).
       let housingBenefit: 'smahus' | 'ej_smahus' | undefined
-      if (benefitHousing > 0) {
+      if (grossHousing > 0) {
         housingBenefit = emp?.housing_benefit_type ?? 'ej_smahus'
       }
+
+      // FK050 / FK051 flag the TAX-FREE part only: the *_taxfree rows, which
+      // the line commands cap at the year's schablon. A *_taxable row is the
+      // excess (or a payment that does not qualify) and is already pay in
+      // gross_salary, so it sets no flag (Fältlista 1.1.18.1 FK050, FK051).
+      const mileageAllowancePaid = sumLineItemAmounts(lineItems, ['mileage_taxfree']) > 0
+      const traktamentePaid = sumLineItemAmounts(lineItems, ['traktamente_taxfree']) > 0
 
       const absenceEvents = absenceByEmployee.get(sre.employee_id)
 
@@ -425,25 +847,33 @@ export async function generateAgiDeclaration(
       const effectiveAvgifterBasis = isFSkatt
         ? 0
         : sre.avgifter_basis_override ?? sre.avgifter_basis
+      // F-skatt payees: inkomst av tjänst for a mottagare med F-skatt is
+      // underlag for egenavgifter, so cash goes to FK125 ONLY and benefits
+      // to FK126/FK127/FK128/FK123/FK124 (Fältlista 1.1.18.1 FK125; SAL
+      // 2 kap. 5 §, 3 kap. 8 §; #82: it used to go to FK131/FK132, which
+      // left it out of the recipient's egenavgifter). Payslips declared
+      // with no avgiftsunderlag get FK131 + FK132/FK133/FK134/FK137/FK138.
+      // Regular employees get FK011 + FK012/FK013/FK018/FK041/FK043.
+      const underlag: AGIUnderlag = isFSkatt
+        ? 'egenavgifter'
+        : declaresNoAvgiftUnderlag(sre)
+          ? 'ej_socialavgifter'
+          : 'arbetsgivaravgifter'
       return {
         personnummer: emp?.personnummer ?? '',
         specificationNumber: emp?.specification_number ?? 0,
         removed: Boolean(sre.removed_from_agi),
-        grossSalary: isFSkatt ? 0 : sre.gross_salary,
+        grossSalary: sre.gross_salary,
         taxWithheld: effectiveTax,
         avgifterBasis: effectiveAvgifterBasis,
-        fSkattPayment: isFSkatt ? sre.gross_salary : undefined,
-        // F-skatt payees: cash goes to FK131 ONLY (grossSalary is zeroed so
-        // FK011 is never emitted for the same payment) and benefits to the
-        // ej-UlagSA variants (FK132/FK133/FK134/FK137/FK138/FK139). Regular
-        // employees get FK011 + FK012/FK013/FK015/FK018/FK041/FK043.
-        benefitsExcludedFromSAUnderlag: isFSkatt ? true : undefined,
-        benefitCar: benefitCar > 0 ? benefitCar : undefined,
+        underlag,
+        benefitCar: grossCar > 0 ? benefitCar : undefined,
         benefitFuel: benefitFuel > 0 ? benefitFuel : undefined,
-        benefitMeals: benefitMeals > 0 ? benefitMeals : undefined,
         housingBenefit,
-        benefitOther: benefitOther > 0 ? benefitOther : undefined,
+        benefitOther: grossOther > 0 ? benefitOther : undefined,
         benefitsAdjusted: Boolean(sre.benefits_adjusted),
+        mileageAllowancePaid,
+        traktamentePaid,
         sickDays: (sre.sick_days ?? 0) > 0 ? (sre.sick_days ?? 0) : undefined,
         vabDays: (sre.vab_days ?? 0) > 0 ? (sre.vab_days ?? 0) : undefined,
         parentalDays:
@@ -453,8 +883,9 @@ export async function generateAgiDeclaration(
     },
   )
     // Drop individuppgifter with nothing to report. An employee who took 0 kr
-    // and had no benefits, tax or absence this month is simply omitted (you
-    // only file an IU for a person who received something). This yields a clean
+    // and had no benefits, tax-free allowance, tax or absence this month is
+    // simply omitted (you only file an IU for a person who received
+    // something; a tax-free traktamente alone is reported, as FK051). This yields a clean
     // HU-only nolldeklaration for a full nollkörning, and omits zero-paid
     // employees in a mixed run. Borttag (removed) tombstones are always kept.
     .filter(
@@ -462,12 +893,12 @@ export async function generateAgiDeclaration(
         e.removed === true ||
         (e.grossSalary ?? 0) > 0 ||
         (e.taxWithheld ?? 0) > 0 ||
-        (e.fSkattPayment ?? 0) > 0 ||
-        (e.benefitCar ?? 0) > 0 ||
+        e.benefitCar !== undefined ||
         (e.benefitFuel ?? 0) > 0 ||
-        (e.benefitMeals ?? 0) > 0 ||
-        (e.benefitOther ?? 0) > 0 ||
+        e.benefitOther !== undefined ||
         e.housingBenefit !== undefined ||
+        e.mileageAllowancePaid === true ||
+        e.traktamentePaid === true ||
         (e.sickDays ?? 0) > 0 ||
         (e.vabDays ?? 0) > 0 ||
         (e.parentalDays ?? 0) > 0 ||
@@ -485,40 +916,39 @@ export async function generateAgiDeclaration(
   // contribute to FK497/FK487/FK499 because the prior submission's amounts
   // remain on file at Skatteverket; the borttag just removes the IU itself.
   const activeEmployees = parsedRows.filter((sre) => !sre.removed_from_agi)
-  // F-skatt rows contribute 0 regardless of overrides (see isFSkattRow).
-  const effectiveBasis = (sre: SalaryRunEmployeeRow): number =>
-    isFSkattRow(sre) ? 0 : (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
 
-  // One computation for every roster shape (computeDeclaredAvgifterWithOverrides):
-  // rows WITHOUT an avgifter_amount_override run Skatteverket's underlag
-  // computation on the FILED basis (never basis overrides: those don't reach
-  // the IU fields, so Skatteverket computes from the filed underlag
-  // regardless, and letting them steer FK487 or the payment would file an
-  // FK487 contradicting the declaration's own IUs and underpay the
-  // skattekonto). Rows WITH an amount override (FoU-avdrag and other manual
-  // adjustments) contribute their manual amounts per category instead: a
-  // manual adjustment on one employee must not cost the colleagues their
-  // SKV-exact declared amounts. The salary booking's split runs the same
-  // function, so booked 2731 == filed FK487 == stored == paid.
-  const declared = computeDeclaredAvgifterWithOverrides(
-    activeEmployees.map((sre) => {
-      const overridden = !isFSkattRow(sre) && sre.avgifter_amount_override != null
-      return {
-        // Overridden rows report their effective (override-coalesced) basis;
-        // computing rows use the FILED basis.
-        basis: overridden ? effectiveBasis(sre) : isFSkattRow(sre) ? 0 : sre.avgifter_basis || 0,
-        rate: sre.avgifter_rate,
-        category: sre.avgifter_category ?? null,
-        overrideAmount: overridden ? sre.avgifter_amount_override : null,
-      }
-    }),
-    resolveDeclaredAvgifterParams(
-      (run.calculation_params as Record<string, unknown> | null) ?? null,
-    ),
+  // One computation for every roster shape (declaredAvgifterForRun, over
+  // computeDeclaredAvgifterWithOverrides). It drops the borttag tombstones
+  // and zeroes F-skatt rows (overrides included) itself. Rows WITHOUT an
+  // avgifter_amount_override run Skatteverket's underlag computation on the
+  // FILED basis (a partial basis override is refused above, #91: it cannot
+  // reach the IU fields, and letting it steer FK487 or the payment would
+  // file an FK487 contradicting the declaration's own IUs). A basis
+  // override of 0 does reach the IU (declaresNoAvgiftUnderlag) and always
+  // comes with an amount override of 0, refused above otherwise. Rows WITH an amount
+  // override (FoU-avdrag and other manual adjustments) contribute their
+  // manual amounts per category instead: a manual adjustment on one employee
+  // must not cost the colleagues their SKV-exact declared amounts. The
+  // salary booking's split runs the same computation, so booked 2731 ==
+  // filed FK487 == stored == paid, and the run page and the
+  // Lönesammanställning show the declared figure through this same call
+  // (crm#1149).
+  const declared = declaredAvgifterForRun(
+    parsedRows,
+    (run.calculation_params as Record<string, unknown> | null) ?? null,
   )
   const avgifterByCategory = declared.byCategory as AGITotals['avgifterByCategory']
-  const totalAvgifterAmount = declared.totalAmount
   const totalAvgifterBasis = declared.totalUnderlag
+  // Regionalt stöd (PH 208): when the run was calculated with the company's
+  // setting on, HU carries FK471/FK476 and FK487 is the avgift after the
+  // avdrag (Skatteverket's IK587 subtracts FK476; kontroll B_006). The
+  // stored total_avgifter, the tax payment and the booked 2731
+  // (salary-entries.ts) follow the same net figure.
+  const regionalSupport = regionalSupportForRun(
+    parsedRows,
+    (run.calculation_params as Record<string, unknown> | null) ?? null,
+  )
+  const totalAvgifterAmount = declared.totalAmount - (regionalSupport?.deduction ?? 0)
 
   // FK497 SummaSkatteavdr must equal the sum of FK001 on active IUs (not
   // run.total_tax, which includes removed rows). Same for FK487.
@@ -540,6 +970,7 @@ export async function generateAgiDeclaration(
     totalAvgifterBasis,
     totalAvgifterAmount,
     avgifterByCategory,
+    ...(regionalSupport ? { regionalSupport } : {}),
   }
 
   // Soft AGI deadline check: warn (but don't block) when generating for a
@@ -551,8 +982,8 @@ export async function generateAgiDeclaration(
   // warn-level and carry no alert flag, so they do not reach the observability
   // sink (lib/observability); they are a breadcrumb, not a page.
   {
-    const now = new Date()
-    const currentYM = now.getUTCFullYear() * 100 + (now.getUTCMonth() + 1)
+    const { year: currentYear, month: currentMonth } = stockholmYearMonth()
+    const currentYM = currentYear * 100 + currentMonth
     const periodYM = agiPeriod.periodYear * 100 + agiPeriod.periodMonth
     if (periodYM > currentYM) {
       opLog.warn('AGI generated for future period', {
@@ -569,50 +1000,87 @@ export async function generateAgiDeclaration(
     }
   }
 
-  // 6. Existing AGI determines correction status. Use `.maybeSingle()`
-  // because the lookup must tolerate the no-row case without throwing:
-  // that's the FIRST-time generation path. `.single()` would surface a
-  // PGRST116 row-not-found error and abort what should be a clean insert.
-  const { data: existingAgi } = await supabase
-    .from('agi_declarations')
-    .select('id, salary_run_id')
-    .eq('company_id', companyId)
-    .eq('period_year', agiPeriod.periodYear)
-    .eq('period_month', agiPeriod.periodMonth)
-    .maybeSingle()
-
-  // Two runs may share a redovisningsperiod only when one corrects the
-  // other (a correction replaces the month's declaration wholesale). Any
-  // other run paid out in the same calendar month would have to be MERGED
-  // into one declaration, which this generator cannot do: overwriting the
-  // existing XML would file the wrong amounts, so refuse instead. Reachable
-  // now that the period follows payment_date (#2191): an August run paid
-  // 25 Sept and a September run paid 30 Sept both land in 202609.
-  if (
-    existingAgi?.salary_run_id &&
-    existingAgi.salary_run_id !== run.id &&
-    existingAgi.salary_run_id !== run.corrects_run_id
-  ) {
-    const { data: otherRun } = await supabase
-      .from('salary_runs')
-      .select('id, status, period_year, period_month')
-      .eq('id', existingAgi.salary_run_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (otherRun && otherRun.status !== 'corrected') {
+  // 6. The period's declaration decides what this generation may write
+  // (decideAgiWrite). A conflict and a filed declaration write nothing, so
+  // they are answered before any XML is built.
+  // The stored declaration answers with its own figures, so the XML and the
+  // totals next to it always agree. Only the per-category breakdown is not
+  // stored; it is today's, which for a booked run is the filed one.
+  const storedAnswer = (row: StoredAgiDeclaration, filed: boolean): GenerateAgiDeclarationResult => ({
+    ok: true,
+    xml: row.xml_content as string,
+    agiDeclarationId: row.id,
+    periodYear: agiPeriod.periodYear,
+    periodMonth: agiPeriod.periodMonth,
+    employeeCount: Number(row.employee_count),
+    isCorrection: true,
+    totals: {
+      ...totals,
+      totalTax: Number(row.total_tax),
+      totalAvgifterBasis: Number(row.total_avgifter_basis),
+      totalAvgifterAmount: Number(row.total_avgifter),
+    },
+    orgNumber: companyData.orgNumber,
+    unchanged: true,
+    ...(filed ? { filed: true } : {}),
+  })
+  const readAndDecide = async (): Promise<{ answer: GenerateAgiDeclarationResult } | AgiWriteTarget> => {
+    const read = await readAgiPeriod(supabase, companyId, agiPeriod, run)
+    if (!read.ok) return { answer: { ok: false, code: 'DATABASE_ERROR', details: read.error } }
+    const decision = decideAgiWrite(read.row, run, read.holder)
+    if (decision === 'conflict') {
       return {
-        ok: false,
-        code: 'AGI_PERIOD_CONFLICT',
-        details: {
-          period: formatAgiPeriodDashed(agiPeriod),
-          other_salary_run_id: otherRun.id,
-          other_run_period: `${otherRun.period_year}-${String(otherRun.period_month).padStart(2, '0')}`,
+        answer: {
+          ok: false,
+          code: 'AGI_PERIOD_CONFLICT',
+          status: 409,
+          details: {
+            period: formatAgiPeriodDashed(agiPeriod),
+            other_salary_run_id: read.row?.salary_run_id ?? null,
+            ...(read.holder
+              ? {
+                  other_run_period: formatAgiPeriodDashed({
+                    periodYear: read.holder.period_year,
+                    periodMonth: read.holder.period_month,
+                  }),
+                }
+              : {}),
+          },
         },
       }
     }
+    if (decision === 'filed') return { answer: storedAnswer(read.row as StoredAgiDeclaration, true) }
+    // Every write, the month's first included: refused while another live
+    // run is paid out in the same month, since this declaration would leave
+    // that run's pay out (readOtherRunsPaidInPeriod). A filed declaration
+    // above is still answered as filed: nothing new is declared.
+    const others = await readOtherRunsPaidInPeriod(supabase, companyId, agiPeriod, run)
+    if (!others.ok) return { answer: { ok: false, code: 'DATABASE_ERROR', details: others.error } }
+    if (others.runs.length > 0) {
+      return {
+        answer: {
+          ok: false,
+          code: 'AGI_PERIOD_CONFLICT',
+          status: 409,
+          details: agiPeriodConflictDetails(
+            agiPeriod,
+            others.runs,
+            (named, period) =>
+              `${named} hör också till redovisningsperiod ${period}. ` +
+              'Arbetsgivardeklarationen för en månad ska omfatta alla utbetalningar den månaden, och Accounted kan ännu inte ' +
+              'slå ihop flera lönekörningar till en deklaration, så den här körningen deklareras inte ensam. ' +
+              `Lämna in deklarationen för ${period} med summan av körningarna i Skatteverkets e-tjänst.`,
+          ),
+        },
+      }
+    }
+    if (decision === 'insert') return { decision, row: null }
+    return { decision, row: read.row as StoredAgiDeclaration }
   }
 
-  const isCorrection = !!existingAgi
+  let target = await readAndDecide()
+  if ('answer' in target) return target.answer
+  let isCorrection = target.row !== null
 
   // 7. Generate XML.
   let xml: string
@@ -640,112 +1108,75 @@ export async function generateAgiDeclaration(
     }
     throw err
   }
-  const individuppgifter = buildIndividuppgifterSnapshot(employeeData)
+  const content: AgiDeclarationContent = {
+    xml_content: xml,
+    individuppgifter: buildIndividuppgifterSnapshot(employeeData),
+    total_gross: run.total_gross,
+    // Declared whole-krona totals, exactly as serialised into the XML
+    // (FK497/FK487): the amounts Skatteverket computes from the declared
+    // underlag and draws from the skattekonto (modulo the two documented
+    // krona-scale approximations in declared-avgifter.ts). This is what
+    // agi-tax-settlement matches the draw against. run.total_tax would
+    // drift: it keeps öre and includes removed rows.
+    total_tax: totals.totalTax,
+    total_avgifter_basis: totals.totalAvgifterBasis,
+    total_avgifter: totals.totalAvgifterAmount,
+    employee_count: employeeData.length,
+  }
+  const keys: AgiDeclarationKeys = {
+    company_id: companyId,
+    user_id: userId,
+    salary_run_id: run.id,
+    period_year: agiPeriod.periodYear,
+    period_month: agiPeriod.periodMonth,
+  }
 
-  // 8. UPSERT agi_declarations.
-  let agiDeclarationId: string
-  if (existingAgi) {
-    const { error: updErr } = await supabase
-      .from('agi_declarations')
-      .update({
-        xml_content: xml,
-        individuppgifter,
-        total_gross: run.total_gross,
-        // Declared whole-krona totals, exactly as serialised into the XML
-        // (FK497/FK487): the amounts Skatteverket computes from the declared
-        // underlag and draws from the skattekonto (modulo the two documented
-        // krona-scale approximations in declared-avgifter.ts). This is what
-        // agi-tax-settlement matches the draw against. run.total_tax would
-        // drift: it keeps öre and includes removed rows.
-        total_tax: totals.totalTax,
-        total_avgifter_basis: totals.totalAvgifterBasis,
-        total_avgifter: totals.totalAvgifterAmount,
-        employee_count: employeeData.length,
-        is_correction: true,
-        salary_run_id: run.id,
-      })
-      .eq('id', existingAgi.id)
-    if (updErr) {
-      return { ok: false, code: 'DATABASE_ERROR', details: updErr }
+  // 8. Write: compare-and-set on the row as read. A miss means something
+  // else wrote the period in between (another generation, the submit, the
+  // kvittens): read and decide once more, then give up rather than write
+  // over it blind.
+  let agiDeclarationId: string | null = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) {
+      target = await readAndDecide()
+      if ('answer' in target) return target.answer
+      // The re-read can turn a lost insert into an update of the row the
+      // winner wrote: the caller is told what this write is. The XML does
+      // not depend on it (generateAGIXml ignores the flag).
+      isCorrection = target.row !== null
     }
-    agiDeclarationId = existingAgi.id as string
-  } else {
-    const { data: inserted, error: insErr } = await supabase
-      .from('agi_declarations')
-      .insert({
-        company_id: companyId,
-        user_id: userId,
-        salary_run_id: run.id,
-        period_year: agiPeriod.periodYear,
-        period_month: agiPeriod.periodMonth,
-        xml_content: xml,
-        individuppgifter,
-        total_gross: run.total_gross,
-        // Declared whole-krona totals: see the update branch above.
-        total_tax: totals.totalTax,
-        total_avgifter_basis: totals.totalAvgifterBasis,
-        total_avgifter: totals.totalAvgifterAmount,
-        employee_count: employeeData.length,
-      })
-      .select('id')
-      .single()
 
-    if (insErr) {
-      // Concurrent-call race: two :generate-agi requests for the same
-      // (company, period) reached the INSERT branch simultaneously. The
-      // earlier read of `existingAgi` returned null for both, but the
-      // first INSERT wins and the second hits the unique constraint.
-      // Postgres error 23505 is the unique-violation code; recover by
-      // re-fetching the now-existing row and treating this call as a
-      // correction (the second caller's XML supersedes the first).
-      if ((insErr as { code?: string }).code === '23505') {
-        const { data: nowExisting, error: refetchErr } = await supabase
-          .from('agi_declarations')
-          .select('id')
-          .eq('company_id', companyId)
-          .eq('period_year', agiPeriod.periodYear)
-          .eq('period_month', agiPeriod.periodMonth)
-          .maybeSingle()
-        if (refetchErr || !nowExisting) {
-          return { ok: false, code: 'DATABASE_ERROR', details: refetchErr || insErr }
-        }
-        const { error: raceUpdErr } = await supabase
-          .from('agi_declarations')
-          .update({
-            xml_content: xml,
-            individuppgifter,
-            total_gross: run.total_gross,
-            // Declared whole-krona totals: see the update branch above.
-            total_tax: totals.totalTax,
-            total_avgifter_basis: totals.totalAvgifterBasis,
-            total_avgifter: totals.totalAvgifterAmount,
-            employee_count: employeeData.length,
-            is_correction: true,
-            salary_run_id: run.id,
-          })
-          .eq('id', nowExisting.id)
-        if (raceUpdErr) {
-          return { ok: false, code: 'DATABASE_ERROR', details: raceUpdErr }
-        }
-        agiDeclarationId = nowExisting.id as string
-        opLog.warn('agi_declarations insert raced; recovered via update', {
-          companyId,
-          periodYear: agiPeriod.periodYear,
-          periodMonth: agiPeriod.periodMonth,
-        })
-        // Note: the caller-facing `isCorrection` flag (set above based on
-        // the pre-INSERT existingAgi lookup) reports `false` even though
-        // the database state is now technically a correction. Edge case
-        // limited to the race window; the agi_declarations row is
-        // correctly marked is_correction=true and the next call will
-        // see it.
-      } else {
-        return { ok: false, code: 'DATABASE_ERROR', details: insErr }
-      }
-    } else if (!inserted) {
-      return { ok: false, code: 'DATABASE_ERROR', details: insErr }
-    } else {
-      agiDeclarationId = inserted.id as string
+    // Submit-time regeneration: the run's own stored declaration already
+    // says this, so leave it (and agi_generated_at) exactly as it is.
+    if (
+      writeOnlyIfChanged &&
+      target.decision === 'update_own' &&
+      storedDeclarationMatches(target.row, {
+        xml,
+        totals,
+        employeeCount: employeeData.length,
+        totalGross: run.total_gross,
+      })
+    ) {
+      return storedAnswer(target.row, false)
+    }
+
+    const written = await writeAgiDeclaration(supabase, target, keys, content)
+    if (!written.ok) return { ok: false, code: 'DATABASE_ERROR', details: written.error }
+    agiDeclarationId = written.id
+    if (agiDeclarationId !== null) break
+  }
+  if (agiDeclarationId === null) {
+    opLog.warn('agi_declarations write missed twice; refusing', {
+      companyId,
+      periodYear: agiPeriod.periodYear,
+      periodMonth: agiPeriod.periodMonth,
+    })
+    return {
+      ok: false,
+      code: 'AGI_GENERATION_CONFLICT',
+      status: 409,
+      details: { period: formatAgiPeriodDashed(agiPeriod) },
     }
   }
 

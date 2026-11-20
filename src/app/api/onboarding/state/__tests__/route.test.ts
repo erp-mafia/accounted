@@ -23,6 +23,7 @@ vi.mock('@/lib/auth/require-write', async (importOriginal) => {
   return {
     requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
     isCompanyAdmin: (...args: unknown[]) => isAdminMock(...args),
+    getCompanyRole: async () => ({ ok: true, role: 'owner', companyId: 'company-1' }),
     companyAdminRequiredResponse: actual.companyAdminRequiredResponse,
   }
 })
@@ -183,7 +184,7 @@ describe('/api/onboarding/state', () => {
     expect(body.error.details?.required_roles).toEqual(['owner', 'admin'])
   })
 
-  it('still answers 500 for a real database error on the UPDATE', async () => {
+  it('answers a database failure on the UPDATE as a failure, not a refusal', async () => {
     enqueueMany([
       { data: { initial_setup_path: null, initial_setup_completed_at: null, initial_setup_dismissed_at: null } },
       { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } },
@@ -194,6 +195,6 @@ describe('/api/onboarding/state', () => {
       body: { path: 'fresh' },
     }), NO_PARAMS)
 
-    expect(response.status).toBe(500)
+    expect(response.status).toBe(503)
   })
 })

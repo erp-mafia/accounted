@@ -1,9 +1,14 @@
-import type { CompanySettings, Currency, InvoicePaymentAccount, InvoiceQrMode } from '@/types'
+import type { CashAccount, CompanySettings, Currency, Invoice, InvoicePaymentAccount, InvoiceQrMode } from '@/types'
 import {
   companyWithInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
+  normalizeInvoicePaymentAccount,
   resolveInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+  summarizeInvoicePaymentAccount,
+} from '@/lib/cash-accounts/invoice-payment-accounts'
+import { cashAccountPayee, foreignInvoicePayeeCandidates } from '@/lib/cash-accounts/invoice-payee-rules'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import {
   buildInvoicePaymentRows,
   printsPayableRow,
@@ -15,6 +20,7 @@ import {
   type InvoiceQrKind,
   type ResolvedInvoicePaymentQr,
 } from '@/lib/invoices/payment-qr'
+import { invoiceFinePrint } from '@/lib/invoices/fine-print'
 
 /**
  * The invoice editor's Betalning section: ONE line that says what the
@@ -189,8 +195,11 @@ export function describeEditorPaymentSummary(summary: EditorPaymentSummary): Sum
 /** The one reason line under the summary (keys of invoice_editor_pay), with an optional fix. */
 export interface PaymentReason {
   key: string
-  /** add_giro: the payee's giro is set in Inställningar; open_panel: the Betalning panel fixes it. */
-  action: 'add_giro' | 'open_panel' | null
+  /**
+   * The payee's accounts are kept in Inställningar: add_account adds a giro
+   * there, fix_account corrects one. open_panel: the Betalning panel fixes it.
+   */
+  action: 'add_account' | 'fix_account' | 'open_panel' | null
 }
 
 /**
@@ -224,6 +233,8 @@ export function paymentReason(
     case 'mode_none':
     case 'not_payable':
     case 'partly_paid':
+    // Bankgirot debits an Autogiro invoice: no code is the point, not a gap.
+    case 'autogiro':
       return null
     case 'nothing_due':
       return { key: 'reason_nothing_due', action: null }
@@ -232,12 +243,18 @@ export function paymentReason(
     case 'no_printed_giro':
       return {
         key: ctx.lang === 'sv' && ctx.showOcr ? 'reason_no_giro_ocr' : 'reason_no_giro',
-        action: 'add_giro',
+        action: 'add_account',
+      }
+    case 'bank_account_only':
+      // OCR and the bank-app code both need a giro; the account still prints.
+      return {
+        key: ctx.lang === 'sv' && ctx.showOcr ? 'reason_bank_account_only_ocr' : 'reason_bank_account_only',
+        action: 'add_account',
       }
     case 'no_org_number':
       return { key: 'reason_no_org_number', action: null }
     case 'invalid_giro':
-      return { key: 'reason_invalid_giro', action: 'add_giro' }
+      return { key: 'reason_invalid_giro', action: 'fix_account' }
     case 'no_invoice_number':
       return { key: 'reason_no_number', action: null }
     case 'incomplete_details':
@@ -255,14 +272,104 @@ export function paymentReason(
   }
 }
 
+/** One account the Betalning section offers for a foreign-currency invoice. */
+export interface ForeignPayeeOption {
+  id: string
+  /** "Företagskonto (1930)". */
+  label: string
+  /** What the invoice will print for the payer: "IBAN SE45 5000 ...". */
+  printed: string
+  /** The bank connection's IBAN, printed on the account when it is chosen; null when it prints one already. */
+  bankIban: string | null
+}
+
+/**
+ * A foreign-currency invoice with nothing to pay to, and the accounts that
+ * can carry it once chosen (crm#1273). The section offers these instead of
+ * the first-details form, which saves SEK details only: the account does not
+ * have to be in the invoice currency, a SEK account with an IBAN is the
+ * usual EUR payee. Only an administrator may print an IBAN the bank
+ * connection knows; anyone may pick an account that prints one. Null when
+ * the invoice is in SEK or has something to pay to (or hidden details,
+ * which the panel fixes).
+ */
+export function foreignPayeeChoice(input: {
+  summary: Pick<EditorPaymentSummary, 'payeeMissing' | 'storedAccountUsable'> | null
+  currency: Currency
+  /** The company's cash accounts; null while they load. */
+  accounts: readonly CashAccount[] | null
+  canEditCompany: boolean
+  label: (account: CashAccount) => string
+}): { currency: Currency; options: ForeignPayeeOption[] } | null {
+  const { summary, currency } = input
+  if (isLedgerCurrency(currency) || !summary?.payeeMissing || summary.storedAccountUsable) return null
+  const options = foreignInvoicePayeeCandidates(input.accounts ?? [], currency)
+    .filter((candidate) => input.canEditCompany || candidate.bankIban === null)
+    .map(({ account, bankIban }) => {
+      const payee = cashAccountPayee(account)
+      return {
+        id: account.id,
+        label: input.label(account),
+        printed: summarizeInvoicePaymentAccount(normalizeInvoicePaymentAccount({
+          iban: bankIban ?? payee.iban,
+          bank_code: payee.bank_code,
+          foreign_account_number: payee.foreign_account_number,
+        })),
+        bankIban,
+      }
+    })
+  return { currency, options }
+}
+
+/**
+ * The same choice for a saved draft, in the send dialog the invoice page
+ * opens ("Skicka", "Markera som skickad och bokför"): a draft the send
+ * guard would refuse for want of a payee in its currency (PH 181). The
+ * editor offered the choice since crm#1273, but a draft sent from its own
+ * page only met the server's refusal and a detour to the settings. Same
+ * rule as the guard (hasRequiredInvoicePaymentAccount), so the dialog
+ * offers it exactly when the send would be refused. Null for an issued
+ * invoice, a credit note, a SEK invoice, or one with a usable payee.
+ */
+export function foreignPayeeChoiceForDraft(input: {
+  settings: CompanySettings | null
+  invoice: Pick<Invoice, 'status' | 'currency' | 'document_type' | 'credited_invoice_id'>
+    & Partial<Pick<Invoice, 'payment_details'>>
+  /** The company's cash accounts; null while they load. */
+  accounts: readonly CashAccount[] | null
+  canEditCompany: boolean
+  label: (account: CashAccount) => string
+}): { currency: Currency; options: ForeignPayeeOption[] } | null {
+  const { settings, invoice } = input
+  if (!settings || invoice.status !== 'draft') return null
+  if (hasRequiredInvoicePaymentAccount(settings, invoice)) return null
+  return foreignPayeeChoice({
+    summary: { payeeMissing: true, storedAccountUsable: false },
+    currency: invoice.currency,
+    accounts: input.accounts,
+    canEditCompany: input.canEditCompany,
+    label: input.label,
+  })
+}
+
 /**
  * The terms line's texts: Betalningsvillkor, then Dröjsmålsränta, each its
- * first line. Empty when the company has set neither.
+ * first line, in the document's language as the PDF prints them
+ * (invoiceFinePrint: the English text on an English invoice, else the
+ * Swedish one). Empty when the company has set neither.
  */
 export function paymentTermsTexts(
-  settings: Pick<CompanySettings, 'invoice_credit_terms_text' | 'invoice_late_fee_text'> | null | undefined,
+  settings:
+    | Pick<
+        CompanySettings,
+        'invoice_credit_terms_text' | 'invoice_late_fee_text' | 'invoice_credit_terms_text_en' | 'invoice_late_fee_text_en'
+      >
+    | null
+    | undefined,
+  lang: 'sv' | 'en' = 'sv',
 ): string[] {
-  return [settings?.invoice_credit_terms_text, settings?.invoice_late_fee_text]
+  const { creditTerms, lateFee } = invoiceFinePrint(settings, lang)
+  return [creditTerms, lateFee]
     .map((text) => clean(text?.split('\n')[0]))
     .filter((text): text is string => text !== null)
 }

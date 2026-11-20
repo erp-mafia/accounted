@@ -2,9 +2,6 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateArsredovisningIxbrl } from '@/lib/bokslut/arsredovisning/file-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * GET /api/bookkeeping/fiscal-periods/:id/arsredovisning/ixbrl/validate

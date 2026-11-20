@@ -18,6 +18,8 @@ import {
   STRIPE_SYNC_TIMEOUT_MS,
   type StripeSyncPayload,
 } from '../lib/settings-actions'
+import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
 
 const originalFetch = globalThis.fetch
 
@@ -54,7 +56,6 @@ function syncPayload(
       fetched: 0,
       imported: 0,
       duplicates: 0,
-      linked: 0,
       errors: 0,
       ...transactions,
     },
@@ -253,7 +254,7 @@ describe('syncSummary', () => {
     // With errors > 0 it means the opposite: the rows are missing from the inbox.
     expect(syncSummary(syncPayload({ fetched: 200, imported: 0, errors: 200 }))).toEqual({
       reason: 'errors',
-      values: { fetched: 200, imported: 0, linked: 0, errors: 200 },
+      values: { fetched: 200, imported: 0, foreignCurrency: 0, errors: 200 },
     })
   })
 
@@ -271,8 +272,32 @@ describe('syncSummary', () => {
   })
 
   it('reports the counts of a healthy run', () => {
-    expect(
-      syncSummary(syncPayload({ fetched: 12, imported: 9, duplicates: 3, linked: 4 })),
-    ).toEqual({ reason: 'feed', values: { fetched: 12, imported: 9, linked: 4 } })
+    // The feed links nothing to vouchers since the payout linking went
+    // (44bdefc86): the sentence no longer names a linked count.
+    expect(syncSummary(syncPayload({ fetched: 12, imported: 9, duplicates: 3 }))).toEqual({
+      reason: 'feed',
+      values: { fetched: 12, imported: 9, foreignCurrency: 0 },
+    })
+  })
+
+  it('carries the non-SEK rows the feed left out, for their own sentence (accounted#58)', () => {
+    expect(syncSummary(syncPayload({ fetched: 5, imported: 2, foreignCurrency: 3 }))).toEqual({
+      reason: 'feed',
+      values: { fetched: 5, imported: 2, foreignCurrency: 3 },
+    })
+  })
+
+  it('reports a run stopped at its bound as paused, in words the panel has (accounted#209)', () => {
+    // The button's run now stops at the feed's per-run bound and goes on at
+    // the next sync: it must not read as a complete one.
+    expect(syncSummary(syncPayload({ fetched: 10_000, imported: 9_800, deadlineReached: true }))).toEqual({
+      reason: 'partial',
+      values: { fetched: 10_000, imported: 9_800, foreignCurrency: 0, errors: 0 },
+    })
+    for (const messages of [sv, en]) {
+      expect(messages.settings_payments.sync_partial_title).toBeTruthy()
+      expect(messages.settings_payments.sync_partial).toContain('{fetched}')
+      expect(messages.settings_payments.sync_partial).toContain('{imported}')
+    }
   })
 })

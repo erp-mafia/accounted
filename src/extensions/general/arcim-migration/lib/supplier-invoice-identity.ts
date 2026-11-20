@@ -1,57 +1,33 @@
 /**
- * How the provider import recognises a supplier invoice it already holds.
+ * How a provider's supplier invoice is matched to a stored row when a repair
+ * pass joins the two (the import itself matches inside
+ * commit_provider_migration_records).
  *
- * A numbered invoice is the pair (supplier, supplier's invoice number), the
- * same pair the UNIQUE index on supplier_invoices enforces.
- *
- * A number-less invoice has no such pair. It is stored with a NULL number
- * (never a stand-in: the field is the supplier's own number), so it is
- * recognised by (supplier, invoice date, amount) instead. Without this a
- * number-less invoice would be imported again on every re-run.
- *
- * Imports before this rule stored the provider's record id as the number of a
- * number-less Bokio invoice; `listedInvoiceKeys` also yields that legacy key
- * so a re-run never duplicates those rows either.
+ * Fortnox numbers every supplier invoice itself (löpnummer, `GivenNumber`, the
+ * record id its mapper hands on), apart from the number the supplier printed
+ * (`InvoiceNumber`, the supplier number since crm#1157). An invoice imported
+ * from Fortnox keeps the löpnummer in `fortnox_number`, and a row imported
+ * before that column holds it as its supplier number. The supplier number
+ * alone never identifies a Fortnox record: suppliers reuse one on invoice
+ * after invoice (crm#1039).
  */
 
-export interface ExistingSupplierInvoiceIdentity {
-  supplier_id: string | null
-  supplier_invoice_number: string | null
-  invoice_date: string | null
-  total: number | string | null
+/**
+ * The number a listed provider invoice is matched to a stored row on: the
+ * löpnummer for a Fortnox record, the supplier's number for any other.
+ */
+export function listedMatchNumber(provider: string, dto: { id: string; invoiceNumber: string }): string | null {
+  return (provider === 'fortnox' && dto.id?.trim()) || dto.invoiceNumber
 }
 
-export interface ListedSupplierInvoiceIdentity {
-  id: string
-  invoiceNumber: string
-  issueDate: string
-  legalMonetaryTotal: { payableAmount: { value: number } }
-}
-
-/** Amount in öre, sign-agnostic: a credit note may be stored with either sign. */
-function amountKey(value: number | string | null | undefined): string | null {
-  const n = Number(value)
-  return Number.isFinite(n) ? String(Math.round(Math.abs(n) * 100)) : null
-}
-
-function numberlessKey(supplierId: string, date: string | null | undefined, total: number | string | null | undefined): string | null {
-  const amount = amountKey(total)
-  return date && amount !== null ? `${supplierId}::no-number::${date}::${amount}` : null
-}
-
-/** The one key an existing supplier_invoices row is known by. */
-export function existingInvoiceKey(row: ExistingSupplierInvoiceIdentity): string | null {
-  if (!row.supplier_id) return null
-  if (row.supplier_invoice_number) return `${row.supplier_id}::${row.supplier_invoice_number}`
-  return numberlessKey(row.supplier_id, row.invoice_date, row.total)
-}
-
-/** Every key a listed provider invoice may already be stored under. */
-export function listedInvoiceKeys(supplierId: string, dto: ListedSupplierInvoiceIdentity): string[] {
-  if (dto.invoiceNumber) return [`${supplierId}::${dto.invoiceNumber}`]
-  const keys: string[] = []
-  const numberless = numberlessKey(supplierId, dto.issueDate, dto.legalMonetaryTotal?.payableAmount?.value)
-  if (numberless) keys.push(numberless)
-  if (dto.id) keys.push(`${supplierId}::${dto.id}`)
-  return keys
+/**
+ * The number a stored row is matched to a listed provider invoice on: for
+ * Fortnox its löpnummer, which a row imported before fortnox_number existed
+ * holds as its supplier number.
+ */
+export function storedMatchNumber(
+  provider: string,
+  row: { supplier_invoice_number: string | null; fortnox_number?: string | null },
+): string | null {
+  return provider === 'fortnox' ? (row.fortnox_number ?? row.supplier_invoice_number) : row.supplier_invoice_number
 }

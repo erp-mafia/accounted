@@ -16,6 +16,8 @@ import { agiKontrolleraHU, agiKontrolleraIU } from './agi-client'
 import { skvAuthCodeToStructured } from './error-map'
 import { resolveReadAuth } from './resolve-auth'
 import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './skattekonto-sync'
+import { isSkattekontoMissing } from './skattekonto-client'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 /**
  * Registry-resolved services behind the AGI pre-validation and the manual
@@ -27,7 +29,7 @@ import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './skattekonto-s
  *
  * Membership: every caller has already established a non-viewer member of
  * the company (withApiV1 / the MCP door refuse viewers; the dashboard routes
- * run requireAgiWriteRole), which is exactly the AGI write-role set
+ * run requireSkvWriteRole), which is exactly the AGI write-role set
  * (owner, admin, member), so no second role read happens here.
  */
 
@@ -47,15 +49,11 @@ const CAPABILITY_BLOCKED: SkvActionFailure = {
 
 /** Same sentences the extension's read routes answer (readAuthFailureResponse in index.ts). */
 const NEEDS_RECONSENT_SV =
-  'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning gäller bara ca 1 timme, så detta är normalt. Anslut igen med BankID.'
+  'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning räcker i ungefär tio timmar, så detta är normalt. Anslut igen med BankID.'
 const NOT_CONNECTED_SV = 'Inte ansluten till Skatteverket.'
 
-function enabled(): boolean {
-  return process.env.SKATTEVERKET_ENABLED === 'true'
-}
-
 async function gate(supabase: SupabaseClient, companyId: string): Promise<SkvActionFailure | null> {
-  if (!enabled()) return DISABLED
+  if (!isSkatteverketEnabled()) return DISABLED
   if (!(await hasCapability(supabase, companyId, CAPABILITY.skatteverket))) return CAPABILITY_BLOCKED
   return null
 }
@@ -221,6 +219,9 @@ export async function runSkattekontoSync(ctx: ExtensionContext): Promise<Skattek
     return { ok: true, data: result }
   } catch (err) {
     if (err instanceof SkatteverketAuthError) return authFailure(err)
+    // Skatteverket keeps no skattekonto for the company (yet): its answer,
+    // with its own status, instead of an unhandled 500 (B07).
+    if (isSkattekontoMissing(err)) return statusFailure(err.httpStatus, err.message, err.felkod ?? undefined)
     throw err
   }
 }

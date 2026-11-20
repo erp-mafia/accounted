@@ -43,6 +43,7 @@
  * a SEK-only company saw before.
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -229,7 +230,7 @@ export function invoiceAmountSek(args: {
 
   const rate = args.exchangeRate == null ? null : Number(args.exchangeRate)
   if (rate !== null && Number.isFinite(rate) && rate > 0) {
-    return roundOre(Math.abs(amount) * rate)
+    return sekOfForeign(Math.abs(amount), rate)
   }
 
   return null

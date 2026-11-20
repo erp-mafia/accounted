@@ -1,5 +1,10 @@
 import { sleep } from '@/lib/utils'
-import { isUnsafeUrlError, safeFetch } from '@/lib/http/safe-fetch'
+import {
+  isUnsafeUrlError,
+  readBodyWithCap,
+  safeFetch,
+  type SafeFetchRefusalReason,
+} from '@/lib/http/safe-fetch'
 import type { WooOrder, WooRefund, WooStoreInfo } from '../types'
 
 /**
@@ -7,9 +12,18 @@ import type { WooOrder, WooRefund, WooStoreInfo } from '../types'
  *
  * Auth is HTTP Basic (consumer key as username, secret as password) over
  * HTTPS only. Some hosts (Apache CGI, security plugins) strip the
- * Authorization header, so a 401 is retried once with the documented
- * query-string credential fallback; that fallback is why plain-http stores
- * are refused outright (keys in a cleartext URL are a credentials leak).
+ * Authorization header, so WooCommerce sees an anonymous request and answers
+ * 401 (or 403 woocommerce_rest_cannot_view); that is retried once with the
+ * documented query-string credential fallback, and the credentials object
+ * remembers the mode for the rest of the run. The fallback is why plain-http
+ * stores are refused outright (keys in a cleartext URL are a credentials
+ * leak).
+ *
+ * Every request carries an identifying User-Agent: WAFs and security plugins
+ * (Cloudflare, Wordfence, mod_security) answer header-less server traffic
+ * with an HTML 403 before WooCommerce ever runs (crm#1669). Such a refusal is
+ * tagged STORE_FIREWALL_CODE so the connect routes can tell the merchant what
+ * to allow, and so the nightly sync never mistakes it for a revoked key.
  *
  * The store URL is tenant input that the server connects to, and members can
  * write `woocommerce_connections.store_url` directly through PostgREST
@@ -25,6 +39,14 @@ import type { WooOrder, WooRefund, WooStoreInfo } from '../types'
  */
 
 const REQUEST_TIMEOUT_MS = 30_000
+/**
+ * Sent on every request to the store. Named so a merchant can find (and
+ * allow) us in their firewall log; a missing User-Agent is a classic bot
+ * signal that WAFs block outright.
+ */
+export const WOO_USER_AGENT = 'Accounted-WooCommerce/1.0 (+https://accounted.se)'
+/** Error bodies are read for diagnosis only; a WAF page is never this big. */
+const ERROR_BODY_CAP_BYTES = 64 * 1024
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504])
 const RETRY_DELAYS_MS = [1_000, 3_000]
 /** wc/v3 hard maximum for per_page. */
@@ -34,6 +56,39 @@ export interface WooCredentials {
   storeUrl: string
   consumerKey: string
   consumerSecret: string
+  /**
+   * How the store accepted the keys last time. Unset or 'header' means "try
+   * the Authorization header first"; wcGet records 'query' once the
+   * query-string fallback has worked, so the rest of a run (every order page
+   * and refund list share one object) skips the request known to fail.
+   * Never persisted.
+   */
+  authMode?: 'header' | 'query'
+}
+
+/** Error code on a WooCommerceApiError when something in front of WooCommerce (WAF, security plugin, host protection) refused the request. */
+export const STORE_FIREWALL_CODE = 'accounted_store_firewall'
+
+/**
+ * What an error response looked like, for the log line that has to explain a
+ * failed connect. Never carries credentials or the request URL (which holds
+ * the keys in query-string mode).
+ */
+export interface WooErrorDiagnostics {
+  /** 'json' = a WordPress/WooCommerce REST error; 'html' = an error page (WAF, host). */
+  bodyKind?: 'json' | 'html' | 'text' | 'empty'
+  /** `Server` response header (e.g. "cloudflare"). */
+  server?: string | null
+  /** Cloudflare request id: the merchant can look it up in Security Events. */
+  cfRay?: string | null
+  /** Cloudflare's `cf-mitigated` header ("challenge" for a bot challenge). */
+  cfMitigated?: string | null
+  /** <title> of an HTML error page, trimmed. */
+  htmlTitle?: string | null
+  /** Why the outbound URL guard refused, when it did. */
+  guardReason?: SafeFetchRefusalReason
+  /** Whether the failing request carried the keys in the query string. */
+  queryAuth?: boolean
 }
 
 export class WooCommerceApiError extends Error {
@@ -43,6 +98,7 @@ export class WooCommerceApiError extends Error {
     readonly status: number,
     /** WooCommerce error code (e.g. woocommerce_rest_cannot_view), if any. */
     readonly wooCode: string | null = null,
+    readonly diagnostics: WooErrorDiagnostics = {},
   ) {
     super(message)
     this.name = 'WooCommerceApiError'
@@ -53,10 +109,13 @@ export class WooCommerceApiError extends Error {
  * Whether an API error means the credentials themselves are dead (key deleted
  * or demoted in wp-admin), as opposed to a transient failure. Used to flip a
  * connection to status 'revoked' so the UI offers a reconnect instead of the
- * cron retrying forever.
+ * cron retrying forever. A firewall refusal is not that: the keys never
+ * reached WooCommerce, and wiping them would force a reconnect that the same
+ * firewall blocks again.
  */
 export function isRevokedCredentialsError(error: unknown): boolean {
   if (!(error instanceof WooCommerceApiError)) return false
+  if (error.wooCode === STORE_FIREWALL_CODE) return false
   return error.status === 401 || error.status === 403
 }
 
@@ -155,7 +214,10 @@ async function requestOnce(
   params: Record<string, string>,
   credentialsInQuery: boolean,
 ): Promise<Response> {
-  const headers: Record<string, string> = { Accept: 'application/json' }
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'User-Agent': WOO_USER_AGENT,
+  }
   if (!credentialsInQuery) {
     const basic = Buffer.from(`${creds.consumerKey}:${creds.consumerSecret}`).toString('base64')
     headers.Authorization = `Basic ${basic}`
@@ -180,38 +242,101 @@ function asTerminalGuardError(err: unknown): WooCommerceApiError | null {
       `WooCommerce store refused by outbound URL guard: ${err.detail}`,
       0,
       UNSAFE_STORE_URL_CODE,
+      { guardReason: err.reason },
     )
   }
   return null
 }
 
-async function parseError(response: Response): Promise<WooCommerceApiError> {
+/** Statuses a WAF or host protection answers with when it refuses a request. */
+const FIREWALL_STATUS = new Set([401, 403, 406])
+
+function htmlTitleOf(text: string): string | null {
+  const match = /<title[^>]*>([^<]*)<\/title>/i.exec(text)
+  const title = match?.[1]?.replace(/\s+/g, ' ').trim()
+  return title ? title.slice(0, 120) : null
+}
+
+async function parseError(
+  response: Response,
+  credentialsInQuery: boolean,
+): Promise<WooCommerceApiError> {
+  let text = ''
+  try {
+    const buf = await readBodyWithCap(response, ERROR_BODY_CAP_BYTES)
+    text = buf ? buf.toString('utf8') : ''
+  } catch {
+    // Unreadable body; the status and headers still say something.
+  }
+  const trimmed = text.trim()
+
   let wooCode: string | null = null
   let detail = ''
-  try {
-    const body = (await response.json()) as { code?: string; message?: string }
-    wooCode = body.code ?? null
-    detail = body.message ?? ''
-  } catch {
-    // Non-JSON error body (host error page); the status is enough.
+  let bodyKind: WooErrorDiagnostics['bodyKind'] = trimmed ? 'text' : 'empty'
+  if (trimmed.startsWith('{')) {
+    try {
+      const body = JSON.parse(trimmed) as { code?: unknown; message?: unknown }
+      bodyKind = 'json'
+      wooCode = typeof body.code === 'string' ? body.code : null
+      detail = typeof body.message === 'string' ? body.message : ''
+    } catch {
+      // Not JSON after all; classified below.
+    }
   }
+  const looksHtml =
+    /^<(!doctype|html|head|body)/i.test(trimmed) ||
+    (response.headers.get('content-type') ?? '').includes('html')
+  if (bodyKind !== 'json' && looksHtml) bodyKind = 'html'
+
+  const cfMitigated = response.headers.get('cf-mitigated')
+  const diagnostics: WooErrorDiagnostics = {
+    bodyKind,
+    server: response.headers.get('server'),
+    cfRay: response.headers.get('cf-ray'),
+    cfMitigated,
+    htmlTitle: bodyKind === 'html' ? htmlTitleOf(trimmed) : null,
+    queryAuth: credentialsInQuery,
+  }
+
+  // WooCommerce and WordPress always refuse with a JSON body carrying a code.
+  // A refusal without one was written by something in front of them.
+  if (cfMitigated || (FIREWALL_STATUS.has(response.status) && wooCode === null)) {
+    wooCode = STORE_FIREWALL_CODE
+    if (!detail) detail = 'refused before WooCommerce (firewall or host protection)'
+  }
+
   return new WooCommerceApiError(
     `WooCommerce API ${response.status}${detail ? `: ${detail}` : ''}`,
     response.status,
     wooCode,
+    diagnostics,
   )
 }
 
 /**
- * GET a wc/v3 path. Retries the header-stripped-auth case (401 → query-string
- * credentials) once, and 429/5xx with a short backoff.
+ * The anonymous-request answer of a host that dropped the Authorization
+ * header: WordPress answers 401 when no user is resolved, but some setups
+ * (a security plugin that sets a user, a proxy) turn it into a 403 with the
+ * same code. A firewall refusal never qualifies: retrying would only resend
+ * the keys, now in a URL, to the same wall.
+ */
+function isHeaderAuthRejected(error: WooCommerceApiError): boolean {
+  if (error.wooCode === STORE_FIREWALL_CODE) return false
+  if (error.status === 401) return true
+  return error.status === 403 && error.wooCode === 'woocommerce_rest_cannot_view'
+}
+
+/**
+ * GET a wc/v3 path. Retries the header-stripped-auth case (401, or 403
+ * woocommerce_rest_cannot_view → query-string credentials) once, and 429/5xx
+ * with a short backoff.
  */
 export async function wcGet<T>(
   creds: WooCredentials,
   path: string,
   params: Record<string, string> = {},
 ): Promise<T> {
-  let credentialsInQuery = false
+  let credentialsInQuery = creds.authMode === 'query'
   let lastError: unknown
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     let response: Response
@@ -232,21 +357,25 @@ export async function wcGet<T>(
       throw lastError
     }
 
-    if (response.ok) return (await response.json()) as T
+    if (response.ok) {
+      creds.authMode = credentialsInQuery ? 'query' : 'header'
+      return (await response.json()) as T
+    }
 
-    if (response.status === 401 && !credentialsInQuery) {
+    const error = await parseError(response, credentialsInQuery)
+    if (!credentialsInQuery && isHeaderAuthRejected(error)) {
       // Host may be stripping the Authorization header; the documented
       // fallback is credentials in the query string (HTTPS enforced upstream).
       credentialsInQuery = true
-      lastError = await parseError(response)
+      lastError = error
       continue
     }
     if (RETRYABLE_STATUS.has(response.status) && attempt < RETRY_DELAYS_MS.length) {
-      lastError = await parseError(response)
+      lastError = error
       await sleep(RETRY_DELAYS_MS[attempt])
       continue
     }
-    throw await parseError(response)
+    throw error
   }
   throw lastError instanceof Error
     ? lastError
@@ -356,7 +485,7 @@ export async function testConnectionAndFetchStoreInfo(
   try {
     // The WP REST index is public and carries the site title.
     const response = await safeFetch(`${storeOriginOf(creds)}/wp-json/`, {
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', 'User-Agent': WOO_USER_AGENT },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
     if (response.ok) {

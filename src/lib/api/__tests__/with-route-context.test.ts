@@ -36,10 +36,29 @@ const supabaseRef = vi.hoisted(() => ({ supabase: null as unknown }))
 
 import { withRouteContext } from '../with-route-context'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { getActor } from '@/lib/bookkeeping/actor-context'
 
 const EMPTY_PARAMS = { params: Promise.resolve({}) }
 
 describe('withRouteContext', () => {
+  // Every commit a handler makes, however deep, reads this scope: the
+  // verifikat records the signed-in user as its actor.
+  it('runs the handler as the signed-in user, and only the handler', async () => {
+    let seen: ReturnType<typeof getActor>
+    const route = withRouteContext('test.actor', async () => {
+      await Promise.resolve()
+      seen = getActor()
+      return NextResponse.json({ ok: true })
+    })
+
+    await route(new Request('http://localhost/api/test', { method: 'POST' }), EMPTY_PARAMS)
+
+    // The user's id rides along: the audit log names them for the handler's
+    // service-role writes (lib/supabase/actor-header.ts).
+    expect(seen).toEqual({ type: 'user', userId: 'user-1' })
+    expect(getActor()).toBeUndefined()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     authState.user = { id: 'user-1' }
@@ -66,6 +85,38 @@ describe('withRouteContext', () => {
       expect.objectContaining({ companyId: 'company-1', user: { id: 'user-1' } }),
       EMPTY_PARAMS,
     )
+  })
+
+  it('hands the role the resolver reported to the write guard and to the handler', async () => {
+    vi.mocked(getActiveCompanyId).mockImplementation(async (_supabase, _userId, facts) => {
+      if (facts) facts.role = 'member'
+      return 'company-1'
+    })
+    const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+    const route = withRouteContext('test.write', handler, { requireWrite: true })
+
+    const res = await route(new Request('http://localhost/api/test', { method: 'POST' }), EMPTY_PARAMS)
+
+    expect(res.status).toBe(200)
+    expect(requireWriteMock).toHaveBeenCalledWith(supabaseRef.supabase, 'user-1', {
+      companyId: 'company-1',
+      role: 'member',
+    })
+    expect(handler).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ companyId: 'company-1', role: 'member' }),
+      EMPTY_PARAMS,
+    )
+  })
+
+  it('leaves the role unknown when the resolver did not report one', async () => {
+    const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+    const route = withRouteContext('test.read', handler)
+
+    await route(new Request('http://localhost/api/test'), EMPTY_PARAMS)
+
+    const ctx = (handler.mock.calls[0] as unknown[])[1] as { role?: string }
+    expect(ctx.role).toBeUndefined()
   })
 
   it('never invokes the write guard on read routes', async () => {

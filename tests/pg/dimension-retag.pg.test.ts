@@ -8,7 +8,7 @@ import {
   insertDraftJournalEntry,
 } from '@/tests/pg/fixtures'
 
-// Migration 20260702170000_dimension_retag_log_and_rpc.sql: the founder-
+// Migration 20260702170000_dimension_retag_log_and_rpc.sql: the operator-
 // approved Tier-2 retro-tagging carve-out (dimensions plan PR6, §3).
 //
 // The mandatory suite from the plan:

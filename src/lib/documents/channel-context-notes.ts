@@ -19,8 +19,8 @@
  * posted (see ChannelContextNotesOptions.includeCaption).
  *
  * Core lib: must not import from @/extensions. Deliberately Swedish-only
- * output: the verifikat description is a regulatory surface (see
- * .claude/rules/i18n.md), not UI chrome.
+ * output: the verifikat description is a regulatory surface,
+ * not UI chrome.
  */
 import type { InboxChannelContext } from '@/types'
 
@@ -30,7 +30,7 @@ import type { InboxChannelContext } from '@/types'
  */
 export const CHANNEL_CONTEXT_NOTES_MAX = 220
 
-/** "Anna Berg (Volvo)" with a company, bare "Jakob W" without (the sender
+/** "Anna Berg (Volvo)" with a company, bare "Kim L" without (the sender
  *  themselves usually answers without naming their own company). */
 export function renderChannelParticipant(p: {
   name: string

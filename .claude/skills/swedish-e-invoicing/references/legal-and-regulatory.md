@@ -1,5 +1,14 @@
 # Legal and Regulatory Framework, Swedish E-Invoicing
 
+## Contents
+
+- Swedish primary legislation
+- EU framework
+- Swedish authorities
+- Penalties and the B2G/B2B/B2C distinction
+- GDPR for e-invoicing
+- Authoritative source list
+
 ## Swedish primary legislation
 
 ### Lag (2018:1277) om elektroniska fakturor till följd av offentlig upphandling

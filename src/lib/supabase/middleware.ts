@@ -9,6 +9,7 @@ import {
   createProxyTimings,
   formatProxyServerTiming,
   proxyRouteTemplate,
+  shouldLogProxyCompletion,
   timed,
   type ProxyTimings,
 } from '@/lib/supabase/proxy-timing'
@@ -17,12 +18,16 @@ import { claimsPinned } from '@/lib/auth/claims'
 import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
 import { MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
+import { MFA_ASSURANCE_HEADER, signNoVerifiedFactor } from '@/lib/auth/mfa-assurance'
+import { ACTIVE_COMPANY_HEADER, signActiveCompany } from '@/lib/auth/active-company-verdict'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { BOOKS_GATE_COOKIE, decideBooksGate } from '@/lib/onboarding/books-gate'
+import { isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
+import { LEGAL_PATHS } from '@/lib/legal/documents'
 import {
   apiRequestSkipsSessionTimeout,
   createSessionTimeoutState,
@@ -37,8 +42,29 @@ import {
   verifySessionTimeoutState,
 } from '@/lib/auth/session-timeout'
 import {
+  expiredCookieOptions,
+  httpOnlyCookieOptions,
+  requestProtocolFromHeaders,
+  supabaseAuthCookieOptions,
+} from '@/lib/supabase/cookie-options'
+import {
+  authTokenCookieNames,
+  supabaseAuthStorageKey,
+  upgradeLegacyAuthCookies,
+} from '@/lib/supabase/auth-cookies'
+import { quietRejectedRefreshTokenErrors } from '@/lib/supabase/refresh-token-errors'
+import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { createAuthServiceWatch, userSessionFetch } from '@/lib/supabase/auth-call-budget'
+import { describeRepeatedRequest, reachesRepeatThreshold } from '@/lib/supabase/request-repeat-report'
+import {
+  apiPathAnswersWithoutSession,
+  authUnavailableApiResponse,
+  authUnavailablePageResponse,
+} from '@/lib/auth/auth-unavailable'
+import {
   isSessionAuthMethod,
   SESSION_AUTH_METHOD_HINT_COOKIE,
+  SESSION_ENDED_REASON,
   SESSION_TIMEOUT_COOKIE,
   SESSION_TIMEOUT_REASON_HEADER,
   type SessionAuthMethod,
@@ -46,6 +72,19 @@ import {
 } from '@/lib/auth/session-timeout-shared'
 
 const log = createLogger('proxy')
+
+// An expired or rotated refresh token is a sign-out, not an error: auth-js
+// logs the refused refresh with console.error (the INITIAL_SESSION event
+// that createServerClient's own subscription triggers) while this proxy
+// clears the cookies and bounces the request anyway
+// (lib/supabase/refresh-token-errors.ts). One quiet line instead.
+quietRejectedRefreshTokenErrors(console, (code) => {
+  if (code === 'refresh_token_already_used') {
+    log.warn('refresh token already used; session treated as signed out', { code })
+  } else {
+    log.info('refresh token not found; session treated as signed out', { code })
+  }
+})
 
 /**
  * Marker that the signed-in user is on their home domain, so the affinity
@@ -69,6 +108,22 @@ const HOME_DOMAIN_OK_MAX_AGE = 15 * 60
 function homeDomainOkValue(userId: string, host: string): string {
   return `${userId}~${host}`
 }
+
+/**
+ * Public API endpoints that never read the session: the build-version probe
+ * every open tab polls, the health probe and the anonymous client log sink.
+ * They get no Supabase client at all: no getUser() round trip to Supabase
+ * Auth, so no token refresh racing the tab's real requests either. Exact
+ * paths only. Nothing on them depends on the session, so no session or MFA
+ * check is weakened: every route that does read it keeps the full treatment
+ * below, and the next one of those refreshes the token and enforces the
+ * session timeout as before.
+ */
+const SESSIONLESS_API_PATHS: ReadonlySet<string> = new Set([
+  '/api/version',
+  '/api/health',
+  '/api/log',
+])
 
 /**
  * Auth proxy entry point. Wraps the real work so every request emits one
@@ -95,13 +150,15 @@ export async function updateSession(request: NextRequest) {
       formatProxyServerTiming(timing, totalMs),
     )
   }
-  log.info('proxy completed', {
-    kind,
-    route: proxyRouteTemplate(pathname),
-    status: response.status,
-    ...timing,
-    totalMs,
-  })
+  if (shouldLogProxyCompletion(kind, request.cookies.getAll().map((cookie) => cookie.name))) {
+    log.info('proxy completed', {
+      kind,
+      route: proxyRouteTemplate(pathname),
+      status: response.status,
+      ...timing,
+      totalMs,
+    })
+  }
   return response
 }
 
@@ -109,19 +166,60 @@ async function updateSessionInner(
   request: NextRequest,
   timing: ProxyTimings,
 ): Promise<NextResponse> {
+  // Only this proxy may hand a route an MFA verdict or a page render an
+  // active-company verdict, and only below, for the request it checked: a
+  // client-sent one never travels on.
+  request.headers.delete(MFA_ASSURANCE_HEADER)
+  request.headers.delete(ACTIVE_COMPANY_HEADER)
+
+  if (SESSIONLESS_API_PATHS.has(request.nextUrl.pathname)) {
+    return NextResponse.next({ request })
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   })
+  // Every cookie this proxy writes is HttpOnly (and Secure over TLS), the
+  // session cookie included: see lib/supabase/cookie-options.ts.
+  const requestProtocol =
+    requestProtocolFromHeaders(request.headers) ?? request.nextUrl.protocol
+  // GoTrue calls (getUser, refresh) carry the end user's IP when IP address
+  // forwarding is configured, and a repeated request does not repeat them:
+  // the /user check and the refresh are answered from memory within their
+  // budget (lib/supabase/auth-call-budget.ts). `authService` learns when
+  // GoTrue could not answer at all.
+  const authService = createAuthServiceWatch()
+  // Whether the browser brought a session, read from what it sent, before
+  // getUser() runs: a request that brought one and leaves without a user had
+  // it ended (signed out on another device, the session removed, the refresh
+  // token refused), and /login says so.
+  const storageKey = supabaseAuthStorageKey()
+  const broughtSession =
+    storageKey !== null && authTokenCookieNames(request.cookies.getAll(), storageKey).length > 0
+  // True while getUser() runs. auth-js removes a session whose refresh it
+  // could not complete after the access token expired, and that removal is
+  // written through setAll as cookie deletions. When the refresh was only
+  // rate limited or the auth service was down, the session is still valid
+  // there: those deletions must not reach the browser.
+  let checkingSession = true
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      global: {
+        fetch: userSessionFetch(clientIpFromHeaders(request.headers), {
+          watch: authService,
+          replayUser: true,
+        }),
+      },
+      cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
+          if (checkingSession && authService.unavailable) return
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
@@ -148,6 +246,36 @@ async function updateSessionInner(
   // Get the pathname
   const pathname = request.nextUrl.pathname
 
+  // A session that could not be checked (GoTrue rate limited the refresh,
+  // answered 5xx or was unreachable) is not a missing session: its cookies
+  // stay, and where a session is required the answer is "try again", never
+  // the /login bounce (lib/auth/auth-unavailable.ts). With a user in hand
+  // (a refresh that failed while the access token was still valid) the
+  // request carries on as usual.
+  const sessionUnchecked = !user && authService.unavailable
+  checkingSession = sessionUnchecked
+
+  // One line when a session keeps repeating a request, with what the logs
+  // otherwise cannot tell (lib/supabase/request-repeat-report.ts).
+  if (user) {
+    const route = proxyRouteTemplate(pathname)
+    if (reachesRepeatThreshold(`${user.id} ${request.method} ${route}`)) {
+      log.warn('one session keeps repeating a request', {
+        operation: 'request_repeated',
+        userId: user.id,
+        route,
+        ...describeRepeatedRequest({ method: request.method, url: request.nextUrl, headers: request.headers }),
+      })
+    }
+  }
+  if (sessionUnchecked) {
+    log.warn('session could not be checked: auth service unavailable', {
+      operation: 'auth_service_unavailable',
+      route: proxyRouteTemplate(pathname),
+      retryAfterSeconds: authService.retryAfterSeconds,
+    })
+  }
+
   // If the refresh token is stale/invalid, clear the session cookies so the
   // browser stops sending them on every request, INCLUDING /api requests,
   // which previously returned before this cleanup and replayed the dead
@@ -155,7 +283,7 @@ async function updateSessionInner(
   // intact. scope: 'local' only clears cookies: the refresh token is already
   // dead server-side, and the default global-revoke round-trip re-triggers
   // the failed refresh, the exact AuthApiError this cleans up after.
-  if (authError && !user && !pathname.startsWith('/auth')) {
+  if (authError && !user && !sessionUnchecked && !pathname.startsWith('/auth')) {
     try {
       await supabase.auth.signOut({ scope: 'local' })
     } catch (signOutError) {
@@ -164,11 +292,17 @@ async function updateSessionInner(
     }
   }
 
+  // A session cookie written before the server-held switch gets the new
+  // attributes once, without a logout (lib/supabase/auth-cookies.ts).
+  await upgradeLegacyAuthCookies(request, supabaseResponse, requestProtocol)
+
   const timeoutConfig = getSessionTimeoutConfig()
   const hasAuthorizationHeader = request.headers.get('authorization') !== null
 
   if (!user) {
-    clearSessionTimeoutCookies(request, supabaseResponse)
+    // An unchecked session keeps its timers too: clearing them would restart
+    // the absolute window once the auth service answers again.
+    if (!sessionUnchecked) clearSessionTimeoutCookies(request, supabaseResponse)
   } else if (
     timeoutConfig.enabled &&
     !apiRequestSkipsSessionTimeout(pathname, hasAuthorizationHeader)
@@ -270,6 +404,21 @@ async function updateSessionInner(
       pathname,
       hasAuthorizationHeader,
     )
+    // A cookie session that could not be checked: a route would answer 401,
+    // which the browser reads as "signed out" and follows to /login. Bearer
+    // surfaces (their header is the credential) and the sign-in routes
+    // answer for themselves.
+    if (
+      sessionUnchecked &&
+      !apiPathAnswersWithoutSession(pathname) &&
+      !(hasAuthorizationHeader && skipMfaGate)
+    ) {
+      // A refresh that succeeded before the check failed has its rotated
+      // tokens on supabaseResponse: they travel with the 503.
+      const response = authUnavailableApiResponse(authService.retryAfterSeconds)
+      copyResponseCookies(supabaseResponse, response)
+      return response
+    }
     // `user` is the getUser() result above: server-authenticated, so its
     // factor list is trustworthy. Only a session with something to step up
     // TO is gated here, whatever NEXT_PUBLIC_REQUIRE_MFA says (see
@@ -295,6 +444,24 @@ async function updateSessionInner(
         return response
       }
     }
+    // A user without a verified factor: requireAuth would ask the auth
+    // server that once more for an AAL1 session (listFactors(), a second
+    // GoTrue round trip per request). getUser() above just answered it, so
+    // the route gets the answer, signed for this user and session
+    // (lib/auth/mfa-assurance.ts).
+    if (!skipMfaGate && user && mfaStepUpApplies(user) && !userHasVerifiedFactor(user)) {
+      const sessionId = await timed(timing, 'mfaMs', () => getSupabaseSessionId(supabase))
+      const verdict = sessionId
+        ? await timed(timing, 'mfaMs', () => signNoVerifiedFactor({ userId: user.id, sessionId }))
+        : null
+      if (verdict) {
+        request.headers.set(MFA_ASSURANCE_HEADER, verdict)
+        // The forwarded request headers are fixed when the response is made.
+        const forwarded = NextResponse.next({ request })
+        copyResponseCookies(supabaseResponse, forwarded)
+        return forwarded
+      }
+    }
     return supabaseResponse
   }
 
@@ -312,6 +479,51 @@ async function updateSessionInner(
   // account; bouncing them to /login would make every emailed payslip link
   // dead. See app/payslip/[token]/page.tsx.
   if (pathname.startsWith('/payslip')) {
+    return supabaseResponse
+  }
+
+  // The signatory link: a firmatecknare opens /koppla/<token> to give the
+  // bank consent for a company without an account (the token is resolved
+  // server-side against bank_connect_invites). See app/koppla/[token]/page.tsx.
+  if (pathname.startsWith('/koppla')) {
+    return supabaseResponse
+  }
+
+  // The payment signing link: a firmatecknare opens /betala/<token> to sign a
+  // basket of approved bank payments for a company without an account (the
+  // token is resolved server-side against payment_signing_links). See
+  // app/betala/[token]/page.tsx.
+  if (pathname.startsWith('/betala')) {
+    return supabaseResponse
+  }
+
+  // The attest mail's link: an attester opens /attest/<token> to approve or
+  // reject a supplier invoice without signing in (the token is resolved
+  // server-side against supplier_invoice_attest_links). See
+  // app/attest/[token]/page.tsx.
+  if (pathname.startsWith('/attest/')) {
+    return supabaseResponse
+  }
+
+  // The signing link: a signer opens /signera/<token> to read a document and
+  // sign it with BankID without an account (the token is resolved server-side
+  // against signing_request_signers). See app/signera/[token]/page.tsx.
+  if (pathname.startsWith('/signera/')) {
+    return supabaseResponse
+  }
+
+  // The reminder mail's answer link: a customer opens /invoice-action/<token>
+  // to answer "Jag har betalat" or "Något stämmer inte" without an account
+  // (the token is resolved server-side against invoice_reminders). See
+  // app/(public)/invoice-action/[token]/page.tsx.
+  if (pathname.startsWith('/invoice-action/')) {
+    return supabaseResponse
+  }
+
+  // The public check of a signed copy: anyone holding a PDF signed through
+  // Accounted can see whether it is the copy that was signed (the browser
+  // hashes the file; only the SHA-256 is sent). See app/verifiera/page.tsx.
+  if (pathname === '/verifiera') {
     return supabaseResponse
   }
 
@@ -335,10 +547,11 @@ async function updateSessionInner(
   // Hook-built links carry type=email_change; stock GoTrue links verify on
   // the GoTrue host and return through redirect_to with only the
   // flow=email_change marker that /api/account/email stamps on it, so both
-  // shapes must pass.
+  // shapes must pass. A hook-built link waits on /auth/confirm for its click
+  // (lib/auth/confirm-link.ts), so that page passes with the same markers.
   if (
     pathname.startsWith('/auth/email-change') ||
-    (pathname.startsWith('/auth/callback') &&
+    ((pathname.startsWith('/auth/callback') || pathname.startsWith('/auth/confirm')) &&
       (request.nextUrl.searchParams.get('type') === 'email_change' ||
         request.nextUrl.searchParams.get('flow') === 'email_change'))
   ) {
@@ -359,6 +572,14 @@ async function updateSessionInner(
     pathname === '/docs' ||
     pathname.startsWith('/docs/')
   ) {
+    return supabaseResponse
+  }
+
+  // The legal documents (terms, privacy policy, DPA, sub-processor list) are
+  // read before an account exists: the register page links them, and a
+  // prospect's lawyer opens them cold. Bouncing them to /login, as every
+  // unlisted path is, made the published privacy policy unreachable.
+  if (LEGAL_PATHS.includes(pathname)) {
     return supabaseResponse
   }
 
@@ -392,10 +613,18 @@ async function updateSessionInner(
 
   // Protected routes - require authentication
   if (!user) {
-    return bounceToAuth(request, supabaseResponse, '/login')
+    if (sessionUnchecked) {
+      const response = authUnavailablePageResponse(
+        authService.retryAfterSeconds,
+        request.cookies.get(LOCALE_COOKIE)?.value === 'en' ? 'en' : 'sv',
+      )
+      copyResponseCookies(supabaseResponse, response)
+      return response
+    }
+    return bounceToAuth(request, supabaseResponse, '/login', broughtSession ? SESSION_ENDED_REASON : null)
   }
 
-  // ── Home-domain affinity (WL, founder call 2026-08-05) ──────────────────
+  // ── Home-domain affinity (WL, product call 2026-08-05) ──────────────────
   // Every signed-in user has a home domain: byrå team members home on their
   // brand's domain, everyone else on the platform app URL, except a byrå's
   // client users, whose home is the byrå domain their companies live under.
@@ -419,13 +648,7 @@ async function updateSessionInner(
     supabaseResponse.cookies.set(
       HOME_DOMAIN_OK_COOKIE,
       homeDomainOkValue(user.id, normalizeHost(request.nextUrl.hostname)),
-      {
-        path: '/',
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: HOME_DOMAIN_OK_MAX_AGE,
-      },
+      httpOnlyCookieOptions(HOME_DOMAIN_OK_MAX_AGE, requestProtocol),
     )
   }
 
@@ -515,19 +738,38 @@ async function updateSessionInner(
     }
   }
 
-  // Forward the pathname so server layouts can branch on it (e.g. render a
-  // no-company shell for /settings/account).
-  supabaseResponse.headers.set('x-pathname', pathname)
-
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
   const { companyId, locale: dbLocale, degraded } = await resolveCompanyOnce()
+
+  // Hand the render the company resolved here, so the dashboard does not
+  // resolve it a second time for the same request (lib/auth/
+  // active-company-verdict.ts). GET only: a Server Action (POST) can switch
+  // the company before its own render, so it keeps resolving for itself. A
+  // degraded resolution vouches for nothing.
+  if (!degraded && companyId && request.method === 'GET') {
+    const verdict = await timed(timing, 'companyMs', async () => {
+      const sessionId = await getSupabaseSessionId(supabase)
+      return sessionId ? signActiveCompany({ userId: user.id, sessionId, companyId }) : null
+    })
+    if (verdict) {
+      request.headers.set(ACTIVE_COMPANY_HEADER, verdict)
+      // The forwarded request headers are fixed when the response is made.
+      const forwarded = NextResponse.next({ request })
+      copyResponseCookies(supabaseResponse, forwarded)
+      supabaseResponse = forwarded
+    }
+  }
+
+  // Forward the pathname so server layouts can branch on it (e.g. render a
+  // no-company shell for /settings/account).
+  supabaseResponse.headers.set('x-pathname', pathname)
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it. Never on degraded
   // resolution: a transient query failure must not wipe a valid cookie.
   if (!degraded && cookieCompanyId && cookieCompanyId !== companyId) {
-    supabaseResponse.cookies.set('gnubok-company-id', '', { path: '/', maxAge: 0 })
+    supabaseResponse.cookies.set('gnubok-company-id', '', expiredCookieOptions(requestProtocol))
   }
 
   // Sync the locale cookie from user_preferences. This keeps next-intl's
@@ -536,21 +778,23 @@ async function updateSessionInner(
   const cookieLocale = request.cookies.get(LOCALE_COOKIE)?.value
   const effectiveLocale = isLocale(dbLocale) ? dbLocale : DEFAULT_LOCALE
   if (!degraded && cookieLocale !== effectiveLocale) {
-    supabaseResponse.cookies.set(LOCALE_COOKIE, effectiveLocale, {
-      path: '/',
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 60 * 60 * 24 * 365,
-    })
+    // HttpOnly: only the server reads it (i18n/request.ts).
+    supabaseResponse.cookies.set(
+      LOCALE_COOKIE,
+      effectiveLocale,
+      httpOnlyCookieOptions(60 * 60 * 24 * 365, requestProtocol),
+    )
   }
 
   // Routes that stay accessible when the user has no active company.
   // Needed so a user who archived their last company can still delete
-  // their account without being trapped on /onboarding forever.
+  // their account without being trapped on /onboarding forever. The
+  // dashboard pages (Profil and the delete-account page) come from one list
+  // shared with the dashboard layout (lib/company/no-company-routes.ts).
   const isNoCompanyAllowed =
     pathname.startsWith('/onboarding') ||
     pathname.startsWith('/select-company') ||
-    pathname.startsWith('/settings/account') ||
+    isNoCompanyDashboardPath(pathname) ||
     pathname.startsWith('/api/account/') ||
     pathname.startsWith('/api/company')
 
@@ -618,13 +862,11 @@ async function updateSessionInner(
   }
 
   // Set company cookie on the response so downstream requests have it
-  supabaseResponse.cookies.set('gnubok-company-id', companyId, {
-    path: '/',
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 365,
-  })
+  supabaseResponse.cookies.set(
+    'gnubok-company-id',
+    companyId,
+    httpOnlyCookieOptions(60 * 60 * 24 * 365, requestProtocol),
+  )
 
   // Allow access to onboarding (for adding new companies), select-company, and companies/new
   if (pathname.startsWith('/select-company') || pathname.startsWith('/companies/new') || pathname.startsWith('/onboarding')) {
@@ -743,12 +985,7 @@ function clearAuthMethodHint(
 ): void {
   if (!request.cookies.has(SESSION_AUTH_METHOD_HINT_COOKIE)) return
   request.cookies.delete(SESSION_AUTH_METHOD_HINT_COOKIE)
-  response.cookies.set(SESSION_AUTH_METHOD_HINT_COOKIE, '', {
-    path: '/',
-    maxAge: 0,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-  })
+  response.cookies.set(SESSION_AUTH_METHOD_HINT_COOKIE, '', expiredCookieOptions())
 }
 
 function clearSessionTimeoutCookies(
@@ -879,11 +1116,16 @@ const AUTH_DESTINATION_PARAM = {
  * The bounce also has to carry the cookies auth-js queued on the response
  * while `getUser()` ran, hence `authResponse`: see
  * `redirectWithAuthCookies`.
+ *
+ * `reason` (SESSION_ENDED_REASON) tells /login the browser had a session
+ * that is gone, so the page says why the user is there instead of a bare
+ * sign-in form. A fixed word, never anything from the request.
  */
 function bounceToAuth(
   request: NextRequest,
   authResponse: NextResponse,
   target: keyof typeof AUTH_DESTINATION_PARAM,
+  reason: typeof SESSION_ENDED_REASON | null = null,
 ) {
   // Absolute-path reference: replaces path AND clears query/fragment.
   const url = new URL(target, request.url)
@@ -891,9 +1133,12 @@ function bounceToAuth(
     request.nextUrl.pathname + request.nextUrl.search,
     '/',
   )
+  const query: string[] = []
   if (destination !== '/') {
-    url.search = `${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`
+    query.push(`${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`)
   }
+  if (reason) query.push(`reason=${reason}`)
+  if (query.length > 0) url.search = query.join('&')
   return redirectWithAuthCookies(authResponse, url)
 }
 
@@ -914,7 +1159,7 @@ function isAffinityExemptHost(host: string): boolean {
 /**
  * Decide whether this signed-in request sits on the user's home domain.
  *
- * Rules (founder call 2026-08-05):
+ * Rules (product call 2026-08-05):
  *   1. A byrå team member's home is their brand's domain: any other product
  *      host (a foreign byrå domain OR the platform domain) redirects there,
  *      EXCEPT on the canonical platform host when the member also has a

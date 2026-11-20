@@ -13,7 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // The bulk-delete escalation helper would swap in a service client when
 // SUPABASE_SERVICE_ROLE_KEY is set; pin it to the fallback so the queued mock
 // observes the rpc call.
-vi.mock('@/lib/import/sie-import', () => ({
+vi.mock('@/lib/supabase/bulk-delete-client', () => ({
   rpcClientForBulkDelete: async (fallback: SupabaseClient) => fallback,
 }))
 

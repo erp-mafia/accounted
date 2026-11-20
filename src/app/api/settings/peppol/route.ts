@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import {
   canRetryPeppolRegistration,
   deregisterCompanyFromPeppolReceiving,
@@ -18,8 +17,6 @@ import {
 } from '@/lib/invoices/peppol-transport'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { createServiceClient } from '@/lib/supabase/server'
-
-ensureInitialized()
 
 // The connector transport waits up to 50 s for a registration call; the
 // platform default would cut the registration off mid-call and leave a
@@ -66,10 +63,10 @@ function isTransportVerdict(result: { ok: false; code: string }): result is Pepp
   return isTransportVerdictCode(result.code)
 }
 
-function resolveTransport(): { transport: PeppolTransport; provider: string } | null {
-  const availability = getPeppolTransportAvailability()
+async function resolveTransport(): Promise<{ transport: PeppolTransport; provider: string } | null> {
+  const availability = await getPeppolTransportAvailability()
   if (!availability.available) return null
-  const transport = getPeppolTransport(availability.provider)
+  const transport = await getPeppolTransport(availability.provider)
   return transport ? { transport, provider: availability.provider } : null
 }
 
@@ -121,7 +118,7 @@ export const POST = withRouteContext(
 export const DELETE = withRouteContext(
   'settings.peppol.deregister',
   async (_request, { companyId, log, requestId }) => {
-    const resolved = resolveTransport()
+    const resolved = await resolveTransport()
     if (!resolved) {
       return privateNoStore(errorResponseFromCode('PEPPOL_TRANSPORT_UNAVAILABLE', log, { requestId }))
     }

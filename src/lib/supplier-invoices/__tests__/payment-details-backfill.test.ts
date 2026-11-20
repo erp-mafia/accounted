@@ -1,44 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { statedPayeeColumns } from '@/lib/payments/payment-details'
 import {
   backfillSupplierPaymentDetails,
-  cleanSupplierPaymentDetails,
-  isValidBic,
-  isValidIban,
+  inboxStatedPaymentDetails,
   planSupplierPaymentBackfill,
 } from '../payment-details-backfill'
 
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
-
-describe('isValidIban', () => {
-  it('accepts a real IBAN with or without spaces and rejects a misread digit', () => {
-    expect(isValidIban('SE45 5000 0000 0583 9825 7466')).toBe(true)
-    expect(isValidIban('DE89370400440532013000')).toBe(true)
-    expect(isValidIban('SE4550000000058398257467')).toBe(false)
-    expect(isValidIban('991-2346')).toBe(false)
-    expect(isValidIban(null)).toBe(false)
-  })
-})
-
-describe('isValidBic', () => {
-  it('takes 8 or 11 characters only', () => {
-    expect(isValidBic('ESSESESS')).toBe(true)
-    expect(isValidBic('DEUTDEFF500')).toBe(true)
-    expect(isValidBic('ESSE')).toBe(false)
-  })
-})
-
-describe('cleanSupplierPaymentDetails', () => {
-  it('keeps each valid detail on its own and drops the invalid ones', () => {
-    expect(cleanSupplierPaymentDetails({ bankgiro: '5050-1055', plusgiro: '123-4', iban: 'SE45 5000 0000 0583 9825 7466', bic: 'essesess' })).toEqual({
-      bankgiro: '5050-1055',
-      iban: 'SE4550000000058398257466',
-      bic: 'ESSESESS',
-    })
-    expect(cleanSupplierPaymentDetails({ bankgiro: '12', plusgiro: null })).toEqual({})
-    expect(cleanSupplierPaymentDetails(null)).toEqual({})
-  })
-})
 
 describe('planSupplierPaymentBackfill', () => {
   it('fills only what the supplier lacks and never overwrites', () => {
@@ -69,5 +38,30 @@ describe('backfillSupplierPaymentDetails', () => {
     enqueue({ data: { bankgiro: '991-2346', plusgiro: null, iban: null, bic: null } })
     expect(await backfillSupplierPaymentDetails(supabase as never, 'company-1', 'sup-1', { bankgiro: '5050-1055' })).toEqual({})
     expect(findCall('suppliers', 'update')).toBeUndefined()
+  })
+})
+
+describe('inboxStatedPaymentDetails', () => {
+  it('reads the giro, IBAN and BIC an extraction states for its supplier, and nothing else', () => {
+    expect(
+      inboxStatedPaymentDetails({
+        supplier: { name: 'Derome Bygg AB', organizationNumber: '5566778899', bankgiro: '9020-0007', iban: 'SE45 5000 0000 0583 9825 7466' },
+        invoice: { invoiceNumber: 'F-1' },
+      }),
+    ).toEqual({ bankgiro: '9020-0007', plusgiro: null, iban: 'SE45 5000 0000 0583 9825 7466', bic: null })
+  })
+
+  it('is null when the extraction states no payment details, has no supplier or is not there', () => {
+    expect(inboxStatedPaymentDetails({ supplier: { name: 'Derome Bygg AB', bankgiro: '  ', plusgiro: 1234566 } })).toBeNull()
+    expect(inboxStatedPaymentDetails({ invoice: { invoiceNumber: 'F-1' } })).toBeNull()
+    expect(inboxStatedPaymentDetails({ supplier: 'Derome Bygg AB' })).toBeNull()
+    expect(inboxStatedPaymentDetails(null)).toBeNull()
+    expect(inboxStatedPaymentDetails(undefined)).toBeNull()
+  })
+
+  it('leaves validation to the columns: a misread bankgiro is read but never stored', () => {
+    const details = inboxStatedPaymentDetails({ supplier: { bankgiro: '5050-1056', plusgiro: '123456-6' } })
+    expect(details).toEqual({ bankgiro: '5050-1056', plusgiro: '123456-6', iban: null, bic: null })
+    expect(statedPayeeColumns(details)).toEqual({ payee_bankgiro: null, payee_plusgiro: '123456-6', payee_iban: null, payee_bic: null })
   })
 })

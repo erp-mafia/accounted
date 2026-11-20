@@ -14,6 +14,19 @@ export function formatPdfAmount(amount: number, language: PdfLang = 'sv'): strin
   }).format(amount).replaceAll('−', '-')
 }
 
+/**
+ * A row's quantity as the PDF prints it: "1,5" in Swedish, "1.5" in English.
+ * The stored quantity was printed raw, so a Swedish invoice read "1.5 dagar"
+ * beside amounts written "1 500,00". Every stored decimal is kept (the
+ * document never rounds the quantity) and digits are not grouped, so the
+ * column keeps its width; only the decimal separator follows the language.
+ */
+export function formatPdfQuantity(quantity: number | null | undefined, language: PdfLang = 'sv'): string {
+  if (quantity === null || quantity === undefined) return ''
+  const text = String(quantity)
+  return language === 'en' ? text : text.replace('.', ',')
+}
+
 // Format currency with explicit ISO code so non-Swedish recipients see "1 234,56 SEK"
 // instead of the Swedish symbol "kr". Decimal style + appended code works for any
 // currency (SEK/EUR/USD) and avoids Intl's locale-specific symbol quirks.

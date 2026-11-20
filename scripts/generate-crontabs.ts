@@ -1,7 +1,9 @@
 #!/usr/bin/env npx tsx
 /**
  * Crontab generator: emits docker/crontab.self-hosted from the `crons` array
- * in vercel.json.
+ * in vercel.json, and src/lib/cron/scheduled-jobs.generated.ts, the same
+ * array with each route's maxDuration, which the run ledger and the cron
+ * watch job read (lib/cron/run-ledger.ts, lib/cron/watch.ts).
  *
  * vercel.json is the single source of truth for what runs on a schedule. The
  * Docker deployments run the same HTTP endpoints through supercronic, so their
@@ -29,6 +31,7 @@ const __filename = fileURLToPath(import.meta.url)
 const ROOT = dirname(dirname(__filename))
 const VERCEL_JSON_PATH = join(ROOT, 'vercel.json')
 const DOCKER_DIR = join(ROOT, 'docker')
+export const SCHEDULED_JOBS_MODULE = join('src', 'lib', 'cron', 'scheduled-jobs.generated.ts')
 
 export type CrontabVariant = 'self-hosted'
 
@@ -137,7 +140,77 @@ export const EXTRA_JOBS: Readonly<Record<CrontabVariant, readonly ExtraJob[]>> =
         'GNUBOK_CONNECTOR_KEY (hourly; grants carry a 72h offline grace). Hosted has no connector ' +
         'key, so the route is not in vercel.json; an instance without a key answers not_configured.',
     },
+    {
+      path: '/api/customers/personal-number-repair/cron',
+      schedule: '*/5 * * * *',
+      reason:
+        'Self-hosted only: moves a personnummer out of customers.org_number on private persons\' cards. ' +
+        'A database that upgrades with such rows needs them repaired without an operator, and keeps the ' +
+        'customers_individual_no_org_number check NOT VALID until then. Hosted has the check validated, ' +
+        'so no such row can exist there and the route is not in vercel.json.',
+    },
   ],
+}
+
+/** A scheduled job as the app knows it at run time: its schedule and its time limit. */
+export interface ScheduledJob {
+  path: string
+  schedule: string
+  maxDurationSeconds: number
+}
+
+/** The route file behind a scheduled path. */
+export function routeFileFor(path: string): string {
+  return join('src', 'app', ...path.split('/').filter(Boolean), 'route.ts')
+}
+
+/**
+ * One scheduled job from its route file. A scheduled route must run through
+ * the cron wrapper (which records the run and reports its failure) and must
+ * declare its own time limit: without the wrapper a killed or failing run
+ * leaves no trace, and without maxDuration the route runs under whatever the
+ * platform default is that month and nothing can say how close it came.
+ */
+export function readScheduledJob(cron: VercelCron, routeSource: string): ScheduledJob {
+  const file = routeFileFor(cron.path)
+  // The exported handler itself, not a mention in a comment or an unused import.
+  if (!/^export const GET = with(?:Service)?CronContext\(/m.test(routeSource)) {
+    throw new Error(
+      `${file}: a scheduled route must export its handler through withCronContext or withServiceCronContext (lib/api/with-cron-context.ts)`,
+    )
+  }
+  const limit = /^export const maxDuration = (\d+)\s*$/m.exec(routeSource)
+  if (!limit) {
+    throw new Error(`${file}: a scheduled route must declare its time limit: export const maxDuration = <seconds>`)
+  }
+  return { path: cron.path, schedule: cron.schedule, maxDurationSeconds: Number(limit[1]) }
+}
+
+/** Render src/lib/cron/scheduled-jobs.generated.ts. Always LF, always newline-terminated. */
+export function buildScheduledJobsModule(jobs: readonly ScheduledJob[]): string {
+  const lines = [
+    '// AUTO-GENERATED: do not edit. Run `npm run crontabs:generate` to regenerate.',
+    '//',
+    '// Every job in the `crons` array of vercel.json with the maxDuration its route',
+    '// declares. scripts/__tests__/generate-crontabs.test.ts fails CI when this',
+    '// file drifts from vercel.json or from a route.',
+    '',
+    'export interface ScheduledJob {',
+    '  /** The scheduled path, e.g. /api/payments/orders/status/cron. */',
+    '  path: string',
+    '  /** Five-field cron expression, UTC. */',
+    '  schedule: string',
+    "  /** The route's maxDuration: the platform kills a run that passes it. */",
+    '  maxDurationSeconds: number',
+    '}',
+    '',
+    'export const SCHEDULED_JOBS: readonly ScheduledJob[] = [',
+    ...jobs.map(
+      (job) => `  { path: ${JSON.stringify(job.path).replace(/"/g, "'")}, schedule: ${JSON.stringify(job.schedule).replace(/"/g, "'")}, maxDurationSeconds: ${job.maxDurationSeconds} },`,
+    ),
+    ']',
+  ]
+  return `${lines.join('\n')}\n`
 }
 
 /** Read and shape-check the `crons` array. */
@@ -279,6 +352,10 @@ function main(): void {
         (overridden > 0 ? `, ${overridden} schedule override(s)` : ''),
     )
   }
+
+  const jobs = crons.map((cron) => readScheduledJob(cron, readFileSync(join(ROOT, routeFileFor(cron.path)), 'utf8')))
+  writeFileSync(join(ROOT, SCHEDULED_JOBS_MODULE), buildScheduledJobsModule(jobs), 'utf8')
+  console.log(`Wrote ${SCHEDULED_JOBS_MODULE}: ${jobs.length} jobs`)
 
   const skipped = Object.keys(EXCLUDED_PATHS)
   if (skipped.length > 0) {

@@ -4,6 +4,21 @@ audience: developer
 
 # Peppol BIS Billing 3.0, Wire Format Reference
 
+## Contents
+
+- The BIS suite and document identifiers
+- Mandatory header
+- Party blocks
+- VAT category codes (UNCL5305)
+- Multi-currency handling
+- Calculation rules, the failure surface
+- Allowances and charges
+- Line items
+- Document totals
+- Attachments
+- Validation stack
+- Authoritative source list
+
 ## The BIS suite and document identifiers
 
 Peppol BIS Billing 3.0 is identified by:

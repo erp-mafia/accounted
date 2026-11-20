@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
-import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
+import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { getEmailService } from '@/lib/email/service'
@@ -14,14 +13,17 @@ import {
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
   archiveIssuedInvoicePdf,
+  emailRefusal,
+  issuable,
   markInvoiceSentAndBook,
   restoreUnbookedDraft,
   type IssuableInvoice,
 } from '@/lib/invoices/issue-and-book-invoice'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
+  creditIssueFailureCode,
   issueCreditNote,
   type CreditNoteOriginalInvoice,
 } from '@/lib/invoices/issue-credit-note'
@@ -31,6 +33,7 @@ import {
   sendTrackedInvoiceEmail,
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
+import { loadInvoiceEmailAttachments } from '@/lib/invoices/invoice-attachments'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { SendInvoiceSchema } from '@/lib/api/schemas'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
@@ -42,11 +45,7 @@ import {
   resolveInvoiceEmailRecipients,
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
-import {
-  hasRequiredInvoicePaymentAccount,
-  invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -57,12 +56,11 @@ import type {
   CompanySettings,
   CreditNote,
   Customer,
-  EntityType,
   Invoice,
   InvoiceItem,
 } from '@/types'
-
-ensureInitialized()
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export const POST = withRouteContext(
   'invoice.send',
@@ -94,7 +92,7 @@ export const POST = withRouteContext(
     const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.email_send)
     if (capBlocked) return capBlocked
 
-    const emailService = getEmailService()
+    const emailService = await getEmailService()
     if (!emailService.isConfigured()) {
       return errorResponseFromCode('INVOICE_SEND_EMAIL_NOT_CONFIGURED', opLog, { requestId })
     }
@@ -124,6 +122,9 @@ export const POST = withRouteContext(
     if (invoice.status === 'cancelled') {
       return errorResponseFromCode('INVOICE_SEND_CANCELLED', opLog, { requestId })
     }
+
+    const notEmailed = emailRefusal(invoice)
+    if (notEmailed) return errorResponseFromCode(notEmailed.code, opLog, { requestId })
 
     // Only drafts may enter the send pipeline. The UI already hides Send for
     // non-drafts, but a direct POST against an issued invoice would re-email
@@ -200,31 +201,23 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', opLog, { requestId })
     }
 
-    const invoiceCurrency = (invoice as Invoice).currency
-    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
     // Freeze the chosen bank account's payee at issue (no-op without a choice).
     const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
     if (!payeeSnapshot.ok) {
       return errorResponseFromCode(payeeSnapshot.code, opLog, { requestId, details: payeeSnapshot.details })
     }
     ;(invoice as Invoice).payment_details = payeeSnapshot.payee
-    if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
-      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', opLog, {
-        requestId,
-        details: { currency: invoiceCurrency },
-      })
-    }
-
-    if (!hasRequiredSellerVatNumber(company as CompanySettings, invoice as Invoice)) {
-      return errorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', opLog, { requestId })
-    }
+    // A linked credit note takes its own issue step below.
+    const refused = isCreditNote ? null : issuable(invoice as Invoice, company as CompanySettings)
+    if (refused) return errorResponseFromCode(refused.code, opLog, { requestId, details: refused.details })
+    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
 
     const hasAdditionalRecipients =
       (bodyResult.data.additional_cc?.length ?? 0) > 0
       || (bodyResult.data.additional_bcc?.length ?? 0) > 0
     // Fixed recipients are owner/admin-approved company routing and apply to
     // every writable sender. Only a new per-send disclosure needs this fresh
-    // role check. See .compliance/authorization-policy.md.
+    // role check.
     if (hasAdditionalRecipients) {
       const { data: membership, error: membershipError } = await supabase
         .from('company_members')
@@ -320,6 +313,14 @@ export const POST = withRouteContext(
       }
     }
 
+    // The files the invoice carries (crm#1269), read before a number is
+    // allocated or anything is issued: a missing or oversized file stops the
+    // send while nothing irreversible has happened.
+    const extraAttachments = await loadInvoiceEmailAttachments(supabase, companyId!, id)
+    if (!extraAttachments.ok) {
+      return errorResponseFromCode(extraAttachments.code, opLog, { requestId })
+    }
+
     let deliveryId: string
     try {
       deliveryId = await reserveInvoiceDelivery({
@@ -340,8 +341,16 @@ export const POST = withRouteContext(
     try {
       await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
     } catch (err) {
+      // A series refusal used up nothing; the reservation above is reused by
+      // this user's retry once the company has set where its series continues.
       opLog.error('failed to assign invoice number on send', err as Error)
-      return errorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', opLog, { requestId })
+      const failure = invoiceNumberingFailure(err, 'INVOICE_SEND_NUMBER_ASSIGN_FAILED')
+      return errorResponseFromCode(failure.code, opLog, {
+        requestId,
+        messageSv: failure.messageSv,
+        messageEn: failure.messageEn,
+        details: failure.details,
+      })
     }
 
     // Auto-create an online payment link (extension-provided, e.g. Stripe) now
@@ -444,8 +453,12 @@ export const POST = withRouteContext(
         originalInvoice,
         entityType: await resolveCompanyEntityType(supabase, companyId!, (company as CompanySettings).entity_type),
         accountingMethod: ((company as Record<string, unknown>).accounting_method || 'accrual') as AccountingMethod,
+        deferInvoiceBooking: !!(company as CompanySettings).defer_invoice_booking,
         log: opLog,
       })
+      // Issued: when the credited invoice is under collection, a database trigger
+      // queued the credit note for the provider.
+      scheduleCollectionForwardDrain(companyId)
       issuedJournalEntryId = issueResult.journalEntryId
 
       if (!issueResult.complete) {
@@ -458,16 +471,8 @@ export const POST = withRouteContext(
             .eq('status', 'sent')
             .is('journal_entry_id', null)
         }
-        return errorResponseFromCode(
-          issueResult.repairRequired
-            ? 'INVOICE_CREDIT_REPAIR_REQUIRED'
-            : 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
-          opLog,
-          {
-            requestId,
-            details: { failure_steps: issueResult.failures.map((failure) => failure.step) },
-          },
-        )
+        const failure = creditIssueFailureCode(issueResult)
+        return errorResponseFromCode(failure.code, opLog, { requestId, details: failure.details })
       }
     }
 
@@ -532,9 +537,13 @@ export const POST = withRouteContext(
             log: opLog,
           })
         : null
-      await eventBus.emit({
-        type: 'invoice.sent',
-        payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, companyId: companyId!, userId: user.id },
+      await emitInvoiceSent({
+        supabase,
+        companyId: companyId!,
+        userId: user.id,
+        invoice: invoice as Invoice,
+        settings: company as CompanySettings,
+        log: opLog,
       })
       return errorResponseFromCode('INVOICE_SEND_ISSUED_NOT_DELIVERED', opLog, {
         requestId,
@@ -569,6 +578,7 @@ export const POST = withRouteContext(
         from: await resolveInvoiceSender(supabase, companyId!, company.company_name),
         filename,
         pdfBuffer,
+        extraAttachments: extraAttachments.value,
       })
     } catch (err) {
       opLog.error('failed to persist invoice delivery snapshot before send', err as Error)
@@ -619,6 +629,8 @@ export const POST = withRouteContext(
           companyId!,
           result.documentId,
           issuedJournalEntryId,
+          // The delivered PDF of this invoice on the invoice's own verifikat.
+          linkBasisColumns('system_derived'),
         )
       } catch (err) {
         opLog.error('failed to link archived invoice PDF to journal entry', err as Error)
@@ -630,9 +642,13 @@ export const POST = withRouteContext(
     }
 
     if (!isCreditNote) {
-      await eventBus.emit({
-        type: 'invoice.sent',
-        payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, companyId: companyId!, userId: user.id },
+      await emitInvoiceSent({
+        supabase,
+        companyId: companyId!,
+        userId: user.id,
+        invoice: invoice as Invoice,
+        settings: company as CompanySettings,
+        log: opLog,
       })
     }
 
@@ -655,7 +671,7 @@ export const POST = withRouteContext(
     return NextResponse.json(
       {
         success: true,
-        message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email}`,
+        message: `${isCreditNote ? 'Kreditfakturan' : invoice.document_type === 'quote' ? 'Offerten' : 'Fakturan'} har skickats till ${customer.email}`,
         messageId: result.messageId,
         deliveryId: result.deliveryId,
         recipient_counts: {

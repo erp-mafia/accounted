@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ProviderName } from './types'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 /**
  * A connect attempt younger than this may still be in progress: the customer
@@ -28,8 +29,9 @@ export interface UnfinishedConnect {
  *
  * No table of its own: the consent row is the record of the attempt. POST
  * /connect writes a status-0 provider_consents row when the connect step
- * opens and deletes the provider's older token-less status-0 rows first, so
- * the newest status-0 row is the latest attempt. It counts as unfinished when
+ * opens and deletes the provider's older token-less status-0 rows (moving a
+ * login still open in another window onto the new row first, moveOpenLogins),
+ * so the newest status-0 row is the latest attempt. It counts as unfinished when
  * it is older than UNFINISHED_CONNECT_MIN_AGE_MS, has no token row, and the
  * customer has not moved on since: no accepted connection to the same
  * provider, no accepted connection started after it, and no completed SIE
@@ -71,11 +73,12 @@ export async function findUnfinishedConnect(
       .select('provider, created_at')
       .eq('company_id', companyId)
       .eq('status', 1),
-    service
-      .from('sie_imports')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('status', 'completed')
+    whereSieImportInPlace(
+      service
+        .from('sie_imports')
+        .select('id')
+        .eq('company_id', companyId),
+    )
       .gt('created_at', attempt.created_at)
       .limit(1),
   ])

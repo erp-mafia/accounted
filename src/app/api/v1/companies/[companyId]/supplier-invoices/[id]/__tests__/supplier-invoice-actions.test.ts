@@ -33,6 +33,13 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'active' }), isMembershipDormant: () => false }
 })
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
+// Payment orders are written by server code only: the delete removes unsent
+// drafts through the service client, the same mocked client here.
+vi.mock('@/lib/supabase/server', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/supabase/server')>('@/lib/supabase/server')
+  const keys = await import('@/lib/auth/api-keys')
+  return { ...actual, createServiceClient: () => (keys.createServiceClientNoCookies as unknown as () => unknown)() }
+})
 const reverseEntryMock = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/engine')>('@/lib/bookkeeping/engine')
@@ -48,6 +55,7 @@ import { DELETE as deleteInvoice } from '../route'
 import { POST as uncredit } from '../uncredit/route'
 import { PATCH as moveItem } from '../items/[itemId]/route'
 import { POST as bankEntered } from '../bank-entered/route'
+import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -90,7 +98,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['supplier_invoices', 'supplier_invoice_items', 'journal_entries', 'journal_entry_lines', 'chart_of_accounts'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const SI_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -222,6 +230,37 @@ describe('DELETE /api/v1/companies/:companyId/supplier-invoices/:id', () => {
     expect(res.status).toBe(409)
     expect((await res.json()).error.code).toBe('SI_DELETE_IN_PAYMENT_BATCH')
     expect(wrote(client)).toBe(false)
+  })
+
+  it('refuses an invoice whose payment was sent to a bank (409) and writes nothing', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice() },
+      // Released back to approved after a cancelled bank payment: still kept.
+      payment_orders: { data: [{ id: 'po-1', status: 'approved', submitted_at: '2026-10-01T08:00:00Z', provider_payment_id: null, batch_id: null }] },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await del()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('SI_DELETE_HAS_BANK_PAYMENT')
+    expect(wrote(client)).toBe(false)
+    expect(client.calls.some((c) => c.table === 'payment_orders' && c.method === 'delete')).toBe(false)
+  })
+
+  it('deletes unsent bank payment drafts first, then the lines and the invoice', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice() },
+      payment_orders: { data: [{ id: 'po-1', status: 'draft', submitted_at: null, provider_payment_id: null, batch_id: null }] },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await del()
+    expect(res.status).toBe(200)
+    const order = client.calls.map((c) => `${c.table}.${c.method}`)
+    const ordersGone = order.indexOf('payment_orders.delete')
+    expect(ordersGone).toBeGreaterThan(-1)
+    expect(ordersGone).toBeLessThan(order.indexOf('supplier_invoice_items.delete'))
+    expect(ordersGone).toBeLessThan(order.indexOf('supplier_invoices.delete'))
   })
 
   it('a dry run previews the delete and writes nothing', async () => {
@@ -380,7 +419,7 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
     const res = await patch({ account_number: '6550' })
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ changed: true, corrected: false })
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('corrects a posted registration verifikat inline through correct_entry_lines_inline', async () => {
@@ -426,7 +465,7 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
     expect((await res.json()).error.code).toBe('SI_ITEM_ACCOUNT_NO_MATCHING_LINE')
     const updates = client.calls.filter((c) => c.table === 'supplier_invoice_items' && c.method === 'update')
     expect(updates.map((u) => u.args[0])).toEqual([{ account_number: '6550' }, { account_number: '6580' }])
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('a dry run plans the rättelse, calls no RPC and writes nothing (not even the account backfill)', async () => {
@@ -469,7 +508,7 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
     const body = await res.json()
     expect(res.status).toBe(200)
     expect(body.data.preview).toMatchObject({ old_account: '6580', new_account: '6550', corrects_verifikat: true, journal_entry_id: JE_ID })
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(backfillMock).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
   })
@@ -484,13 +523,35 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered',
     expect((await post({ entered: 'yes' })).status).toBe(400)
   })
 
-  it('400 SI_BANK_ENTERED_NOT_PAYABLE on a registered (unattested) invoice', async () => {
-    const client = makeClient({ company_members: OWNER, supplier_invoices: { data: invoice({ status: 'registered' }) } })
+  it('400 SI_BANK_ENTERED_NOT_PAYABLE on a registered invoice still waiting for attest (faktureringsmetoden)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice({ status: 'registered' }) },
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+    })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ entered: true })
     expect(res.status).toBe(400)
     expect((await res.json()).error.code).toBe('SI_BANK_ENTERED_NOT_PAYABLE')
     expect(wrote(client)).toBe(false)
+  })
+
+  it('marks a registered invoice under kontantmetoden, which has no attest step (crm#1141)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: [{ data: invoice({ status: 'registered' }) }, { data: { id: SI_ID, bank_entered_at: '2026-10-20T10:00:00.000Z' } }],
+      company_settings: { data: { accounting_method: 'cash' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ entered: true })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ supplier_invoice_id: SI_ID, bank_entered_at: '2026-10-20T10:00:00.000Z' })
+    expect(client.calls).toContainEqual({ table: 'company_settings', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(client.calls).toContainEqual({
+      table: 'supplier_invoices',
+      method: 'in',
+      args: ['status', ['registered', 'approved', 'overdue', 'partially_paid']],
+    })
   })
 
   it('marks an approved invoice, with a compare-and-set on its eligibility', async () => {
@@ -503,6 +564,20 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered',
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ supplier_invoice_id: SI_ID, bank_entered_at: '2026-09-06T10:00:00.000Z' })
     expect(client.calls).toContainEqual({ table: 'supplier_invoices', method: 'in', args: ['status', ['approved', 'overdue', 'partially_paid']] })
+  })
+
+  it('409 SI_BANK_PAYMENT_UNDER_WAY while a bank payment signed for the invoice is under way (crm#1243)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice({ status: 'approved' }) },
+      payment_orders: { data: [{ id: 'order-1', status: 'awaiting_second_signer', requested_execution_date: '2026-10-30' }] },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ entered: true })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('SI_BANK_PAYMENT_UNDER_WAY')
+    expect(client.calls).toContainEqual({ table: 'payment_orders', method: 'eq', args: ['supplier_invoice_id', SI_ID] })
+    expect(wrote(client)).toBe(false)
   })
 
   it('a dry run writes nothing', async () => {

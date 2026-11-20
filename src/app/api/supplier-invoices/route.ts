@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
-
-ensureInitialized()
+import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
+import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
+import { filterSupplierInvoicesByReportedStatus } from '@/lib/supplier-invoices/reported-status'
+import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
+import type { AttestInvoiceFacts } from '@/lib/supplier-invoices/attest-policy'
+import { readAttestHold } from '@/lib/supplier-invoices/attest-hold'
+import { isToPayInList, type ListTabInvoice } from '@/lib/supplier-invoices/list-tabs'
 
 export const GET = withRouteContext(
   'supplier_invoice.list',
@@ -17,28 +22,58 @@ export const GET = withRouteContext(
     const status = searchParams.get('status')
     const supplierId = searchParams.get('supplier_id')
 
-    let query = supabase
-      .from('supplier_invoices')
-      .select('*, supplier:suppliers(id, name)')
-      .eq('company_id', companyId)
+    // Paged: the list used to end at 1,000 invoices.
+    let data: unknown[]
+    try {
+      // What the attest policy holds back from payment (paymentWaitsForAttest,
+      // the payment file's attest_required): each unsettled row says so, and
+      // the Att betala tab and to_pay leave those out (lib/supplier-invoices/to-pay.ts).
+      // Never throws (a failed read answers "not held"), so it runs beside the list read.
+      const waitsForAttestRead = readAttestHold(supabase, companyId)
 
-    // Optional narrowing to one supplier — the supplier detail page only
-    // needs that supplier's invoices, not the whole company ledger.
-    if (supplierId) {
-      query = query.eq('supplier_id', supplierId)
-    }
+      data = await fetchAllRows<unknown>(({ from, to }) => {
+        let query = supabase
+          .from('supplier_invoices')
+          .select('*, supplier:suppliers(id, name)')
+          .eq('company_id', companyId)
 
-    if (status && status !== 'all') {
-      if (status === 'to_pay') {
-        query = query.in('status', ['approved', 'overdue'])
-      } else {
-        query = query.eq('status', status)
-      }
-    }
+        // Optional narrowing to one supplier: the supplier detail page only
+        // needs that supplier's invoices, not the whole company ledger.
+        if (supplierId) {
+          query = query.eq('supplier_id', supplierId)
+        }
 
-    const { data, error } = await query.order('due_date', { ascending: true })
+        if (status && status !== 'all') {
+          if (status === 'to_pay') {
+            // The statuses a payment may be made in; isToPayInList below decides.
+            query = query.in('status', [...PAYABLE_SUPPLIER_INVOICE_STATUSES]).eq('auto_debit', false)
+          } else {
+            // approved and overdue are read from the attest mark and the due
+            // date, every other status as stored (reported-status.ts).
+            query = filterSupplierInvoicesByReportedStatus(query, status)
+          }
+        }
 
-    if (error) {
+        return query.order('due_date', { ascending: true }).order('id', { ascending: true }).range(from, to)
+      })
+      // Each unsettled invoice carries the payment instruction that already
+      // covers it (an open bank payment or payment file), read the same way
+      // as the lifecycle stage, so a person deciding what to pay sees that a
+      // payment is under way (crm#1243). Null when nothing covers it.
+      const rows = data as Array<AttestInvoiceFacts & ListTabInvoice & { id: string; approved_at: string | null }>
+      const unsettledIds = rows.filter((r) => !SETTLED_SUPPLIER_INVOICE_STATUSES.has(r.status)).map((r) => r.id)
+      const [open, waitsForAttest] = await Promise.all([
+        loadOpenPaymentInstructions(supabase, companyId, unsettledIds),
+        waitsForAttestRead,
+      ])
+      const listed = rows.map((r) => ({
+        ...r,
+        open_payment: open.get(r.id) ?? null,
+        waits_for_attest: SETTLED_SUPPLIER_INVOICE_STATUSES.has(r.status) ? false : waitsForAttest(r),
+      }))
+      // to_pay is the Att betala tab, row for row (isToPayInList).
+      data = status === 'to_pay' ? listed.filter((r) => isToPayInList(r)) : listed
+    } catch (error) {
       log.error('supplier_invoice list failed', error)
       return errorResponse(error, log, { requestId })
     }

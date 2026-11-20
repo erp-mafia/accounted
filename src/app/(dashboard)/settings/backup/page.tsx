@@ -2,8 +2,8 @@ import { redirect } from 'next/navigation'
 
 // Säkerhetskopia + Google Drive-molnsynkronisering ligger numera under
 // /import (Importera/Exportera). Den här sidan finns kvar endast som en
-// permanent omdirigering så att gamla bokmärken och cloud-backup-extensionens
-// `settingsPanel.path` fortfarande tar användaren till rätt plats.
+// permanent omdirigering så att gamla bokmärken fortfarande tar användaren
+// till rätt plats.
 //
 // Query-parametrar följer med: Googles OAuth-callback landar här med
 // `?cloud_backup=connected_first` (m.fl.) och kortet på /import läser dem

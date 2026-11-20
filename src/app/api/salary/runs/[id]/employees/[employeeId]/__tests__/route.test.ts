@@ -25,16 +25,22 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
 function authed() {
-  const { supabase, enqueueMany } = createQueuedMockSupabase()
+  const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
   vi.mocked(requireAuth).mockResolvedValue({
     user: mockUser as never,
     supabase: supabase as never,
     error: null,
   })
-  return { supabase, enqueueMany }
+  return { supabase, enqueueMany, findCalls }
 }
 
 describe('GET /api/salary/runs/[id]/employees/[employeeId]', () => {
@@ -207,5 +213,353 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
+  })
+})
+
+describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: hourly total hours (accounted#1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
+  })
+
+  const draftRun = {
+    id: 'run-1',
+    status: 'draft',
+    period_year: 2026,
+    period_month: 9,
+    deviation_period_start: null,
+    deviation_period_end: null,
+  }
+  const hourlyRow = {
+    id: 'sre-1',
+    employee_id: 'emp-1',
+    employment_degree: 100,
+    salary_type: 'hourly',
+    monthly_salary: 0,
+    hours_worked: null,
+    employee: { salary_type: 'hourly', employment_type: 'employee' },
+  }
+
+  function patch(body: Record<string, unknown>) {
+    return PATCH(
+      createMockRequest('/api/salary/runs/run-1/employees/emp-1', { method: 'PATCH', body }),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const response = await patch({ hours_worked: 26 })
+    expect(response.status).toBe(401)
+  })
+
+  it('returns 400 for hours outside 0 to 744 and writes nothing', async () => {
+    const { findCalls } = authed()
+    const negative = await patch({ hours_worked: -1 })
+    const tooMany = await patch({ hours_worked: 745 })
+    expect(negative.status).toBe(400)
+    expect(tooMany.status).toBe(400)
+    expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+  })
+
+  it('returns 400 when both monthly_salary and hours_worked are sent', async () => {
+    const { findCalls } = authed()
+    const response = await patch({ monthly_salary: 30000, hours_worked: 26 })
+    expect(response.status).toBe(400)
+    expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+  })
+
+  it('returns 404 when the run does not exist', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([{ data: null }])
+    const response = await patch({ hours_worked: 26 })
+    expect(response.status).toBe(404)
+  })
+
+  it('sets the total on the run row and prices the Timlön line', async () => {
+    const { enqueueMany, findCalls } = authed()
+    enqueueMany([
+      { data: draftRun }, // service: salary_runs draft gate
+      { data: hourlyRow }, // service: salary_run_employees select
+      { data: [] }, // service: salary_worked_days in the period, none
+      { data: { hourly_rate: 187.5 } }, // service: employees hourly_rate
+      { data: null }, // service: salary_run_employees update
+      { data: null }, // service: salary_line_items Timlön refresh
+    ])
+
+    const response = await patch({ hours_worked: 26 })
+    const { status, body } = await parseJsonResponse<{ data: { hours_worked: number; salary_type: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ hours_worked: 26, salary_type: 'hourly' })
+    expect(findCalls('salary_run_employees', 'update')[0]![0]).toEqual({ hours_worked: 26 })
+    expect(findCalls('salary_line_items', 'update')[0]![0]).toEqual({ amount: 4875, quantity: 26, unit_price: 187.5 })
+  })
+
+  it('refuses with 409 when the period already has days in the calendar', async () => {
+    const { enqueueMany, findCalls } = authed()
+    enqueueMany([
+      { data: draftRun },
+      { data: hourlyRow },
+      { data: [{ hours: 20 }, { hours: 6 }] }, // calendar days in the period
+    ])
+
+    const response = await patch({ hours_worked: 30 })
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('SALARY_RUN_HOURS_FROM_CALENDAR')
+    expect(body.error).toContain('kalendern')
+    expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+  })
+
+  it('refuses hours for a monthly-paid employee by its own reason', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: draftRun },
+      { data: { ...hourlyRow, salary_type: 'monthly', employee: { salary_type: 'monthly', employment_type: 'employee' } } },
+    ])
+
+    const response = await patch({ hours_worked: 26 })
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('SALARY_RUN_SALARY_FIELD_MISMATCH')
+    expect(body.error).toContain('timavlönade')
+  })
+})
+
+describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter override', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
+  })
+
+  const SRE_AFTER = {
+    id: 'sre-1',
+    tax_withheld: 7000,
+    tax_withheld_override: 9000,
+    avgifter_amount: 9426,
+    avgifter_amount_override: 0,
+    avgifter_basis: 30000,
+    avgifter_basis_override: 0,
+    override_reason: 'test',
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const response = await PATCH(
+      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+        method: 'PATCH',
+        body: { tax_withheld_override: 9000, reason: 'test' },
+      }),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+    expect(response.status).toBe(401)
+  })
+
+  it('returns 404 when the run does not exist', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([{ data: null }])
+    const response = await PATCH(
+      createMockRequest('/api/salary/runs/run-x/employees/emp-1', {
+        method: 'PATCH',
+        body: { tax_withheld_override: 9000, reason: 'test' },
+      }),
+      createMockRouteParams({ id: 'run-x', employeeId: 'emp-1' }),
+    )
+    expect(response.status).toBe(404)
+  })
+
+  it('refuses an override outside review', async () => {
+    const { enqueueMany, findCalls } = authed()
+    enqueueMany([{ data: { id: 'run-1', status: 'draft' } }])
+    const response = await PATCH(
+      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+        method: 'PATCH',
+        body: { tax_withheld_override: 9000, reason: 'test' },
+      }),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+    expect(response.status).toBe(400)
+    expect(findCalls('salary_runs', 'update')).toHaveLength(0)
+  })
+
+  it('refuses an avgiftsunderlag of 0 without an avgift of 0 (crm#1372) and writes nothing', async () => {
+    // Underlag 0 declares the pay in the AGI as no underlag (FK131-FK134), so
+    // Skatteverket charges nothing: a booked avgift next to it is for nothing.
+    for (const avgifter_amount_override of [null, 141.39, undefined]) {
+      const { findCalls } = authed()
+      const response = await PATCH(
+        createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+          method: 'PATCH',
+          body: { avgifter_basis_override: 0, avgifter_amount_override, reason: 'Under 1 000 kr i år' },
+        }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+      expect(status).toBe(400)
+      expect(JSON.stringify(body)).toContain('Sätt även arbetsgivaravgifterna till 0 kr')
+      expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+    }
+  })
+
+  it('refuses a partial avgiftsunderlag above 0 (#91) and writes nothing', async () => {
+    // The IU has no field for a bare reduced underlag: FK011 kept the full
+    // pay while the booking and FK487 followed the override. With and without
+    // a matching avgift override, the save is refused before any read.
+    for (const avgifter_amount_override of [undefined, null, 9426]) {
+      const { findCalls } = authed()
+      const response = await PATCH(
+        createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+          method: 'PATCH',
+          body: { avgifter_basis_override: 30000, avgifter_amount_override, reason: 'Delvis underlag' },
+        }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+      expect(status).toBe(400)
+      expect(JSON.stringify(body)).toContain('Ett delvis underlag går inte att redovisa i arbetsgivardeklarationen')
+      expect(findCalls('salary_runs', 'select')).toHaveLength(0)
+      expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+    }
+  })
+
+  it('accepts the no-underlag switch (underlag 0, avgift 0) and clearing it (null)', async () => {
+    for (const body of [
+      { avgifter_basis_override: 0, avgifter_amount_override: 0, reason: 'Under 1 000 kr i år' },
+      { avgifter_basis_override: null, avgifter_amount_override: null, reason: null },
+    ]) {
+      const { enqueueMany, findCalls } = authed()
+      enqueueMany([
+        { data: { id: 'run-1', status: 'review' } },
+        { data: { ...SRE_AFTER, avgifter_basis_override: body.avgifter_basis_override } },
+        { data: [] },
+        { data: [{ id: 'run-1' }] },
+      ])
+      const response = await PATCH(
+        createMockRequest('/api/salary/runs/run-1/employees/emp-1', { method: 'PATCH', body }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+      expect(response.status).toBe(200)
+      const updates = findCalls('salary_run_employees', 'update')
+      expect(updates).toHaveLength(1)
+      expect(updates[0][0]).toMatchObject({ avgifter_basis_override: body.avgifter_basis_override })
+    }
+  })
+
+  it('refreshes the stored run totals from the effective per-employee figures', async () => {
+    const { enqueueMany, findCalls } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'review' } }, // salary_runs status gate
+      { data: SRE_AFTER }, // salary_run_employees override update
+      {
+        // refreshRunTotals: roster read (one page)
+        data: [
+          {
+            id: 'sre-1',
+            gross_salary: 30000,
+            tax_withheld: 7000,
+            tax_withheld_override: 9000,
+            net_salary: 23000,
+            avgifter_amount: 9426,
+            avgifter_amount_override: 0,
+            vacation_accrual: 3600,
+            vacation_accrual_avgifter: 1131.12,
+            employee: { f_skatt_status: 'a_skatt' },
+          },
+          {
+            id: 'sre-2',
+            gross_salary: 20000,
+            tax_withheld: 4000,
+            tax_withheld_override: null,
+            net_salary: 16000,
+            avgifter_amount: 6284,
+            avgifter_amount_override: null,
+            vacation_accrual: 2400,
+            vacation_accrual_avgifter: 754.08,
+            employee: { f_skatt_status: 'a_skatt' },
+          },
+        ],
+      },
+      { data: [{ id: 'run-1' }] }, // salary_runs totals update (status review matched)
+    ])
+
+    const response = await PATCH(
+      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+        method: 'PATCH',
+        body: { tax_withheld_override: 9000, avgifter_amount_override: 0, avgifter_basis_override: 0, reason: 'test' },
+      }),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      data: { tax_withheld_override: number; run_totals: Record<string, number> }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.tax_withheld_override).toBe(9000)
+
+    const expected = {
+      total_tax: 13000, // 9000 (override) + 4000
+      total_net: 37000, // 23000 - 2000 + 16000
+      total_avgifter: 6284, // 0 (override) + 6284
+      total_employer_cost: 64169.2, // 30000 + 0 + 3600 + 1131.12 + 20000 + 6284 + 2400 + 754.08
+    }
+    expect(body.data.run_totals).toEqual(expected)
+
+    const runUpdates = findCalls('salary_runs', 'update')
+    expect(runUpdates).toHaveLength(1)
+    expect(runUpdates[0][0]).toEqual(expected)
+    // Scoped to the run and the company.
+    const runEqs = findCalls('salary_runs', 'eq').map((a) => a.join('='))
+    expect(runEqs).toEqual(expect.arrayContaining(['id=run-1', 'company_id=company-1', 'status=review']))
+  })
+
+  it('keeps the saved override (200) and returns run_totals null when the run left review before the totals write', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'review' } },
+      { data: SRE_AFTER },
+      { data: [] }, // roster read
+      { data: [] }, // salary_runs update matched no review run
+    ])
+    const response = await PATCH(
+      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+        method: 'PATCH',
+        body: { tax_withheld_override: 9000, reason: 'test' },
+      }),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { run_totals: unknown } }>(response)
+    expect(status).toBe(200)
+    expect(body.data.run_totals).toBeNull()
+  })
+
+  it('does not fail the request when the totals refresh fails after the override was saved', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'review' } },
+      { data: SRE_AFTER },
+      { data: null, error: { message: 'statement timeout', code: '57014' } }, // roster read fails
+    ])
+    const response = await PATCH(
+      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+        method: 'PATCH',
+        body: { tax_withheld_override: 9000, reason: 'test' },
+      }),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { tax_withheld_override: number; run_totals: unknown } }>(response)
+    expect(status).toBe(200)
+    expect(body.data.tax_withheld_override).toBe(9000)
+    expect(body.data.run_totals).toBeNull()
   })
 })

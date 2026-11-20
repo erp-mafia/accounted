@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX } from '../template-library'
+import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, libraryLinesForSkattekonto, libraryLinesTouchSkattekonto, linesWithoutDimensions, templateAccountNames, templateShareLines } from '../template-library'
+import { BookingTemplateLineSchema } from '../booking-template-schemas'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
@@ -22,6 +23,32 @@ function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Par
 }
 
 describe('applyTemplate', () => {
+  it('copies dimensions onto business lines only', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      {
+        account: '5410',
+        label: 'Förbrukning',
+        side: 'debit',
+        type: 'business',
+        ratio: 1,
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      },
+      // A bag on a settlement line is not a template's to set: it is dropped.
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1, dimensions: { '6': 'P001' } },
+    ]
+    const result = applyTemplate(lines, 1000)
+    expect(result[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(result[1].dimensions).toBeUndefined()
+  })
+
+  it('adds no dimensions key to a line without a bag, or with an empty one', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business', ratio: 1, dimensions: { '1': ' ' } },
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    for (const line of applyTemplate(lines, 1000)) expect(line).not.toHaveProperty('dimensions')
+  })
+
   it('creates simple two-line debit/credit entries', () => {
     const lines: BookingTemplateLibraryLine[] = [
       { account: '1630', label: 'Skattekonto', side: 'debit', type: 'business', ratio: 1.0 },
@@ -86,6 +113,23 @@ describe('applyTemplate', () => {
     expect(sumDebit).toBeCloseTo(sumCredit, 2)
   })
 
+  it('applies a four-decimal share to öre and still balances (särskild löneskatt, crm#1657)', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '7412', label: 'Pensionsförsäkring', side: 'debit', type: 'business', ratio: 1 },
+      { account: '7533', label: 'Särskild löneskatt', side: 'debit', type: 'business', ratio: 0.2426 },
+      { account: '2514', label: 'Beräknad särskild löneskatt', side: 'credit', type: 'business', ratio: 0.2426 },
+      { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    const result = applyTemplate(lines, 12345.67)
+    const byAccount = Object.fromEntries(result.map((l) => [l.account_number, l]))
+    // 12 345.67 * 0.2426 = 2 995.0595... rounded to öre
+    expect(byAccount['7533'].debit_amount).toBe('2995.06')
+    expect(byAccount['2514'].credit_amount).toBe('2995.06')
+    const sumDebit = result.reduce((s, l) => s + (parseFloat(l.debit_amount || '0') || 0), 0)
+    const sumCredit = result.reduce((s, l) => s + (parseFloat(l.credit_amount || '0') || 0), 0)
+    expect(Math.round(sumDebit * 100) / 100).toBe(Math.round(sumCredit * 100) / 100)
+  })
+
   it('applies reduced-rate reverse charge (2624/2645 at 12%) on top of the base', () => {
     const lines: BookingTemplateLibraryLine[] = [
       { account: '4010', label: 'Varuinköp', side: 'debit', type: 'business', ratio: 1.0 },
@@ -114,6 +158,44 @@ describe('applyTemplate', () => {
     expect(byAccount['2614'].credit_amount).toBe('202.00')
     expect(byAccount['2645'].debit_amount).toBe('202.00')
     expect(byAccount['6540'].debit_amount).toBe('807.99')
+  })
+
+  it('save-as-mall then apply round-trips a reverse-charge booking with its basis pair (crm#1096)', () => {
+    // What the momskod "tjänster utanför EU, 25 %" books on 6540: the 4531 /
+    // 4598 basis pair nets to zero like the fiktiv pair. Counted toward the
+    // total it doubled it, and the re-applied mall booked half of everything.
+    const source = [
+      { account_number: '6540', debit_amount: '1000', credit_amount: '' },
+      { account_number: '2645', debit_amount: '250', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '250' },
+      { account_number: '4531', debit_amount: '1000', credit_amount: '' },
+      { account_number: '4598', debit_amount: '', credit_amount: '1000' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1000' },
+    ]
+    const derived = deriveTemplateLinesFromBooking(source)
+    expect(derived.find((l) => l.account === '1930')!.type).toBe('settlement')
+    expect(derived.find((l) => l.account === '2614')!.vat_rate).toBe(0.25)
+
+    const applied = applyTemplate(derived, 1000)
+    expect(applied.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['6540', '1000.00', ''],
+      ['2645', '250.00', ''],
+      ['2614', '', '250.00'],
+      ['4531', '1000.00', ''],
+      ['4598', '', '1000.00'],
+      ['1930', '', '1000.00'],
+    ])
+  })
+
+  it('keeps a 45xx cost line in the total when no 4598 offset sits beside it', () => {
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '4535', debit_amount: '1000', credit_amount: '' },
+      { account_number: '2645', debit_amount: '250', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '250' },
+      { account_number: '2440', debit_amount: '', credit_amount: '1000' },
+    ])
+    expect(derived.find((l) => l.account === '4535')).toMatchObject({ type: 'business', ratio: 1 })
+    expect(derived.find((l) => l.account === '2440')).toMatchObject({ type: 'settlement', ratio: 1 })
   })
 
   it('handles representation with 25% input VAT', () => {
@@ -149,6 +231,35 @@ describe('applyTemplate', () => {
 })
 
 describe('deriveTemplateLinesFromBooking', () => {
+  it('preserves dimensions on derived business lines only', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      {
+        account_number: '5420',
+        debit_amount: '385.40',
+        credit_amount: '',
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      },
+      { account_number: '2641', debit_amount: '96.40', credit_amount: '', dimensions: { '1': 'KS01' } },
+      { account_number: '2893', debit_amount: '', credit_amount: '481.80', dimensions: { '1': 'KS01' } },
+    ])
+    expect(lines.find((l) => l.account === '5420')!.dimensions).toEqual({
+      '1': 'KS01',
+      '6': 'P001',
+    })
+    expect(lines.find((l) => l.account === '2641')).not.toHaveProperty('dimensions')
+    expect(lines.find((l) => l.account === '2893')).not.toHaveProperty('dimensions')
+  })
+
+  it('a derived template gives the booking its tags back when applied', () => {
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '5420', debit_amount: '400.00', credit_amount: '', dimensions: { '6': 'P001' } },
+      { account_number: '1930', debit_amount: '', credit_amount: '400.00' },
+    ])
+    const applied = applyTemplate(derived, 250)
+    expect(applied.find((l) => l.account_number === '5420')!.dimensions).toEqual({ '6': 'P001' })
+    expect(applied.find((l) => l.account_number === '1930')).not.toHaveProperty('dimensions')
+  })
+
   it('classifies cost + input VAT + settlement (the Bokför direkt shape)', () => {
     // Mirrors the screenshot: 2641 D 96.40, 5420 D 385.40, 2893 K 481.80.
     const lines = deriveTemplateLinesFromBooking(
@@ -233,6 +344,182 @@ describe('deriveTemplateLinesFromBooking', () => {
     ])
     expect(lines.find((l) => l.account === '2641')!.vat_rate).toBe(0.12)
     expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
+  })
+
+  // crm#1321: a card or Swish payout, 1930 D / 1580 K at the same amount. The
+  // equal-amount tie went to the credit leg and tagged the receivable
+  // "Betalning", which the bank dialog then rewrote to 1930.
+  it('tags the bank line settlement when both legs carry the total (crm#1321)', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '1930', debit_amount: '495', credit_amount: '' },
+      { account_number: '1580', debit_amount: '', credit_amount: '495' },
+    ])
+    expect(lines.map((l) => [l.account, l.side, l.type])).toEqual([
+      ['1930', 'debit', 'settlement'],
+      ['1580', 'credit', 'business'],
+    ])
+    expect(lines.find((l) => l.account === '1580')!.ratio).toBe(1)
+  })
+
+  it('tags the bank line settlement on a debit-side revenue booking as well', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '3004', debit_amount: '', credit_amount: '1200' },
+      { account_number: '1930', debit_amount: '1200', credit_amount: '' },
+    ])
+    expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
+    expect(lines.find((l) => l.account === '3004')!.type).toBe('business')
+  })
+
+  it('keeps the amount rule between two bank lines (a transfer): the credit leg', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '1940', debit_amount: '5000', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '5000' },
+    ])
+    expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
+    expect(lines.find((l) => l.account === '1940')!.type).toBe('business')
+  })
+
+  it('never tags a bank line that carries only part of the total: the mall must stay balanced', () => {
+    // Paid partly from the bank and partly by the owner. The settlement leg
+    // takes the whole total, so it has to be the line that carries it.
+    const source = [
+      { account_number: '5410', debit_amount: '1000', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '600' },
+      { account_number: '2893', debit_amount: '', credit_amount: '400' },
+    ]
+    const lines = deriveTemplateLinesFromBooking(source)
+    expect(lines.find((l) => l.account === '5410')!.type).toBe('settlement')
+    const applied = applyTemplate(lines, 1000)
+    const debit = applied.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0)
+    const credit = applied.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0)
+    expect(debit).toBeCloseTo(credit, 2)
+    expect(applied.find((l) => l.account_number === '1930')!.credit_amount).toBe('600.00')
+  })
+
+  it('keeps the amount rule when no bank line is booked (owner paid)', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '2893', debit_amount: '', credit_amount: '481.80' },
+      { account_number: '5420', debit_amount: '481.80', credit_amount: '' },
+    ])
+    expect(lines.find((l) => l.account === '2893')!.type).toBe('settlement')
+  })
+})
+
+describe('templateAccountNames (crm#1821)', () => {
+  const catalog = [
+    { account_number: '1930', account_name: 'Företagskonto' },
+    { account_number: '6540', account_name: 'IT-tjänster' },
+  ]
+
+  it("labels a company's own account, which BAS does not know, with its name", () => {
+    const chart = [
+      { account_number: '1930', account_name: 'Företagskonto' },
+      { account_number: '1589', account_name: 'Kortfordran egen' },
+    ]
+    const derived = deriveTemplateLinesFromBooking(
+      [
+        { account_number: '1930', debit_amount: '1000', credit_amount: '' },
+        { account_number: '1589', debit_amount: '', credit_amount: '1000' },
+      ],
+      templateAccountNames(chart, catalog),
+    )
+    expect(derived.map((l) => [l.account, l.label])).toEqual([
+      ['1930', 'Företagskonto'],
+      ['1589', 'Kortfordran egen'],
+    ])
+  })
+
+  it('reads the catalogue for a standard account the company has not activated', () => {
+    expect(templateAccountNames([], catalog)['6540']).toBe('IT-tjänster')
+  })
+
+  it("lets the company's own name for an account win, and ignores a blank one", () => {
+    const names = templateAccountNames(
+      [
+        { account_number: '1930', account_name: 'Bank, vardag' },
+        { account_number: '6540', account_name: '  ' },
+      ],
+      catalog,
+    )
+    expect(names['1930']).toBe('Bank, vardag')
+    expect(names['6540']).toBe('IT-tjänster')
+  })
+})
+
+describe('templateShareLines', () => {
+  // What the mall editor (TemplateForm) shows share inputs for and checks
+  // sums to 1.0: a basis pair there read as three shares summing to 3.
+  it('leaves the basis pair of a reverse-charge mall out of the shares (crm#1096)', () => {
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '6540', debit_amount: '1000', credit_amount: '' },
+      { account_number: '2645', debit_amount: '250', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '250' },
+      { account_number: '4531', debit_amount: '1000', credit_amount: '' },
+      { account_number: '4598', debit_amount: '', credit_amount: '1000' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1000' },
+    ])
+    expect(templateShareLines(derived).map((l) => [l.account, l.ratio])).toEqual([['6540', 1]])
+  })
+
+  it('keeps every cost line of a split mall beside the basis pair', () => {
+    // A momskod on 6540 (600) and none on 6550 (400): the fiktiv moms is 25 %
+    // of the 600 basis. Read against the whole total it was 15 %, snapped to 12 %.
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '6540', debit_amount: '600', credit_amount: '' },
+      { account_number: '2645', debit_amount: '150', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '150' },
+      { account_number: '4531', debit_amount: '600', credit_amount: '' },
+      { account_number: '4598', debit_amount: '', credit_amount: '600' },
+      { account_number: '6550', debit_amount: '400', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1000' },
+    ])
+    const shares = templateShareLines(derived)
+    expect(shares.map((l) => [l.account, l.ratio])).toEqual([['6540', 0.6], ['6550', 0.4]])
+    expect(shares.reduce((sum, l) => sum + (l.ratio ?? 1), 0)).toBe(1)
+    expect(derived.filter((l) => l.type === 'vat').map((l) => [l.account, l.vat_rate]))
+      .toEqual([['2645', 0.25], ['2614', 0.25]])
+  })
+
+  it('reads a fiktiv leg\'s rate from a cost line on a basis account in a split booking', () => {
+    // 4531 carries its own basis (600), so there is no 4598 pair to read.
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '4531', debit_amount: '600', credit_amount: '' },
+      { account_number: '2645', debit_amount: '150', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '150' },
+      { account_number: '6550', debit_amount: '400', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1000' },
+    ])
+    expect(derived.filter((l) => l.type === 'vat').map((l) => [l.account, l.vat_rate]))
+      .toEqual([['2645', 0.25], ['2614', 0.25]])
+  })
+
+  it('counts a 45xx line without a 4598 offset as the cost line it is', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '4535', label: 'Tjänster EU', side: 'debit', type: 'business', ratio: 1 },
+      { account: '2645', label: 'Moms', side: 'debit', type: 'vat', vat_rate: 0.25 },
+      { account: '2614', label: 'Moms', side: 'credit', type: 'vat', vat_rate: 0.25 },
+      { account: '2440', label: 'Leverantörsskulder', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    expect(templateShareLines(lines).map((l) => l.account)).toEqual(['4535'])
+  })
+})
+
+describe('linesWithoutDimensions', () => {
+  it('drops the dimensions of every line and keeps the rest of the line', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business', ratio: 1, dimensions: { '1': 'KS01', '6': 'P001' } },
+      { account: '2641', label: 'Ingående moms', side: 'debit', type: 'vat', vat_rate: 0.25 },
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1, dimensions: {} },
+    ]
+    const stripped = linesWithoutDimensions(lines)
+    expect(stripped).toEqual([
+      { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business', ratio: 1 },
+      { account: '2641', label: 'Ingående moms', side: 'debit', type: 'vat', vat_rate: 0.25 },
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1 },
+    ])
+    for (const line of stripped) expect(line).not.toHaveProperty('dimensions')
+    // The lines handed in are left as they were.
+    expect(lines[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
   })
 })
 
@@ -426,5 +713,48 @@ describe('library mall books its literal accounts (regression)', () => {
     const sumCredit = result.reduce((s, l) => s + (parseFloat(l.credit_amount || '0') || 0), 0)
     expect(sumDebit).toBeCloseTo(sumCredit, 2)
     expect(sumDebit).toBeCloseTo(4999.99, 2)
+  })
+})
+
+describe('system templates on the company skattekonto account (PH 175)', () => {
+  const deposit: BookingTemplateLibraryLine[] = [
+    { account: '1630', label: 'Skattekonto', side: 'debit', type: 'business', ratio: 1 },
+    { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1 },
+  ]
+
+  it('moves only the skattekonto line to 2012', () => {
+    expect(libraryLinesTouchSkattekonto(deposit)).toBe(true)
+    expect(libraryLinesForSkattekonto(deposit, '2012').map((l) => l.account)).toEqual(['2012', '1930'])
+    expect(libraryLinesForSkattekonto(deposit, '2012')[0]).toMatchObject({ label: 'Skattekonto', side: 'debit' })
+  })
+
+  it('leaves the lines alone on 1630, without an account, or without a skattekonto line', () => {
+    expect(libraryLinesForSkattekonto(deposit, '1630')).toEqual(deposit)
+    expect(libraryLinesForSkattekonto(deposit, undefined)).toBe(deposit)
+    const sale: BookingTemplateLibraryLine[] = [
+      { account: '1930', label: 'Bank', side: 'debit', type: 'settlement' },
+      { account: '3001', label: 'Försäljning', side: 'credit', type: 'business', ratio: 1 },
+    ]
+    expect(libraryLinesTouchSkattekonto(sale)).toBe(false)
+    expect(libraryLinesForSkattekonto(sale, '2012')).toBe(sale)
+  })
+})
+
+describe('BookingTemplateLineSchema', () => {
+  const line = { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business' }
+
+  it('accepts optional dimensions on template lines and keeps them', () => {
+    const parsed = BookingTemplateLineSchema.safeParse({ ...line, dimensions: { '1': 'KS01', '6': 'P001' } })
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+  })
+
+  it('still accepts a line without dimensions', () => {
+    expect(BookingTemplateLineSchema.safeParse(line).success).toBe(true)
+  })
+
+  it('refuses a bag the journal lines would refuse', () => {
+    expect(BookingTemplateLineSchema.safeParse({ ...line, dimensions: { projekt: 'P001' } }).success).toBe(false)
+    expect(BookingTemplateLineSchema.safeParse({ ...line, dimensions: { '6': 'P{1}' } }).success).toBe(false)
   })
 })

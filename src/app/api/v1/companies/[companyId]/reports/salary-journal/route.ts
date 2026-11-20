@@ -36,10 +36,11 @@ registerEndpoint({
     'Only `booked` salary runs are included: `draft`/`review`/`approved`/`paid` runs are excluded as they aren\'t legally final.',
     '`paid`-but-unbooked runs are EXCLUDED. This means the report reconciles cleanly against BAS 7xxx (the ledger), but an AGI-vs-ledger cross-check will show a gap until the run is booked. The AGI is filed at `approved`/`paid` (Phase 5 PR-2 allows it from `review`), so reconciling AGI against this report requires waiting until every paid run is also booked.',
     'month_from/month_to are 1-12 inclusive.',
+    'Each row carries personnelCategory (arbetare or tjansteman; null for owners and board members), the category the run was booked with. groupTotals sums the period per group (arbetare, tjansteman, company_owner, board_member): the arbetare and tjänstemän totals the collective-agreement insurers ask for.',
   ],
   example: {
     response: {
-      data: { year: 2026, employees: [], totals: {} },
+      data: { rows: [], totals: {}, groupTotals: [], period: { year: 2026 } },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
