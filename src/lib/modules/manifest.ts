@@ -385,8 +385,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'process',
     uses: ['transactions', 'vat'],
     libFolders: ['expenses', 'mileage'],
-    operationPrefixes: ['expense-claims'],
-    v1Segments: ['expense-claims'],
+    operationPrefixes: ['expense-claims', 'mileage-trips'],
+    v1Segments: ['expense-claims', 'mileage-trips'],
     jurisdictions: SE,
   },
   {
