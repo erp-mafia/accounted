@@ -1432,9 +1432,18 @@ export function sieCurrencyRefusal(header: Pick<SIEHeader, 'currency'>): string 
 }
 
 /**
- * Validate a parsed SIE file
+ * Validate a parsed SIE file.
+ *
+ * `importOpeningBalances: false` is an import that leaves the file's IB out
+ * (crm#1294): no IB verifikat and no adjustment entry are booked, so the two
+ * warnings that say what the import does with the IB are left out too.
+ * Omitted, the IB is assumed imported, as the job's default.
  */
-export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
+export function validateSIEFile(
+  parsed: ParsedSIEFile,
+  options: { importOpeningBalances?: boolean } = {},
+): ValidationResult {
+  const importsOpeningBalances = options.importOpeningBalances !== false
   const errors: string[] = []
   const warnings: string[] = []
 
@@ -1535,7 +1544,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   // which account was used.
   const effectiveIB = getEffectiveOpeningBalances(parsed)
 
-  if (effectiveIB.derivedFromPriorYearUB) {
+  if (importsOpeningBalances && effectiveIB.derivedFromPriorYearUB) {
     warnings.push(
       'Filen saknar ingående balanser (#IB) för aktuellt räkenskapsår: de härleds från föregående års utgående balans (#UB -1) vid import.'
     )
@@ -1543,7 +1552,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
 
   const ibTotal = effectiveIB.balances.reduce((sum, b) => sum + b.amount, 0)
 
-  if (Math.abs(ibTotal) > 0.01) {
+  if (importsOpeningBalances && Math.abs(ibTotal) > 0.01) {
     warnings.push(`Ingående balanser balanserar inte (differens: ${ibTotal.toFixed(2)} kr). En automatisk justeringspost mot eget kapital (företagsformens konto för årets resultat) skapas vid import.`)
   }
 

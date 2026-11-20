@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock jwt module before importing api-client
 const mockGenerateJWT = vi.fn().mockReturnValue('test-jwt-token')
+const mockHasSigningCredentials = vi.fn().mockReturnValue(true)
 vi.mock('../jwt', () => ({
   generateJWT: (...args: unknown[]) => mockGenerateJWT(...args),
   getAuthorizationHeader: () => `Bearer ${mockGenerateJWT()}`,
+  hasSigningCredentials: () => mockHasSigningCredentials(),
   _resetTokenCache: vi.fn(),
 }))
 
@@ -24,8 +26,10 @@ import {
   probeSessionHealth,
   startAuthorization,
   createSession,
+  BANK_NOT_CONFIGURED_MESSAGE,
   type Transaction,
 } from '../api-client'
+import { isSwedishUserMessage } from '@/lib/errors/get-error-message'
 
 describe('api-client', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
@@ -932,6 +936,7 @@ describe('JWT cache', () => {
         jwtCallCount.count++
         return `Bearer cached-token`
       },
+      hasSigningCredentials: () => true,
       _resetTokenCache: vi.fn(),
     }))
 
@@ -1337,6 +1342,69 @@ describe('connector mode', () => {
     expect(url).toContain('enablebanking.com')
     expect(headers['X-Connector-Company']).toBeUndefined()
     expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
+
+  it('still routes through the proxy when the instance cannot sign itself', async () => {
+    mockHasSigningCredentials.mockReturnValue(false)
+    fetchSpy.mockResolvedValue(okJson({ aspsps: [] }))
+    await getASPSPs('SE')
+    expect(lastCall().url).toContain('https://app.test.example/api/connect/bank/aspsps')
+    mockHasSigningCredentials.mockReturnValue(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// No route to Enable Banking at all (no connector key, no own client)
+// ---------------------------------------------------------------------------
+describe('unconfigured bank upstream', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', '')
+    vi.stubEnv('GNUBOK_CONNECT_URL', '')
+    mockHasSigningCredentials.mockReturnValue(false)
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    errorSpy.mockRestore()
+    mockHasSigningCredentials.mockReturnValue(true)
+    vi.unstubAllEnvs()
+  })
+
+  it('refuses at the door with a Swedish message instead of signing', async () => {
+    await expect(startAuthorization('Nordea', 'SE', 'https://instance.test/cb', 'state-1'))
+      .rejects.toThrow(BANK_NOT_CONFIGURED_MESSAGE)
+    // Nothing left the process, and the signer was never asked for a token
+    // it cannot mint: its error names the missing environment variable.
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(mockGenerateJWT).not.toHaveBeenCalled()
+  })
+
+  it('refuses a half-set own client even with a connector key', async () => {
+    // One of the id/key variables set takes the instance out of connector
+    // mode, and without the other half it cannot sign either.
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_testsecret')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'https://app.test.example')
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    await expect(getASPSPs('SE')).rejects.toThrow(BANK_NOT_CONFIGURED_MESSAGE)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('names the missing variables in the log, where the operator reads them', async () => {
+    await expect(getAccountBalances('acc-1')).rejects.toThrow(BANK_NOT_CONFIGURED_MESSAGE)
+    expect(JSON.stringify(errorSpy.mock.calls)).toContain('ENABLE_BANKING_APP_ID')
+  })
+
+  it('names no environment variable: the message is what a user reads', () => {
+    expect(BANK_NOT_CONFIGURED_MESSAGE).not.toMatch(/ENABLE_BANKING|GNUBOK_|environment variable/)
+    // getErrorMessage passes a route's free-text error through only when it
+    // reads as Swedish written for the user; this one has to clear that bar.
+    expect(isSwedishUserMessage(BANK_NOT_CONFIGURED_MESSAGE)).toBe(true)
   })
 })
 

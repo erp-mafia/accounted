@@ -107,6 +107,14 @@ describe('ACCOUNT_TO_BOX', () => {
     expect(ACCOUNT_TO_BOX['3402']).toBe('06')
     expect(ACCOUNT_TO_BOX['3403']).toBe('06')
   })
+
+  it('maps rent under frivillig skattskyldighet (3913) to ruta 08', () => {
+    expect(ACCOUNT_TO_BOX['3913']).toBe('08')
+    expect(ACCOUNT_RUTA['3913']).toEqual({ box: 'ruta08', side: 'credit' })
+    // Hyres- and Arrendeintäkter hold exempt rent too: the momskod decides.
+    expect(ACCOUNT_TO_BOX['3911']).toBeUndefined()
+    expect(ACCOUNT_TO_BOX['3912']).toBeUndefined()
+  })
 })
 
 describe('getBoxForAccount', () => {
@@ -133,20 +141,21 @@ describe('BOX_LABELS', () => {
 // Parity: ACCOUNT_RUTA, ACCOUNT_TO_BOX and the reverse-charge basis lists are
 // derived from VAT_ACCOUNT_TABLE. Before, they were four hand-kept copies held
 // together by a drift test; these are those copies as they stood (account,
-// ruta, side), and the derived maps must equal them exactly. One deliberate
-// change since: the vilande accounts 2618/2628/2638/2648 left (crm#1562).
+// ruta, side), and the derived maps must equal them exactly. Deliberate
+// changes since: the vilande accounts 2618/2628/2638/2648 left (crm#1562),
+// and 3913 joined ruta 08.
 describe('VAT_ACCOUNT_TABLE: parity with the copies it replaced', () => {
   const OLD_ACCOUNT_RUTA =
     '2610:10:c 2611:10:c 2612:10:c 2613:10:c 2616:10:c 2620:11:c 2621:11:c 2622:11:c 2623:11:c ' +
     '2626:11:c 2630:12:c 2631:12:c 2632:12:c 2633:12:c 2636:12:c 2614:30:c 2624:31:c ' +
     '2634:32:c 2640:48:d 2641:48:d 2642:48:d 2645:48:d 2646:48:d 2647:48:d 2649:48:d 2615:60:c ' +
-    '2625:61:c 2635:62:c 3000:05:c 3001:05:c 3002:05:c 3003:05:c 3401:06:c 3402:06:c 3403:06:c 3108:35:c ' +
+    '2625:61:c 2635:62:c 3000:05:c 3001:05:c 3002:05:c 3003:05:c 3401:06:c 3402:06:c 3403:06:c 3913:08:c 3108:35:c ' +
     '3107:38:c 3308:39:c 3105:36:c 3305:40:c 3004:42:c 3100:42:c 3404:42:c 3980:42:c 3994:42:c 3231:41:c ' +
     '3232:41:c 3233:41:c 4512:37:d 4515:20:d 4516:20:d 4517:20:d 4535:21:d 4536:21:d 4537:21:d 4531:22:d ' +
     '4532:22:d 4533:22:d 4415:23:d 4416:23:d 4417:23:d 4425:24:d 4426:24:d 4427:24:d 4545:50:d 4546:50:d ' +
     '4547:50:d'
   const OLD_ACCOUNT_TO_BOX =
-    '3000:05 3001:05 3002:05 3003:05 3401:06 3402:06 3403:06 3107:38 4512:37 3108:35 3521:35 3105:36 ' +
+    '3000:05 3001:05 3002:05 3003:05 3401:06 3402:06 3403:06 3913:08 3107:38 4512:37 3108:35 3521:35 3105:36 ' +
     '3522:36 3109:38 3308:39 3305:40 3231:41 3232:41 3233:41 3004:42 3100:42 3404:42 3980:42 3994:42 ' +
     '2610:10 2611:10 2612:10 2613:10 2616:10 2620:11 2621:11 2622:11 2623:11 2626:11 ' +
     '2630:12 2631:12 2632:12 2633:12 2636:12 2614:30 2624:31 2634:32 2615:60 2625:61 2635:62 ' +

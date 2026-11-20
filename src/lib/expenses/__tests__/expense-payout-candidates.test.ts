@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   groupExpenseClaimsByPerson,
   matchTransactionsToExpensePayouts,
+  outstandingByClaimant,
 } from '../expense-payout-candidates'
 
 const anna = { key: 'emp-1', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', claim_count: 2, claim_ids: ['c2', 'c3'], total_sek: 1596, oldest_expense_date: '2026-09-02' }
@@ -65,5 +66,38 @@ describe('matchTransactionsToExpensePayouts', () => {
       [anna, twin],
     )
     expect(m.size).toBe(0)
+  })
+})
+
+describe('outstandingByClaimant', () => {
+  // An owner who typed their name in two cases on the Utlägg page and left
+  // it empty once: two people to pay, not three, as the payout RPC sees it.
+  const claim = (claimant_name: string, amount_sek: number, awaits_payout = true) => ({
+    employee_id: null,
+    claimant_name,
+    amount_sek,
+    awaits_payout,
+  })
+
+  it('sums "Kim" and "kim" as one person, keyed like the payout RPC', () => {
+    const out = outstandingByClaimant([
+      claim('Kim', 400),
+      claim('Kim', 271.43),
+      claim('kim', 1232),
+      claim('Ägare', 900),
+      claim('Kim', 5000, false),
+    ])
+    expect(out).toEqual([
+      { key: 'owner:kim', claimant_name: 'Kim', total_sek: 1903.43 },
+      { key: 'owner:ägare', claimant_name: 'Ägare', total_sek: 900 },
+    ])
+  })
+
+  it('keeps an employee apart from an owner with the same name', () => {
+    const out = outstandingByClaimant([
+      claim('Anna Berg', 100),
+      { employee_id: 'emp-1', claimant_name: 'Anna Berg', amount_sek: '50', awaits_payout: true },
+    ])
+    expect(out.map((p) => p.key)).toEqual(['owner:anna berg', 'emp-1'])
   })
 })

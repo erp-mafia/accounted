@@ -573,7 +573,8 @@
               }
             ]
           },
-          "description": "Rättelse: betald efter bokslut, årsomföring kontantmetoden (verifikat A1)"
+          "description": "Rättelse: betald efter bokslut, årsomföring kontantmetoden (verifikat A1)",
+          "keepLearnedTemplates": true
         }
       ]
     ]

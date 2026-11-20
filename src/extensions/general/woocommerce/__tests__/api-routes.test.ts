@@ -124,6 +124,57 @@ describe('woocommerce extension routes', () => {
       expect(body.connection.skipped_currency_orders).toBeUndefined()
     })
 
+    it('lists a failed attempt on another store, not the failed attempts before a store connected (crm#2056)', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      const shop = 'https://shop.example.se'
+      enqueue({
+        data: [
+          { id: 'live', status: 'active', store_url: shop },
+          { id: 'gone', status: 'revoked', store_url: shop },
+          ...Array.from({ length: 8 }, (_, i) => ({ id: `retry-${i}`, status: 'error', store_url: shop })),
+          { id: 'other', status: 'error', store_url: 'https://www.shop.example.se' },
+          ...Array.from({ length: 5 }, (_, i) => ({ id: `first-${i}`, status: 'error', store_url: shop })),
+        ],
+      })
+      enqueue({ data: [] })
+      const res = await findRoute('GET', '/status').handler(makeRequest('GET'), makeContext(supabase))
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.connections.map((c: { id: string }) => c.id)).toEqual(['live', 'other'])
+      expect(body.connection.id).toBe('live')
+    })
+
+    it('shows the newest row when every store was disconnected', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({
+        data: [
+          { id: 'gone', status: 'revoked', store_url: 'https://shop.example.se', connected_at: '2026-11-01T10:00:00.000Z' },
+          { id: 'old', status: 'error', store_url: 'https://shop.example.se', connected_at: null },
+        ],
+      })
+      enqueue({ data: [] })
+      const res = await findRoute('GET', '/status').handler(makeRequest('GET'), makeContext(supabase))
+      const body = await res.json()
+      expect(body.connections.map((c: { id: string }) => c.id)).toEqual(['gone'])
+    })
+
+    it('does not bring back a failed attempt the user removed', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({
+        data: [
+          { id: 'removed', status: 'revoked', store_url: 'https://shop.example.se', connected_at: null },
+          { id: 'old', status: 'error', store_url: 'https://shop.example.se', connected_at: null },
+        ],
+      })
+      const res = await findRoute('GET', '/status').handler(makeRequest('GET'), makeContext(supabase))
+      const body = await res.json()
+      expect(body.connections).toEqual([])
+      expect(body.connection).toBeNull()
+    })
+
     it('attaches the durable skipped-orders list to its store', async () => {
       const { supabase, enqueue, calls } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })

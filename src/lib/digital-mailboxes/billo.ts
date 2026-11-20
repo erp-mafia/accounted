@@ -43,6 +43,7 @@ import type {
   OutgoingInvoice,
   OutgoingPayslip,
   ReceiveAccount,
+  SenderRegistration,
 } from './types'
 
 const PROVIDER = 'billo' as const
@@ -464,7 +465,7 @@ export class BilloSenderClient implements MailboxSender {
     )
   }
 
-  async registerSender(company: { orgNumber: string; name: string }): Promise<{ tenantRef: string }> {
+  async registerSender(company: { orgNumber: string; name: string }): Promise<SenderRegistration> {
     const vat = swedishVatNumber(company.orgNumber)
     if (!vat) throw new DigitalMailboxApiError(PROVIDER, 'rejected', 'company organisationsnummer is not valid')
     const res = await this.post('/v1/tenant', { name: company.name, company_id: [{ name: company.name, orgnr: vat }] }, 'tenant registration')
@@ -472,7 +473,7 @@ export class BilloSenderClient implements MailboxSender {
     if (!tenantRef) throw new DigitalMailboxApiError(PROVIDER, 'unavailable', 'tenant registration answered no billo-objkey')
     // The token's scope names the tenants it may send for: ask for a new one.
     this.tokens.invalidate()
-    return { tenantRef }
+    return { status: 'active', tenantRef }
   }
 
   async isReachable(tenantRef: string, recipient: MailboxRecipient): Promise<boolean> {

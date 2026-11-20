@@ -134,6 +134,8 @@ export class WebhookFanOutError extends Error {
  *   - personnummer in every stored form: the customer's personal_number, the
  *     ROT/RUT claimant's ciphertext and last four digits on the invoice, and
  *     the employee's ciphertext and last four digits.
+ *   - keepLearnedTemplates: an in-process instruction to the template
+ *     consumer on journal_entry.corrected, not part of the event.
  */
 const STRIPPED_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
   'userId',
@@ -144,6 +146,7 @@ const STRIPPED_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
   'deduction_personnummer_last4',
   'personnummer_encrypted',
   'personnummer_last4',
+  'keepLearnedTemplates',
 ])
 
 /**

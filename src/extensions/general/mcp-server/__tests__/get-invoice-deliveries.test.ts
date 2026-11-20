@@ -92,6 +92,27 @@ describe('gnubok_get_invoice_deliveries: registration', () => {
     expect(itemProps.invoice_delivery_id).toBeDefined()
     expect(itemProps.id).toBeUndefined()
   })
+
+  it('says delivered means the receiving server accepted the mail, not that the customer saw it (crm#2050)', () => {
+    // An agent read provider_status "delivered" as "the customer got the
+    // invoice"; the mail sat in the recipient's spam or quarantine and the
+    // invoice fell overdue unnoticed. The UI already says what delivered
+    // means (delivery_status_explanation_delivered); the agent's contract
+    // must say the same, in the description and on the field itself.
+    const itemProps = (
+      getDeliveries.outputSchema as {
+        properties: {
+          deliveries: { items: { properties: Record<string, { description?: string }> } }
+        }
+      }
+    ).properties.deliveries.items.properties
+    for (const text of [getDeliveries.description, itemProps.provider_status.description ?? '']) {
+      expect(text).toMatch(/delivered/)
+      expect(text).toMatch(/server accepted/)
+      expect(text).toMatch(/spam/)
+    }
+    expect(getDeliveries.description.length).toBeLessThanOrEqual(280)
+  })
 })
 
 describe('gnubok_get_invoice_deliveries: execute', () => {

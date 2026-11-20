@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { sessionTimeoutClearCookieOptions } from '@/lib/auth/session-timeout'
 import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
+import type { UserUiState } from '@/types'
 
 // User-level UI preferences (not company-scoped), stored on user_preferences.
 // Mirrors the /api/user/locale pattern: requireAuth directly because these
@@ -25,7 +26,7 @@ export async function GET() {
 
   const { data } = await supabase
     .from('user_preferences')
-    .select('hide_assistant_fab, auto_logout')
+    .select('hide_assistant_fab, auto_logout, ui_state')
     .eq('user_id', user.id)
     .maybeSingle()
 
@@ -33,6 +34,9 @@ export async function GET() {
     data: {
       hide_assistant_fab: data?.hide_assistant_fab ?? false,
       auto_logout: data?.auto_logout ?? false,
+      // Read here so the settings row has one place to ask; written through
+      // /api/user/ui-state, where it is stored (lib/ui-state/fab-preference.ts).
+      support_fab_hidden: (data?.ui_state as UserUiState | null | undefined)?.support_fab_hidden === true,
     },
   })
 }

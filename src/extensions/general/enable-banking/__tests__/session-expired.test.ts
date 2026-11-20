@@ -6,6 +6,7 @@ import type { StoredAccount } from '../types'
 // ENABLE_BANKING credentials (part 2 stubs fetch directly).
 vi.mock('../lib/jwt', () => ({
   getAuthorizationHeader: () => 'Bearer test-token',
+  hasSigningCredentials: () => true,
 }))
 
 // Mock the sync orchestrator so the /sync handler test can force a dead-session

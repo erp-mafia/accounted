@@ -826,6 +826,19 @@ describe('correctEntry', () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1', companyId: 'company-1' })
     )
+    expect(handler.mock.calls[0]![0]).not.toHaveProperty('keepLearnedTemplates')
+  })
+
+  it('carries keepLearnedTemplates on the corrected event when the caller is a system step (crm#1858)', async () => {
+    setupResults()
+
+    const handler = vi.fn()
+    eventBus.on('journal_entry.corrected', handler)
+
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines, { keepLearnedTemplates: true })
+
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ keepLearnedTemplates: true }))
   })
 
   // accounted#58: reverseEntry announces its storno as committed; correctEntry

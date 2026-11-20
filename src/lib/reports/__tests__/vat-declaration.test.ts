@@ -1973,3 +1973,114 @@ describe('revenueAccountsWithoutRuta: parity with the declaration (#3387)', () =
     expect(revenueAccountsWithoutRuta(totals, {})).toEqual([])
   })
 })
+
+// ============================================================
+// Ruta 08: BAS 3913 (Frivilligt momspliktiga hyresintäkter) is the account
+// for rent under frivillig skattskyldighet. Revenue booked on it reaches ruta
+// 08 from the ledger without a configured momskod, the way 3001 reaches ruta
+// 05; a momskod on the account still decides.
+// ============================================================
+
+describe('calculateVatDeclaration: ruta 08 from BAS 3913', () => {
+  const RENT_3913 = 'Frivilligt momspliktiga hyresintäkter'
+
+  it('files 3913 in ruta 08 without a configured momskod, consistent with its 2613 VAT', async () => {
+    chartAccounts = [{ account_number: '3913', account_name: RENT_3913, default_vat_rate: null }]
+    seedLedger(
+      [
+        { account_number: '3001', debit_amount: 0, credit_amount: 2000 },
+        { account_number: '2611', debit_amount: 0, credit_amount: 500 },
+        { account_number: '3913', debit_amount: 0, credit_amount: 40000 },
+        { account_number: '2613', debit_amount: 0, credit_amount: 10000 },
+        { account_number: '3004', debit_amount: 0, credit_amount: 3000 },
+        { account_number: '2641', debit_amount: 1500, credit_amount: 0 },
+      ],
+      ['sie_import', 'manual'],
+    )
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'quarterly', 2024, 3)
+
+    expect(result.rutor.ruta05).toBe(2000)
+    expect(result.rutor.ruta08).toBe(40000)
+    expect(result.rutor.ruta42).toBe(3000)
+    expect(result.rutor.ruta10).toBe(10500)
+    expect(result.rutor.ruta48).toBe(1500)
+    expect(result.rutor.ruta49).toBe(9000)
+    // Summed by number, so it is not named as an account without a ruta.
+    expect(result.revenueAccountsWithoutRuta).toEqual([])
+    // Ruta 10 is exactly 25 % of rutor 05 + 08: no consistency finding.
+    expect(
+      runVatDeclarationChecks(result.rutor, undefined, {
+        revenueAccountsWithoutRuta: result.revenueAccountsWithoutRuta,
+      }),
+    ).toEqual([])
+  })
+
+  it('files 3913 in ruta 08 when the chart gives it a momssats but no momskod', async () => {
+    chartAccounts = [{ account_number: '3913', account_name: RENT_3913, default_vat_rate: 0.25 }]
+    seedLedger([
+      { account_number: '3913', debit_amount: 0, credit_amount: 8000 },
+      { account_number: '2613', debit_amount: 0, credit_amount: 2000 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+    expect(result.rutor.ruta08).toBe(8000)
+    expect(result.rutor.ruta10).toBe(2000)
+  })
+
+  it('lets a configured momskod on 3913 win, counted once', async () => {
+    chartAccounts = [
+      { account_number: '3913', account_name: RENT_3913, default_vat_rate: null, default_vat_treatment: 'exempt' },
+    ]
+    seedLedger([{ account_number: '3913', debit_amount: 0, credit_amount: 5000 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta08).toBe(0)
+    expect(result.rutor.ruta42).toBe(5000)
+  })
+
+  it('counts 3913 once when its momskod is rental_voluntary', async () => {
+    chartAccounts = [
+      {
+        account_number: '3913',
+        account_name: RENT_3913,
+        default_vat_rate: null,
+        default_vat_treatment: 'rental_voluntary',
+      },
+    ]
+    seedLedger([{ account_number: '3913', debit_amount: 0, credit_amount: 5000 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta08).toBe(5000)
+  })
+
+  it('joins the fixed account list the totals are read with', async () => {
+    seedLedger([{ account_number: '3913', debit_amount: 0, credit_amount: 5000 }])
+
+    await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    // p_ruta_accounts is also the settlement shape detector: a verifikat with
+    // a line on 3913 and one on 2650/1650 is read as a momsredovisning, as
+    // for every other revenue account in the fixed list.
+    const [, args] = supabase.rpc.mock.calls[0]
+    expect(args.p_accounts).toContain('3913')
+    expect(args.p_ruta_accounts).toContain('3913')
+  })
+
+  it('leaves 3911 (Hyresintäkter) to its momskod: unconfigured, it is named, not guessed', async () => {
+    chartAccounts = [{ account_number: '3911', account_name: 'Hyresintäkter', default_vat_rate: null }]
+    seedLedger([{ account_number: '3911', debit_amount: 0, credit_amount: 6000 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta08).toBe(0)
+    expect(result.rutor.ruta42).toBe(0)
+    expect(result.revenueAccountsWithoutRuta).toEqual([
+      { account_number: '3911', account_name: 'Hyresintäkter', amount: 6000 },
+    ])
+  })
+})

@@ -2968,6 +2968,20 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'This is a credit note with no link to its original, so it cannot be issued as an ordinary invoice. Delete the draft and credit the original invoice.',
   },
+  INVOICE_SEND_CREDIT_NOTE_DRAFT: {
+    httpStatus: 409,
+    message_sv:
+      'En kreditfaktura skickas inte den här vägen. Utkastet skickas från kreditfakturans sida i Accounted, där den också utfärdas och bokförs.',
+    message_en:
+      "A credit note is not sent this way. The draft is sent from the credit note's page in Accounted, which also issues and books it.",
+  },
+  INVOICE_SEND_CREDIT_NOTE_ISSUED: {
+    httpStatus: 409,
+    message_sv:
+      'Kreditfakturan är redan utfärdad, och Accounted mejlar den inte i efterhand. Ladda ner PDF:en på kreditfakturans sida och skicka den själv till kunden.',
+    message_en:
+      "The credit note is already issued, and Accounted does not email it afterwards. Download its PDF from the credit note's page and send it to the customer yourself.",
+  },
   INVOICE_SEND_CANCELLED: {
     httpStatus: 400,
     message_sv: 'Makulerade fakturor kan inte skickas. Skapa en ny faktura istället.',
@@ -3514,6 +3528,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Företagets Billo-brevlåda är redan kopplad till en annan tjänst. Koppla bort den där först.',
     message_en: 'The company\'s Billo mailbox is already connected to another partner. Disconnect it there first.',
+  },
+  DIGITAL_MAILBOX_SENDER_ELSEWHERE: {
+    httpStatus: 409,
+    message_sv: 'Företaget skickar redan via Kivra genom en annan tjänst, och Kivra tog inte emot vår förfrågan om att Accounted också får skicka. Kontakta oss så löser vi det.',
+    message_en: 'The company already sends through Kivra via another service, and Kivra did not take our request for Accounted to send too. Contact us and we will sort it out.',
+  },
+  DIGITAL_MAILBOX_SENDER_REQUEST_REJECTED: {
+    httpStatus: 409,
+    message_sv: 'Kivra nekade att Accounted skickar för företaget, eftersom det redan skickar via en annan tjänst. Kontakta oss så hjälper vi till.',
+    message_en: 'Kivra declined to let Accounted send for the company, since it already sends through another service. Contact us and we will help.',
   },
   DIGITAL_MAILBOX_PROVIDER_FAILED: {
     httpStatus: 502,

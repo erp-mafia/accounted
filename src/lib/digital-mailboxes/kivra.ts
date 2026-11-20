@@ -19,10 +19,12 @@ import { formatAmountInput } from '@/lib/money'
 import {
   DigitalMailboxApiError,
   createTokenCache,
+  isDigitalMailboxApiError,
   providerDownload,
   providerRequest,
   toBase64,
   withToken,
+  type DigitalMailboxErrorKind,
   type TokenCache,
 } from './http'
 import { orgNumberFromVatNumber, payslipEmployerContact, swedishVatNumber } from './identifiers'
@@ -39,6 +41,7 @@ import type {
   OutgoingPayslip,
   PayslipStatement,
   ReceiveAccount,
+  SenderRegistration,
 } from './types'
 
 const PROVIDER = 'kivra' as const
@@ -132,6 +135,17 @@ function tokenCacheFor(baseUrl: string, client: KivraClientCredentials): TokenCa
 }
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` })
+
+/**
+ * The providerCode on the conflict registerSender throws when the company is
+ * a sender through another service and Kivra would not take the access
+ * request: trying again does not help, so it is not reported as a failure to
+ * retry.
+ */
+export const KIVRA_SENDER_ELSEWHERE = 'sender_elsewhere'
+
+/** Refusals that say nothing about the request itself: the provider was down, slow or busy. */
+const TRANSIENT_KINDS: ReadonlySet<DigitalMailboxErrorKind> = new Set(['network', 'unavailable', 'rate_limited'])
 
 // ---------------------------------------------------------------------------
 // Partner API (receiving)
@@ -355,23 +369,88 @@ export class KivraTenantClient implements MailboxSender {
     this.tokens = tokenCacheFor(baseUrl, client)
   }
 
-  async registerSender(company: { orgNumber: string; name: string }): Promise<{ tenantRef: string }> {
+  /**
+   * Kivra answers 409 when the organisationsnummer is already a tenant
+   * outside this client's scope (the company sends through another service).
+   * Retrying never changes that: access to the existing tenant is asked for
+   * instead (request_access), Kivra approves or rejects it, and
+   * checkSenderRequest follows it up.
+   */
+  async registerSender(company: { orgNumber: string; name: string }): Promise<SenderRegistration> {
     const vat = swedishVatNumber(company.orgNumber)
     if (!vat) throw new DigitalMailboxApiError(PROVIDER, 'rejected', 'company organisationsnummer is not valid')
-    const res = await withToken(this.tokens, (token) =>
-      providerRequest(PROVIDER, {
-        method: 'POST',
-        url: `${this.baseUrl}/v2/tenant`,
-        headers: bearer(token),
-        json: { name: company.name, company_id: [{ name: company.name, orgnr: vat }] },
-        description: 'tenant registration',
-      }),
-    )
+    let res
+    try {
+      res = await withToken(this.tokens, (token) =>
+        providerRequest(PROVIDER, {
+          method: 'POST',
+          url: `${this.baseUrl}/v2/tenant`,
+          headers: bearer(token),
+          json: { name: company.name, company_id: [{ name: company.name, orgnr: vat }] },
+          description: 'tenant registration',
+        }),
+      )
+    } catch (err) {
+      if (isDigitalMailboxApiError(err) && err.kind === 'conflict') return this.requestAccess(vat)
+      throw err
+    }
     const tenantRef = res.headers.get('kivra-objkey')?.trim()
     if (!tenantRef) throw new DigitalMailboxApiError(PROVIDER, 'unavailable', 'tenant registration answered no kivra-objkey')
     // The new tenant joins the client's scope only in a token issued after it.
     this.tokens.invalidate()
-    return { tenantRef }
+    return { status: 'active', tenantRef }
+  }
+
+  /** Ask Kivra for access to the tenant that already holds the organisationsnummer. */
+  private async requestAccess(vat: string): Promise<SenderRegistration> {
+    let res
+    try {
+      res = await withToken(this.tokens, (token) =>
+        providerRequest(PROVIDER, {
+          method: 'POST',
+          url: `${this.baseUrl}/v2/tenant/request_access`,
+          headers: bearer(token),
+          json: { vat_number: vat },
+          description: 'tenant access request',
+        }),
+      )
+    } catch (err) {
+      // A provider that is down or slow is worth trying again; any other refusal leaves the conflict standing.
+      if (isDigitalMailboxApiError(err) && !TRANSIENT_KINDS.has(err.kind)) {
+        throw new DigitalMailboxApiError(PROVIDER, 'conflict', err.message, err.status, KIVRA_SENDER_ELSEWHERE)
+      }
+      throw err
+    }
+    const requestRef = res.headers.get('kivra-objkey')?.trim()
+    if (!requestRef) throw new DigitalMailboxApiError(PROVIDER, 'unavailable', 'tenant access request answered no kivra-objkey')
+    // The request's own status scope comes with a token issued after it.
+    this.tokens.invalidate()
+    return this.accessRequestOutcome(res.json, requestRef)
+  }
+
+  async checkSenderRequest(requestRef: string): Promise<SenderRegistration> {
+    const res = await withToken(this.tokens, (token) =>
+      providerRequest(PROVIDER, {
+        method: 'GET',
+        url: `${this.baseUrl}/v2/tenant/request_access/${encodeURIComponent(requestRef)}`,
+        headers: bearer(token),
+        description: 'tenant access request status',
+      }),
+    )
+    return this.accessRequestOutcome(res.json, requestRef)
+  }
+
+  /** Kivra's request object: accepted carries the tenant to send as, which joins the scope only in a new token. */
+  private accessRequestOutcome(body: unknown, requestRef: string): SenderRegistration {
+    const request = (body ?? {}) as { status?: unknown; tenant_key?: unknown }
+    const status = typeof request.status === 'string' ? request.status.trim().toLowerCase() : ''
+    const tenantKey = typeof request.tenant_key === 'string' ? request.tenant_key.trim() : ''
+    if (status === 'accepted' && tenantKey) {
+      this.tokens.invalidate()
+      return { status: 'active', tenantRef: tenantKey }
+    }
+    if (status === 'rejected') return { status: 'rejected', requestRef }
+    return { status: 'pending', requestRef }
   }
 
   async isReachable(tenantRef: string, recipient: MailboxRecipient): Promise<boolean> {

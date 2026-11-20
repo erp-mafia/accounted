@@ -468,7 +468,7 @@ describe('commitPendingOperation: what no door issues as an ordinary invoice', (
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op(type))
 
     expect(result.status).toBe('rejected')
-    expect(result.error).toContain('Credit notes must be issued')
+    expect(result.code).toBe('INVOICE_CREDIT_NOTE_NOT_ISSUABLE')
     expect(findCalls('invoices', 'update')).toEqual([])
     expect(mocks.sendTrackedInvoiceEmail).not.toHaveBeenCalled()
   })

@@ -351,3 +351,75 @@ describe('AccountMappingStep answered rows stay in the review view (O20)', () =>
     expect(pending).not.toContain('Bekräftad')
   })
 })
+
+describe('AccountMappingStep match column', () => {
+  const row = (overrides: Partial<AccountMapping>): AccountMapping => ({
+    sourceAccount: '1930',
+    sourceName: 'Företagskonto',
+    targetAccount: '1930',
+    targetName: 'Företagskonto',
+    confidence: 1,
+    matchType: 'exact',
+    isOverride: false,
+    ...overrides,
+  })
+  // A valid number outside the BAS reference, mapped to itself: what the
+  // mapper does with most rows of a chart that keeps its own sub-accounts.
+  const fromFile = row({
+    sourceAccount: '4599',
+    sourceName: 'Eget inköpskonto',
+    targetAccount: '4599',
+    targetName: 'Eget inköpskonto',
+    confidence: 0.7,
+    matchType: 'bas_range',
+  })
+
+  it('names what the mapper did on each row', () => {
+    const html = render([
+      row({}),
+      fromFile,
+      row({ sourceAccount: '2640', sourceName: 'Ingående moms', targetAccount: '2641', targetName: 'Debiterad ingående moms' }),
+      row({ sourceAccount: '9999', sourceName: 'Observationskonto', targetAccount: '2999', targetName: 'OBS-konto', confidence: 0.5, matchType: 'class' }),
+      row({ sourceAccount: '1510', sourceName: 'Kundfordringar', targetAccount: '1510', targetName: 'Kundfordringar', isOverride: true }),
+    ])
+    expect(html).toContain('>Matchning<')
+    expect(html).toContain('>BAS-konto<')
+    expect(html).toContain('>Från filen<')
+    expect(html).toContain('>Flyttad<')
+    expect(html).toContain('>Osäker<')
+    expect(html).toContain('>Manuell<')
+  })
+
+  it('does not grade a self-mapped account outside the BAS reference as likely', () => {
+    const html = render([fromFile])
+    expect(html).toContain('>Från filen<')
+    expect(html).not.toContain('Trolig')
+    expect(html).not.toContain('Konfidens')
+  })
+
+  it('leaves the cell empty on an unmapped row', () => {
+    const html = render([row({ sourceAccount: '9999', sourceName: 'Observationskonto', targetAccount: '', targetName: '', confidence: 0, matchType: 'manual' })])
+    for (const label of ['>BAS-konto<', '>Från filen<', '>Flyttad<', '>Osäker<', '>Manuell<']) {
+      expect(html).not.toContain(label)
+    }
+  })
+
+  it('keeps the columns inside the content column of a 1440px window', () => {
+    // The content column where the sidebar turns wide: 1440 minus the rail
+    // (96), the wide sidebar (320), the frame gutter (10) and the page padding
+    // (48). A wider table slides the match column under the sticky confirm
+    // column there.
+    const CONTENT_COLUMN = 966
+    const head = render([row({})]).match(/<thead[\s\S]*?<\/thead>/)?.[0] ?? ''
+    const widths = [...head.matchAll(/<th\s[^>]*?class="([^"]*)"/g)].map((th) => {
+      const width = th[1].split(/\s+/).find((name) => /^w-\d+$/.test(name))
+      return width ? Number(width.slice(2)) * 4 : Number.NaN
+    })
+    expect(widths).toHaveLength(7)
+    expect(widths.reduce((sum, width) => sum + width, 0)).toBeLessThanOrEqual(CONTENT_COLUMN)
+  })
+
+  it('writes a text label on one line', () => {
+    expect(render([row({})])).toMatch(/<span class="[^"]*\bwhitespace-nowrap\b[^"]*">BAS-konto<\/span>/)
+  })
+})

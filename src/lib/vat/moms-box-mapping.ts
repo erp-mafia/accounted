@@ -145,6 +145,11 @@ export const VAT_ACCOUNT_TABLE: Readonly<Record<string, VatAccount>> = {
   '3401': credit('06'),
   '3402': credit('06'),
   '3403': credit('06'),
+  // Revenue: rent under frivillig skattskyldighet → ruta 08. Its output VAT
+  // is on 2613/2623/2633 (rutor 10-12). 3911/3912 (Hyres- and
+  // Arrendeintäkter) stay out: they hold exempt rent too, so the account's
+  // momskod decides their ruta.
+  '3913': credit('08'),  // Frivilligt momspliktiga hyresintäkter
   // Revenue: EU goods/services → ruta 35/39
   '3108': credit('35'),  // Varuförsäljning till EU
   // Trepartshandel. A declared account here also widens p_ruta_accounts,

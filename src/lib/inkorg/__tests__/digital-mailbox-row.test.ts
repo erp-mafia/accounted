@@ -13,6 +13,7 @@ function connection(overrides: Partial<ConnectionSummary> = {}): ConnectionSumma
     last_synced_at: '2026-10-19T09:13:00Z',
     send_state: 'off',
     send_activated_at: null,
+    send_request: null,
     last_error: null,
     last_error_at: null,
     postal_address: null,
@@ -70,6 +71,14 @@ describe('digitalMailboxRowView', () => {
     expect(digitalMailboxRowView(BOTH, null).sending).toBe('off')
     expect(digitalMailboxRowView(BOTH, connection({ send_state: 'ended' })).sending).toBe('off')
     expect(digitalMailboxRowView(BOTH, connection({ send_state: 'active' })).sending).toBe('active')
+  })
+
+  it('shows an access request to a sender the company has through another service as waiting, or declined', () => {
+    expect(digitalMailboxRowView(BOTH, connection({ send_request: 'pending' })).sending).toBe('pending')
+    expect(digitalMailboxRowView(BOTH, connection({ send_state: 'ended', send_request: 'rejected' })).sending).toBe('rejected')
+    // Active wins: the summary carries no request once sending is on.
+    expect(digitalMailboxRowView(BOTH, connection({ send_state: 'active', send_request: null })).sending).toBe('active')
+    expect(digitalMailboxRowView(RECEIVE_ONLY, connection({ send_request: 'pending' })).sending).toBeNull()
   })
 
   it('shows a failure, with its time and never its text, while the mailbox is read or waits', () => {

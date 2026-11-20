@@ -345,11 +345,15 @@ export async function bulkBookTransactions(
     let sortOrder = 0
     // applyTemplate answers one form line per template line, in order. The
     // header default tags the template's business lines only: its
-    // settlement (bank) and moms lines stay untagged (crm#1313).
+    // settlement (bank) and moms lines stay untagged (crm#1313). A tag the
+    // template sets on a business line wins over the header default, per key.
     const applied = (amount: number) =>
       applyTemplate(templateLines, amount).map((formLine, i) => ({
         formLine,
-        dimensions: templateLines[i]?.type === 'business' ? body.default_dimensions : undefined,
+        dimensions: mergeDimensionBags(
+          templateLines[i]?.type === 'business' ? body.default_dimensions : undefined,
+          formLine.dimensions,
+        ),
       }))
 
     if (body.mode === 'sum_per_account') {

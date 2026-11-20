@@ -38,12 +38,34 @@ function generateRequestId(): string {
  *      without a requestId, inject one into the body so the toast can show
  *      `Felreferens: req_…`
  *
+ * JSON responses also get `charset=utf-8` declared on their content-type,
+ * unless the caller passes `declareCharset: false`.
+ *
  * Non-JSON responses (HTML for OAuth callbacks, file downloads) only get the
  * header: body rewriting is reserved for the canonical envelope shape.
  */
-async function decorateResponse(response: Response, requestId: string): Promise<Response> {
+async function decorateResponse(
+  response: Response,
+  requestId: string,
+  { declareCharset = true }: { declareCharset?: boolean } = {},
+): Promise<Response> {
   if (!response.headers.get('X-Request-Id')) {
     response.headers.set('X-Request-Id', requestId)
+  }
+
+  // Declare the encoding on JSON. The bytes are already UTF-8 (JSON is UTF-8
+  // by definition, RFC 8259), but a client that falls back to Latin-1 when no
+  // charset is declared renders "är" as "Ã¤r". JSON only: other content types
+  // (event streams, PDFs, payment files, exports) go out as the handler set
+  // them.
+  const declaredType = response.headers.get('content-type')
+  if (
+    declareCharset &&
+    declaredType &&
+    declaredType.toLowerCase().startsWith('application/json') &&
+    !declaredType.toLowerCase().includes('charset=')
+  ) {
+    response.headers.set('content-type', `${declaredType}; charset=utf-8`)
   }
 
   if (!response.ok) {
@@ -254,7 +276,10 @@ async function dispatchRequest(
         ...note?.fields,
       })
     }
-    return decorateResponse(response, requestId)
+    // A skipAuth handler answers an outside caller (an OAuth provider, a
+    // webhook sender, an MCP client) that may match on the content-type: it
+    // goes out exactly as the handler set it.
+    return decorateResponse(response, requestId, { declareCharset: false })
   }
 
   // Auth check: requireAuth() enforces MFA (AAL2) on hosted, which the previous

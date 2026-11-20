@@ -146,12 +146,26 @@ export interface SendReceipt {
   providerRef: string | null
 }
 
+/**
+ * Where registering the company as a sender stands. Pending: the company is
+ * already a sender at the provider through another service, so Accounted has
+ * asked for access to that sender and the provider decides (Kivra's
+ * request_access); requestRef is the request to follow up, or the one the
+ * provider rejected.
+ */
+export type SenderRegistration =
+  | { status: 'active'; tenantRef: string }
+  | { status: 'pending'; requestRef: string }
+  | { status: 'rejected'; requestRef: string }
+
 export interface MailboxSender {
   /**
    * The company's sender identity (tenant), created or found by its
    * organisationsnummer. Idempotent: the same company answers the same key.
    */
-  registerSender(company: { orgNumber: string; name: string }): Promise<{ tenantRef: string }>
+  registerSender(company: { orgNumber: string; name: string }): Promise<SenderRegistration>
+  /** Where an access request registerSender left pending stands now. Only a provider that answers pending has it. */
+  checkSenderRequest?(requestRef: string): Promise<SenderRegistration>
   /** Whether the recipient has a mailbox this sender may deliver to. */
   isReachable(tenantRef: string, recipient: MailboxRecipient): Promise<boolean>
   sendInvoice(tenantRef: string, recipient: MailboxRecipient, invoice: OutgoingInvoice): Promise<SendReceipt>

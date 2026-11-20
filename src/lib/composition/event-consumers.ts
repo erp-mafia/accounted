@@ -17,7 +17,7 @@
  * kept fresh by consumer-index.test.ts).
  */
 import { handleSupplierInvoiceRetroMatch } from '@/lib/invoices/supplier-invoice-handler'
-import { unlearnOnReversal } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'
+import { unlearnOnCorrection, unlearnOnReversal } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'
 import { cancelAccrualsOnOriginReversal } from '@/lib/bookkeeping/handlers/cancel-accruals-on-origin-reversal'
 import { WEBHOOKS_EVENT_CONSUMER } from '@/lib/composition/async-event-consumers'
 import { eventConsumer, type EventConsumer } from '@/lib/events/consumers'
@@ -42,12 +42,14 @@ export const EVENT_CONSUMERS: readonly EventConsumer[] = Object.freeze([
     eventTypes: ['supplier_invoice.registered', 'supplier_invoice.approved'],
     handle: (event) => handleSupplierInvoiceRetroMatch(event.payload),
   }),
-  // A reversed bank booking takes back the counterpart template it taught.
+  // A reversed or corrected bank booking takes back the counterpart template it taught.
   eventConsumer({
     id: 'unlearn-on-reversal',
     owner: 'transactions',
-    eventTypes: ['journal_entry.reversed'],
-    handle: (event) => unlearnOnReversal(event.payload),
+    eventTypes: ['journal_entry.reversed', 'journal_entry.corrected'],
+    handle: (event) => event.type === 'journal_entry.corrected'
+      ? unlearnOnCorrection(event.payload)
+      : unlearnOnReversal(event.payload),
   }),
   // A reversed verifikat cancels the manual periodiseringar it is the origin
   // of and stornoes the months they posted, as a credit does for an invoice.
