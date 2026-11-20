@@ -714,8 +714,18 @@ export const CreateInvoiceItemSchema = z
     if (item.description.trim().length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: 'Item description is required' })
     }
-    if (item.quantity <= 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: 'Quantity must be positive' })
+    // Zero and negative quantities are allowed (#3553), as negative prices
+    // are: a 0 x 0 row carries information on a Peppol invoice, and a
+    // negative quantity at a positive price is the line deduction EN 16931
+    // accepts (BR-27 forbids only a negative item price). An order line is
+    // the exception: a negative quantity would lower what the order counts
+    // as invoiced.
+    if (item.sales_order_item_id && item.quantity < 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['quantity'],
+        message: 'Quantity on a sales order line cannot be negative',
+      })
     }
     if (item.unit.length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: 'Unit is required' })

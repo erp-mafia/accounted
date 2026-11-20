@@ -6774,7 +6774,7 @@
     "doc_label_quote": "Offert",
     "doc_label_delivery_note": "Följesedel",
     "validation_description_required": "Beskrivning krävs",
-    "validation_quantity_min": "Minst 0.01",
+    "validation_quantity_number": "Ange antal",
     "validation_unit_required": "Enhet krävs",
     "validation_customer_required": "Välj en kund",
     "validation_invoice_date_required": "Fakturadatum krävs",

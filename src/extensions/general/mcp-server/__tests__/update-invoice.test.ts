@@ -208,14 +208,14 @@ describe('gnubok_update_invoice: validation and staging', () => {
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
-  it('rejects an item without a positive quantity before querying', async () => {
+  it('rejects an item without a quantity before querying', async () => {
     const { supabase } = createQueuedMockSupabase()
 
     await expect(
       tool().execute(
         {
           invoice_id: INVOICE_ID,
-          items: [{ description: 'Konsultation', quantity: 0, unit: 'tim', unit_price: 1000 }],
+          items: [{ description: 'Konsultation', unit: 'tim', unit_price: 1000 }],
         },
         'company-1',
         'user-1',

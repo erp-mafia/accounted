@@ -550,8 +550,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       if (item.description.trim().length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: t('validation_description_required') })
       }
-      if (!(item.quantity >= 0.01)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: t('validation_quantity_min') })
+      // Zero and negative quantities are allowed (#3553): a 0 x 0 row carries
+      // information on a Peppol invoice, where text rows cannot travel, and
+      // a negative quantity at a positive price is the deduction EN 16931
+      // accepts (BR-27 forbids only a negative item price).
+      if (!Number.isFinite(item.quantity)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: t('validation_quantity_number') })
       }
       if (item.unit.trim().length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: t('validation_unit_required') })

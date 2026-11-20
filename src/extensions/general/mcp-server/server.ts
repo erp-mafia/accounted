@@ -979,7 +979,11 @@ function resolveInvoiceLineFromArticle(
       vat_rate: 0,
     }
   }
-  if (!item.quantity || item.quantity <= 0) throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: quantity must be positive`)
+  // Zero and negative quantities are valid, as on the web (#3553): a 0 x 0
+  // information row, or a deduction as a negative quantity.
+  if (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity)) {
+    throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: quantity must be a number`)
+  }
   // Strict typeof: a host that skips inputSchema validation could send a
   // string, which JS comparisons would coerce past a bare range check while
   // hasLineDiscount (typeof === 'number') then ignores it in the totals.
@@ -25937,10 +25941,13 @@ export const tools: McpTool[] = [
         }
         for (const [i, item] of rawItems.entries()) {
           // Text rows are stored with quantity 0 and legitimately come back
-          // that way from gnubok_get_invoice (web parity: the canonical
-          // CreateInvoiceItemSchema exempts them from the quantity rule).
+          // that way from gnubok_get_invoice. Product rows take any number,
+          // zero and negative included (#3553, web parity with the canonical
+          // CreateInvoiceItemSchema).
           if (item.line_type === 'text') continue
-          if (!item.quantity || item.quantity <= 0) throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: quantity must be positive`)
+          if (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity)) {
+            throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: quantity must be a number`)
+          }
         }
       }
 
