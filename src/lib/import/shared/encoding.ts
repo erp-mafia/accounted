@@ -106,8 +106,25 @@ export function stripBOM(content: string): string {
 }
 
 /**
- * Prepare file content for parsing: strip BOM, normalize line endings, handle encoding
+ * Excel writes `sep=;` as the first line so a double-click opens the file with
+ * the right delimiter. It is an instruction to a spreadsheet, not data, and
+ * the format detectors read the FIRST line to identify a file: left in place
+ * it hides the real header. Only the exact one-character form is matched, so
+ * a data row that begins with "sep=" survives.
+ */
+const EXCEL_SEPARATOR_HINT_RE = /^"?sep=.?"?\s*$/i
+
+function stripSeparatorHint(content: string): string {
+  const firstBreak = content.indexOf('\n')
+  const firstLine = firstBreak === -1 ? content : content.slice(0, firstBreak)
+  if (!EXCEL_SEPARATOR_HINT_RE.test(firstLine)) return content
+  return firstBreak === -1 ? '' : content.slice(firstBreak + 1)
+}
+
+/**
+ * Prepare file content for parsing: strip BOM, normalize line endings, handle
+ * encoding, and drop Excel's `sep=` hint line so the real header is first.
  */
 export function prepareContent(content: string): string {
-  return normalizeLineEndings(stripBOM(decodeStringContent(content)))
+  return stripSeparatorHint(normalizeLineEndings(stripBOM(decodeStringContent(content))))
 }

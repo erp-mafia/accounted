@@ -8,18 +8,20 @@ import { Button } from '@/components/ui/button'
 import { AGENT_FAB_PROPS } from '@/components/ui/fab-clearance'
 
 /**
- * The floating button for a person whose built-in assistant is gone
- * (ASSISTANT_CHAT_ENABLED, lib/env/assistant-chat-switch.ts) and who had its
- * button: the same corner now opens the support panel (SupportDock.tsx), so
- * the place they asked their questions still answers them.
+ * The floating button that opens the support panel (SupportDock.tsx), for
+ * everyone in a company without the built-in assistant
+ * (ASSISTANT_CHAT_ENABLED, lib/env/assistant-chat-switch.ts): the corner
+ * where that assistant's button sat is where a question is asked now.
  *
  * It is drawn as another thing than the button it follows (AgentTrigger: the
  * dark pill with the assistant's own name and face): a light bar, a question
  * mark and the word support. What it opens reads and explains and does
  * nothing in the books, and it should not look like the assistant that did.
  *
- * Desktop only, like the button it follows, and hidden by the same
- * preference: the X hides it for good, with an undo. Not while the panel is
+ * Desktop only, like the button it follows. Its own choice to hide: a person
+ * who hid the assistant's button said nothing about this one. The X hides
+ * it, with an undo, and Inställningar > Ditt konto brings it back
+ * (components/settings/FabVisibilityRow.tsx). Not while the panel is
  * open (the panel sits where the button is), not on /chat, where the page
  * itself offers the question, nor on the verifikation editor, which is kept
  * clear of floating buttons.
@@ -36,10 +38,11 @@ export function SupportAskTrigger({
 }) {
   const t = useTranslations('support_link')
   const pathname = usePathname()
-  const { effectiveHidden, hideFab } = useFabHidden(hidden, {
-    title: t('ask_fab_hidden_title'),
-    description: t('ask_fab_hidden_description'),
-  })
+  const { effectiveHidden, hideFab } = useFabHidden(
+    hidden,
+    { title: t('ask_fab_hidden_title'), description: t('ask_fab_hidden_description') },
+    'support',
+  )
 
   const segments = pathname?.split('/').filter(Boolean) ?? []
   const onEditor = segments[0] === 'bookkeeping' && Boolean(segments[1]) && segments[1] !== 'year-end' && segments[1] !== 'new'

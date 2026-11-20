@@ -196,7 +196,7 @@ describe('BilloSenderClient', () => {
   it('takes an OAuth token and registers the tenant from billo-objkey', async () => {
     responder = () => json({}, { status: 201, headers: { 'billo-objkey': 'tenant-1' } })
     const client = new BilloSenderClient(HOSTS, { clientId: 'c', clientSecret: 's' })
-    await expect(client.registerSender({ orgNumber: ORG, name: 'Testbolaget AB' })).resolves.toEqual({ tenantRef: 'tenant-1' })
+    await expect(client.registerSender({ orgNumber: ORG, name: 'Testbolaget AB' })).resolves.toEqual({ status: 'active', tenantRef: 'tenant-1' })
     expect(String(calls[0]!.init.body)).toBe('grant_type=client_credentials&client_id=c&client_secret=s')
     expect(bodyOf(apiCalls()[0]!)).toEqual({ name: 'Testbolaget AB', company_id: [{ name: 'Testbolaget AB', orgnr: VAT }] })
   })

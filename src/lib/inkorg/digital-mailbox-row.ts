@@ -16,14 +16,21 @@ import type { DigitalMailboxAvailability } from '@/lib/digital-mailboxes/provide
  */
 export type DigitalMailboxReceive = 'off' | 'pending' | 'active'
 
+export type DigitalMailboxSending = 'off' | 'pending' | 'rejected' | 'active'
+
 export interface DigitalMailboxRowView {
   receive: DigitalMailboxReceive
   /** When the mailbox was last read, while it is read. */
   lastSyncedAt: string | null
   /** Billo's scanning address for paper mail on one line, while the mailbox is read and Billo gave one. */
   postalAddress: string | null
-  /** Whether the company sends invoices and payslips through the provider; null where this deployment cannot send. */
-  sending: 'off' | 'active' | null
+  /**
+   * Whether the company sends invoices and payslips through the provider;
+   * null where this deployment cannot send. pending: the company already
+   * sends through another service and the provider has not yet accepted
+   * Accounted's access request; rejected: the provider declined it.
+   */
+  sending: DigitalMailboxSending | null
   /**
    * The last failure, while something still reads the mailbox: an error left
    * on a disconnected row is history, not something to act on. The provider's
@@ -42,9 +49,14 @@ export function digitalMailboxRowView(
     receive,
     lastSyncedAt: receive === 'active' ? (connection?.last_synced_at ?? null) : null,
     postalAddress: receive === 'active' ? billoPostalAddress(connection?.postal_address) : null,
-    sending: available.send ? (connection?.send_state === 'active' ? 'active' : 'off') : null,
+    sending: available.send ? sendingOf(connection) : null,
     error: receive !== 'off' && connection?.last_error ? { at: connection.last_error_at } : null,
   }
+}
+
+function sendingOf(connection: ConnectionSummary | null): DigitalMailboxSending {
+  if (connection?.send_state === 'active') return 'active'
+  return connection?.send_request ?? 'off'
 }
 
 function text(value: unknown): string | null {

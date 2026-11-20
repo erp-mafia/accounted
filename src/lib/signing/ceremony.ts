@@ -21,6 +21,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decryptStoredPersonalNumber, hashPersonalNumber, maskPersonalNumber } from '@/lib/auth/bankid'
 import { signerPersonalNumberFromBankIdLogin } from '@/lib/auth/bankid-signer'
+import { maskPersonnummer } from '@/lib/invariants/personal-number-shape'
 import { eventBus } from '@/lib/events/bus'
 import type { Logger } from '@/lib/logger'
 import type { OperationOutcome } from '@/lib/operations/types'
@@ -289,17 +290,29 @@ async function endSession(service: SupabaseClient, signerId: string, sessionId: 
     .eq('bankid_session_id', sessionId)
 }
 
-function evidenceFor(signature: CollectedBankIdSignature, visibleText: string) {
+/**
+ * `mask` is what the Signeringsbevis prints for the signer: the app's one
+ * display form, the birth date visible and the last four digits hidden
+ * (maskPersonnummer). It printed the opposite, XXXXXXXX-1234, through a
+ * second helper (crm#1969). Stored with the signature and frozen with it, so
+ * a signature recorded before keeps the mask it was recorded with.
+ */
+function evidenceFor(signature: CollectedBankIdSignature, visibleText: string, mask: (personalNumber: string) => string) {
   return {
     given_name: signature.givenName,
     surname: signature.surname,
     personnummer_hash: hashPersonalNumber(signature.personalNumber),
-    personnummer_masked: maskPersonalNumber(signature.personalNumber),
+    personnummer_masked: mask(signature.personalNumber),
     completed_at: signature.completedAt,
     user_visible_data: visibleText,
     signature_xml: signature.signatureXml,
     ocsp_response: signature.ocspResponse,
   }
+}
+
+/** The database refused the row over the mask's form (check_violation on personnummer_masked). */
+function maskRefused(error: { code?: string; message?: string }): boolean {
+  return error.code === '23514' && (error.message ?? '').includes('personnummer_masked')
 }
 
 /**
@@ -373,11 +386,24 @@ export async function pollSignature(scope: SignerScope, now: number = Date.now()
     return { ok: false, code: 'SIGNING_EVIDENCE_INCOMPLETE' }
   }
 
-  const { data: recorded, error: rpcError } = await service.rpc('record_signing_signature', {
-    p_signer_id: signer.id,
-    p_session_id: sessionId,
-    p_evidence: evidenceFor(signature, visibleText),
-  })
+  const record = (mask: (personalNumber: string) => string) =>
+    service.rpc('record_signing_signature', {
+      p_signer_id: signer.id,
+      p_session_id: sessionId,
+      p_evidence: evidenceFor(signature, visibleText, mask),
+    })
+  let { data: recorded, error: rpcError } = await record(maskPersonnummer)
+  // A signature is never lost to how its personnummer is masked. A database
+  // whose check on the mask is not widened yet (the migration
+  // signing_masked_personnummer_display_form lands a moment after the code,
+  // or was skipped) refuses the new form; the refused attempt rolled back
+  // whole, the BankID session included, so the signature is recorded with
+  // the form that database accepts. The warning is how an unapplied
+  // migration is seen.
+  if (rpcError && maskRefused(rpcError)) {
+    log.warn('signing mask refused by the database: recorded with the earlier form', { signerId: signer.id })
+    ;({ data: recorded, error: rpcError } = await record(maskPersonalNumber))
+  }
   if (rpcError) {
     log.error('record_signing_signature failed', rpcError, { signerId: signer.id })
     await endSession(service, signer.id, sessionId, 'SIGNING_RECORD_FAILED')

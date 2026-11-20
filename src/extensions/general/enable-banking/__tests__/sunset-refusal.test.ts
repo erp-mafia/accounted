@@ -4,7 +4,7 @@ import type { StoredAccount } from '../types'
 
 // The /sync handler is driven without the network: the JWT signer and the
 // sync orchestrator are stubbed, so the test can prove nothing was called.
-vi.mock('../lib/jwt', () => ({ getAuthorizationHeader: () => 'Bearer test-token' }))
+vi.mock('../lib/jwt', () => ({ getAuthorizationHeader: () => 'Bearer test-token', hasSigningCredentials: () => true }))
 vi.mock('../lib/sync', () => ({ syncAccountTransactions: vi.fn() }))
 vi.mock('../lib/sync-lease', async () => {
   const actual = await vi.importActual<typeof import('../lib/sync-lease')>('../lib/sync-lease')

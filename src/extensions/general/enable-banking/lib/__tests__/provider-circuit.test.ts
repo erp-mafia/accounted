@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // The JWT signer needs real credentials; the fetch below is stubbed anyway.
 vi.mock('../jwt', () => ({
   getAuthorizationHeader: () => 'Bearer test-token',
+  hasSigningCredentials: () => true,
 }))
 
 import {

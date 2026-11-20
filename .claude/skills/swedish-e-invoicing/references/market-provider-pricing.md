@@ -6,6 +6,15 @@ audience: developer
 
 This reference covers (a) which Access Points and service providers operate in Sweden, (b) how the dominant Swedish accounting platforms (Fortnox, Visma, Bokio, SpeedLedger, Björn Lundén, Hogia) wire their Peppol layers, almost all white-label, (c) per-document pricing benchmarks, (d) the post-2022 industry consolidation pattern.
 
+## Contents
+
+- Major Swedish Access Points and service providers
+- Qvalia public pricing (EUR, read from qvalia.com/pricing 2026-09-21)
+- SME pricing benchmarks (April 2026)
+- How Swedish accounting platforms wire Peppol
+- Industry consolidation post-2022
+- Authoritative source list
+
 ## Major Swedish Access Points and service providers
 
 | Provider | Status (Apr 2026) | Segment | Reach (claimed) | Notes |

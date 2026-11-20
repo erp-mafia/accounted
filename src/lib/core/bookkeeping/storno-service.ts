@@ -254,6 +254,13 @@ export async function correctEntry(
      * negate the original are refused: to only cancel a verifikat, reverse it.
      */
     sidesSwapped?: boolean
+    /**
+     * The correction is a system step, not the person's verdict on the
+     * kontering (the kontantmetod cut-off moving a paid cost to its clearing
+     * account): the counterparty template the booking taught keeps its
+     * occurrence (unlearn-on-reversal, crm#1858).
+     */
+    keepLearnedTemplates?: boolean
     /** Posting port: the events of the two new verifikat (CorrectionBusinessEvents). */
     businessEvents?: CorrectionBusinessEvents
   }
@@ -723,6 +730,7 @@ export async function correctEntry(
       corrected: result.corrected,
       companyId,
       userId,
+      ...(options?.keepLearnedTemplates ? { keepLearnedTemplates: true as const } : {}),
     },
   })
 

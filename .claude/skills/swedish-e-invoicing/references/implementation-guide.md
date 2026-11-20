@@ -6,6 +6,14 @@ audience: developer
 
 This reference is the practical builder's guide. Open-source library landscape, common rejection patterns and validation in CI.
 
+## Contents
+
+- Open-source library landscape
+- Common rejection patterns, the high-yield checklist
+- Validation in CI
+- Critical UX features
+- Authoritative source list
+
 ## Open-source library landscape
 
 The **Java ecosystem dominates Peppol**. Most production stacks are JVM.

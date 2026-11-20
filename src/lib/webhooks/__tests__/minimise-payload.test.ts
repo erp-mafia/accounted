@@ -40,6 +40,7 @@ describe('minimisePayload', () => {
     'deduction_personnummer_last4',
     'personnummer_encrypted',
     'personnummer_last4',
+    'keepLearnedTemplates',
   ])
 
   function strippedKeysAnywhere(value: unknown, path = '$'): string[] {
@@ -98,6 +99,11 @@ describe('minimisePayload', () => {
   it('is idempotent on an already minimised payload (the retry path re-runs it)', () => {
     const once = minimisePayload(invoiceCreatedPayload() as unknown as Record<string, unknown>)
     expect(minimisePayload(once)).toEqual(once)
+  })
+
+  it('drops the in-process keepLearnedTemplates instruction from journal_entry.corrected', () => {
+    const out = minimisePayload({ original: { id: 'je-1' }, corrected: { id: 'je-2' }, companyId: 'company-1', keepLearnedTemplates: true })
+    expect(out).toEqual({ original: { id: 'je-1' }, corrected: { id: 'je-2' }, companyId: 'company-1' })
   })
 
   it('leaves null, primitives and arrays of primitives alone', () => {

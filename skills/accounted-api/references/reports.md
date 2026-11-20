@@ -2482,7 +2482,7 @@ Response `200` (`application/pdf`).
 **General ledger (huvudbok) for a fiscal period.**
 `scope:reports:read · risk:low · idempotent`
 
-Returns every posted journal line in the period grouped by account, with opening / running / closing balances. Supports optional `account_from` and `account_to` query parameters to limit the report to an account range (e.g. ?account_from=3000&account_to=3999 for revenue-only), and `dim_no` + `dim_code` to keep only the lines tagged with one dimension value (the answer then carries `dimension_filter` and `partial_view`).
+Returns every posted journal line in the period grouped by account, with opening / running / closing balances. Supports optional `account_from` and `account_to` query parameters to limit the report to an account range (e.g. ?account_from=3000&account_to=3999 for revenue-only), `from_date` and `to_date` to limit it to a date window inside the period, and `dim_no` + `dim_code` to keep only the lines tagged with one dimension value (the answer then carries `dimension_filter` and `partial_view`).
 
 **Use when:** You're reconciling a specific account or range (bank account drilldown, revenue audit, expense investigation) and need every voucher-line that hit the account.
 **Do not use for:** Period totals only (use /reports/trial-balance). Specific transaction lookup (use /journal-entries/{id}).
@@ -2492,7 +2492,8 @@ Returns every posted journal line in the period grouped by account, with opening
 - Account ranges are inclusive on both bounds. `account_from=3000` includes 3000; `account_to=3999` includes 3999.
 - Lines with `status != 'posted'` (drafts, reversed) are excluded.
 - With `dim_no` + `dim_code` (always together) the opening_balance is scoped to the filter too: the IB lines tagged with that value (`partial_view.opening_balances` is `dimension_scoped`, and `partial_view.opening_balances_included` is true). A project (dimension 6) opens at its carried balance; a dimension that resets annually (e.g. kostnadsställe, dimension 1) opens at 0, and so do the VAT accounts (26xx), whose IB is never split per project. Running and closing balances are that IB plus the tagged lines' movements.
-- A query parameter it does not document (e.g. from_date) is not applied: the answer names it in the X-Ignored-Query-Params header. A dimension filter is always applied or refused, never ignored.
+- With `from_date`, the lines before it roll into each account's opening_balance, so the running balance at the window start equals the full-period ledger's. `period` in the answer is the window, not the fiscal year. The window must lie inside the fiscal period: a range spanning two räkenskapsår is two calls.
+- A query parameter it does not document (e.g. from, a misspelled from_date) is not applied: the answer names it in the X-Ignored-Query-Params header. A dimension filter is always applied or refused, never ignored.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2500,6 +2501,8 @@ Returns every posted journal line in the period grouped by account, with opening
 | `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 | `account_from` | query | `string` | no | Lowest account number to include (inclusive), 3-8 digits, e.g. 3000. |
 | `account_to` | query | `string` | no | Highest account number to include (inclusive), 3-8 digits, e.g. 3999. |
+| `from_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period. Omit with to_date for the whole period. |
+| `to_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period and not before from_date. |
 | `dim_no` | query | `string` | no | SIE dimension number to filter on: "1" kostnadsställe, "6" projekt, 20+ custom. Send with dim_code. |
 | `dim_code` | query | `string` | no | The dimension value code, e.g. "P001". Send with dim_no. |
 

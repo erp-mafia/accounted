@@ -804,6 +804,22 @@ describe('manualBookDirectLines and toBookDirectPayloadLine', () => {
     expect(toBookDirectPayloadLine({ ...line, dimensions: {} }).dimensions).toBeUndefined()
   })
 
+  it('keeps the dimensions a template set on a line, so they are posted with it', () => {
+    const lines = manualBookDirectLines([
+      { account_number: '5410', debit_amount: '1000', credit_amount: '', dimensions: { '6': 'P001' } },
+      { account_number: '2641', debit_amount: '250', credit_amount: '', dimensions: {} },
+      { account_number: '1930', debit_amount: '', credit_amount: '1250' },
+    ])
+    expect(lines).toEqual([
+      { account_number: '5410', debit_amount: '1000', credit_amount: '', dimensions: { '6': 'P001' } },
+      { account_number: '2641', debit_amount: '250', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1250' },
+    ])
+    // An empty bag would open the line's picker row: a template line without tags gets none.
+    expect(lines[1]).not.toHaveProperty('dimensions')
+    expect(toBookDirectPayloadLine(lines[0]).dimensions).toEqual({ '6': 'P001' })
+  })
+
   it('tags neither 2641 nor a 19-account when a template is applied', () => {
     const lines = manualBookDirectLines([
       { account_number: '2641', debit_amount: '250', credit_amount: '' },

@@ -1550,6 +1550,14 @@ describe('getEffectiveOpeningBalances: derive IB from #UB -1 (issue #675)', () =
     ])
   })
 
+  // crm#1294: an import that leaves the IB out derives none, so it says nothing about one.
+  it('warns about the derived IB only when the import brings the IB', () => {
+    const parsed = parseSIEFile(SIE_NO_IB0)
+    expect(validateSIEFile(parsed).warnings.join(' ')).toContain('härleds från föregående års utgående balans')
+    expect(validateSIEFile(parsed, { importOpeningBalances: true }).warnings.join(' ')).toContain('härleds')
+    expect(validateSIEFile(parsed, { importOpeningBalances: false }).warnings.join(' ')).not.toContain('härleds')
+  })
+
   it('never uses #IB -1 (previous year IB) as the derivation source', () => {
     const parsed = parseSIEFile(SIE_NO_IB0)
     const { balances } = getEffectiveOpeningBalances(parsed)

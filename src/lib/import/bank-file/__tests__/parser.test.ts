@@ -8,7 +8,7 @@
 
 import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, getFormat, getAllFormats, toRawTransaction, unreadRows } from '../parser'
 import type { ParsedBankTransaction, BankFileFormatId } from '../types'
-import { genericDecimalMark, parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
+import { genericDecimalMark, getCSVPreview, parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
 import { parseCSVLine } from '../formats/nordea'
 import { CAMT053_PRETTY_WITH_REFS, CAMT053_V08_PREFIXED_MULTI_STMT, camt053ManyEntries } from '@/tests/fixtures/camt053'
 
@@ -367,6 +367,26 @@ describe('detectFileFormat', () => {
     const format = detectFileFormat(sebLike, 'export.csv')
     expect(format).not.toBeNull()
     expect(format!.id).toBe('seb')
+  })
+
+  it('detects a bank export saved through Excel, past its sep= hint line', () => {
+    // Excel's hint used to be read as the header, so the file matched no
+    // format and the user was told to pick a bank by hand.
+    const excelSaved = 'sep=;\nBokföringsdag;Valutadag;Verifikationsnummer;Text;Belopp;Saldo\n2026-01-15;2026-01-15;123;SPOTIFY;-99,00;12345,67'
+    const format = detectFileFormat(excelSaved, 'export.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('seb')
+  })
+
+  it('does not claim a wide export as SEB when it has no amount column SEB reads', () => {
+    // An export with Bokföringsdag and Valutadag whose amount sits in a
+    // column SEB does not know matched SEB on the two date columns and then
+    // failed in parse with "Kunde inte identifiera nödvändiga kolumner".
+    // Detecting is a promise that parse can read the file: falling through to
+    // the generic mapper is the honest outcome.
+    const wide = 'Kontohavare;Kontonr;IBAN;BIC;Kontoform;Valuta;Kontor;Bokföringsdag;Reskontradag;Valutadag;Referens;Insättning/Uttag;Bokfört saldo\nAB;123;SE1;HANDSESS;Företag;SEK;01;2026-01-15;2026-01-15;2026-01-15;SPOTIFY;-99,00;12345,67'
+    const format = detectFileFormat(wide, 'export.csv')
+    expect(format?.id).not.toBe('seb')
   })
 
   it('detects SEB CSV from semicolon-delimited header with bokföringsdag', () => {
@@ -2453,6 +2473,36 @@ describe('Länsförsäkringar detection: false positive prevention', () => {
     const format = detectFileFormat(falsePositive, 'generic.csv')
     // Should NOT detect as Länsförsäkringar
     expect(format?.id).not.toBe('lansforsakringar')
+  })
+})
+
+describe('generic CSV behind Excel\'s sep= hint line', () => {
+  const content = [
+    'sep=;',
+    'Datum;Text;Summa',
+    '2026-01-15;SPOTIFY;-99,00',
+    '2026-01-16;ICA;-10,50',
+  ].join('\r\n')
+
+  it('previews the header as the first row, so the mapping step counts its fields per delimiter', () => {
+    expect(getCSVPreview(content, ';', 1)[0]).toEqual(['Datum', 'Text', 'Summa'])
+    expect(getCSVPreview(content, ',', 1)[0]).toHaveLength(1)
+  })
+
+  it('parses every data row with the header as the one skipped row', () => {
+    const result = parseGenericCSV(content, {
+      date: 0,
+      description: 1,
+      amount: 2,
+      delimiter: ';',
+      decimal_separator: ',',
+      skip_rows: 1,
+      date_format: 'YYYY-MM-DD',
+    })
+    expect(result.transactions.map((t) => [t.date, t.description, t.amount])).toEqual([
+      ['2026-01-15', 'SPOTIFY', -99],
+      ['2026-01-16', 'ICA', -10.5],
+    ])
   })
 })
 

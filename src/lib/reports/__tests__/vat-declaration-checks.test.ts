@@ -664,10 +664,11 @@ describe('runVatDeclarationChecks', () => {
     ).toBe('ERROR')
   })
 
-  // The sales pair stays binary on purpose: rutor 07/08 have no source accounts
-  // in ACCOUNT_RUTA while their output VAT (2613/2616 etc.) still feeds ruta 10,
-  // and periodiserade invoice lines credit 29xx with the moms left on 2611. A
-  // proportional check would block filing on correct declarations.
+  // The sales pair stays binary on purpose: ruta 07 has no source account in
+  // ACCOUNT_RUTA and ruta 08 only 3913, while their output VAT (2613/2616
+  // etc.) still feeds ruta 10, and periodiserade invoice lines credit 29xx
+  // with the moms left on 2611. A proportional check would block filing on
+  // correct declarations.
   it('does not flag the sales pair when output VAT exceeds what ruta 05-08 implies', () => {
     const rutor: VatDeclarationRutor = {
       ...emptyRutor,

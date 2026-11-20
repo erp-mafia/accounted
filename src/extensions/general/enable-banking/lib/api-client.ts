@@ -12,7 +12,7 @@
  * 6. GET /accounts/{uid}/transactions
  */
 
-import { getAuthorizationHeader } from './jwt'
+import { getAuthorizationHeader, hasSigningCredentials } from './jwt'
 import { requireHttpsUrl } from '@/lib/http/require-https'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
@@ -465,6 +465,16 @@ export class ConnectorSyncError extends Error {
 export const CONNECTOR_UNAVAILABLE_MESSAGE =
   'Synkningen via Accounted Connect misslyckades tillfälligt. Försök igen om en stund. Anslutningen behöver inte förnyas.'
 
+/**
+ * Thrown when the instance has no route to Enable Banking: no connector key
+ * and no complete own signing credentials. Swedish and written for the user:
+ * the routes forward a thrown message to the client as `error`, and
+ * getErrorMessage shows such a string only when it reads as Swedish written
+ * for the user.
+ */
+export const BANK_NOT_CONFIGURED_MESSAGE =
+  'Bankkoppling är inte konfigurerad i den här miljön. Importera kontoutdraget som fil så länge.'
+
 // API Helper
 
 async function authenticatedFetch(
@@ -479,6 +489,18 @@ async function authenticatedFetch(
   // this instance has its own EB credentials, or on hosted, bankConnectorMode()
   // returns null and the direct path below is byte-identical to before.
   const connector = bankConnectorMode()
+  // No connector and no complete own client: this instance cannot reach
+  // Enable Banking at all. Refuse here, at the one door every bank call goes
+  // through, with a message a user can read. The signer would throw the name
+  // of the missing environment variable, which the routes pass on to the
+  // client; the names go to the log instead.
+  if (!connector && !hasSigningCredentials()) {
+    console.error('[enable-banking] Bank upstream not configured', {
+      endpoint,
+      hint: 'set ENABLE_BANKING_APP_ID and ENABLE_BANKING_PRIVATE_KEY (or their _PRODUCTION variants), or GNUBOK_CONNECTOR_KEY',
+    })
+    throw new Error(BANK_NOT_CONFIGURED_MESSAGE)
+  }
   // The direct path sends Arcim's signed EB JWT: refuse a plaintext base URL
   // (accounted#21). The connector base is checked in lib/connect/instance/config.ts.
   const url = connector

@@ -56,8 +56,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   request = requestRow({ status: 'completed', completed_at: COMPLETED_AT, title: 'Hyresavtal 2026', document_sha256: sha256Hex(original), created_at: '2026-10-23T08:00:00.000Z' })
   sealedRows = [{ id: REQ }]
+  // The mask is stored with each signature and printed as stored: signer 1
+  // in the display form signatures get now (birth date visible, crm#1969),
+  // signer 2 as one recorded before that, which keeps the mask it has.
   privates = [
-    { signer_id: 'signer-1', personnummer_masked: 'XXXXXXXX-1239', signature_xml: b64(XML_1), ocsp_response: b64(OCSP_1) },
+    { signer_id: 'signer-1', personnummer_masked: '19900101-XXXX', signature_xml: b64(XML_1), ocsp_response: b64(OCSP_1) },
     { signer_id: 'signer-2', personnummer_masked: 'XXXXXXXX-9876', signature_xml: b64(XML_2), ocsp_response: b64(OCSP_2) },
   ]
   db = createTableMockSupabase({
@@ -122,7 +125,8 @@ describe('sealSigningRequest', { timeout: 20_000 }, () => {
     expect(evidence).toContain('Bolaget AB Org.nr 556677-8899 Signeringsbevis ID 77777777')
     expect(evidence).toContain('Hyresavtal 2026 Signerat av alla (2 av 2). Slutfört 24 oktober 2026 kl. 14:30.')
     // Each signer: the name in the signing and the role, the BankID name and masked personnummer, when.
-    expect(evidence).toContain('Anna Andersson VD ANNA ANDERSSON XXXXXXXX-1239 24 okt 2026, 14:00 BankID')
+    expect(evidence).toContain('Anna Andersson VD ANNA ANDERSSON 19900101-XXXX 24 okt 2026, 14:00 BankID')
+    // A signature recorded before the display form changed prints the mask stored with it.
     expect(evidence).toContain('Erik E Undertecknare ERIK ERIKSSON XXXXXXXX-9876 24 okt 2026, 14:30 BankID')
     expect(evidence).toContain('Fil hyresavtal.pdf, 1 sida')
     expect(evidence).toContain('Skickat för signering 23 oktober 2026 kl. 10:00 av Karin Byråsson')
@@ -251,7 +255,7 @@ describe('sealSigningRequest', { timeout: 20_000 }, () => {
         name: 'Anna Andersson',
         role: 'VD',
         bankid_name: 'Anna Andersson',
-        personnummer_masked: 'XXXXXXXX-1239',
+        personnummer_masked: '19900101-XXXX',
         signed_at: '2026-10-24T12:00:00.000Z',
         signature_file: 'signatur-1.xml',
         signature_sha256: sha256Hex(Buffer.from(XML_1)),

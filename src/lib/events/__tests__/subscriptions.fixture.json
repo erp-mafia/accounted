@@ -107,6 +107,7 @@
     "webhooks"
   ],
   "journal_entry.corrected": [
+    "unlearn-on-reversal",
     "event-log",
     "webhooks"
   ],

@@ -2,6 +2,22 @@
 
 This reference covers everything that is **specifically Swedish** in a Peppol BIS Billing 3 invoice: identifier formats, the SE-R-* validation rules, VAT rate handling, payment encoding for Bankgiro/Plusgiro/OCR, ROT/RUT and grön teknik handling, BAS-kontoplan postings, faktureringsmetoden vs kontantmetoden, and per-buyer BT-10 BuyerReference formats.
 
+## Contents
+
+- Swedish identifier formats
+- SE-R-*, the Sweden CIUS rules
+- Swedish payment encoding (full example)
+- OCR references
+- Bankgirot integration mechanics
+- VAT (moms) rates and category encoding
+- BAS-kontoplan postings
+- Standard postings
+- Faktureringsmetoden vs kontantmetoden
+- ROT/RUT and grön teknik
+- BT-10 BuyerReference per-buyer formats
+- Multi-currency (Swedish supplier invoicing in EUR)
+- Authoritative source list
+
 ## Swedish identifier formats
 
 ### EndpointID (BT-34)
@@ -187,12 +203,12 @@ The de-facto chart is **BAS-kontoplanen** (https://www.bas.se), updated yearly. 
 
 - **1510** Kundfordringar (AR control, primary)
 - **1513** Kundfordringar i delbetalning (used for ROT/RUT split)
-- **1515** Osäkra kundfordringar
+- **1516** Tvistiga kundfordringar (BAS 2026 has no 1515 for osäkra kundfordringar: a doubtful receivable stays on 1510, with the reserve on 1519)
 - **1518** Ej reskontraförda kundfordringar
 - **1519** Värdereglering kundfordringar
 - **3001/3002/3003/3004** Försäljning by VAT rate (25/12/6/0%)
-- **3308** Försäljning tjänst utanför EU
-- **3573** Försäljning tjänst EU (för uppgift i periodisk sammanställning)
+- **3305** Försäljning tjänst utanför EU
+- **3308** Försäljning tjänst EU (för uppgift i periodisk sammanställning)
 
 ### Supplier-side (leverantörsfakturor)
 
