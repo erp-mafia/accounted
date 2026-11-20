@@ -534,6 +534,7 @@ const EXPENSES: PackageDoors = {
     'POST /api/expense-claims',
     'POST /api/mileage/trips',
     'op:expense-claims.create',
+    'op:mileage-trips.create',
     'mcp:gnubok_log_mileage_trip',
     'pending:log_mileage_trip',
   ],
