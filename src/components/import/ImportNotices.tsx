@@ -54,7 +54,7 @@ export function ImportNotices({ notices, className }: ImportNoticesProps) {
         </ul>
       }
     >
-      <span className="text-[12.5px] leading-5 text-muted-foreground">{t('info_label')}</span>
+      <span className="text-xs leading-5 text-muted-foreground">{t('info_label')}</span>
     </InfoTooltip>
   )
 
@@ -68,7 +68,7 @@ export function ImportNotices({ notices, className }: ImportNoticesProps) {
               type="button"
               onClick={() => setOpen((v) => !v)}
               aria-expanded={open}
-              className="text-[12.5px] leading-5 text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+              className="text-xs leading-5 text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
             >
               {open ? t('hide_folded') : t('show_folded', { count: folded.length })}
             </button>
@@ -77,12 +77,12 @@ export function ImportNotices({ notices, className }: ImportNoticesProps) {
         </div>
       )}
       {open && folded.length > 0 && (
-        <ul className="space-y-1 border-l border-border pl-3">
+        <ul className="space-y-1 border-l-hairline pl-3">
           {folded.map((n, i) => (
             <li
               key={i}
               className={cn(
-                'text-[12.5px] leading-5',
+                'text-xs leading-5',
                 n.severity === 'action' ? 'text-attn' : 'text-muted-foreground'
               )}
             >

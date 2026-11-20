@@ -4,7 +4,7 @@ export const QUICKSTART_MD = `# Quickstart: send your first invoice
 
 ## What you'll need
 
-- A **live** API key (\`gnubok_sk_*\`, no \`test_\` infix) from the Accounted dashboard at **/settings/api**. Run the whole walkthrough with this one key: the create→send→pay sequence chains on real IDs (the customer's \`id\`, then the invoice's \`id\`) that only committed writes return. A **test** key (\`gnubok_sk_test_*\`) is useful to validate request *shapes* first: it points at the same company as a live key, but the wrapper forces every write into dry-run. Because a forced dry-run never persists (\`id: null\`, no emails), it can't complete the stateful flow. So: **use a live key for the walkthrough.** There is no separate sandbox company or host; to test without touching your bookkeeping, create a second, empty company in the dashboard and never connect a bank or Skatteverket to it.
+- A **live** API key (\`gnubok_sk_*\`, no \`test_\` infix) with the \`companies:read\`, \`customers:write\` and \`invoices:write\` scopes, from the Accounted dashboard at **/settings/api**. Run the whole walkthrough with this one key: the create→send→pay sequence chains on real IDs (the customer's \`id\`, then the invoice's \`id\`) that only committed writes return. A **test** key (\`gnubok_sk_test_*\`) is useful to validate request *shapes* first: it points at the same company as a live key, but the wrapper forces every write that supports a dry run into one and refuses the rest (\`403 TEST_KEY_WRITE_BLOCKED\`). Because a forced dry-run never persists (\`id: null\`, no emails), it can't complete the stateful flow. So: **use a live key for the walkthrough.** There is no separate sandbox company or host; to test without touching your bookkeeping, create a second, empty company in the dashboard and never connect a bank or Skatteverket to it.
 - \`curl\` or any HTTP client.
 
 ## 1. List the companies the key can access
@@ -12,7 +12,7 @@ export const QUICKSTART_MD = `# Quickstart: send your first invoice
 This call confirms your key works and returns the \`companyId\` you'll use throughout. Both live and test keys resolve to the companies the key's user can access.
 
 \`\`\`bash
-curl https://app.gnubok.se/api/v1/companies \\
+curl https://app.accounted.se/api/v1/companies \\
   -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
@@ -29,10 +29,10 @@ Save the \`id\` as \`COMPANY_ID\` for the next steps.
 
 ## 2. Create a customer (dry-run first)
 
-Most writes support \`?dry_run=true\`: the response shows the would-be record without committing. (Bank/SIE imports are the exception: they run for real or not at all.) Use it in agent test loops to validate inputs before paying the side-effect cost.
+Most writes support \`?dry_run=true\`: the response shows the would-be record without committing. (Not all: imports, period lock, close and year-end, match-invoice, generate-agi and document upload have no dry run and refuse the flag with \`400 VALIDATION_ERROR\`.) Use it in agent test loops to validate inputs before paying the side-effect cost.
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -65,7 +65,7 @@ Response (\`X-Dry-Run: true\` header, no row written). The would-be record is ne
 }
 \`\`\`
 
-With a **live** key, dropping \`?dry_run=true\` commits the row: the response drops the \`dry_run\`/\`preview\` wrapper and returns the record directly under \`data\` with a real \`id\` and \`created_at\`. Save that committed \`data.id\` as \`CUSTOMER_ID\` for the next step. With a **test** key the write is forced to dry-run either way, so you keep getting this preview (\`id\`/\`created_at\` stay \`null\`) — which is why the create→send→pay steps below need a live key to produce IDs to chain on.
+With a **live** key, dropping \`?dry_run=true\` commits the row: the response drops the \`dry_run\`/\`preview\` wrapper and returns the record directly under \`data\` with a real \`id\` and \`created_at\`. Save that committed \`data.id\` as \`CUSTOMER_ID\` for the next step. With a **test** key the write is forced to dry-run either way, so you keep getting this preview (\`id\`/\`created_at\` stay \`null\`) - which is why the create→send→pay steps below need a live key to produce IDs to chain on.
 
 ## 3. Draft an invoice
 
@@ -73,7 +73,7 @@ Invoices are typed (B2B, EU-business, individual) and support mixed-rate VAT (pe
 
 \`\`\`bash
 INVOICE_IDEMP=$(uuidgen)
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $INVOICE_IDEMP" \\
   -H "Content-Type: application/json" \\
@@ -110,13 +110,13 @@ A fresh draft has \`invoice_number: null\`: the F-series löpnummer is allocated
 
 ## 4. Send it
 
-\`POST /invoices/{id}/send\` runs a sequential pipeline: preflight PDF render (validates rendering before a number is burned) → allocate the F-series number atomically → final PDF render → email the customer via Resend (PDF attached, copy to the company). Any hard failure up to and including the email rolls nothing forward. Once the email is delivered the pipeline hits a **point of no return**: the status flip to \`sent\`, the journal entry (accrual + real invoices), PDF archival as underlag, and the \`invoice.sent\` event are best-effort, and any of their failures surface as \`warnings\` on the response rather than unwinding the send. It is not a single atomic transaction.
+\`POST /invoices/{id}/send\` runs a sequential pipeline: preflight PDF render (validates rendering before a number is burned) → allocate the F-series number atomically → final PDF render → issue the invoice: status \`sent\` and the journal entry (accrual + real invoices), before the email and fail closed (a refused verifikat returns the engine's error, the invoice stays a draft and nothing is sent) → email the customer (Resend or SMTP, PDF attached, copy to the company) → archive the PDF as underlag → the \`invoice.sent\` event. An email failure after the verifikat is posted answers \`502 INVOICE_SEND_ISSUED_NOT_DELIVERED\`: the invoice stays issued and booked (a posted verifikat is never undone), so deliver it another way and do not call \`/send\` again. After delivery, the PDF link to the journal entry and the event are best-effort, and their failures surface as \`warnings\` on the response. It is not a single atomic transaction.
 
 \`\`\`bash
 # Generate the key ONCE and reuse it on every retry of this same send, so a
 # timeout-then-retry replays the original result instead of sending twice.
 SEND_IDEMP=$(uuidgen)
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/send" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/send" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $SEND_IDEMP"
 \`\`\`
@@ -139,16 +139,16 @@ Response carries the allocated invoice number and the id of the posted journal e
 }
 \`\`\`
 
-If any post-email step degraded, \`data.warnings\` is present (e.g. \`JOURNAL_ENTRY_NOT_POSTED\`); the invoice is marked \`sent\` regardless.
+If a step after delivery degraded, \`data.warnings\` is present (e.g. \`PDF_JOURNAL_LINK_FAILED\`); the invoice is sent and booked regardless.
 
 ## 5. Mark it paid
 
-When the customer pays, mark the invoice paid. The engine generates the payment voucher (debit 1930 bank, credit 1510 AR) and links it to the invoice. There is no \`payment_amount\` field: the default books the full remaining amount (\`remaining_amount\`). For a partial payment, pass a custom \`lines\` array (at least two balanced rows).
+When the customer pays, mark the invoice paid. The engine generates the payment voucher (debit the company's primary bank account, credit 1510 AR) and links it to the invoice. There is no \`payment_amount\` field: the default books the full remaining amount (\`remaining_amount\`). For a partial payment, pass a custom \`lines\` array (at least two balanced rows).
 
 \`\`\`bash
 # One key per logical payment; reuse it across retries of this mark-paid.
 PAY_IDEMP=$(uuidgen)
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $PAY_IDEMP" \\
   -H "Content-Type: application/json" \\
@@ -157,11 +157,11 @@ curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOI
 
 ## What just happened
 
-This flow creates a customer, drafts a single-line invoice, posts the verifikation on \`/send\`, emails the PDF, and records the payment. That's **five committing calls** — list companies, create customer, create invoice, send, mark-paid — plus the optional \`?dry_run=true\` preview in step 2 if you run it. The engine handles BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering. Run the committing calls with a live key; a test key can validate request shapes via dry-run first but never persists, so it can't chain the real IDs each step needs.
+This flow creates a customer, drafts a single-line invoice, posts the verifikation on \`/send\`, emails the PDF, and records the payment. That's **five committing calls** - list companies, create customer, create invoice, send, mark-paid - plus the optional \`?dry_run=true\` preview in step 2 if you run it. The engine handles BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering. Run the committing calls with a live key; a test key can validate request shapes via dry-run first but never persists, so it can't chain the real IDs each step needs.
 
 The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate): including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, per-line VAT rate, and the supply date. **Pass \`delivery_date\` explicitly** when goods or services are delivered on a different date than the invoice date: ML 17 kap 24 § field 7 requires the supply date and the API does NOT default it to \`invoice_date\`; a faktura with no supply date is non-compliant.
 
-The "Godkänd för F-skatt" note is a **legal requirement** on every faktura issued by a Swedish momsregistrerad seller that holds F-skatt registration. The buyer uses this note to determine whether they must withhold preliminary tax (A-skatt): omitting it can shift liability onto the buyer and triggers a FATAL Peppol BIS 3.0 validation failure (SE-R-005) on B2G invoices. The requirement applies equally to PDF/paper and Peppol/e-invoice formats; B2G is just where the validation is automated. The PDF includes it automatically when \`company_settings.has_f_skatt\` is true. **The integrator is responsible for keeping \`has_f_skatt\` in sync with the company's live Skatteverket registration status.** Keep it in sync from the settings page in the dashboard (there is no v1 settings endpoint today): a flag that's false while the company is actually F-skatt-registered produces non-compliant invoices, not merely a missing optional note.
+The "Godkänd för F-skatt" note is a **legal requirement** on every faktura issued by a Swedish momsregistrerad seller that holds F-skatt registration. The buyer uses this note to determine whether they must withhold preliminary tax (A-skatt): omitting it can shift liability onto the buyer and triggers a FATAL Peppol BIS 3.0 validation failure (SE-R-005) on B2G invoices. The requirement applies equally to PDF/paper and Peppol/e-invoice formats; B2G is just where the validation is automated. The PDF includes it automatically when the company's \`f_skatt\` setting is true. **The integrator is responsible for keeping \`f_skatt\` in sync with the company's live Skatteverket registration status.** Keep it in sync with \`PATCH /settings/tax-profile\` (\`{ "f_skatt": true }\`, scope \`companies:write\`) or the settings page in the dashboard: a flag that's false while the company is actually F-skatt-registered produces non-compliant invoices, not merely a missing optional note.
 
 The summary fields in the JSON response (\`subtotal\`, \`vat_amount\`, \`total\`) are convenience aggregates for the integration; the binding faktura content is the PDF itself.
 
@@ -175,7 +175,7 @@ The summary fields in the JSON response (\`subtotal\`, \`vat_amount\`, \`total\`
 ## Common pitfalls
 
 - **Use one idempotency key per logical action.** The key is treated as an opaque string (UUIDs are recommended, but any unique value works). Generate one per logical action and reuse it across retries of that same action: never on a fresh attempt. Reusing a key with a different request body is rejected with \`IDEMPOTENCY_KEY_REUSE\`.
-- **Test keys never send or post.** \`gnubok_sk_test_*\` keys are simulation-only: every write is forced to dry-run, so \`/send\` never emails the customer, never allocates an F-series number, and never posts a voucher. On top of that the sandbox company they're bound to blocks outbound email outright (403 \`sandbox_blocked\`). Use a live key on a real company to actually deliver an invoice.
+- **Test keys never send or post.** \`gnubok_sk_test_*\` keys are simulation-only: every write is forced to dry-run, so \`/send\` never emails the customer, never allocates an F-series number, and never posts a voucher. They reach the same real companies a live key does, not a separate sandbox company, so use a live key to actually deliver an invoice.
 - **Period locks block writes.** If you try to invoice into a closed period (\`invoice_date\` falls inside a locked fiscal period), the response is \`PERIOD_LOCKED\` (400). Use \`GET /fiscal-periods\` to check before backdating.
 - **VIES VAT validation runs on commit only.** It only fires when you create an \`eu_business\` customer with a \`vat_number\` (Swedish customers like the one above never trigger it). Dry-run skips the external VIES call; the real commit blocks on slow VIES responses (we time out after 10s, but that's still up to 10s added to the request). There is no v1 pre-validation endpoint today: rely on dry-run to check the rest of the payload first.
 `

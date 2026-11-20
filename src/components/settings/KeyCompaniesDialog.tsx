@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -22,6 +22,7 @@ import {
   type PickerCompany,
 } from '@/components/settings/CompanyPickerList'
 import type { ApiKeyRow } from '@/components/settings/useApiKeys'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 /**
  * Per-key company allowlist and access editor, opened from a connection row.
@@ -48,6 +49,7 @@ export function KeyCompaniesDialog({
   onSaved: () => void
 }) {
   const t = useTranslations('settings_api_keys')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const activeCompanyId = companies.find((company) => company.is_active)?.company_id ?? null
   const [selected, setSelected] = useState<Set<string>>(() => {
@@ -77,10 +79,7 @@ export function KeyCompaniesDialog({
       })
       const json = await res.json()
       if (!res.ok) {
-        const message =
-          typeof json.error === 'string'
-            ? json.error
-            : json.error?.message ?? t('toast_companies_failed')
+        const message = getErrorMessage(json, { locale: errorLocale, fallback: t('toast_companies_failed') })
         toast({ title: message, variant: 'destructive' })
         return
       }

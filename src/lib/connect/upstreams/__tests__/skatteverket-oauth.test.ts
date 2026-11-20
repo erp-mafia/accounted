@@ -15,8 +15,6 @@ import {
   skvGatewayHeaders,
 } from '../skatteverket-oauth'
 
-const ENV = ['SKATTEVERKET_OAUTH_BASE_URL', 'SKATTEVERKET_OAUTH2_CLIENT_ID', 'SKATTEVERKET_OAUTH2_CLIENT_SECRET', 'SKATTEVERKET_APIGW_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_SECRET'] as const
-
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('SKATTEVERKET_OAUTH2_CLIENT_ID', 'oauth-client')

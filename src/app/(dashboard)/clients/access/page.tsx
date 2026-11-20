@@ -28,7 +28,7 @@ export default async function SignupAccessPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title={t('access_title')} />
+      <PageHeader title={t('access_title')} parent={{ label: t('title'), href: '/clients' }} />
       <SignupAccessManager
         canEdit={membership.role === 'owner' || membership.role === 'admin'}
       />

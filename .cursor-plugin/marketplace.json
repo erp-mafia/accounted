@@ -1,0 +1,16 @@
+{
+  "name": "accounted",
+  "owner": {
+    "name": "Accounted (erp-mafia)"
+  },
+  "metadata": {
+    "description": "Official plugin marketplace for Accounted, the open-source Swedish bookkeeping platform built to be the ledger agents best talk with."
+  },
+  "plugins": [
+    {
+      "name": "accounted",
+      "source": "packages/claude-plugin",
+      "description": "Connect your Accounted ledger and get short, approval-gated workflow skills: daily bookkeeping, health check, month close, VAT (moms), payroll, year-end (bokslut). Pulls the company's live data over MCP and loads Swedish accounting knowledge from the product when needed."
+    }
+  ]
+}

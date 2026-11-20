@@ -1,0 +1,409 @@
+{
+  "$comment": "BAS kopplingstabell for INK3R (\"enligt redovisningen\" column only), transcribed from bas.se INK3_P1_Intervall-241119.xlsx. One entry per xls row; accounts use the file spelling (NNNN, NNNN-NNNN, NNNx, NNxx, NNNx-NNNx). netSign \"+\"/\"-\" marks the \"(Om netto +/-)\" rows. Where a code disagrees with Skatteverket's field table, the field table wins: see supersededBy.",
+  "source": "https://www.bas.se/wp-content/uploads/2024/11/INK3_P1_Intervall-241119.xlsx",
+  "sha256": "414d153dd0f5812cfd6864462e3e2223f6bbaba12b648a023183f79a9b6711c5",
+  "fetchedAt": "2026-10-15",
+  "footnote1": "(1) BAS-kontoplanen innehåller inga standardiserade konton för medlemsavgifter, erhållna gåvor eller erhållna bidrag relaterade till den ideella verksamheten. De konton som ska kopplas till fältkod 8650, 8651 och 8652 måste företaget själv lägga in i kontoplanen.",
+  "posts": [
+    {
+      "code": "8720",
+      "row": "5.1",
+      "label": "Immateriella anläggningstillgångar",
+      "accounts": [
+        "10xx"
+      ]
+    },
+    {
+      "code": "8721",
+      "row": "5.2",
+      "label": "Byggnader och markanläggningar",
+      "accounts": [
+        "1100-1129",
+        "1131-1199"
+      ]
+    },
+    {
+      "code": "8722",
+      "row": "5.3",
+      "label": "Mark och andra tillgångar som inte får skrivas av",
+      "accounts": [
+        "1130",
+        "1291"
+      ]
+    },
+    {
+      "code": "8723",
+      "row": "5.4",
+      "label": "Maskiner och inventarier",
+      "accounts": [
+        "121x-128x"
+      ]
+    },
+    {
+      "code": "8724",
+      "row": "5.5",
+      "label": "Finansiella anläggningstillgångar",
+      "accounts": [
+        "13xx"
+      ]
+    },
+    {
+      "code": "8725",
+      "row": "5.6",
+      "label": "Övriga anläggningstillgångar",
+      "accounts": [
+        "1290",
+        "1292-1299"
+      ]
+    },
+    {
+      "code": "8726",
+      "row": "5.7",
+      "label": "Varulager m.m.",
+      "accounts": [
+        "14xx"
+      ]
+    },
+    {
+      "code": "8727",
+      "row": "5.8",
+      "label": "Kundfordringar",
+      "accounts": [
+        "151x-155x",
+        "158x"
+      ],
+      "changedFromPreviousYear": true
+    },
+    {
+      "code": "8728",
+      "row": "5.9",
+      "label": "Övriga fordringar och kortfristiga placeringar",
+      "accounts": [
+        "156x-157x",
+        "16xx",
+        "18xx"
+      ],
+      "changedFromPreviousYear": true
+    },
+    {
+      "code": "8729",
+      "row": "5.10",
+      "label": "Upplupna intäkter och förutbetalda kostnader",
+      "accounts": [
+        "17xx"
+      ]
+    },
+    {
+      "code": "8730",
+      "row": "5.11",
+      "label": "Kassa och bank",
+      "accounts": [
+        "19xx"
+      ]
+    },
+    {
+      "code": "8735",
+      "row": "5.12",
+      "label": "Eget kapital",
+      "accounts": [
+        "206x-207x"
+      ]
+    },
+    {
+      "code": "8736",
+      "row": "5.13",
+      "label": "Periodiseringsfonder",
+      "accounts": [
+        "211x-213x"
+      ]
+    },
+    {
+      "code": "8737",
+      "row": "5.14",
+      "label": "Övriga obeskattade reserver",
+      "accounts": [
+        "215x-219x"
+      ]
+    },
+    {
+      "code": "8738",
+      "row": "5.15",
+      "label": "Avsättningar för pensioner och liknande förpliktelser",
+      "accounts": [
+        "221x",
+        "223x"
+      ]
+    },
+    {
+      "code": "8739",
+      "row": "5.16",
+      "label": "Övriga avsättningar",
+      "accounts": [
+        "222x",
+        "224x-229x"
+      ]
+    },
+    {
+      "code": "8740",
+      "row": "5.17",
+      "label": "Låneskulder",
+      "accounts": [
+        "23xx",
+        "241x-243x",
+        "245x",
+        "248x-249x"
+      ]
+    },
+    {
+      "code": "8741",
+      "row": "5.18",
+      "label": "Skatteskulder",
+      "accounts": [
+        "25xx"
+      ]
+    },
+    {
+      "code": "8742",
+      "row": "5.19",
+      "label": "Leverantörsskulder",
+      "accounts": [
+        "244x"
+      ],
+      "changedFromPreviousYear": true
+    },
+    {
+      "code": "8743",
+      "row": "5.20",
+      "label": "Övriga skulder",
+      "accounts": [
+        "246x-247x",
+        "26xx",
+        "27xx",
+        "28xx"
+      ],
+      "changedFromPreviousYear": true
+    },
+    {
+      "code": "8744",
+      "row": "5.21",
+      "label": "Upplupna kostnader och förutbetalda intäkter",
+      "accounts": [
+        "29xx"
+      ]
+    },
+    {
+      "code": "8650",
+      "row": "6.1",
+      "label": "Medlemsavgifter",
+      "accounts": [],
+      "footnote": 1
+    },
+    {
+      "code": "8651",
+      "row": "6.2",
+      "label": "Serviceavgifter",
+      "accounts": [],
+      "footnote": 1
+    },
+    {
+      "code": "8652",
+      "row": "6.3",
+      "label": "Gåvor och bidrag",
+      "accounts": [],
+      "footnote": 1
+    },
+    {
+      "code": "8653",
+      "row": "6.4",
+      "label": "Nettoomsättning",
+      "accounts": [
+        "30xx-37xx"
+      ],
+      "changedFromPreviousYear": true
+    },
+    {
+      "code": "8654",
+      "row": "6.5",
+      "label": "Övriga intäkter",
+      "accounts": [
+        "38xx-39xx"
+      ],
+      "changedFromPreviousYear": true
+    },
+    {
+      "code": "8750",
+      "row": "6.6",
+      "label": "Varor och legoarbeten",
+      "accounts": [
+        "40xx-49xx"
+      ]
+    },
+    {
+      "code": "8751",
+      "row": "6.7",
+      "label": "Övriga externa kostnader",
+      "accounts": [
+        "50xx-69xx"
+      ]
+    },
+    {
+      "code": "8752",
+      "row": "6.8",
+      "label": "Personalkostnader",
+      "accounts": [
+        "70xx-76xx"
+      ]
+    },
+    {
+      "code": "8753",
+      "row": "6.9",
+      "label": "Av- och nedskrivningar",
+      "accounts": [
+        "771x-773x",
+        "775x-778x",
+        "78xx"
+      ]
+    },
+    {
+      "code": "8754",
+      "row": "6.10",
+      "label": "Övriga rörelsekostnader",
+      "accounts": [
+        "774x",
+        "779x",
+        "79xx"
+      ]
+    },
+    {
+      "code": "8655",
+      "row": "6.11",
+      "label": "Resultat från andelar i koncernföretag, intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i",
+      "accounts": [
+        "801x-803x",
+        "811x-813x"
+      ],
+      "netSign": "+"
+    },
+    {
+      "code": "8755",
+      "row": "6.11",
+      "label": "Resultat från andelar i koncernföretag, intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i",
+      "accounts": [
+        "801x-803x",
+        "811x-813x"
+      ],
+      "netSign": "-"
+    },
+    {
+      "code": "8656",
+      "row": "6.12",
+      "label": "Resultat från övriga finansiella anläggningstillgångar",
+      "accounts": [
+        "821x-826x",
+        "829x"
+      ],
+      "netSign": "+"
+    },
+    {
+      "code": "8756",
+      "row": "6.12",
+      "label": "Resultat från övriga finansiella anläggningstillgångar",
+      "accounts": [
+        "821x-826x",
+        "829x"
+      ],
+      "netSign": "-"
+    },
+    {
+      "code": "8657",
+      "row": "6.13",
+      "label": "Övriga finansiella intäkter t.ex. ränteintäkter och utdelningar",
+      "accounts": [
+        "8300-8369",
+        "8390-8399"
+      ]
+    },
+    {
+      "code": "8757",
+      "row": "6.14",
+      "label": "Nedskrivning av finansiella anläggningstillgångar och kortfristiga placeringar",
+      "accounts": [
+        "807x-808x",
+        "817x-818x",
+        "827x-828x",
+        "837x-838x"
+      ]
+    },
+    {
+      "code": "8758",
+      "row": "6.15",
+      "label": "Räntekostnader och liknande resultatposter",
+      "accounts": [
+        "84xx"
+      ]
+    },
+    {
+      "code": "8659",
+      "row": "6.16",
+      "label": "Bokslutsdispositioner m.m.",
+      "accounts": [
+        "8810",
+        "8819"
+      ]
+    },
+    {
+      "code": "8760",
+      "row": "6.17",
+      "label": "Avsättning till periodiseringsfond",
+      "accounts": [
+        "8810",
+        "8811"
+      ]
+    },
+    {
+      "code": "8660",
+      "row": "6.18",
+      "label": "Övriga bokslutsdispositioner t.ex. mottagna koncernbidrag",
+      "accounts": [
+        "882x",
+        "885x",
+        "8860",
+        "8865-8869",
+        "889x"
+      ]
+    },
+    {
+      "code": "8761",
+      "row": "6.18",
+      "label": "Övriga bokslutsdispositioner t.ex. mottagna koncernbidrag",
+      "accounts": [
+        "883x",
+        "885x",
+        "8860",
+        "8861-8864",
+        "889x"
+      ]
+    },
+    {
+      "code": "8762",
+      "row": "6.19",
+      "label": "Skatter",
+      "accounts": [
+        "890x-898x"
+      ]
+    },
+    {
+      "code": "8665",
+      "row": "6.20",
+      "label": "Resultat enligt redovisning",
+      "accounts": [
+        "899x"
+      ],
+      "supersededBy": [
+        "8663",
+        "8763"
+      ],
+      "supersededNote": "Skatteverket INK3R_SKV2003-33-02-26-07 files 6.20 Årets resultat as 8663 (vinst) and 8763 (förlust); 8665 is not on the 2026P4 blankett."
+    }
+  ]
+}

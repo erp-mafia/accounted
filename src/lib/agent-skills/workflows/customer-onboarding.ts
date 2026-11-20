@@ -31,7 +31,7 @@ later: much cheaper to ask the customer once at onboarding.
 
 **Special cases:**
 
-- **B2G (Swedish municipality/agency)**: still \`swedish_business\`. Public-sector buyers require Peppol e-invoices. Accounted sends Peppol BIS Billing 3 invoices from the invoice page in the dashboard, gated per company: request access under Inställningar > Fakturering (Settings > Invoicing), Accounted's operators enable it, and a grant may carry a send cap that support raises. Restrictions: senders with an organisationsnummer (every legal form except enskild firma, whose org number is the owner's personnummer), standard invoices only (no credit notes), a buyer whose org number is not a personnummer (an enskild firma customer is refused until GLN identifiers are supported), SEK invoices with taxable Swedish VAT at 6, 12 or 25 % only (no reverse charge, no ROT/RUT deductions), and Er referens set. An agent checks \`gnubok_get_invoice_peppol_readiness\` and stages \`gnubok_send_invoice_peppol\` (a person approves); the user can also send from the dashboard. A successful dashboard Peppol send issues the invoice itself, so do not mark it as sent afterwards; if the dashboard reports that the invoice was sent via Peppol but could not be marked as sent, complete the issuance with \`gnubok_mark_invoice_as_sent\` on the still-draft invoice (if it already shows as sent, the verifikat exists and only its link to the invoice needs repair: do not mark it as sent again, leave the repair to support). If Peppol access is not granted, or the company is an enskild firma, deliver the invoice through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record delivery.
+- **B2G (Swedish municipality/agency)**: still \`swedish_business\`. Public-sector buyers require Peppol e-invoices. Accounted sends Peppol BIS Billing 3 invoices from the invoice page in the dashboard, gated per company: request access under Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol), Accounted's operators enable it, and a grant may carry a send cap that support raises. Restrictions: senders with an organisationsnummer (every legal form except enskild firma, whose org number is the owner's personnummer), standard invoices only (no credit notes), a buyer whose org number is not a personnummer (an enskild firma customer is refused until GLN identifiers are supported), SEK invoices with taxable Swedish VAT at 6, 12 or 25 % only (no reverse charge, no ROT/RUT deductions), and Er referens set. An agent checks \`gnubok_get_invoice_peppol_readiness\` and stages \`gnubok_send_invoice_peppol\` (a person approves); the user can also send from the dashboard. A successful dashboard Peppol send issues the invoice itself, so do not mark it as sent afterwards; if the dashboard reports that the invoice was sent via Peppol but could not be marked as sent, complete the issuance with \`gnubok_mark_invoice_as_sent\` on the still-draft invoice (if it already shows as sent, the verifikat exists and only its link to the invoice needs repair: do not mark it as sent again, leave the repair to support). If Peppol access is not granted, or the company is an enskild firma, deliver the invoice through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record delivery.
 - **Consumer customer in another EU country (B2C distance sale)**: \`eu_business\` does NOT apply. Charge Swedish VAT (25/12/6 %) below the OSS threshold; above the threshold the company must register for OSS. This is rare for sole traders: flag the user if turnover suggests they're approaching the threshold.
 
 ## Workflow
@@ -41,6 +41,8 @@ later: much cheaper to ask the customer once at onboarding.
 \`gnubok_list_customers\` returns all customers. Search by name client-side.
 If a customer with the same org_number or vat_number exists, USE THAT ONE.
 Duplicate customers fragment the AR ledger and confuse aging reports.
+If one buyer already has two cards, stage \`gnubok_merge_customers\`: the
+duplicate's invoices move to the card that stays and the duplicate is archived.
 
 ### Step 2: Decide customer_type
 
@@ -82,7 +84,12 @@ appears in \`gnubok_list_customers\` and can be invoiced via \`gnubok_create_inv
 ### Step 5: Sanity-check before first invoice
 
 \`gnubok_list_customers\`: confirm the customer appears, customer_type is right.
-Read \`vat_number_validated\` (for EU); if false, double-check the VAT number.
+Then read the full record with \`gnubok_get_customer({ customer_id })\` (search-only
+read: call it through \`gnubok_call_tool\` if it is not in your tool list):
+\`vat_number_validated\` (for EU; if false, double-check the VAT number), the
+address, and \`notes\`. Requirements the customer states (e-invoice only,
+fakturamärkning, reverse charge) belong in \`notes\` via \`gnubok_update_customer\`,
+so the next invoicing agent reads them on the customer.
 
 When you eventually call \`gnubok_create_invoice\`, Accounted uses the
 \`getPermittedVatRates\` helper to constrain the legal rates per customer type.
@@ -111,6 +118,7 @@ for the booking details (BAS accounts 1513 + 3740).
 ## Tools
 
 - \`gnubok_list_customers\`: check for existing customers
+- \`gnubok_get_customer\` (via \`gnubok_call_tool\`): the full record: \`vat_number_validated\`, address, notes
 - \`gnubok_create_customer\`: stage the new customer
 - \`gnubok_create_invoice\`: uses the customer_type for VAT-rate validation
 - (Helper, not a tool but referenced) \`getPermittedVatRates(customer_type, vat_number_validated)\`: drives the legal-rates check

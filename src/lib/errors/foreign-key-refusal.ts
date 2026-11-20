@@ -36,17 +36,23 @@
  *     after its payment file was generated. The file is räkenskapsinformation
  *     kept for seven years (migration 20260919105035), so the run stays
  *     (3 refusals).
+ * The document DELETE (dashboard Arkiv, v1 and MCP documents.delete):
+ *   - transactions_document_id_fkey: a document that is still a bank
+ *     transaction's underlag (ON DELETE RESTRICT, 20260506100000). It is
+ *     detached from the transaction first (crm#230).
  */
 import type { StructuredErrorRemediation } from './structured-errors'
 
 export type ForeignKeyRefusalCode =
   | 'JOURNAL_ENTRY_DELETE_BLOCKED_BY_REGISTER'
   | 'SALARY_RUN_DELETE_BLOCKED_BY_PAYMENT_FILE'
+  | 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION'
   | 'RECORD_STILL_REFERENCED'
 
 export const FOREIGN_KEY_REFUSAL_CODES: ReadonlySet<string> = new Set<ForeignKeyRefusalCode>([
   'JOURNAL_ENTRY_DELETE_BLOCKED_BY_REGISTER',
   'SALARY_RUN_DELETE_BLOCKED_BY_PAYMENT_FILE',
+  'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION',
   'RECORD_STILL_REFERENCED',
 ])
 
@@ -58,6 +64,7 @@ export type ForeignKeyRefusalRegister =
   | 'accrual_origin'
   | 'payroll'
   | 'payment_file'
+  | 'bank_transaction'
 
 interface MappedRefusal {
   code: Exclude<ForeignKeyRefusalCode, 'RECORD_STILL_REFERENCED'>
@@ -139,6 +146,17 @@ const PAYROLL_RUN_WITH_PAYMENT_FILE: MappedRefusal = {
   },
 }
 
+const DOCUMENT_ON_TRANSACTION: MappedRefusal = {
+  code: 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION',
+  register: 'bank_transaction',
+  sv: 'Underlaget är kopplat till en banktransaktion och kan inte tas bort. Koppla bort det från transaktionen först.',
+  en: 'The document is attached to a bank transaction and cannot be deleted. Detach it from the transaction first.',
+  remediation: {
+    description:
+      'The document is the underlag of a bank transaction (transactions.document_id). Detach it from the transaction first (POST /api/v1/companies/{companyId}/transactions/{id}/detach-document), then delete it. A document linked to a verifikat is never deleted.',
+  },
+}
+
 const MAPPED_REFUSALS: Record<string, MappedRefusal> = {
   depreciation_schedules_journal_entry_id_fkey: DEPRECIATION_VOUCHER,
   assets_disposal_journal_entry_id_fkey: DISPOSAL_VOUCHER,
@@ -149,6 +167,7 @@ const MAPPED_REFUSALS: Record<string, MappedRefusal> = {
   salary_runs_vacation_entry_id_fkey: PAYROLL_VOUCHER,
   salary_runs_pension_entry_id_fkey: PAYROLL_VOUCHER,
   salary_payment_files_salary_run_id_fkey: PAYROLL_RUN_WITH_PAYMENT_FILE,
+  transactions_document_id_fkey: DOCUMENT_ON_TRANSACTION,
 }
 
 const STILL_REFERENCED_REMEDIATION: StructuredErrorRemediation = {

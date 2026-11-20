@@ -13,6 +13,7 @@ export const BEHANDLINGSHISTORIK_CATEGORIES = [
   'import',
   'atkomst',
   'arkiv',
+  'beslut',
   'ovrigt',
 ] as const
 
@@ -25,6 +26,7 @@ export type BehandlingshistorikActorType =
   | 'cron'
   | 'agent_chat'
   | 'system'
+  | 'service_account'
 
 export type BehandlingshistorikSource =
   | 'journal_entries'
@@ -33,11 +35,27 @@ export type BehandlingshistorikSource =
   | 'migration_reset'
   | 'sie_import'
   | 'bank_file_import'
+  | 'collection_case'
+  | 'suggestion_log'
 
 export interface BehandlingshistorikActor {
   type: BehandlingshistorikActorType
   user_id: string | null
   /** Human-readable: e-mail for users, key name for API keys, "Systemet", ... */
+  label: string
+}
+
+/**
+ * The principal the database itself observed when a verifikat was posted
+ * (journal_entries.committed_auth_role / committed_auth_uid, migration
+ * 20261016110000), as opposed to the actor, which the application asserts.
+ */
+export interface BehandlingshistorikVerifiedPrincipal {
+  /** Database role of the committing request: authenticated, service_role, or a login role such as postgres. */
+  role: string
+  /** auth.uid() of the committing request, when it had one. */
+  user_id: string | null
+  /** Human-readable, Swedish like the actor label: "Inloggad användare: anna@...", "Applikationsservern (service_role)". */
   label: string
 }
 
@@ -54,6 +72,12 @@ export interface BehandlingshistorikEvent {
   /** What the event concerns: voucher label, account, period name, file name. */
   object: string | null
   actor: BehandlingshistorikActor
+  /**
+   * Shown next to the actor. Present only on a posted verifikat that carries
+   * the database's own stamp; absent on every other event and on verifikat
+   * posted before the stamp existed.
+   */
+  verified?: BehandlingshistorikVerifiedPrincipal
   /** Human-readable detail lines (field diffs, counts, reasons). */
   details: string[]
   source: BehandlingshistorikSource
@@ -86,5 +110,6 @@ export const BEHANDLINGSHISTORIK_CATEGORY_LABELS: Record<BehandlingshistorikCate
   import: 'Import',
   atkomst: 'Åtkomst',
   arkiv: 'Arkiv',
+  beslut: 'Beslut och förslag',
   ovrigt: 'Övrigt',
 }

@@ -6,7 +6,17 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
-import { ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, Pencil, Plus, Search, X } from 'lucide-react'
+import {
+  ArrowUpRightIcon,
+  CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  MagnifyingGlassIcon,
+  PencilIcon,
+  PlusIcon,
+  TrashIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -16,7 +26,7 @@ import type { KnowledgeAction, KnowledgeOption } from '@/lib/agent-skills/knowle
 import { registrySkillSlug, skillsToDoNow, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
 import { AUTHOR_HANDLE, isReservedHandle } from '@/lib/agent-skills/validation'
-import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { formatDateLong } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
@@ -37,7 +47,7 @@ import { StartNote } from './StartNote'
 import { trackInstructions } from './track'
 import { RoutineOffer, RoutinePanel } from './RoutinePanel'
 import { isPeriodFlow, parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
-import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, knowledgeHref, simulatedClient, KNOWLEDGE_FAILED_PARAM, KNOWLEDGE_FAILED_VALUE, type SkillSummary } from './data'
+import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, knowledgeHref, simulatedClient, simulatedConnection, KNOWLEDGE_FAILED_PARAM, KNOWLEDGE_FAILED_VALUE, type SkillSummary } from './data'
 import styles from './skills.module.css'
 
 // Skriv själv, loaded when an own flow is edited (it imports this file's fields, so not statically).
@@ -65,6 +75,8 @@ export function AgentDetail({ segment, backHref = '/skills' }: { segment: string
 
 function Detail({ companyId, companyName, agentId, backHref }: { companyId: string; companyName: string; agentId: string; backHref: string }) {
   const t = useTranslations('skills_registry')
+  // The top bar carries the menu row's name (Agenter › Arbetssätt).
+  const tNav = useTranslations('nav')
   const locale = useLocale()
   const router = useRouter()
   const { canWrite } = useCanWrite()
@@ -72,16 +84,17 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   const curated = isAgentId(agentId) ? agentId as RegistrySkillId : null
 
   // ── the AI connection, read once and whenever the user comes back ──
-  const [connected, setConnected] = useState<AiClient[] | null>(null)
+  const [connection, setConnection] = useState<AiConnection | null>(null)
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
-    const check = () => { if (document.visibilityState !== 'hidden') void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) }) }
+    const check = () => { if (document.visibilityState !== 'hidden') void (simulated ? Promise.resolve(simulatedConnection(simulated)) : fetchConnections(controller.signal)).then((read) => { if (read) setConnection(read) }) }
     check()
     window.addEventListener('focus', check)
     return () => { controller.abort(); window.removeEventListener('focus', check) }
   }, [])
-  const client = pickConnectedAiClient(connected ?? []) ?? 'claude'
+  // Handed to a verified client, or Claude when the connected agent names none.
+  const client = pickConnectedAiClient(connection?.clients ?? []) ?? 'claude'
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
   const [claudeTarget] = useClaudeTarget()
   const target: ClaudeTarget = client === 'claude' ? claudeTarget : 'web'
@@ -111,8 +124,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   if (!curated && catalog.data && !catalog.isValidating && !own) {
     return (
       <div className={styles.apage}>
-        <PageHeader title={t('title')} />
-        <Link href={backHref} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+        <PageHeader title={tNav('v3_skills')} />
         <p className={styles.muted}>{t('not_found')}</p>
       </div>
     )
@@ -128,7 +140,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   const changed = knowledge.some((k) => k.source === 'added') || (overview?.removed.length ?? 0) > 0
   const status = curated ? agentStatus({
     id: curated,
-    aiKnown: connected === null ? null : connected.length > 0,
+    aiKnown: connection === null ? null : connection.connected,
     overview: agents.data,
     waiting: skillsToDoNow(worklist.data ?? {}).get(curated),
     lastAt: usage.data?.[curated]?.last_at,
@@ -195,7 +207,8 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   const say = curated ? t(`skills.${curated}.say`) : t('own_say', { name })
   // A month-end close or VAT flow scheduled weekly first checks whether its period is already done.
   const routineSay = curated && isPeriodFlow(curated) ? t(`routine_say.${curated}`) : say
-  const disconnected = connected !== null && connected.length === 0
+  // Any live agent key counts, also one that names no client: re-offering the connect only fails in the client.
+  const disconnected = connection !== null && !connection.connected
   // Curated flows are fixed text, so on the web they open filled in; an own flow's prompt carries the name the user wrote, so it is copied.
   const prompt = pinCompany(t('prompt', { say, agent: agentId, client }), t('prompt_company_pin', { company: companyName, companyId }))
   function run(start: ClaudeTarget = 'web'): Promise<StartOutcome> | undefined {
@@ -213,12 +226,12 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
 
   return (
     <div className={styles.apage}>
-      <PageHeader title={t('title')} />
-      <Link href={backHref} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      {/* The list this flow sits under, then its name: the way back is the breadcrumb. */}
+      <PageHeader title={curated ? name : <span data-ph-mask="">{name}</span>} parent={{ label: tNav('v3_skills'), href: backHref }} />
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={name}>
-          <StrataField seed={seedOf(agentId)} ground={`hsl(${hue} 52% 88%)`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
+          <StrataField seed={seedOf(agentId)} ground={`hsl(${hue} var(--hue-ground))`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
           <div className={styles.stageTile}>
             <FlowSymbol hue={hue} size={96} />
             <b data-ph-mask={own ? '' : undefined}>{name}</b>
@@ -231,7 +244,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={AI_CLIENTS.find((c) => c.id === (disconnected ? 'claude' : client))!.logo} alt="" width={16} height={16} className={styles.btnLogo} />
                 {disconnected ? t('connect_client', { client: 'Claude' }) : t('run_agent', { client: clientName })}
-                <ArrowUpRight className="h-4 w-4" aria-hidden />
+                <ArrowUpRightIcon className="h-4 w-4" aria-hidden />
               </Button>
             )}
             {/* A routine is scheduled in Claude, and never for a draft. */}
@@ -262,7 +275,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
               </Field>
 
               {own?.draft && (
-                <div><Button disabled={!canWrite} onClick={() => { trackInstructions('instructions_draft_added', { kind: 'workflow' }); void patchOwn({ action: 'add' }) }}><Plus className="h-4 w-4" aria-hidden />{t('add_draft_workflow')}</Button></div>
+                <div><Button disabled={!canWrite} onClick={() => { trackInstructions('instructions_draft_added', { kind: 'workflow' }); void patchOwn({ action: 'add' }) }}><PlusIcon className="h-4 w-4" aria-hidden />{t('add_draft_workflow')}</Button></div>
               )}
 
               <div className={styles.rows}>
@@ -312,7 +325,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
               <CopyInstruction body={body.data} />
               {canEdit && changed && (
                 <ActionRow title={t('adv_reset_title')} desc={t('adv_reset_desc')}>
-                  <Button variant="outline" size="sm" onClick={() => void changeKnowledge('reset')}>{t('adv_reset')}</Button>
+                  <Button variant="outline" onClick={() => void changeKnowledge('reset')}>{t('adv_reset')}</Button>
                 </ActionRow>
               )}
               {COMMUNITY_OPEN && own && !own.draft && <ShareBox preview={{ title: name, desc: own.summary ?? '', kind: 'workflow', hue, symbolKey: agentId }} status={own.shareStatus ?? 'private'} publishedUrl={own.publishedUrl} reviewNote={own.reviewNote} canWrite={canWrite} onShare={(share) => patchOwn(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} />}
@@ -337,8 +350,8 @@ export function Row({ label, children, onAdd, addLabel, onOpen }: { label: strin
       <span className={styles.rowLabel}>{label}</span>
       <div className={styles.rowContent}>{children}</div>
       <span className={styles.rowAction}>
-        {onAdd && <Button variant="outline" size="icon" aria-label={addLabel} onClick={onAdd}><Plus className="h-4 w-4" aria-hidden /></Button>}
-        {onOpen && <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />}
+        {onAdd && <Button variant="outline" size="icon" aria-label={addLabel} onClick={onAdd}><PlusIcon className="h-4 w-4" aria-hidden /></Button>}
+        {onOpen && <ChevronRightIcon className="h-4 w-4 text-muted-foreground" aria-hidden />}
       </span>
     </>
   )
@@ -376,7 +389,7 @@ export function Field({ label, note, copy, children }: {
 /** "Redigera" on an own item: opens Skriv själv filled in with what was saved. */
 export function EditOwnButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
   const t = useTranslations('skills_registry')
-  return <Button variant="outline" size="sm" className="gap-2" disabled={disabled} onClick={onClick}><Pencil className="h-3.5 w-3.5" aria-hidden />{t('edit')}</Button>
+  return <Button variant="outline" className="gap-2" disabled={disabled} onClick={onClick}><PencilIcon className="h-3.5 w-3.5" aria-hidden />{t('edit')}</Button>
 }
 
 /** A panel sub-view: back to the agent, a title, its content. `backLabel` names the way out where "Klar" would read as saved. */
@@ -384,7 +397,7 @@ export function SubView({ title, onBack, backLabel, children }: { title: string;
   const t = useTranslations('skills_registry')
   return (
     <div className="flex flex-col gap-4">
-      <button type="button" className={styles.back} onClick={onBack}><ChevronLeft className="h-4 w-4" aria-hidden />{backLabel ?? t('knowledge_picker_done')}</button>
+      <button type="button" className={styles.back} onClick={onBack}><ChevronLeftIcon className="h-4 w-4" aria-hidden />{backLabel ?? t('knowledge_picker_done')}</button>
       <h2 className={styles.subTitle}>{title}</h2>
       {children}
     </div>
@@ -418,7 +431,7 @@ function CopyInstruction({ body }: { body: string | undefined }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   return (
     <ActionRow title={t('adv_copy_title')} desc={t('adv_copy_desc')} alert={state === 'failed' ? t('copy_failed') : undefined}>
-      <Button variant="outline" size="sm" disabled={!body} onClick={() => {
+      <Button variant="outline" disabled={!body} onClick={() => {
         const copying = body && navigator.clipboard ? navigator.clipboard.writeText(body) : Promise.reject(new Error('Nothing to copy'))
         void copying.then(() => setState('copied'), () => setState('failed'))
       }}>{t(state === 'copied' ? 'copied_full' : 'copy')}</Button>
@@ -439,7 +452,7 @@ export function KnowledgeChip({ knowledge, href, canEdit, onRemove }: { knowledg
       {knowledge.source === 'added' && <small>{t('knowledge_added_tag')}</small>}
       {canEdit && (
         <button type="button" className={styles.chipX} aria-label={t('knowledge_remove', { name: label })} disabled={busy} onClick={() => { setBusy(true); void onRemove().finally(() => setBusy(false)) }}>
-          <X className="h-3 w-3" aria-hidden />
+          <XMarkIcon className="h-3 w-3" aria-hidden />
         </button>
       )}
     </span>
@@ -485,14 +498,14 @@ export function KnowledgePanel({ held, options, onBack, onChange, initialFailed 
   }
   return (
     <div className="flex flex-col gap-4">
-      <button type="button" className={styles.back} onClick={onBack}><ChevronLeft className="h-4 w-4" aria-hidden />{t('knowledge_picker_done')}</button>
+      <button type="button" className={styles.back} onClick={onBack}><ChevronLeftIcon className="h-4 w-4" aria-hidden />{t('knowledge_picker_done')}</button>
       <SegmentedControl aria-label={t('sources_label')} className={styles.sourceSwitch} value={source} onChange={setSource} options={[
         { value: 'accounted' as const, label: t('tab_accounted') },
         { value: 'own' as const, label: t('tab_own') },
         ...(COMMUNITY_OPEN ? [{ value: 'community' as const, label: t('tab_community') }] : []),
       ]} />
       <label className={styles.search}>
-        <Search className="h-4 w-4 text-muted-foreground" aria-hidden />
+        <MagnifyingGlassIcon className="h-4 w-4 text-muted-foreground" aria-hidden />
         <input id="agent-knowledge-search" type="search" value={query} placeholder={t('knowledge_search')} aria-label={t('knowledge_search')} onChange={(e) => setQuery(e.target.value)} />
       </label>
       {failed && <p role="alert" className={styles.muted}>{t('knowledge_save_failed')}</p>}
@@ -504,8 +517,8 @@ export function KnowledgePanel({ held, options, onBack, onChange, initialFailed 
               <div key={o.id} className={styles.kcard} data-held={has ? '' : undefined}>
                 <div className={styles.kcardTop}>
                   <b>{name(o.id, o.title)}</b>
-                  <Button variant={has ? 'default' : 'outline'} size="icon-sm" loading={busy === o.id} disabled={busy !== null && busy !== o.id} aria-label={has ? t('knowledge_remove', { name: name(o.id, o.title) }) : t('knowledge_add')} onClick={() => void toggle(o.id)}>
-                    {has ? <Check className="h-4 w-4" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
+                  <Button variant={has ? 'default' : 'outline'} size="icon" loading={busy === o.id} disabled={busy !== null && busy !== o.id} aria-label={has ? t('knowledge_remove', { name: name(o.id, o.title) }) : t('knowledge_add')} onClick={() => void toggle(o.id)}>
+                    {has ? <CheckIcon className="h-4 w-4" aria-hidden /> : <PlusIcon className="h-4 w-4" aria-hidden />}
                   </Button>
                 </div>
                 <p>{describe(o.id, o.summary)}</p>
@@ -550,7 +563,7 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, 
     return (
       <ActionRow title={t('adv_share_title')} desc={t(`share_status_${status}`)} alert={failed} below={status === 'published' && publishedUrl ? <a className={styles.catLink} href={publishedUrl} target="_blank" rel="noreferrer">{t('share_published_link')}</a> : undefined}>
         {/* A published item is in other people's AI: withdrawing it is asked once. A submitted one only leaves the review queue. */}
-        <Button variant="outline" size="sm" disabled={!canWrite} loading={state === 'sending'} onClick={() => status === 'published' ? setConfirmWithdraw(true) : void send('withdraw')}>{t('share_withdraw')}</Button>
+        <Button variant="outline" disabled={!canWrite} loading={state === 'sending'} onClick={() => status === 'published' ? setConfirmWithdraw(true) : void send('withdraw')}>{t('share_withdraw')}</Button>
         <DestructiveConfirmDialog
           open={confirmWithdraw}
           onOpenChange={setConfirmWithdraw}
@@ -565,11 +578,11 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, 
   }
   return (
     <ActionRow title={t('adv_share_title')} desc={reviewNote ? t('share_returned', { note: reviewNote }) : t('adv_share_desc')}>
-      <Button variant="outline" size="sm" disabled={!canWrite} onClick={() => { setState('idle'); setOpen(true) }}>{t('adv_share')}</Button>
+      <Button variant="outline" disabled={!canWrite} onClick={() => { setState('idle'); setOpen(true) }}>{t('adv_share')}</Button>
       <Dialog open={open} onOpenChange={(next) => state !== 'sending' && setOpen(next)}>
-        <DialogContent className="sm:max-w-[480px]">
+        <DialogContent size="confirm">
           <DialogHeader>
-            <DialogTitle className="font-display text-lg tracking-tight">{t('share_title')}</DialogTitle>
+            <DialogTitle className="text-lg">{t('share_title')}</DialogTitle>
             <DialogDescription className="text-[13px] leading-relaxed">{t('share_body')}</DialogDescription>
           </DialogHeader>
           <form id="share-form" className={styles.shareForm} onSubmit={(e) => { e.preventDefault(); if (handleOk && confirmed) void send({ author_handle: handle }) }}>
@@ -594,8 +607,8 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, 
             {failed && <p role="alert" className={styles.shareHint}>{failed}</p>}
           </form>
           <DialogFooter className="gap-2 sm:gap-2">
-            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>{t('cancel')}</Button>
-            <Button type="submit" form="share-form" size="sm" disabled={!canWrite || !confirmed || !handleOk} loading={state === 'sending'}>{t('share_submit')}</Button>
+            <Button variant="outline" onClick={() => setOpen(false)}>{t('cancel')}</Button>
+            <Button type="submit" form="share-form" disabled={!canWrite || !confirmed || !handleOk} loading={state === 'sending'}>{t('share_submit')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -610,7 +623,7 @@ export function DeleteOwn({ canWrite, onDelete, kind = 'workflow' }: { canWrite:
   const [failed, setFailed] = useState(false)
   return (
     <ActionRow title={t(`delete_title_${kind}`)} desc={t(`delete_desc_${kind}`)} alert={failed ? t('save_failed') : undefined}>
-      <Button variant="outline" size="sm" className={styles.dangerBtn} disabled={!canWrite} onClick={() => setConfirm(true)}>{t('delete')}</Button>
+      <Button variant="outline" className={styles.dangerBtn} disabled={!canWrite} onClick={() => setConfirm(true)}><TrashIcon className="h-4 w-4" />{t('delete')}</Button>
       <DestructiveConfirmDialog
         open={confirm}
         onOpenChange={setConfirm}

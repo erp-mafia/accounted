@@ -92,8 +92,7 @@ tasks:
   Rate Limits before activation. Exercise sustained limits only on staging and
   record the expected `429` threshold.
 - Enable leaked-password protection in Supabase Auth when the project plan
-  supports it. A read-only Security Advisor check on 2026-08-25 reported
-  `Leaked Password Protection Disabled` for the main project.
+  supports it.
 - Monitor Supabase Auth logs and Turnstile Analytics for challenge failures,
   Auth `429` responses, recovery or signup volume, and anonymous-user growth.
   Alerting must not include email addresses, passwords, CAPTCHA tokens, or

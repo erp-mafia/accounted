@@ -440,6 +440,22 @@ VAT recovery on bad debts permitted under **ML 7 kap 43§** when loss is konstat
 
 Påminnelseavgift (no VAT): BAS 2026 has no dedicated account: use **3540** Faktureringsavgifter or a free account in group 39.
 
+### Invoices to private persons: konsumentkreditlag (2026:1011), from 20 November 2026
+
+An invoice a consumer pays afterwards is a credit (betalningsanstånd, 1 kap. 3 §). The act replaced konsumentkreditlagen (2010:1846) on 2026-11-20; agreements entered into before that day stay under the old act (övergångsbestämmelserna p. 3). Source: SFS 2026:1011, prop. 2025/26:223, bet. 2025/26:CU26.
+
+The invoice stays outside credit assessment, pre-contract information, the documented credit agreement and the right of withdrawal only as a **särskild fakturakredit** (definition 1 kap. 3 §; exemptions 2 kap. 9 §, 3 kap. 19 §, 4 kap. 21 §, 5 kap. 7 §, 6 kap. 13 §). All three must hold:
+
+| Condition | Meaning for the invoice |
+|---|---|
+| The seller gives the credit itself | Not a payment company or financier as creditor |
+| No kreditkostnad | No interest and no fakturaavgift, aviavgift or similar charge for paying by invoice, wherever it stands on the invoice |
+| Due within 50 days of delivery | Counted from the day the goods or service were delivered. 14 days, and the claim may not be sold meanwhile, when the seller is NOT a mindre företag (250 employees or more, turnover above EUR 50 million) and the sale is a distance contract made online |
+
+Not credit costs, so they do not break the exemption (prop. 2025/26:223, kommentaren till 1 kap. 3 §): **dröjsmålsränta** and the **påminnelseavgift** and other costs under lag (1981:739) om ersättning för inkassokostnader (which must be agreed in advance). Limits that apply to a särskild fakturakredit too: dröjsmålsränta at most the reference rate + 20 percentage points, and no compensation for the delay other than dröjsmålsränta (4 kap. 4 §).
+
+Outside the exemption the act applies in full. Accounted refuses such an invoice to a customer of type `individual` dated 2026-11-20 or later (`INVOICE_CONSUMER_CREDIT_TERMS_TOO_LONG`, `INVOICE_CONSUMER_CREDIT_FEE`; `lib/invoices/consumer-credit.ts`). Invoices to businesses are not affected.
+
 ## 15. Key law references
 
 | Topic | Current law | Old law |

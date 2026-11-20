@@ -48,6 +48,7 @@ export const PROCESSING_EVENT_TYPES = [
   'BankTransactionDuplicateDismissed',
   'BankTransactionStrandedRelinked',
   'BankTransactionStrandedRepaired',
+  'BankTransactionTwinsIgnored',
   'CashAccountTwinsMerged',
   'ChannelQuestionAnswered',
   'ChannelQuestionAsked',
@@ -59,6 +60,7 @@ export const PROCESSING_EVENT_TYPES = [
   'DocumentIngested',
   'InboundMailReceived',
   'InboxUnderlagReconciled',
+  'InvoiceDeductionMigrated',
   'InvoiceDuplicatePaymentDismissed',
   'InvoiceJournalEntrySkipped',
   'InvoicePaymentRowBackfilled',
@@ -70,6 +72,7 @@ export const PROCESSING_EVENT_TYPES = [
   'SupplierInvoiceCompleted',
   'SupplierInvoiceCounterRowsRepaired',
   'TransactionDocumentReplaced',
+  'VoucherWarningsAcknowledged',
 ] as const
 
 export type ProcessingHistoryEventType = (typeof PROCESSING_EVENT_TYPES)[number]
@@ -199,53 +202,4 @@ export async function appendProcessingHistoryWithClient(
   }
 
   return eventId
-}
-
-/**
- * Append multiple events atomically (single INSERT).
- * Used for batch operations (e.g., migration commits, multi-event command handlers).
- *
- * Returns array of generated event_ids in input order.
- */
-export async function appendProcessingHistoryBatch(
-  inputs: AppendEventInput[]
-): Promise<string[]> {
-  if (inputs.length === 0) return []
-
-  const eventIds = inputs.map(() => crypto.randomUUID())
-
-  // Validate all payloads + actor labels before any DB write
-  for (const input of inputs) {
-    piiSafePayload.parse(input.payload)
-    assertActorPiiSafe(input.actor)
-  }
-
-  const rows = inputs.map((input, i) => ({
-    event_id: eventIds[i],
-    company_id: input.companyId,
-    correlation_id: input.correlationId,
-    causation_id: input.causationId ?? null,
-    aggregate_type: input.aggregateType,
-    aggregate_id: input.aggregateId,
-    event_type: input.eventType,
-    payload: input.payload,
-    payload_schema_version: input.payloadSchemaVersion ?? 1,
-    actor: input.actor,
-    rubric_version: input.rubricVersion ?? null,
-    occurred_at: input.occurredAt.toISOString(),
-  }))
-
-  const supabase = createServiceClient()
-
-  const { error } = await supabase
-    .from('processing_history')
-    .insert(rows)
-
-  if (error) {
-    throw new Error(
-      `Failed to append processing_history batch (${inputs.length} events): ${error.message}`
-    )
-  }
-
-  return eventIds
 }

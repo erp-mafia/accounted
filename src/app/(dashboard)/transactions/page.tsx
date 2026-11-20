@@ -2,27 +2,37 @@
 
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from 'react'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { DataListEmpty } from '@/components/ui/data-list'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { OpenOnParam } from '@/components/ui/open-on-param'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { Loader2, SlidersHorizontal, Check } from 'lucide-react'
+import { AdjustmentsHorizontalIcon, CheckIcon, CreditCardIcon, SpinnerIcon } from '@/components/icons'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
-import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import {
+  SKATTEKONTO_ACCOUNT_DEFAULT,
+  isSkattekontoLedgerAccount,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
+import { isOpenSkattekontoRow } from '@/lib/skatteverket/skattekonto-open-rows'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import { cashAccountKontoLabel, cashAccountLogoUrl } from '@/lib/cash-accounts/labels'
 import type { RowProposal } from '@/components/transactions/TransactionInboxCard'
@@ -31,47 +41,56 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
-import { FyPicker } from '@/components/common/FyPicker'
-import { ALL_YEARS_VALUE } from '@/components/common/FiscalYearSelector'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { AttnLine } from '@/components/ui/attn-line'
-import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
-import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
+import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
 import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard'
+import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import {
   foldDeferredRetries,
+  foldFiledVatRetries,
   runDeferredDuplicateRetries,
   tallyBatchOutcomes,
   type BatchCategorizeOutcome,
   type DeferredDuplicateBooking,
 } from '@/lib/transactions/batch-duplicates'
 import type { BatchDuplicateRow } from '@/components/transactions/BatchDuplicateDialog'
+import type { ConfirmOpts, MatchAlreadyBooked } from '@/components/transactions/InvoiceMatchDialog'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { categorizeBodyFor, proposalFromTemplate, proposalHue, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { useProposalWhy } from '@/components/transactions/proposal-why'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
   TransactionWithInvoice,
   ViewMode,
+  HistoryFilter,
   SourceFilter,
   CategorizeHandler,
   PotentialVoucher,
   PotentialRotRutPayout,
   PotentialRotRutPayoutRequest,
 } from '@/components/transactions/transaction-types'
-import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
+import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
+import { readGiroCounterparty, type GiroCounterparty, type GiroRegister } from '@/lib/transactions/giro-counterparty'
+import { loadGiroRegister } from '@/lib/transactions/giro-register'
+import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/open-rot-rut-payout-requests'
 import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import {
   groupExpenseClaimsByPerson,
   matchTransactionsToExpensePayouts,
 } from '@/lib/expenses/expense-payout-candidates'
+import { listExpenseClaimsAwaitingPayout } from '@/lib/salary/expense-claim-payout-state'
 import type { ExpensePayoutDue } from '@/lib/worklist/types'
+import type { SalaryRunPayout } from '@/lib/transactions/salary-run-payouts'
 import { SuggestionReviewList } from '@/components/transactions/SuggestionReviewList'
 import {
   isSourceFilter,
@@ -79,6 +98,11 @@ import {
   resolveEffectiveSourceFilter,
   writeStoredSourceFilter,
 } from '@/components/transactions/source-filter-storage'
+import {
+  readStoredViewMode,
+  resolveInitialViewMode,
+  writeStoredViewMode,
+} from '@/components/transactions/view-mode-storage'
 import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
@@ -91,21 +115,26 @@ import { skvStatusNeedsReconnect, type SkvStatusLike } from '@/lib/notices/predi
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
-} from '@/lib/invoices/matchable-statuses'
-import { useCompany } from '@/contexts/CompanyContext'
+} from '@/lib/bookkeeping/matchable-statuses'
+import { useAssistantReadsAvailable, useCompany } from '@/contexts/CompanyContext'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { collectPages } from '@/lib/lists/collect-pages'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { refreshWorklistBadges } from '@/lib/hooks/use-worklist-badges'
+import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary } from '@/types'
+import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { mutate as globalMutate } from 'swr'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
-import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+import { reviewRequired, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
+import { activationFor, isPersonChoice, rememberReviewChoice, reviewChoiceFor, type ReviewChoice, type ReviewChoices } from '@/lib/transactions/review-choice'
 
 /**
  * Tell the drawer and the review to re-read a row's underlag. They read it
@@ -119,19 +148,24 @@ function revalidateUnderlag(transactionId: string): Promise<unknown> {
 /** Rows warmed per pass, taken from the top of the list only: a screenful, never the backlog. */
 const ASSISTANT_WARM_LIMIT = 8
 const ASSISTANT_WARM_WINDOW = 30
-import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
+import { withLivePointer } from '@/lib/transactions/is-booked'
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
-import type { FiscalPeriod } from '@/types'
+import { bankRowInSource, countInboxScope, skattekontoInSource } from '@/lib/transactions/inbox-scope'
 
 // Every list fetch embeds the junction so a row split over several verifikat
 // (journal_entry_id NULL, #1553) renders as booked with its verifikat instead
 // of "Ej bokförd" (crm#48). The nested journal_entry gives the row a label per
 // link (V200, V201); see getLinkedJournalEntryIds.
+// parts_count: how many parts the row's Bankgirot split has (the inbox row's
+// "N delbetalningar"); the parts themselves load in the drawer.
 const TRANSACTION_LIST_SELECT =
-  '*, transaction_voucher_links(journal_entry_id, role, journal_entry:journal_entries(voucher_series, voucher_number))'
+  '*, transaction_voucher_links(journal_entry_id, role, journal_entry:journal_entries(voucher_series, voucher_number)), parts_count:bank_transaction_parts(count)'
+// The window's rows can be booked: is_booked tells a stale pointer from a live
+// one (withLivePointer). The pending backlog never is, and it can be thousands.
+const TRANSACTION_WINDOW_SELECT = `${TRANSACTION_LIST_SELECT}, is_booked`
 
 function InlineDialogContentLoading() {
   return (
@@ -154,7 +188,6 @@ const MatchVoucherDialog = dynamic(
   { loading: DialogLoadingSkeleton },
 )
 const InvoicePicker = dynamic(() => import('@/components/transactions/InvoicePicker'), { loading: InlineDialogContentLoading })
-const SupplierInvoicePicker = dynamic(() => import('@/components/transactions/SupplierInvoicePicker'), { loading: InlineDialogContentLoading })
 const MatchAllocationDialog = dynamic(() => import('@/components/transactions/MatchAllocationDialog'), { loading: DialogLoadingSkeleton })
 const BulkBookDialog = dynamic(() => import('@/components/transactions/BulkBookDialog'), { loading: DialogLoadingSkeleton })
 const TransactionBookingDialog = dynamic(() => import('@/components/transactions/TransactionBookingDialog'), { loading: DialogLoadingSkeleton })
@@ -179,23 +212,37 @@ const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
   { loading: DialogLoadingSkeleton },
 )
+const SkattekontoLinkProposalsDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoLinkProposalsDialog').then(
+      (module) => module.SkattekontoLinkProposalsDialog,
+    ),
+  { loading: DialogLoadingSkeleton },
+)
 const DuplicateBookingDialog = dynamic(
   () => import('@/components/transactions/DuplicateBookingDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+// The confirm step of a booking-time warning (the typed verifikat's dialog):
+// here for a bank row whose category booking changes the underlag for a
+// momsdeklaration already filed.
+const VoucherWarningsDialog = dynamic(
+  () => import('@/components/bookkeeping/VoucherWarningsDialog'),
   { loading: DialogLoadingSkeleton },
 )
 const BatchDuplicateDialog = dynamic(
   () => import('@/components/transactions/BatchDuplicateDialog'),
   { loading: DialogLoadingSkeleton },
 )
-const TemplatePicker = dynamic(() => import('@/components/transactions/TemplatePicker'), { loading: InlineDialogContentLoading })
+// The bank row's picker: its Konton search also finds the BAS accounts the
+// company has not added yet (crm#1101).
+const TemplatePicker = dynamic(
+  () => import('@/components/transactions/TemplatePicker').then((m) => m.BankRowTemplatePicker),
+  { loading: InlineDialogContentLoading },
+)
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
-
-// Page-local fiscal-year scope (FyPicker appends the company id). Deliberately
-// NOT the shared report scope (Accounted:fiscal-year:): a year picked on a
-// report page must never silently hide pending inbox rows here, and vice versa.
-const PERIOD_FILTER_STORAGE_PREFIX = 'Accounted:transactions-fy-scope:v1:'
 
 // Journal-entry ids get interpolated into the supplier-invoice .or() filter
 // string in the underlag-badge effect below. They come from journal_entries.id
@@ -245,31 +292,21 @@ function buildSupplierInvoiceMap(
   }, {})
 }
 
-// Pair unbooked outflows with the person whose registered utlägg they repay
-// in full (lib/expenses/expense-payout-candidates). Read-time: the open claims
-// are the candidate pool, so this is one small query and nothing for the
-// companies without any. Non-fatal like fetchPotentialMatches.
+// Pair unbooked outflows with the person whose utlägg they repay in full
+// (lib/expenses/expense-payout-candidates). Read-time: the claims that wait
+// for a payout are the candidate pool (a claim on a salary run is not one),
+// so this is one small query and nothing for the companies without any.
+// Non-fatal like fetchPotentialMatches.
 async function fetchExpensePayoutMatches(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string | null,
   rows: { id: string; amount: number; currency: string | null; is_business: boolean | null; journal_entry_id: string | null }[],
 ): Promise<{ byTransaction: Map<string, ExpensePayoutDue>; people: ExpensePayoutDue[] }> {
   const out = new Map<string, ExpensePayoutDue>()
   if (!companyId || rows.length === 0) return { byTransaction: out, people: [] }
-  // Every registered claim, paged past the PostgREST row cap: a truncated set
-  // would understate a person's debt and suggest a payout for part of it.
   let claimRows: Parameters<typeof groupExpenseClaimsByPerson>[0]
   try {
-    claimRows = await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('expense_claims')
-        .select('id, employee_id, claimant_name, liability_account, amount_sek, expense_date')
-        .eq('company_id', companyId)
-        .eq('status', 'registered')
-        .order('expense_date', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
+    claimRows = await listExpenseClaimsAwaitingPayout(supabase, companyId)
   } catch (error) {
     console.error('[fetchExpensePayoutMatches] expense_claims query failed', error)
     return { byTransaction: out, people: [] }
@@ -284,7 +321,7 @@ async function fetchExpensePayoutMatches(
 // on potential_supplier_invoice_id is blocked until that FK exists in the
 // prod schema cache (see DECISIONS.md archive 2026-07-06).
 async function fetchPotentialMatches(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string | null,
   rows: {
     id: string
@@ -366,15 +403,8 @@ async function fetchPotentialMatches(
     // together with other beslut (#2239). Items ride along so the dialog can
     // list the covered invoices. A handful of rows per company.
     companyId
-      ? supabase
-          .from('rot_rut_payout_requests')
-          .select(
-            'id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id, items:rot_rut_payout_request_items(requested_amount, invoice:invoices(invoice_number))',
-          )
-          .eq('company_id', companyId)
-          .in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES])
-          .is('settlement_journal_entry_id', null)
-      : Promise.resolve({ data: null, error: null }),
+      ? loadOpenRotRutPayoutRequests(supabase, companyId)
+      : Promise.resolve({ requests: [], error: null }),
   ])
 
   // Non-fatal: the transaction list still renders without match hints, but
@@ -392,31 +422,7 @@ async function fetchPotentialMatches(
     console.error('[fetchPotentialMatches] rot_rut_payout_requests query failed', rotRutResult.error)
   }
 
-  const rotRutRequests: PotentialRotRutPayoutRequest[] = ((rotRutResult.data ?? []) as Array<{
-    id: string
-    name: string
-    deduction_type: 'rot' | 'rut'
-    status: string
-    requested_total: number | string
-    decided_total: number | string | null
-    settlement_journal_entry_id: string | null
-    items?: Array<{
-      requested_amount: number | string
-      invoice?: { invoice_number: string | null } | { invoice_number: string | null }[] | null
-    }> | null
-  }>).map((req) => ({
-    id: req.id,
-    name: req.name,
-    deduction_type: req.deduction_type,
-    status: req.status,
-    requested_total: req.requested_total,
-    decided_total: req.decided_total,
-    settlement_journal_entry_id: req.settlement_journal_entry_id,
-    invoices: (req.items ?? []).map((item) => {
-      const inv = Array.isArray(item.invoice) ? item.invoice[0] : item.invoice
-      return { invoice_number: inv?.invoice_number ?? null, requested_amount: item.requested_amount }
-    }),
-  }))
+  const rotRutRequests: PotentialRotRutPayoutRequest[] = rotRutResult.requests
   const rotRutById = new Map(rotRutRequests.map((req) => [req.id, req] as const))
   // Per row: the persisted 1:1 hint when its begäran is still open, else the
   // exact covering set over the open pool (several begäran in one transfer).
@@ -469,8 +475,10 @@ interface QuickReviewState {
 export default function TransactionsPage() {
   const { company } = useCompany()
   const companyId = company?.id ?? null
+  const canAskAssistant = useAssistantReadsAvailable()
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
+  const errorLocale = useLocale() as ErrorLocale
   const whyFor = useProposalWhy()
   // Kategori and Konto columns plus per-user column visibility
   // (ui_state.tx_columns), UI v2 PR 4.
@@ -490,12 +498,54 @@ export default function TransactionsPage() {
     setColumnsHidden(current.includes(id) ? current.filter((c) => c !== id) : [...current, id])
   }
   const tDetach = useTranslations('tx_detach')
+  const tCommon = useTranslations('common')
+  const { canWrite } = useCanWrite()
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last list fetch failed (failed) or loaded only the window, without the
+  // older pending rows (partial). Said in the page, never in a toast: with no
+  // rows on screen in place of the list, with rows as one line above them.
+  const [loadFailure, setLoadFailure] = useState<'failed' | 'partial' | null>(null)
   const [mode, setMode] = useState<ViewMode>('inbox')
+  // The view is remembered per company (view-mode-storage.ts) and applied
+  // once per company and per ?view= link, after mount: reading localStorage
+  // in the initial state would differ from the server render. Only the tabs
+  // write the choice; the highlight widening, the review nudge and the
+  // "show ignored" toast change the view in memory only.
+  const appliedViewKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!companyId) return
+    const urlView = searchParams.get('view')
+    const key = `${companyId}|${urlView ?? ''}`
+    if (appliedViewKeyRef.current === key) return
+    appliedViewKeyRef.current = key
+    setMode(
+      resolveInitialViewMode({
+        urlView,
+        hasHighlight: Boolean(searchParams.get('highlight')),
+        stored: readStoredViewMode(companyId),
+      }),
+    )
+  }, [companyId, searchParams])
+  const handleModeChange = useCallback(
+    (next: ViewMode) => {
+      setMode(next)
+      if (companyId) writeStoredViewMode(companyId, next)
+    },
+    [companyId],
+  )
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
+  // The rows a booked salary run already pays out, with the run's verifikat,
+  // read with the proposals (crm#1685): the row is matched to it, never booked.
+  const [salaryPayouts, setSalaryPayouts] = useState<Record<string, SalaryRunPayout>>({})
+  const salaryPayoutFor = (tx: TransactionWithInvoice): SalaryRunPayout | undefined =>
+    tx.journal_entry_id ? undefined : salaryPayouts[tx.id]
+  // The company's one-click switch, read with the proposals. Until it has
+  // arrived no row books without its review.
+  const [directBooking, setDirectBooking] = useState<DirectBookingSettings | null>(null)
   // The assistant's reads for the loaded rows, so the review opens with one
   // instead of fetching it. A ref, not state: only the review reads them, and
   // it reads at open time, so a landing read has nothing to re-render.
@@ -507,7 +557,7 @@ export default function TransactionsPage() {
   const [searchTerm, setSearchTerm] = useState('')
 
   // Batch selection: hover checkboxes + bulkbar (concept), no mode toggle.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // The selections themselves are bankSelection and skvSelection below.
   const [showBatchSelector, setShowBatchSelector] = useState(false)
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
   // Row expansion (concept foldout): one open row at a time, mirroring the
@@ -518,6 +568,10 @@ export default function TransactionsPage() {
   const [matchDialogOpen, setMatchDialogOpen] = useState(false)
   const [selectedTransaction, setSelectedTransaction] = useState<TransactionWithInvoice | null>(null)
   const [isConfirmingMatch, setIsConfirmingMatch] = useState(false)
+  // The match refused a booked row (MATCH_SI_TX_ALREADY_BOOKED,
+  // MATCH_INVOICE_TX_ALREADY_BOOKED): the dialog's soft block, for the row it
+  // was refused for.
+  const [matchAlreadyBooked, setMatchAlreadyBooked] = useState<(MatchAlreadyBooked & { transactionId: string }) | null>(null)
   // ROT/RUT payout confirm (Skatteverkets utbetalning for an open begäran):
   // its own dialog, same selectedTransaction / isConfirmingMatch plumbing.
   const [rotRutMatchDialogOpen, setRotRutMatchDialogOpen] = useState(false)
@@ -573,6 +627,9 @@ export default function TransactionsPage() {
   const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
   const [splitMatchOpen, setSplitMatchOpen] = useState(false)
   const [splitMatchTransaction, setSplitMatchTransaction] = useState<TransactionWithInvoice | null>(null)
+  // The allocations the row's Bankgirot split suggests, when the drawer's
+  // "Matcha N fakturor" opened the dialog; null from the plain split item.
+  const [splitMatchPrefill, setSplitMatchPrefill] = useState<BatchAllocationPrefill[] | null>(null)
   // "Matcha mot befintlig verifikation": link a bank tx to an already-booked
   // voucher (salary, Fortnox import, manual entry) with no new bokföring.
   const [matchVoucherTx, setMatchVoucherTx] = useState<TransactionWithInvoice | null>(null)
@@ -581,6 +638,14 @@ export default function TransactionsPage() {
   // Quick review dialog (suggestion review before booking)
   const [quickReviewOpen, setQuickReviewOpen] = useState(false)
   const [quickReview, setQuickReview] = useState<QuickReviewState | null>(null)
+  // The bookings people set in the review, by row: an account or moms they
+  // changed, a template they picked. Closing the review used to forget it
+  // and the row came back with the machine's proposal (PostHog 170). Kept
+  // for the visit only (lib/transactions/review-choice.ts): nothing is stored.
+  const [reviewChoices, setReviewChoices] = useState<ReviewChoices>({})
+  const handleReviewProposalChange = useCallback((transactionId: string, held: ReviewChoice) => {
+    setReviewChoices((prev) => rememberReviewChoice(prev, transactionId, held))
+  }, [])
 
   // Prong B: prompt to match against an open supplier invoice instead of
   // categorizing direct to 2440. Triggered by a 409 TX_CATEGORIZE_SUGGEST_SI_MATCH.
@@ -591,7 +656,7 @@ export default function TransactionsPage() {
     retry: () => Promise<unknown>
     candidates: Array<{
       supplier_invoice_id: string
-      invoice_number: string
+      invoice_number: string | null
       invoice_date: string
       remaining_amount: number
       currency: string
@@ -637,6 +702,21 @@ export default function TransactionsPage() {
     candidate: BookedDuplicateCandidate
   } | null>(null)
   const [duplicateProcessing, setDuplicateProcessing] = useState(false)
+  // TX_CATEGORIZE_VAT_PERIOD_FILED: the row is dated in a filed momsperiod and
+  // its booking changes the underlag for that declaration. The person reads
+  // the warning and books anyway (retry sends confirm_filed_vat_period) or
+  // leaves the row. A row of a selection is not asked here: the batch names
+  // the reason once for the rows it holds back.
+  const [filedVatConfirm, setFiledVatConfirm] = useState<{
+    warnings: VoucherWarning[]
+    retry: () => Promise<unknown>
+  } | null>(null)
+  const [filedVatProcessing, setFiledVatProcessing] = useState(false)
+  // The same question for a selection, asked once after the pool settles
+  // (as the duplicate guard does, #2488): each held row parks its retry.
+  const batchFiledVatRef = useRef<Array<{ transactionId: string; warning: VoucherWarning; retry: () => Promise<BatchCategorizeOutcome> }>>([])
+  const batchFiledVatAnswerRef = useRef<((confirmed: boolean) => void) | null>(null)
+  const [batchFiledVatAsk, setBatchFiledVatAsk] = useState<{ warnings: VoucherWarning[]; count: number } | null>(null)
 
   // The same guard, asked once for a whole batch (#2488). The slot above holds
   // ONE answer, so N rows booking in parallel wrote it N times: only the last
@@ -677,9 +757,6 @@ export default function TransactionsPage() {
   // active period scope's window and paging state with stale rows.
   const fetchGenerationRef = useRef(0)
 
-  // True uncategorized count from DB (not limited by pagination)
-  const [totalUncategorizedCount, setTotalUncategorizedCount] = useState<number | null>(null)
-
   // Set of transaction IDs that are animating out (just categorized)
   const [exitingIds, setExitingIds] = useState<Set<string>>(new Set())
 
@@ -687,6 +764,13 @@ export default function TransactionsPage() {
   // Skatteverket extension is enabled and connected. 503/401 → silently
   // hidden (extension disabled or user not connected).
   const [skvRows, setSkvRows] = useState<SkattekontoTransactionWithSuggestion[]>([])
+  // The company's skattekonto account (1630, or 2012 for an enskild firma that
+  // runs it there), as the rows' list route reports it.
+  const [skvAccount, setSkvAccount] = useState<SkattekontoLedgerAccount>(SKATTEKONTO_ACCOUNT_DEFAULT)
+  // The date of the ingående balans on that account, as the same route
+  // reports it: a row dated before it is carried by the IB and is no work
+  // here (isOpenSkattekontoRow, the reading Att göra counts with).
+  const [skvOpeningDate, setSkvOpeningDate] = useState<string | null>(null)
   const [skvMatchTarget, setSkvMatchTarget] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
@@ -695,10 +779,9 @@ export default function TransactionsPage() {
   const [skvBookTarget, setSkvBookTarget] = useState<SkattekontoTransactionWithSuggestion | null>(
     null,
   )
-  // SKV bulk selection: deliberately a SEPARATE set from the bank
-  // `selectedIds`: every bank batch handler POSTs /api/transactions/* and
-  // would 404 on skattekonto ids.
-  const [skvSelectedIds, setSkvSelectedIds] = useState<Set<string>>(new Set())
+  // SKV bulk selection (skvSelection below): deliberately a SEPARATE set
+  // from the bank `selectedIds`: every bank batch handler POSTs
+  // /api/transactions/* and would 404 on skattekonto ids.
   const [skvBulkConfirmOpen, setSkvBulkConfirmOpen] = useState(false)
   const [skvBulkSubmitting, setSkvBulkSubmitting] = useState(false)
   // True when an SKV connection exists but is dead (needs_reconsent, or
@@ -729,38 +812,25 @@ export default function TransactionsPage() {
     [companyId],
   )
 
-  // Period filter (rakenskapsar). FyPicker owns the persistence under the
-  // page-local key. Quarter chips existed briefly (#1545) but were dropped:
-  // they crowded the filter row, and on a brutet rakenskapsar they were not
-  // momsdeklaration quarters, which made them misleading rather than useful.
-  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
-  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
+  // Period scope (räkenskapsår): the app-wide year beside the company name
+  // (Stil v3), visible on every page, so a year chosen elsewhere never hides
+  // pending rows here unseen; the footer still names rows outside it. Rows
+  // the scope hides leave both batch selections when it renders
+  // (useBulkSelection): every batch action operates on "what you see".
+  // Quarter chips existed briefly (#1545) but were dropped: on a brutet
+  // räkenskapsår they were not momsdeklaration quarters.
+  const fiscalScope = useFiscalScope()
+  // Footer "Visa alla": this visit lists every year, without moving the
+  // app-wide year. A new year chosen in the sidebar ends it.
+  const [showAllYears, setShowAllYears] = useState(false)
+  const [seenYear, setSeenYear] = useState<string | null | undefined>(undefined)
+  if (fiscalScope.ready && seenYear !== fiscalScope.periodId) {
+    setSeenYear(fiscalScope.periodId)
+    if (seenYear !== undefined) setShowAllYears(false)
+  }
+  const fyPeriod = showAllYears ? null : fiscalScope.period
   const periodBounds = useMemo(() => resolvePeriodBounds(fyPeriod, null), [fyPeriod])
-
-  const handlePeriodChange = useCallback((periodId: string | null, period?: FiscalPeriod | null) => {
-    setFyPeriodId(periodId)
-    setFyPeriod(period ?? null)
-    // Batch selections may reference rows the new scope hides; every batch
-    // action operates on "what you see", so drop them.
-    setSelectedIds(new Set())
-    setSkvSelectedIds(new Set())
-  }, [])
-
-  // Footer "Visa alla" escape hatch: clears the period scope AND its
-  // persisted value (FyPicker only writes storage from its own dropdown).
-  const clearPeriodFilter = useCallback(() => {
-    setFyPeriodId(null)
-    setFyPeriod(null)
-    setSelectedIds(new Set())
-    setSkvSelectedIds(new Set())
-    if (companyId) {
-      try {
-        window.localStorage.setItem(PERIOD_FILTER_STORAGE_PREFIX + companyId, ALL_YEARS_VALUE)
-      } catch {
-        // localStorage may be unavailable; the in-memory state is cleared.
-      }
-    }
-  }, [companyId])
+  const clearPeriodFilter = useCallback(() => setShowAllYears(true), [])
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
   // Registered, enabled cash accounts for the account chooser: session-cached
@@ -784,11 +854,15 @@ export default function TransactionsPage() {
   // stands in the Kategori cell so the person sees what Bokför will do
   // before clicking anything. Suggestions arrive with the list
   // (fetchCategorySuggestions), so nothing is computed on click.
+  // The booking the person set in the review, while it stands, comes before
+  // every proposal: the row wears it and Bokför opens the review on it.
+  const rowProposalFor = (tx: TransactionWithInvoice): SuggestedTemplate | undefined =>
+    reviewChoiceFor(reviewChoices, tx) ?? rowProposal(templateSuggestions[tx.id])
   const proposalFor = (tx: TransactionWithInvoice): RowProposal | null => {
     if (tx.journal_entry_id || tx.is_business !== null) return null
-    const s = rowProposal(templateSuggestions[tx.id])
+    const s = rowProposalFor(tx)
     if (!s) return null
-    return { label: s.name_sv, hue: proposalHue(s), confidence: s.confidence, why: whyFor(s) }
+    return { label: s.name_sv, hue: proposalHue(s), confidence: s.confidence, why: whyFor(s), own: isPersonChoice(s) }
   }
   const categoryLabelFor = (tx: TransactionWithInvoice): string | null => {
     if (tx.potential_invoice && !tx.invoice_id)
@@ -796,6 +870,8 @@ export default function TransactionsPage() {
     if (tx.potential_supplier_invoice) return t('cat_hint_supplier_invoice')
     if (tx.potential_rot_rut_payout) return t('cat_hint_rot_rut')
     if (tx.potential_expense_payout) return t('cat_hint_expense')
+    const salaryPayout = salaryPayoutFor(tx)
+    if (salaryPayout) return t('cat_hint_salary_run', { period: salaryPayout.period })
     if (tx.potential_voucher) return t('cat_hint_voucher')
     return null
   }
@@ -807,7 +883,49 @@ export default function TransactionsPage() {
   // Bank transaction being moved to another cash account (null = dialog closed).
   const [moveAccountTarget, setMoveAccountTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = useRealtimeSupabase()
+  // A company with no bank row in any year meets the start card, not the
+  // period line: "Välj Alla räkenskapsår" names rows that do not exist. Asked
+  // only when the year's list comes back empty.
+  const [noRowsInAnyYear, setNoRowsInAnyYear] = useState(false)
+  const yearListEmpty = !isLoading && !!periodBounds && transactions.length === 0 && skvRows.length === 0
+  useEffect(() => {
+    if (!companyId || !yearListEmpty) return
+    let cancelled = false
+    void supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .then(({ count, error }) => {
+        if (!cancelled && !error) setNoRowsInAnyYear(count === 0)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId, supabase, yearListEmpty])
+  // Whose giro number a row that names nobody shows (crm#1204): the company's
+  // own bankgiro, or the one supplier card carrying it. Read once per company;
+  // nothing is shown until the register is in, so a row never flips from
+  // "likely" to "yours".
+  const [giroLoaded, setGiroLoaded] = useState<{ companyId: string; register: GiroRegister } | null>(null)
+  useEffect(() => {
+    if (!companyId) return
+    let live = true
+    void loadGiroRegister(supabase, companyId).then((register) => {
+      if (live) setGiroLoaded({ companyId, register })
+    })
+    return () => {
+      live = false
+    }
+  }, [companyId, supabase])
+  const giroRegister = giroLoaded && giroLoaded.companyId === companyId ? giroLoaded.register : null
+  const giroCounterpartyFor = useCallback(
+    (tx: TransactionWithInvoice): GiroCounterparty | null => (giroRegister ? readGiroCounterparty(tx, giroRegister) : null),
+    [giroRegister],
+  )
   const highlightId = searchParams.get('highlight')
+  // ?open=match beside ?highlight: also open the row's suggested match (Att
+  // göra sends a match that needs a decision here, e.g. an overpayment).
+  const openMatchOnHighlight = searchParams.get('open') === 'match'
   // Tracks the last highlight target we acted on so re-renders don't re-trigger
   // the auto-open every time the user closes the categorize panel.
   const handledHighlightRef = useRef<string | null>(null)
@@ -817,30 +935,48 @@ export default function TransactionsPage() {
   // "Kör matchning igen" in the review surface.
   const [rerunningMatch, setRerunningMatch] = useState(false)
 
-  // End of the company's SIE-migration data coverage (latest imported
-  // voucher date, see lib/transactions/migration-coverage.ts). Drives the
-  // quiet "från perioden före din migrering" marker on inbox rows: date-based
-  // on purpose, it labels rows the imported bokföring should already cover,
-  // it never suggests a sync skip date (that was #917). Not fiscal_year_end:
-  // for a mid-year migration that is a future date and the marker fired on
-  // every new transaction until New Year.
-  const [sieCoverageEnd, setSieCoverageEnd] = useState<string | null>(null)
+  // Open rows that carry the quiet "från perioden före din migrering" marker:
+  // dated inside the imported bokföring's coverage AND explained by it (an
+  // unlinked voucher set of the same amount within a week, see
+  // GET /api/transactions/migration-coverage). Date alone marked rows the old
+  // system never booked as "most likely already imported" (crm#1239). It
+  // never suggests a sync skip date (that was #917).
+  //
+  // Asked again only when rows ARRIVE (first load, a sync, a company switch):
+  // a booked or ignored row just leaves the inbox and needs no new answer. A
+  // generation counter, not an effect cleanup, discards a stale answer, so a
+  // booking mid-request (the count drops) does not cancel the in-flight one.
+  const [preMigrationIds, setPreMigrationIds] = useState<ReadonlySet<string>>(() => new Set())
+  const pendingRowCount = useMemo(
+    () => transactions.reduce((n, t) => (t.is_business === null && !t.is_ignored ? n + 1 : n), 0),
+    [transactions],
+  )
+  const preMigrationAskedRef = useRef<{ companyId: string | null; count: number }>({ companyId: null, count: 0 })
+  const preMigrationGenerationRef = useRef(0)
   useEffect(() => {
-    if (!companyId) {
-      setSieCoverageEnd(null)
-      return
+    const asked = preMigrationAskedRef.current
+    const sameCompany = asked.companyId === companyId
+    preMigrationAskedRef.current = { companyId, count: pendingRowCount }
+    if (!sameCompany) {
+      preMigrationGenerationRef.current++
+      setPreMigrationIds(new Set())
     }
-    let cancelled = false
+    if (!companyId || pendingRowCount === 0 || (sameCompany && pendingRowCount <= asked.count)) return
+    const generation = ++preMigrationGenerationRef.current
     ;(async () => {
-      const coverageEnd = await fetchMigrationCoverageEnd(supabase, companyId)
-      if (!cancelled) {
-        setSieCoverageEnd(coverageEnd)
+      try {
+        const response = await fetch('/api/transactions/migration-coverage')
+        if (!response.ok) return
+        const payload = (await response.json()) as { data?: { explained_ids?: string[] } }
+        if (generation === preMigrationGenerationRef.current) {
+          setPreMigrationIds(new Set(payload.data?.explained_ids ?? []))
+        }
+      } catch {
+        // Advisory: without an answer no row carries the marker, the same as
+        // a row the ledger does not explain. The booking doors keep their guard.
       }
     })()
-    return () => {
-      cancelled = true
-    }
-  }, [companyId, supabase])
+  }, [companyId, pendingRowCount])
 
   // Computed lists. Exiting rows (just booked/ignored/deleted) stay IN this
   // list on purpose: they render for the 350ms exit window with the .row-exit
@@ -884,9 +1020,18 @@ export default function TransactionsPage() {
     | { source: 'skatteverket'; date: string; data: SkattekontoTransactionWithSuggestion }
 
   const skvUnmatched = useMemo(
-    () => skvRows.filter((row) => !row.journal_entry_id && !row.is_ignored),
-    [skvRows],
+    () => skvRows.filter((row) => isOpenSkattekontoRow(row, skvOpeningDate)),
+    [skvRows, skvOpeningDate],
   )
+  // Booking, matching or ignoring a skattekonto row here changes the nav
+  // badge, which counts these rows too; skattekonto has no realtime channel,
+  // so the reloaded list moves it. The first count is the page load itself.
+  const skvUnmatchedCountRef = useRef<number | null>(null)
+  useEffect(() => {
+    const previous = skvUnmatchedCountRef.current
+    skvUnmatchedCountRef.current = skvUnmatched.length
+    if (previous !== null && previous !== skvUnmatched.length) refreshWorklistBadges()
+  }, [skvUnmatched.length])
 
   const bankToSkvHints = useMemo(
     () => findBankSkvCounterparts({
@@ -904,16 +1049,20 @@ export default function TransactionsPage() {
   // rows merged in for the inbox would otherwise render as sparse, gap-ridden
   // months below the window and read as missing bookkeeping. Same-date rows at
   // the boundary may slip in; they are real rows of that date, so harmless.
+  // Under Ignorerade every ignored row in state shows, window or not: that
+  // list is sparse by nature and reads as nothing missing.
   const historyTransactions = useMemo(
     () =>
       transactions.filter(
         (t) =>
-          (!pagedThroughDate || t.date >= pagedThroughDate) &&
+          (!pagedThroughDate ||
+            t.date >= pagedThroughDate ||
+            (historyFilter === 'ignored' && t.is_ignored)) &&
           // Server-side scope catches up on refetch; this keeps the view
           // correct in the transition frame after a filter change.
           isWithinBounds(t.date, periodBounds),
       ),
-    [transactions, pagedThroughDate, periodBounds],
+    [transactions, pagedThroughDate, periodBounds, historyFilter],
   )
 
   // SKV rows shown in the history view, narrowed to the active period. The
@@ -924,36 +1073,15 @@ export default function TransactionsPage() {
     [skvRows, periodBounds],
   )
 
-  // Tab badge: DB-true pending count normally; with a period filter active,
-  // the pending rows inside the scope (complete, since the pending backlog
-  // fetch is unscoped and fully in state).
-  const inboxBadgeCount = useMemo(() => {
-    if (!periodBounds) return totalUncategorizedCount ?? uncategorizedTransactions.length
-    return uncategorizedTransactions.filter((tx) => isWithinBounds(tx.date, periodBounds)).length
-  }, [periodBounds, totalUncategorizedCount, uncategorizedTransactions])
-
-  // Pending work the active period filter hides (bank + skattekonto). BFL
-  // 5 kap: pending affarshandelser must never disappear silently, so the
-  // footer names this count and offers a one-click way back to everything.
-  const pendingOutsideCount = useMemo(() => {
-    if (!periodBounds) return 0
-    const bankOutside = uncategorizedTransactions.filter(
-      (tx) => !isWithinBounds(tx.date, periodBounds),
-    ).length
-    const skvOutside = skvRows.filter(
-      (r) =>
-        !r.journal_entry_id &&
-        !r.is_ignored &&
-        !isWithinBounds(r.transaktionsdatum, periodBounds),
-    ).length
-    return bankOutside + skvOutside
-  }, [periodBounds, skvRows, uncategorizedTransactions])
-
   // Account chooser (concept scene 10): the source picker doubles as a
   // balance readout. The total sums only SEK ledgers (mixing currencies into
-  // one figure would be a lie); null hides the annotation entirely.
+  // one figure would be a lie); null hides the annotation entirely. A company
+  // card's balance is a debt, not cash: "Alla konton" never nets it against
+  // the bank (the card keeps its own figure in the picker).
   const totalSourceBalance = useMemo(() => {
-    const sekBalances = cashAccounts.filter((a) => a.currency === 'SEK' && a.balance != null)
+    const sekBalances = cashAccounts.filter(
+      (a) => a.currency === 'SEK' && a.balance != null && (a.kind ?? 'bank') === 'bank',
+    )
     if (sekBalances.length === 0) return null
     return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0)
   }, [cashAccounts])
@@ -1017,6 +1145,43 @@ export default function TransactionsPage() {
     [sourceFilter, sourceItems],
   )
 
+  // The company card the source picker narrows to, if it is one.
+  const emptyCardSource = useMemo(
+    () => cashAccounts.find((a) => a.kind === 'card' && `acct:${a.id}` === effectiveSourceFilter) ?? null,
+    [cashAccounts, effectiveSourceFilter],
+  )
+
+  // Skattekonto rows a verifikat already holds (imported history, PH 171):
+  // one line with the one action that links them all, instead of a cover
+  // answer per row. Read only while open skattekonto rows are in view; the
+  // count reloads as the open rows change.
+  const [skvLinkAllOpen, setSkvLinkAllOpen] = useState(false)
+  const { count: skvLedgerProposals, refresh: refreshSkvLedgerProposals } =
+    useSkattekontoLedgerProposalCount(
+      skvUnmatched.length > 0 && skattekontoInSource(effectiveSourceFilter),
+      skvUnmatched.length,
+    )
+
+  // Every pending row (bank + skattekonto) in exactly one bucket: shown by
+  // the active source and period (the tab badge), hidden by the source, or
+  // outside the period. The badge reads the same source predicate as the
+  // list below (lib/transactions/inbox-scope), so it counts what the list
+  // shows: before, it counted bank rows only, from a separate DB head count
+  // that ignored the source picker (crm#1056, crm#1043). BFL 5 kap: pending
+  // affarshandelser must never disappear silently, so the footer names each
+  // hidden count with a one-click way back.
+  const inboxScope = useMemo(
+    () =>
+      countInboxScope({
+        bankRows: uncategorizedTransactions,
+        skattekontoRows: skvUnmatched,
+        source: effectiveSourceFilter,
+        period: periodBounds,
+        leaving: exitingIds,
+      }),
+    [effectiveSourceFilter, exitingIds, periodBounds, skvUnmatched, uncategorizedTransactions],
+  )
+
   // Declared after sourceItems/effectiveSourceFilter because the inbox must
   // filter by the EFFECTIVE source, never the raw wanted one.
   const inboxItems = useMemo<InboxItem[]>(() => {
@@ -1027,13 +1192,7 @@ export default function TransactionsPage() {
         // The refetch already narrows state server-side; this check makes the
         // filter correct immediately on change, before the refetch lands.
         if (!isWithinBounds(tx.date, periodBounds)) continue
-        if (
-          effectiveSourceFilter.startsWith('acct:') &&
-          tx.cash_account_id !== effectiveSourceFilter.slice('acct:'.length)
-        ) {
-          continue
-        }
-        if (effectiveSourceFilter === 'bank:other' && tx.cash_account_id != null) continue
+        if (!bankRowInSource(tx.cash_account_id, effectiveSourceFilter)) continue
         if (
           query &&
           !tx.description?.toLowerCase().includes(query) &&
@@ -1045,13 +1204,14 @@ export default function TransactionsPage() {
         items.push({ source: 'bank', date: tx.date, data: tx })
       }
     }
-    if (effectiveSourceFilter === 'all' || effectiveSourceFilter === 'skatteverket') {
-      // Inbox only shows SKV rows that need action (no verifikat yet).
+    if (skattekontoInSource(effectiveSourceFilter)) {
+      // Inbox only shows SKV rows that need action: no verifikat yet, and
+      // not carried by the IB on the skattekonto account.
       for (const r of skvRows) {
         // Exiting rows stay rendered for the exit animation, even if a
         // refetch already gave them a journal_entry_id (or an ignore) mid-
         // window (see above).
-        if ((r.journal_entry_id || r.is_ignored) && !exitingIds.has(r.id)) continue
+        if (!isOpenSkattekontoRow(r, skvOpeningDate) && !exitingIds.has(r.id)) continue
         // SKV rows live client-side only, so the period filter applies here.
         if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
         if (
@@ -1071,7 +1231,7 @@ export default function TransactionsPage() {
       if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
       return 0
     })
-  }, [effectiveSourceFilter, exitingIds, periodBounds, searchTerm, skvRows, uncategorizedTransactions])
+  }, [effectiveSourceFilter, exitingIds, periodBounds, searchTerm, skvOpeningDate, skvRows, uncategorizedTransactions])
 
   // Rows the bulkbar's "Markera alla" can select: the visible bank rows
   // (they feed the /api/transactions/* batch handlers) ...
@@ -1105,16 +1265,13 @@ export default function TransactionsPage() {
   // Shift-click ranges run per selection set: bank rows and skattekonto rows
   // are interleaved in one table but are booked through different endpoints,
   // so each range walks only its own selectable ids in rendered order.
-  const bankRange = useRangeSelect({
-    visibleIds: selectableInboxIds,
-    selectedIds,
-    setSelectedIds,
-  })
-  const skvRange = useRangeSelect({
-    visibleIds: selectableSkvIds,
-    selectedIds: skvSelectedIds,
-    setSelectedIds: setSkvSelectedIds,
-  })
+  // Each selection holds only its own selectable rows of the current view:
+  // a search, source, period or exit animation that hides a ticked row drops
+  // it, so the bar never counts or acts on a row the user cannot see.
+  const bankSelection = useBulkSelection(selectableInboxIds)
+  const skvSelection = useBulkSelection(selectableSkvIds)
+  const selectedIds = bankSelection.selectedIds
+  const skvSelectedIds = skvSelection.selectedIds
 
   const skvSelectedRows = useMemo(
     () => skvRows.filter((r) => skvSelectedIds.has(r.id)),
@@ -1205,8 +1362,10 @@ export default function TransactionsPage() {
       const json = await res.json()
       if (skvFetchSeqRef.current !== seq) return
       const booked = (json.data?.booked ?? []) as SkattekontoTransactionWithSuggestion[]
-      // Keep all booked SKV rows in state: inbox view filters to obokförda
-      // (journal_entry_id null), history view shows all of them (matched
+      if (isSkattekontoLedgerAccount(json.data?.skattekonto_account)) setSkvAccount(json.data.skattekonto_account)
+      setSkvOpeningDate(typeof json.data?.opening_balance_date === 'string' ? json.data.opening_balance_date : null)
+      // Keep all booked SKV rows in state: inbox view filters to the open
+      // rows (isOpenSkattekontoRow), history view shows all of them (matched
       // and unmatched) interleaved with bank tx by date.
       setSkvRows(booked)
     } catch {
@@ -1214,6 +1373,12 @@ export default function TransactionsPage() {
       setSkvRows([])
     }
   }, [])
+
+  // Rows were linked from the skattekonto cover answer or the line above.
+  const handleSkvLinked = useCallback(() => {
+    void loadSkvRows()
+    refreshSkvLedgerProposals()
+  }, [loadSkvRows, refreshSkvLedgerProposals])
 
   const fetchTransactions = useCallback(async (
     showLoading = false,
@@ -1238,30 +1403,34 @@ export default function TransactionsPage() {
       // pending affarshandelser to be booked promptly, so every pending row
       // must stay in state regardless of the filter. The inbox applies the
       // period client-side and the footer surfaces what falls outside it.
-      let windowQuery = supabase
-        .from('transactions')
-        .select(TRANSACTION_LIST_SELECT)
-        .eq('company_id', companyId)
-      if (periodBounds) {
-        windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
-      }
-
-      const [{ data: txData, error: txError }, { count: uncatCount }, pendingRows] = await Promise.all([
+      const windowPage = async (offset: number, limit: number) => {
+        let windowQuery = supabase
+          .from('transactions')
+          .select(TRANSACTION_WINDOW_SELECT)
+          .eq('company_id', companyId)
+        if (periodBounds) {
+          windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+        }
         // The id tie-breaker keeps offset paging deterministic when many
         // rows share a date; without it .range() pages can skip or repeat
         // same-date rows.
-        windowQuery
+        const { data, error } = await windowQuery
           .order('date', { ascending: false })
           .order('id', { ascending: true })
-          .range(0, windowSize - 1),
-        supabase
-          .from('transactions')
-          .select('*', { count: 'exact', head: true })
-          .eq('company_id', companyId)
-          .is('is_business', null)
-          // Same predicate as lib/worklist countUnbookedTransactions: ignored
-          // rows are handled, not pending.
-          .eq('is_ignored', false),
+          .range(offset, offset + limit - 1)
+        if (error) throw error
+        return { data: ((data ?? []) as TransactionWithInvoice[]).map(withLivePointer) }
+      }
+
+      const [{ data: txData, error: txError }, pendingRows, ignoredRows] = await Promise.all([
+        // A refresh after "Visa fler" reloads the whole window the user paged
+        // through. One request is cut at 1,000 rows, which shrank a larger
+        // window and hid the button although older rows remained, so the
+        // window is collected in chunks.
+        collectPages(windowPage, { want: windowSize }).then(
+          ({ data }) => ({ data, error: null }),
+          (error: unknown) => ({ data: null, error }),
+        ),
         // The inbox is a worklist: it must contain every pending row, even ones
         // older than the newest-first window above. Falls back to null so the
         // page still renders the windowed rows if this fetch dies; the failure
@@ -1281,28 +1450,53 @@ export default function TransactionsPage() {
           console.error('[transactions] pending backlog fetch failed; inbox may be missing older rows', error)
           return null
         }),
+        // Alla → Ignorerade promises every ignored row of the period, the
+        // place the ignore texts send users to restore one (crm#1612), so
+        // they all load, not only those inside the window. They are few.
+        fetchAllRows<TransactionWithInvoice>(({ from, to }) => {
+          let ignoredQuery = supabase
+            .from('transactions')
+            .select(TRANSACTION_WINDOW_SELECT)
+            .eq('company_id', companyId)
+            .eq('is_ignored', true)
+          if (periodBounds) {
+            ignoredQuery = ignoredQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+          }
+          return ignoredQuery
+            .order('date', { ascending: false })
+            .order('id', { ascending: true })
+            .range(from, to)
+        }).then(
+          (rows) => rows.map(withLivePointer),
+          (error: unknown) => {
+            console.error('[transactions] ignored rows fetch failed; Ignorerade may be missing older rows', error)
+            return null
+          },
+        ),
       ])
 
       // A newer fetch (scope change, refresh) started while this one was in
       // flight: its results own the state now, so this response must not
-      // apply. Toasts are skipped too; the newer request reports its own fate.
+      // apply. Its failure state is skipped too; the newer request reports
+      // its own fate.
       if (fetchGenerationRef.current !== generation) return
 
       if (txError) {
-        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
+        setLoadFailure('failed')
         return
       }
 
-      if (pendingRows === null) {
-        // Partial load: the windowed rows render, but older pending rows are
-        // absent. Say so instead of presenting a complete-looking inbox.
-        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
-      }
+      // Partial load: the windowed rows render, but older pending (or
+      // ignored) rows are absent. Say so instead of presenting a
+      // complete-looking list.
+      setLoadFailure(pendingRows === null || ignoredRows === null ? 'partial' : null)
 
       const rows = txData || []
       const windowIds = new Set(rows.map((r) => r.id))
       const olderPending = (pendingRows ?? []).filter((r) => !windowIds.has(r.id))
-      const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
+      // Never pending (the backlog excludes ignored rows), so no overlap there.
+      const olderIgnored = (ignoredRows ?? []).filter((r) => !windowIds.has(r.id))
+      const allRows = [...rows, ...olderPending, ...olderIgnored].sort((a, b) => b.date.localeCompare(a.date))
       const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutByTransaction }, expensePayouts] = await Promise.all([
         fetchPotentialMatches(supabase, companyId, allRows),
         fetchExpensePayoutMatches(supabase, companyId, allRows),
@@ -1328,7 +1522,6 @@ export default function TransactionsPage() {
       }))
 
       setTransactions(transactionsWithInvoices)
-      setTotalUncategorizedCount(uncatCount ?? 0)
       pagedCountRef.current = rows.length
       setPagedThroughDate(rows.length >= windowSize ? rows[rows.length - 1].date : null)
       setHasMore(rows.length >= windowSize)
@@ -1340,7 +1533,7 @@ export default function TransactionsPage() {
       // predecessor may have left it up).
       if (fetchGenerationRef.current === generation) setIsLoading(false)
     }
-  }, [companyId, loadSkvRows, periodBounds, supabase, t, toast])
+  }, [companyId, loadSkvRows, periodBounds, supabase])
 
   const refreshTransactions = useCallback(async () => {
     if (!companyId) return
@@ -1372,7 +1565,7 @@ export default function TransactionsPage() {
     const offset = pagedCountRef.current
     let pageQuery = supabase
       .from('transactions')
-      .select(TRANSACTION_LIST_SELECT)
+      .select(TRANSACTION_WINDOW_SELECT)
       .eq('company_id', companyId)
     // Same period scope as the initial window fetch: mixed-scope pages would
     // corrupt the offset bookkeeping.
@@ -1394,10 +1587,11 @@ export default function TransactionsPage() {
     pagedCountRef.current += txData.length
     setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
     setHasMore(txData.length >= PAGE_SIZE)
+    const pageRows = (txData as TransactionWithInvoice[]).map(withLivePointer)
 
     const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutByTransaction }, expensePayouts] = await Promise.all([
-      fetchPotentialMatches(supabase, companyId, txData),
-      fetchExpensePayoutMatches(supabase, companyId, txData),
+      fetchPotentialMatches(supabase, companyId, pageRows),
+      fetchExpensePayoutMatches(supabase, companyId, pageRows),
     ])
     const expensePayoutMap = expensePayouts.byTransaction
 
@@ -1408,7 +1602,7 @@ export default function TransactionsPage() {
       return
     }
 
-    const newTransactions: TransactionWithInvoice[] = txData.map((t) => ({
+    const newTransactions: TransactionWithInvoice[] = pageRows.map((t) => ({
       ...t,
       potential_expense_payout: expensePayoutMap.get(t.id),
       potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
@@ -1593,7 +1787,7 @@ export default function TransactionsPage() {
   }, [companyId, transactions])
 
   useEffect(() => {
-    if (!companyId || !warmKey) return
+    if (!companyId || !warmKey || !canAskAssistant) return
     if (warmedReadsRef.current.companyId !== companyId) {
       warmedReadsRef.current = { companyId, ids: new Set() }
       assistantReadsRef.current = {}
@@ -1634,7 +1828,7 @@ export default function TransactionsPage() {
     // The key already encodes the rows; re-running on the list's identity
     // would walk the backlog on every realtime echo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId, warmKey])
+  }, [companyId, warmKey, canAskAssistant])
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
@@ -1649,19 +1843,19 @@ export default function TransactionsPage() {
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
+      if (data.salary_payouts) setSalaryPayouts(data.salary_payouts as Record<string, SalaryRunPayout>)
+      if (data.direct_booking) setDirectBooking(data.direct_booking as DirectBookingSettings)
       if (data.assistant_reads) Object.assign(assistantReadsRef.current, data.assistant_reads)
     } catch {
       // Non-critical
     }
   }
 
-  // The initial fetch waits for FyPicker to finish restoring the persisted
-  // period scope (onReady fires after its restore onChange). Fetching at
+  // The initial fetch waits for the app-wide year to restore. Fetching at
   // mount used to race the restore: an unscoped fetch painted the list, the
   // restore re-created fetchTransactions and re-ran this effect with a second
   // skeleton takeover, so every visit flashed list → skeleton → list.
-  const [fyReady, setFyReady] = useState(false)
-  const handleFyReady = useCallback(() => setFyReady(true), [])
+  const fyReady = fiscalScope.ready
   // Whether anything is on screen, readable from the effect without making
   // row state a dependency (which would refetch on every row patch).
   const hasRowsRef = useRef(false)
@@ -1675,21 +1869,14 @@ export default function TransactionsPage() {
   const [isScopeRefreshing, setIsScopeRefreshing] = useState(false)
   const scopeRefreshSeqRef = useRef(0)
 
-  // Fiscal scope must not survive a company switch: periodBounds from the
-  // previous company would scope the first fetch for the new one, and a
-  // non-null fyPeriodId makes FyPicker skip its persisted-scope restore
-  // (it only restores when value === null). Resetting during render (React's
-  // adjust-state-on-prop-change pattern) rather than in an effect guarantees
-  // FyPicker's restore effect observes the cleared value: its effect captures
-  // `value` at commit time, and child effects run before a parent effect
-  // could reset it. fyReady = false holds the fetch effect until the new
-  // company's restore completes via onReady.
+  // Page state must not survive a company switch (React's
+  // adjust-state-on-prop-change pattern). The app-wide year resets itself:
+  // fiscalScope.ready is false until the new company's year is restored,
+  // which holds the fetch effect below.
   const [scopeCompanyId, setScopeCompanyId] = useState<string | null>(companyId)
   if (scopeCompanyId !== companyId) {
     setScopeCompanyId(companyId)
-    setFyReady(false)
-    setFyPeriodId(null)
-    setFyPeriod(null)
+    setShowAllYears(false)
     // A scope refresh in flight belongs to the old company: invalidate its
     // finally-guard and drop the cue.
     scopeRefreshSeqRef.current++
@@ -1702,7 +1889,6 @@ export default function TransactionsPage() {
     // they reset with them.
     setTransactions([])
     setSkvRows([])
-    setTotalUncategorizedCount(null)
     setPagedThroughDate(null)
     setHasMore(false)
     pagedCountRef.current = 0
@@ -1736,6 +1922,9 @@ export default function TransactionsPage() {
 
     const refreshFromRealtime = async () => {
       if (cancelled) return
+      // The nav badge has no channel of its own any more: this one, live
+      // while the user looks at the inbox, moves it.
+      refreshWorklistBadges()
       await refreshTransactions()
     }
 
@@ -1753,10 +1942,11 @@ export default function TransactionsPage() {
           void refreshFromRealtime()
         },
       )
-      .subscribe()
+    const stopJoin = subscribeAsUser(supabase, channel)
 
     return () => {
       cancelled = true
+      stopJoin()
       void supabase.removeChannel(channel)
     }
   }, [companyId, refreshTransactions, supabase])
@@ -1785,6 +1975,9 @@ export default function TransactionsPage() {
       ? tx.is_business !== null || tx.is_ignored
       : Boolean(skvRow?.journal_entry_id || skvRow?.is_ignored)
     if (outsideInbox && mode === 'inbox') setMode('history')
+    // The history chip must show it too: an ignored row lives under
+    // Ignorerade, which also reaches past the loaded window (crm#1612).
+    if (outsideInbox) setHistoryFilter(tx?.is_ignored ? 'ignored' : 'all')
 
     // A deep link must land on a visible row: when the remembered source
     // filter would hide the highlighted transaction, widen to 'all' in
@@ -1815,7 +2008,12 @@ export default function TransactionsPage() {
         }
       })
     })
-  }, [highlightId, mode, skvRows, sourceFilter, transactions])
+
+    if (openMatchOnHighlight && tx?.potential_invoice) {
+      setSelectedTransaction(tx)
+      setMatchDialogOpen(true)
+    }
+  }, [highlightId, mode, openMatchOnHighlight, skvRows, sourceFilter, transactions])
 
   // Auto-fetch suggestions when transactions load
   useEffect(() => {
@@ -1885,7 +2083,6 @@ export default function TransactionsPage() {
     undoneIdsRef.current.delete(id)
 
     setExitingIds((prev) => new Set(prev).add(id))
-    setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
 
     if (silent) {
       // No per-row toast: fall through to the delayed state patch below.
@@ -1907,7 +2104,6 @@ export default function TransactionsPage() {
                       : t
                   )
                 )
-                setTotalUncategorizedCount((prev) => (prev ?? 0) + 1)
                 toast({ title: t('undone_title'), description: t('undone_description') })
               } else {
                 const errData = await undoRes.json()
@@ -1968,15 +2164,29 @@ export default function TransactionsPage() {
     isBusiness: boolean
     category?: TransactionCategory
     vatTreatment?: VatTreatment
+    /** The basis box of a reverse charge the proposal names (ruta 21 or 22): sent as reverse_charge_kind. */
+    reverseChargeKind?: ReverseChargeKind
     accountOverride?: string
     templateId?: string
     /** A learned counterpart rule: the server books its stored lines. */
     counterpartyTemplateId?: string
+    /** The suggestion the booking started from, recorded in suggestion_log. */
+    proposalId?: string
+    /** false: the row's one click; true: booked from Granska bokföring. Sent as review_shown. */
+    reviewShown?: boolean
+    /** Bokför valda: no booking's review seen, so a booking a block matches is refused (in_bulk). */
+    inBulk?: boolean
+    /** The server sent a one click to its review (TX_CATEGORIZE_REVIEW_REQUIRED): open it instead of a failure toast. */
+    onReviewRequired?: () => void
     inboxItemId?: string
     dimensions?: Record<string, string>
     /** The underlag's moms (transaction currency): sent as vat_amount. */
     vatAmount?: number
     confirmNoMatch: boolean
+    /** The person's word that the VAT on the underlag is foreign VAT charged in error: sent as confirm_foreign_seller_vat (crm#1765). */
+    confirmForeignSellerVat?: boolean
+    /** The person's answer to the filed-momsperiod warning: sent as confirm_filed_vat_period. */
+    confirmFiledVatPeriod?: boolean
     // Set after the user confirms the booking-time duplicate warning. force
     // bypasses the guard; the bypass is bound to the reviewed candidate's
     // voucher (journal_entry_id), present on both a sibling-transaction and a
@@ -1999,7 +2209,7 @@ export default function TransactionsPage() {
     // state: a silent row the duplicate guard flagged, parked for the batch's
     // single confirmation and therefore neither booked nor failed.
   }): Promise<BatchCategorizeOutcome> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, counterpartyTemplateId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, inBulk, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, confirmForeignSellerVat, confirmFiledVatPeriod, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2009,13 +2219,19 @@ export default function TransactionsPage() {
           is_business: isBusiness,
           category,
           vat_treatment: vatTreatment,
+          ...(reverseChargeKind ? { reverse_charge_kind: reverseChargeKind } : {}),
           account_override: accountOverride,
           template_id: templateId,
           ...(counterpartyTemplateId ? { counterparty_template_id: counterpartyTemplateId } : {}),
+          ...(proposalId ? { proposal_id: proposalId } : {}),
+          ...(reviewShown !== undefined ? { review_shown: reviewShown } : {}),
+          ...(inBulk ? { in_bulk: true } : {}),
           inbox_item_id: inboxItemId,
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
           ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
           ...(confirmNoMatch ? { confirm_no_match: true } : {}),
+          ...(confirmForeignSellerVat ? { confirm_foreign_seller_vat: true } : {}),
+          ...(confirmFiledVatPeriod ? { confirm_filed_vat_period: true } : {}),
           ...(force && expectedDuplicateJournalEntryId
             ? { force: true, expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }
             : {}),
@@ -2024,6 +2240,14 @@ export default function TransactionsPage() {
 
       const result = await response.json()
       if (!response.ok) {
+        if (result?.error?.code === 'TX_CATEGORIZE_REVIEW_REQUIRED' && onReviewRequired) {
+          // The company or the rule asks for a review the page did not know
+          // of yet (a setting changed in another tab): nothing was booked,
+          // so the review opens on the same proposal.
+          setProcessingId(null)
+          onReviewRequired()
+          return { ok: false, journalEntryId: null }
+        }
         if (
           result?.error?.code === 'TX_CATEGORIZE_SUGGEST_SI_MATCH' &&
           Array.isArray(result.error.details?.candidates)
@@ -2214,6 +2438,51 @@ export default function TransactionsPage() {
           setProcessingId(null)
           return { ok: false, journalEntryId: null }
         }
+        if (
+          result?.error?.code === 'TX_CATEGORIZE_VAT_PERIOD_FILED' &&
+          Array.isArray(result.error.details?.warnings) &&
+          result.error.details.warnings.length > 0
+        ) {
+          // Nothing was booked. The dialog shows the warning (the period and
+          // its filing date); "Bokför ändå" sends the same booking again with
+          // the confirmation, and the server asks its question once more.
+          const warnings = result.error.details.warnings as VoucherWarning[]
+          const retry = () => runCategorize({ ...args, confirmFiledVatPeriod: true })
+          if (silent) {
+            // A batch row: park it, and handleBatchCategorize asks once for
+            // every held row after the pool settles.
+            batchFiledVatRef.current.push({ transactionId: id, warning: warnings[0], retry })
+            setProcessingId(null)
+            return { ok: false, journalEntryId: null, heldForFiledVat: true }
+          }
+          setFiledVatConfirm({ warnings, retry })
+          setProcessingId(null)
+          return { ok: false, journalEntryId: null }
+        }
+        if (
+          !silent &&
+          result?.error?.code === 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT' &&
+          result.error.details?.reason === 'not_confirmed'
+        ) {
+          // crm#1765: the underlag shows the seller's VAT. Foreign VAT charged
+          // in error still books as reverse charge, on the whole amount paid,
+          // once the person says that is what it is; a Swedish seller's VAT
+          // (reason seller_vat_swedish) keeps the plain refusal below.
+          toast({
+            title: t('rc_seller_vat_title'),
+            description: t('rc_seller_vat_description'),
+            action: (
+              <ToastAction
+                altText={t('rc_seller_vat_confirm_action')}
+                onClick={() => void runCategorize({ ...args, confirmForeignSellerVat: true })}
+              >
+                {t('rc_seller_vat_confirm_action')}
+              </ToastAction>
+            ),
+          })
+          setProcessingId(null)
+          return { ok: false, journalEntryId: null }
+        }
         if (result?.error?.code === 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED') {
           // Issue #1661: a private marking is a real booking (eget uttag /
           // insättning), so a locked period refuses it. The row being cleared
@@ -2245,7 +2514,13 @@ export default function TransactionsPage() {
           })
         }
         setProcessingId(null)
-        return { ok: false, journalEntryId: null }
+        // The batch toast names why its failed rows were refused (for #206):
+        // a silent row has no toast of its own to say it.
+        return {
+          ok: false,
+          journalEntryId: null,
+          failureReason: getErrorMessage(result, { context: 'transaction', statusCode: response.status, locale: errorLocale }),
+        }
       }
 
       finishBooking({
@@ -2265,7 +2540,7 @@ export default function TransactionsPage() {
         toast({ title: t('booking_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
       }
       setProcessingId(null)
-      return { ok: false, journalEntryId: null }
+      return { ok: false, journalEntryId: null, failureReason: t('booking_failed_description') }
     }
   }
 
@@ -2291,7 +2566,6 @@ export default function TransactionsPage() {
       toast({ title: t('customer_invoice_matched_title'), description: t('customer_invoice_matched_description') })
       setCiMatchSuggestion(null)
       setExitingIds((prev) => new Set(prev).add(transactionId))
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
       setTimeout(() => {
         setTransactions((prev) =>
           prev.map((t) =>
@@ -2340,7 +2614,6 @@ export default function TransactionsPage() {
       toast({ title: t('supplier_invoice_matched_title'), description: t('supplier_invoice_matched_description') })
       setSiMatchSuggestion(null)
       setExitingIds((prev) => new Set(prev).add(transactionId))
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
       setTimeout(() => {
         setTransactions((prev) =>
           prev.map((t) =>
@@ -2370,12 +2643,12 @@ export default function TransactionsPage() {
   async function handleIgnoreTransaction(tx: TransactionWithInvoice) {
     // Mirrors BankReconciliationView's ignore flow: Ignorera is fully
     // reversible, but the row vanishes immediately: confirmation before the
-    // write plus an Ångra toast gives two recovery affordances. The
-    // "Ignorerade transaktioner" card on Rapporter → Bankavstämning is the
-    // standing third.
+    // write plus an Ångra toast gives two recovery affordances. Alla →
+    // Ignorerade on this page (Återställ per row) is the standing third, and
+    // the account's Ignorerade band under Konton a fourth (crm#1612).
     const ok = await confirm({
       title: 'Ignorera transaktionen?',
-      description: `${tx.description}, ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton. Riktiga köp och betalningar ska bokföras. Du kan återställa den under Bankavstämning när som helst.`,
+      description: `${tx.description}, ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton. Riktiga köp och betalningar ska bokföras. Du kan återställa den när som helst under Alla → Ignorerade.`,
       confirmLabel: 'Ignorera',
       cancelLabel: 'Avbryt',
       variant: 'warning',
@@ -2389,13 +2662,12 @@ export default function TransactionsPage() {
       if (!res.ok || result.error) {
         toast({
           title: 'Kunde inte ignorera transaktionen',
-          description: typeof result.error === 'string' ? result.error : undefined,
+          description: result.error ? getErrorMessage(result, { locale: errorLocale }) : undefined,
           variant: 'destructive',
         })
         return
       }
       setExitingIds((prev) => new Set(prev).add(tx.id))
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
       setTimeout(() => {
         setTransactions((prev) =>
           prev.map((t) => (t.id === tx.id ? { ...t, is_ignored: true } : t))
@@ -2431,22 +2703,12 @@ export default function TransactionsPage() {
       setTransactions((prev) =>
         prev.map((t) => (t.id === transactionId ? { ...t, is_ignored: false } : t))
       )
-      setTotalUncategorizedCount((prev) => (prev ?? 0) + 1)
     } catch {
       toast({ title: 'Kunde inte återställa transaktionen', variant: 'destructive' })
     }
   }
 
-  async function handleConfirmInvoiceMatch(opts?: {
-    force?: boolean
-    expected_journal_entry_id?: string
-    lines?: Array<{
-      account_number: string
-      debit_amount: number
-      credit_amount: number
-      line_description?: string
-    }>
-  }) {
+  async function handleConfirmInvoiceMatch(opts?: ConfirmOpts) {
     if (!selectedTransaction) return
     const isSupplier = !!selectedTransaction.potential_supplier_invoice
     const isCustomer = !!selectedTransaction.potential_invoice
@@ -2461,7 +2723,7 @@ export default function TransactionsPage() {
       const body: Record<string, unknown> = isSupplier
         ? { supplier_invoice_id: selectedTransaction.potential_supplier_invoice!.id }
         : { invoice_id: selectedTransaction.potential_invoice!.id }
-      if (!isSupplier && opts?.force) {
+      if (opts?.force) {
         body.force = true
         // Bind the override to the candidate the user saw in the dialog.
         // The server re-detects the candidate and rejects the bypass if
@@ -2477,6 +2739,23 @@ export default function TransactionsPage() {
       if (opts?.lines && opts.lines.length >= 2) {
         body.lines = opts.lines
       }
+      // Where a customer's excess goes, with the excess the dialog showed:
+      // the route books exactly that or refuses (crm#1045).
+      if (!isSupplier && opts?.overpayment_account && opts.overpayment_amount !== undefined) {
+        body.overpayment_account = opts.overpayment_account
+        body.overpayment_amount = opts.overpayment_amount
+      }
+      // The payment provider's fee on 6570, with the fee the dialog showed
+      // (crm#1364): booked exactly or refused, like the overpayment.
+      if (!isSupplier && opts?.fee_account && opts.fee_amount !== undefined) {
+        body.fee_account = opts.fee_account
+        body.fee_amount = opts.fee_amount
+      }
+      // Reverse the row's own categorization and match: only from the soft
+      // block's button, after the refusal named the verifikat.
+      if (isSupplier && opts?.storno_existing) {
+        body.storno_existing = true
+      }
 
       const response = await fetch(url, {
         method: 'POST',
@@ -2485,6 +2764,20 @@ export default function TransactionsPage() {
       })
       const result = await response.json()
       if (!response.ok) {
+        // A booked row is not a failure to toast: the dialog says which
+        // verifikat books it, and how the row opens again.
+        const refusal = (result as { error?: { code?: unknown; details?: { journal_entry_id?: unknown; voucher?: unknown; storno_allowed?: unknown } } })?.error
+        if (refusal?.code === (isSupplier ? 'MATCH_SI_TX_ALREADY_BOOKED' : 'MATCH_INVOICE_TX_ALREADY_BOOKED')) {
+          setMatchAlreadyBooked({
+            transactionId: selectedTransaction.id,
+            journalEntryId: typeof refusal.details?.journal_entry_id === 'string' ? refusal.details.journal_entry_id : null,
+            voucher: typeof refusal.details?.voucher === 'string' ? refusal.details.voucher : null,
+            stornoAllowed: refusal.details?.storno_allowed === true,
+            message: getErrorMessage(result, { locale: errorLocale }),
+          })
+          setIsConfirmingMatch(false)
+          return
+        }
         toast({
           title: isSupplier ? 'Leverantörsfakturamatchning misslyckades' : 'Fakturamatchning misslyckades',
           description: getErrorMessage(result, { context: 'transaction' }),
@@ -2495,10 +2788,14 @@ export default function TransactionsPage() {
       }
 
       const label = isSupplier
-        ? `Leverantörsfaktura ${selectedTransaction.potential_supplier_invoice!.supplier_invoice_number} markerad som betald`
+        ? `Leverantörsfaktura ${supplierInvoiceReference(
+            selectedTransaction.potential_supplier_invoice!.supplier_invoice_number,
+            selectedTransaction.potential_supplier_invoice!.arrival_number,
+          )} markerad som betald`
         : `Faktura ${selectedTransaction.potential_invoice!.invoice_number} markerad som betald`
       toast({ title: isSupplier ? 'Leverantörsfaktura matchad' : 'Faktura matchad', description: label })
       setMatchDialogOpen(false)
+      setMatchAlreadyBooked(null)
 
       // Mark as exiting for animation
       setExitingIds((prev) => new Set(prev).add(selectedTransaction.id))
@@ -2520,7 +2817,7 @@ export default function TransactionsPage() {
                     potential_invoice_id: null,
                     potential_invoice: undefined,
                     is_business: true,
-                    category: 'income_services' as TransactionCategory,
+                    category: (result.category ?? t.category) as TransactionCategory,
                     journal_entry_id: result.journal_entry_id,
                   }
               : t
@@ -2586,7 +2883,6 @@ export default function TransactionsPage() {
   // same person drops its suggestion, since that person is now paid.
   function applyExpensePayoutBooked(transactionId: string, journalEntryId: string, personKey: string) {
     setExitingIds((prev) => new Set(prev).add(transactionId))
-    setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
     setTimeout(() => {
       setTransactions((prev) =>
         prev.map((tx) => {
@@ -2924,6 +3220,11 @@ export default function TransactionsPage() {
     }
   }, [refreshTransactions, t, toast])
 
+  // A bank account that books on another 19xx ledger account than the books
+  // say (crm#1066): one sentence with the button that changes it, or null.
+  // Read after the first render; applying it relinks, so the list is refetched.
+  const ledgerSuggestionNotice = useBankLedgerSuggestionNotice({ onApplied: refreshTransactions })
+
   function handleSelectInvoiceFromPicker(invoice: Invoice & { customer?: Customer }) {
     if (!invoicePickerTransaction) return
     // Don't POST directly from the picker. Route through the confirm dialog
@@ -2962,6 +3263,43 @@ export default function TransactionsPage() {
     setMatchDialogOpen(true)
   }
 
+  // Several invoices ticked in either picker (PH 192): close it and open the
+  // batch allocation with them, where the samlingsverifikat is confirmed.
+  function handleSelectSeveralFromPicker(allocations: BatchAllocationPrefill[]) {
+    const tx = invoicePickerTransaction ?? supplierInvoicePickerTransaction
+    if (!tx || allocations.length === 0) return
+    setInvoicePickerOpen(false)
+    setInvoicePickerTransaction(null)
+    setSupplierInvoicePickerOpen(false)
+    setSupplierInvoicePickerTransaction(null)
+    openSplitMatchDialog(tx, allocations)
+  }
+
+  // The row pays more than the one invoice in the match dialog: carry that
+  // invoice into the batch allocation, where the other ones are added.
+  function handleSplitFromMatchDialog() {
+    const tx = selectedTransaction
+    if (!tx) return
+    const prefill: BatchAllocationPrefill[] = []
+    if (tx.amount > 0 && tx.potential_invoice) {
+      const invoice = tx.potential_invoice
+      prefill.push({
+        kind: 'customer_invoice',
+        invoice_id: invoice.id,
+        amount: roundOre(Number(invoice.remaining_amount ?? invoice.total)),
+      })
+    } else if (tx.amount < 0 && tx.potential_supplier_invoice) {
+      const invoice = tx.potential_supplier_invoice
+      prefill.push({
+        kind: 'supplier_invoice',
+        supplier_invoice_id: invoice.id,
+        amount: roundOre(Number(invoice.remaining_amount ?? invoice.total)),
+      })
+    }
+    setMatchDialogOpen(false)
+    openSplitMatchDialog(tx, prefill)
+  }
+
   function openInvoiceMatchPicker(transaction: TransactionWithInvoice) {
     if (transaction.amount >= 0) {
       setInvoicePickerTransaction(transaction)
@@ -2972,8 +3310,9 @@ export default function TransactionsPage() {
     }
   }
 
-  function openSplitMatchDialog(transaction: TransactionWithInvoice) {
+  function openSplitMatchDialog(transaction: TransactionWithInvoice, prefill?: BatchAllocationPrefill[]) {
     setSplitMatchTransaction(transaction)
+    setSplitMatchPrefill(prefill ?? null)
     setSplitMatchOpen(true)
   }
 
@@ -3004,7 +3343,7 @@ export default function TransactionsPage() {
       return next
     })
     await refreshTransactions()
-    setSelectedIds(new Set())
+    bankSelection.clear()
     setTimeout(() => {
       setExitingIds((prev) => {
         const next = new Set(prev)
@@ -3106,17 +3445,7 @@ export default function TransactionsPage() {
         // Drop the row from the batch selection immediately: leaving it there
         // keeps the bulk bar counting (and acting on) a row that no longer
         // exists once the timer removes it.
-        setSelectedIds((prev) => {
-          if (!prev.has(id)) return prev
-          const next = new Set(prev)
-          next.delete(id)
-          return next
-        })
-        // The realtime echo is not guaranteed for DELETE on a filtered
-        // subscription, so the pending badge must decrement locally.
-        if (transaction.is_business === null && !transaction.is_ignored) {
-          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
-        }
+        bankSelection.deselect([id])
         toast({ title: t('deleted_title'), description: t('deleted_description') })
         setTimeout(() => {
           setTransactions((prev) => prev.filter((t) => t.id !== id))
@@ -3230,12 +3559,7 @@ export default function TransactionsPage() {
    */
   function handleSkvBooked(rowId: string, result: SkattekontoBatchRowResult) {
     setSkvBookTarget(null)
-    setSkvSelectedIds((prev) => {
-      if (!prev.has(rowId)) return prev
-      const next = new Set(prev)
-      next.delete(rowId)
-      return next
-    })
+    skvSelection.deselect([rowId])
     setExitingIds((prev) => new Set(prev).add(rowId))
     setTimeout(() => {
       setSkvRows((prev) =>
@@ -3275,7 +3599,7 @@ export default function TransactionsPage() {
   }
 
   function toggleSkvSelect(id: string, extend?: boolean) {
-    skvRange.toggle(id, extend)
+    skvSelection.toggle(id, extend)
   }
 
   async function handleSkvUnignore(id: string) {
@@ -3341,12 +3665,7 @@ export default function TransactionsPage() {
     )
     if (!ok) return
 
-    setSkvSelectedIds((prev) => {
-      if (!prev.has(row.id)) return prev
-      const next = new Set(prev)
-      next.delete(row.id)
-      return next
-    })
+    skvSelection.deselect([row.id])
     setExitingIds((prev) => new Set(prev).add(row.id))
     setTimeout(() => {
       setSkvRows((prev) =>
@@ -3382,7 +3701,7 @@ export default function TransactionsPage() {
     const ids = skvBookableSelectedRows.map((r) => r.id)
     if (ids.length === 0) {
       setSkvBulkConfirmOpen(false)
-      setSkvSelectedIds(new Set())
+      skvSelection.clear()
       return
     }
     setSkvBulkConfirmOpen(false)
@@ -3449,7 +3768,7 @@ export default function TransactionsPage() {
         })
       }, 350)
     }
-    setSkvSelectedIds(new Set())
+    skvSelection.clear()
 
     const succeeded = results.filter((r) => r.ok).length
     const failures = results.filter((r) => !r.ok)
@@ -3477,7 +3796,11 @@ export default function TransactionsPage() {
                   ? t('skv_err_commit_failed')
                   : code === 'LEDGER_TWIN_EXISTS'
                     ? t('skv_err_ledger_twin')
-                    : t('skv_err_other')
+                    : code === 'LEDGER_COVER_EXISTS'
+                      ? t('skv_err_ledger_cover')
+                      : code === 'LEDGER_DIRECT_EXISTS'
+                        ? t('skv_err_ledger_direct')
+                        : t('skv_err_other')
       const parts = [t('skv_bulk_partial_ok', { count: succeeded })]
       for (const [code, n] of codeCounts) parts.push(`${n} ${codeLabel(code)}`)
       toast({
@@ -3514,10 +3837,6 @@ export default function TransactionsPage() {
     matched?: boolean,
   ) {
     setExitingIds((prev) => new Set(prev).add(transactionId))
-    // The row leaves the unbooked inbox either way (booked, or linked to an
-    // existing voucher), so the header count has to follow: every other path
-    // that removes a row decrements, this one did not.
-    setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
     setTimeout(() => {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -3553,6 +3872,16 @@ export default function TransactionsPage() {
 
   function openAttachDocumentDialog(transaction: TransactionWithInvoice) {
     setAttachDocTx(transaction)
+  }
+
+  // The booking dialogs pin a document to the row the moment it is attached
+  // there, and take it off on its x (crm#1101): the list follows, so the
+  // row shows its underlag and the next open starts with it. The dialogs
+  // revalidate the underlag read and tell the inbox card themselves.
+  function handleUnderlagChanged(transactionId: string, documentId: string | null) {
+    setTransactions((prev) =>
+      prev.map((t) => (t.id === transactionId ? { ...t, document_id: documentId } : t))
+    )
   }
 
   function handleDocumentAttached(transactionId: string, documentId: string) {
@@ -3639,14 +3968,12 @@ export default function TransactionsPage() {
   const BATCH_CONCURRENCY = 5
 
   function toggleBatchSelect(id: string, extend?: boolean) {
-    bankRange.toggle(id, extend)
+    bankSelection.toggle(id, extend)
   }
 
   function exitBatchMode() {
-    setSelectedIds(new Set())
-    setSkvSelectedIds(new Set())
-    bankRange.resetAnchor()
-    skvRange.resetAnchor()
+    bankSelection.clear()
+    skvSelection.clear()
   }
 
   async function handleBatchDelete() {
@@ -3812,9 +4139,6 @@ export default function TransactionsPage() {
         for (const id of ignoredSkv) next.add(id)
         return next
       })
-      if (ignoredBank.size > 0) {
-        setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? ignoredBank.size) - ignoredBank.size))
-      }
       setTimeout(() => {
         if (ignoredBank.size > 0) {
           setTransactions((prev) =>
@@ -3836,15 +4160,21 @@ export default function TransactionsPage() {
     }
     setBatchProgress(null)
     if (failed === 0) {
-      // Restore lives where the rows now live: Bankavstämning for bank rows,
-      // the Skattekonto page for skattekonto rows.
+      // Restore lives where the rows now live: Alla → Ignorerade on this page
+      // for bank rows, the Skattekonto page for skattekonto rows.
       toast({
         title: t('batch_done_title'),
         description: t('batch_ignore_done_description', { count: successes }),
         action:
           ignoredBank.size > 0 ? (
-            <ToastAction altText={t('batch_ignore_open_reconciliation_alt')} asChild>
-              <Link href="/reconciliation">{t('batch_ignore_open_reconciliation')}</Link>
+            <ToastAction
+              altText={t('batch_ignore_show_ignored_alt')}
+              onClick={() => {
+                setHistoryFilter('ignored')
+                setMode('history')
+              }}
+            >
+              {t('batch_ignore_show_ignored')}
             </ToastAction>
           ) : (
             <ToastAction altText={t('batch_ignore_open_skattekonto_alt')} asChild>
@@ -3891,11 +4221,32 @@ export default function TransactionsPage() {
     resolve?.(confirmed)
   }
 
-  async function handleBatchCategorize(category: TransactionCategory, vatTreatment?: VatTreatment) {
+  /**
+   * Show the filed-momsperiod warning for the rows a batch held back, each
+   * distinct warning once, and resolve with the person's answer.
+   */
+  function askBatchFiledVat(held: Array<{ warning: VoucherWarning }>): Promise<boolean> {
+    const distinct = new Map<string, VoucherWarning>()
+    for (const { warning } of held) if (!distinct.has(warning.message_sv)) distinct.set(warning.message_sv, warning)
+    return new Promise<boolean>((resolve) => {
+      batchFiledVatAnswerRef.current = resolve
+      setBatchFiledVatAsk({ warnings: [...distinct.values()], count: held.length })
+    })
+  }
+
+  function answerBatchFiledVat(confirmed: boolean) {
+    setBatchFiledVatAsk(null)
+    const resolve = batchFiledVatAnswerRef.current
+    batchFiledVatAnswerRef.current = null
+    resolve?.(confirmed)
+  }
+
+  async function handleBatchCategorize(category: TransactionCategory, vatTreatment?: VatTreatment, reverseChargeKind?: ReverseChargeKind) {
     const ids = Array.from(selectedIds)
     // Fresh collector per batch: rows the guard flags park here instead of
     // fighting over the single-row modal slot.
     batchDuplicatesRef.current = []
+    batchFiledVatRef.current = []
     setBatchProgress({ done: 0, total: ids.length })
     let completed = 0
     const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
@@ -3907,8 +4258,11 @@ export default function TransactionsPage() {
         isBusiness: true,
         category,
         vatTreatment,
+        // The box the person named for the selection (BatchCategorySelector).
+        reverseChargeKind,
         confirmNoMatch: false,
         silent: true,
+        inBulk: true,
       })
       completed++
       setBatchProgress({ done: completed, total: ids.length })
@@ -3938,6 +4292,21 @@ export default function TransactionsPage() {
       setBatchProgress(null)
       tally = foldDeferredRetries(tally, retried)
     }
+    // The rows dated in a filed momsperiod whose booking changes the underlag
+    // for that declaration, a confirmed duplicate among them: one question,
+    // then every parked retry with its confirmation.
+    const heldFiledVat = batchFiledVatRef.current
+    batchFiledVatRef.current = []
+    if (heldFiledVat.length > 0 && (await askBatchFiledVat(heldFiledVat))) {
+      setBatchProgress({ done: 0, total: heldFiledVat.length })
+      const retried = await runDeferredDuplicateRetries(
+        heldFiledVat,
+        BATCH_CONCURRENCY,
+        (done, total) => setBatchProgress({ done, total }),
+      )
+      setBatchProgress(null)
+      tally = foldFiledVatRetries(tally, retried)
+    }
     // One Ångra-alla for the whole batch: it runs the same storno endpoint as
     // the per-row toast's Ångra, which requires a posted journal entry, so
     // only rows that actually got one are undoable. A successful flag-flip
@@ -3952,7 +4321,7 @@ export default function TransactionsPage() {
           {t('batch_undo_all')}
         </ToastAction>
       ) : undefined
-    if (tally.failedCount === 0 && tally.deferredCount === 0) {
+    if (tally.failedCount === 0 && tally.deferredCount === 0 && tally.filedVatHeldCount === 0) {
       toast({
         title: t('batch_done_title'),
         description: t('batch_categorize_done_description', { count: tally.successCount }),
@@ -3969,12 +4338,22 @@ export default function TransactionsPage() {
               failed: tally.failedCount,
             })
           : t('batch_categorize_done_description', { count: tally.successCount })
+      // Why the failed rows were refused, one sentence per reason with its
+      // row count (for #206): "2 misslyckades" alone left nothing to act on.
+      const details = [
+        ...tally.failureReasons.map((group) =>
+          t('batch_categorize_failed_reason', { count: group.count, reason: group.reason }),
+        ),
+        ...(tally.deferredCount > 0
+          ? [t('batch_categorize_duplicates_held_back', { count: tally.deferredCount })]
+          : []),
+        ...(tally.filedVatHeldCount > 0
+          ? [t('batch_categorize_filed_vat_held_back', { count: tally.filedVatHeldCount })]
+          : []),
+      ]
       toast({
         title: t('batch_partial_title'),
-        description:
-          tally.deferredCount > 0
-            ? `${booked}. ${t('batch_categorize_duplicates_held_back', { count: tally.deferredCount })}`
-            : booked,
+        description: details.length > 0 ? `${booked}. ${details.join(' ')}` : booked,
         ...(tally.failedCount > 0 ? { variant: 'destructive' as const } : {}),
         action: undoAllAction,
       })
@@ -4015,7 +4394,6 @@ export default function TransactionsPage() {
             : tx,
         ),
       )
-      setTotalUncategorizedCount((prev) => (prev ?? 0) + undoneIds.size)
     }
     const failed = ids.length - undoneIds.size
     if (failed === 0) {
@@ -4086,11 +4464,13 @@ export default function TransactionsPage() {
   // Bokför on a row that carries a proposal goes straight to the
   // review with that template set; no picker in between.
   function bookProposal(transaction: TransactionWithInvoice) {
-    const s = rowProposal(templateSuggestions[transaction.id])
+    const s = rowProposalFor(transaction)
     if (!s) return openCategoryDialog(transaction)
     // A decision the company already made (a rule, a settled counterpart, a
     // sure read of a receipt) books from the row; Ångra sits on the toast.
-    if (booksWithoutReview(s)) return void bookDirect(transaction, s)
+    // The company's switch and the rule's own say come first
+    // (lib/transactions/direct-booking.ts), and the server judges it again.
+    if (directBooking && !reviewRequired(s, directBooking)) return void bookDirect(transaction, s)
     openReview(transaction, s, false)
   }
 
@@ -4099,7 +4479,13 @@ export default function TransactionsPage() {
   async function bookProposalNow(
     transaction: TransactionWithInvoice,
     proposal: BookingProposal,
-    extras: { dimensions?: Record<string, string>; vatAmount?: number; narration?: string } = {},
+    extras: {
+      dimensions?: Record<string, string>
+      vatAmount?: number
+      narration?: string
+      reviewShown: boolean
+      onReviewRequired?: () => void
+    },
   ): Promise<{ ok: boolean; journalEntryId: string | null }> {
     const body = categorizeBodyFor(proposal, { dimensions: extras.dimensions, vatAmount: extras.vatAmount })
     return runCategorize({
@@ -4107,9 +4493,13 @@ export default function TransactionsPage() {
       isBusiness: true,
       category: body.category,
       vatTreatment: body.vat_treatment,
+      reverseChargeKind: body.reverse_charge_kind,
       accountOverride: body.account_override,
       templateId: body.template_id,
       counterpartyTemplateId: body.counterparty_template_id,
+      proposalId: body.proposal_id,
+      reviewShown: extras.reviewShown,
+      onReviewRequired: extras.onReviewRequired,
       dimensions: body.dimensions,
       vatAmount: body.vat_amount,
       confirmNoMatch: false,
@@ -4121,6 +4511,8 @@ export default function TransactionsPage() {
     await bookProposalNow(transaction, s, {
       dimensions: s.default_dimensions ?? undefined,
       narration: `${s.name_sv} · ${whyFor(s)}`,
+      reviewShown: false,
+      onReviewRequired: () => openReview(transaction, s, false),
     })
   }
 
@@ -4217,7 +4609,7 @@ export default function TransactionsPage() {
   ): Promise<string | null> {
     const tx = quickReview?.transaction
     const { journalEntryId } = tx && tx.id === id
-      ? await bookProposalNow(tx, proposal, extras)
+      ? await bookProposalNow(tx, proposal, { ...extras, reviewShown: true })
       : { journalEntryId: null }
     // Always close: whether the server created a verifikation, returned a
     // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a
@@ -4241,10 +4633,29 @@ export default function TransactionsPage() {
     onPickLibraryTemplate: handlePickLibraryTemplate,
     onSelectAccount: handlePickAccount,
   }
+  const templatePickerSalaryPayout = templatePickerTransaction ? salaryPayoutFor(templatePickerTransaction) : undefined
+  // "Matcha mot befintlig verifikation" on a row a salary run pays out opens
+  // with the run's verifikat picked, whichever door opened it.
+  const matchVoucherSalaryPayout = matchVoucherTx ? salaryPayoutFor(matchVoucherTx) : undefined
   // Alternate paths as quiet links (concept vact): the templates are the
   // main content, not three stacked buttons.
   const templatePickerLinks = (
     <>
+            {/* A booked salary run pays this row out (crm#1685): matched to
+                the run's verifikat, never booked a second time. */}
+            {templatePickerTransaction && templatePickerSalaryPayout && (
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  openMatchVoucherDialog(tx)
+                }}
+              >
+                {t('dialog_match_salary_run', { period: templatePickerSalaryPayout.period })}
+              </button>
+            )}
             <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
               Bokför manuellt
             </button>
@@ -4260,6 +4671,22 @@ export default function TransactionsPage() {
                 }}
               >
                 Matcha med faktura
+              </button>
+            )}
+            {/* The outgoing twin (PH 192): the supplier picker, where one
+                payment for several supplier invoices is ticked. */}
+            {templatePickerTransaction && templatePickerTransaction.amount < 0 && (
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  setSupplierInvoicePickerTransaction(tx)
+                  setSupplierInvoicePickerOpen(true)
+                }}
+              >
+                {t('dialog_pick_supplier_invoice')}
               </button>
             )}
             {templatePickerTransaction && (
@@ -4280,14 +4707,31 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect && sourceFilter === 'skatteverket' ? (
+      {loadFailure && transactions.length > 0 ? (
+        // The list could not refresh (or loaded without its older pending
+        // rows) while rows are on screen: the rows stay, this line says so,
+        // and it takes the place of any softer line (one per page).
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchTransactions(false, true) }}>
+          {loadFailure === 'partial' ? t('load_partial') : tCommon('refresh_failed')}
+        </AttnLine>
+      ) : skvNeedsReconnect && sourceFilter === 'skatteverket' ? (
         // Only while the person is looking at Skatteverket's rows. The dead
         // connection has its own channel on the Skattekonto page and the
         // Konton row (lib/notices predicate), so a line on every visit to the
-        // bank list was noise (founder feedback 2026-09-09). The line still
+        // bank list was noise (feedback 2026-09-09). The line still
         // renders only while the connection is actually broken.
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/skatteverket' }}>
           {t('skv_reconnect_body')}
+        </AttnLine>
+      ) : ledgerSuggestionNotice ? (
+        // The mapping is the cause of the backlog the lines below describe:
+        // until the bank account books on the ledger account the imported
+        // verifikat use, neither the review list nor the bulk match can find
+        // them. So this line wins over both.
+        ledgerSuggestionNotice
+      ) : (skvLedgerProposals ?? 0) > 0 && skattekontoInSource(effectiveSourceFilter) ? (
+        <AttnLine action={{ label: t('skv_ledger_attn_cta'), onClick: () => setSkvLinkAllOpen(true) }}>
+          {t('skv_ledger_attn_body', { count: skvLedgerProposals ?? 0, skattekonto: skvAccount })}
         </AttnLine>
       ) : suggestionItems.length > 0 && mode !== 'review' ? (
         // Migrated-history review nudge. Max one attn line per page
@@ -4299,14 +4743,13 @@ export default function TransactionsPage() {
         </AttnLine>
       ) : null}
 
-      {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
-          ... [source ContextPicker far right] */}
+      {/* Toolbar: [Att bokföra/Alla-seg] [source ContextPicker] ... [sök] */}
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl
           value={mode}
-          onChange={setMode}
+          onChange={handleModeChange}
           options={[
-            { value: 'inbox', label: t('mode_inbox'), count: inboxBadgeCount },
+            { value: 'inbox', label: t('mode_inbox'), count: inboxScope.inScope },
             { value: 'history', label: t('mode_all') },
             // Review tab exists only while suggestions do (or while the user is
             // standing in it after emptying the list): a permanent third tab
@@ -4316,94 +4759,56 @@ export default function TransactionsPage() {
               : []),
           ]}
         />
+        {/* V7 toolbar order: view segments, then the source filter, then the
+            search at the right end (one width on every list). */}
+        {sourceItems.length > 1 && (
+          <ContextPicker
+            value={effectiveSourceFilter}
+            onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
+            triggerLabel={(() => {
+              const active =
+                sourceItems.find((item) => item.id === effectiveSourceFilter) ?? sourceItems[0]
+              // The annotation is a balance: a colon, not a middle dot,
+              // which reads as a minus sign in front of an amount on a
+              // small screen (PostHog PH 119).
+              return active.annotation ? `${active.label}: ${active.annotation}` : active.label
+            })()}
+            items={sourceItems}
+          />
+        )}
+        {/* Quiet cue that a scope change is reconciling behind the rendered
+            list (the list itself never swaps to a skeleton for it). */}
+        {isScopeRefreshing && (
+          <SpinnerIcon
+            className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+            aria-label={t('refreshing')}
+          />
+        )}
         <ToolbarSearch
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
           placeholder="Sök transaktioner…"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
-        {/* Far-right context group, shared by both view modes: period scope
-            (rakenskapsar chip) and the account chooser (concept scene 10).
-            Approved deviation from convention 8's single chip: booking is
-            period work, so the period scope earns the second chip (user
-            request 2026-08-12). The Q1-Q4 chips that briefly rendered here
-            (#1545) were removed: they crowded the row into a second line,
-            and on a brutet rakenskapsar they were not momsdeklaration
-            quarters, so they misled more than they scoped. */}
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {/* Column visibility, persisted per user. */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="text-muted-foreground hover:text-foreground"
-                aria-label={t('columns_button')}
-                title={t('columns_button')}
-              >
-                <SlidersHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[12rem]">
-              {TX_COLUMNS.filter((c) => c.optional).map((c) => (
-                <DropdownMenuItem
-                  key={c.id}
-                  onSelect={(e) => e.preventDefault()}
-                  onClick={() => toggleColumn(c.id)}
-                >
-                  <Check className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
-                  {t(c.labelKey)}
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuItem onClick={() => setColumnsHidden([])}>{t('columns_reset')}</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {/* Quiet cue that a scope change is reconciling behind the rendered
-              list (the list itself never swaps to a skeleton for it). */}
-          {isScopeRefreshing && (
-            <Loader2
-              className="h-3.5 w-3.5 animate-spin text-muted-foreground"
-              aria-label={t('refreshing')}
-            />
-          )}
-          <FyPicker
-            value={fyPeriodId}
-            onChange={handlePeriodChange}
-            onReady={handleFyReady}
-            storageKeyPrefix={PERIOD_FILTER_STORAGE_PREFIX}
-          />
-          {sourceItems.length > 1 && (
-            <ContextPicker
-              value={effectiveSourceFilter}
-              onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
-              triggerLabel={(() => {
-                const active =
-                  sourceItems.find((item) => item.id === effectiveSourceFilter) ?? sourceItems[0]
-                // The annotation is a balance: a colon, not a middle dot,
-                // which reads as a minus sign in front of an amount on a
-                // small screen (PostHog PH 119).
-                return active.annotation ? `${active.label}: ${active.annotation}` : active.label
-              })()}
-              items={sourceItems}
-            />
-          )}
-        </div>
       </div>
 
       {/* Content based on mode */}
       {isLoading ? (
         // Same shape as loading.tsx and the list it resolves into: borderless
-        // one-line rows, not a boxed card with two-line rows.
-        <div aria-busy>
+        // one-line 44px rows, not a boxed card with two-line rows.
+        <LateReveal>
           {[1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center justify-between gap-4 border-b border-border py-3">
-              <Skeleton className="h-4 w-48" />
+            <div key={i} className="flex h-11 items-center justify-between gap-4 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
               <div className="flex items-center gap-6">
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-4 w-16" />
+                <Skeleton className="h-3.5 w-20" />
+                <Skeleton className="h-3.5 w-16" />
               </div>
             </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailure && transactions.length === 0 ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void fetchTransactions(true, true)} />
       ) : mode === 'review' ? (
         <SuggestionReviewList
           items={suggestionItems}
@@ -4415,42 +4820,46 @@ export default function TransactionsPage() {
         />
       ) : mode === 'inbox' ? (
         inboxItems.length === 0 ? (
-          searchTerm || effectiveSourceFilter !== 'all' || periodBounds ? (
-            <DataListEmpty
-              title="Inga träffar"
-              description={
-                searchTerm
-                  ? t('no_search_results')
-                  : effectiveSourceFilter !== 'all'
-                    ? t('source_empty')
-                    : t('period_empty')
-              }
+          emptyCardSource && !searchTerm ? (
+            // A company card with nothing to book: its rows come from the
+            // card statement, so the way forward is importing the next one.
+            <EmptyState
+              icon={CreditCardIcon}
+              title={t('card_empty_title')}
+              description={t('card_empty_description')}
+              actionLabel={t('card_empty_action')}
+              actionHref={`/import?mode=bank&account=${emptyCardSource.id}`}
             />
+          ) : searchTerm ? (
+            // No hits: one muted line in the list, not a block.
+            <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+              <span>{t('no_search_results')}</span>
+              <Button variant="link" onClick={() => setSearchTerm('')}>
+                {tCommon('clear_search')}
+              </Button>
+            </div>
+          ) : effectiveSourceFilter !== 'all' || (periodBounds && !(noRowsInAnyYear && yearListEmpty)) ? (
+            <p className="py-3 text-[13px] text-muted-foreground">
+              {effectiveSourceFilter !== 'all' ? t('source_empty') : t('period_empty')}
+            </p>
           ) : (
-            <InboxZeroState
-              hasTransactions={transactions.length > 0 || skvRows.length > 0}
-              onCreateTransaction={() => setIsDialogOpen(true)}
-            />
+            <InboxZeroState hasTransactions={transactions.length > 0 || skvRows.length > 0} />
           )
         ) : (
           <div>
             {/* Bulkbar (concept): hidden until at least one transaction is
                 selected via the hover checkboxes, then it pops in with the
                 count and the batch actions. */}
-            {(selectedIds.size > 0 || skvSelectedIds.size > 0) && (
+            {/* batchProgress keeps it up while a run animates its booked rows
+                out of the selection, so the counter stays to the end. */}
+            {(selectedIds.size > 0 || skvSelectedIds.size > 0 || batchProgress) && (
               <div
-                className={cn(
-                  'flex items-center gap-x-5 gap-y-2 text-[12.5px] animate-fade-in',
-                  // A floating bar centred over the panel (concept .floatbar),
-                  // so it stays in view however far down the selection
-                  // reaches and the list does not shift under it. Offset by
-                  // --bottom-nav-h so it clears the mobile bottom nav (#2738).
-                  'fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-30 max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-x-auto whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 shadow-[var(--shadow-md)] md:left-[calc(50%+var(--nav-w)/2)]',
-                )}
+                {...PAGE_BOTTOM_BAR_PROPS}
+                className={FLOATING_BULK_BAR_CLASS}
               >
                 {batchProgress ? (
                   <span className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
                     {t('batch_progress', { done: batchProgress.done, total: batchProgress.total })}
                   </span>
                 ) : (
@@ -4463,17 +4872,16 @@ export default function TransactionsPage() {
                     </span>
                     {selectedIds.size > 0 && (
                       <>
-                        <Button size="sm" onClick={() => setShowBatchSelector(true)}>
+                        <Button onClick={() => setShowBatchSelector(true)} disabled={!canWrite}>
                           {t('batch_book')}
                         </Button>
                         {/* Bulk-book (samlingsverifikation): only when ≥2 selected
                             on the same date + same direction. Disabled state
                             explains why via title. */}
                         <Button
-                          size="sm"
                           variant="outline"
                           onClick={() => setBulkBookOpen(true)}
-                          disabled={!bulkBookEligible}
+                          disabled={!canWrite || !bulkBookEligible}
                           title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
                         >
                           {t('batch_bulk_book')}
@@ -4482,6 +4890,7 @@ export default function TransactionsPage() {
                           type="button"
                           className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
                           onClick={handleBatchDelete}
+                          disabled={!canWrite}
                         >
                           {t('batch_delete')}
                         </button>
@@ -4492,13 +4901,13 @@ export default function TransactionsPage() {
                         the deterministic subset of the selection is bookable;
                         the rest is still ignorable below. */}
                     {skvBookableSelectedRows.length > 0 && (
-                      <Button size="sm" onClick={() => setSkvBulkConfirmOpen(true)}>
+                      <Button onClick={() => setSkvBulkConfirmOpen(true)} disabled={!canWrite}>
                         {t('batch_skv_book', { count: skvBookableSelectedRows.length })}
                       </Button>
                     )}
                     {/* Ignorera spans both selections (bank + skattekonto):
                         one confirmation, one progress counter, one toast. */}
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore} disabled={!canWrite}>
                       {t('batch_ignore')}
                     </button>
                     {(selectedIds.size < selectableInboxIds.length ||
@@ -4507,10 +4916,8 @@ export default function TransactionsPage() {
                         type="button"
                         className={QUIET_LINK_CLASS}
                         onClick={() => {
-                          setSelectedIds(new Set(selectableInboxIds))
-                          setSkvSelectedIds(new Set(selectableSkvIds))
-                          bankRange.resetAnchor()
-                          skvRange.resetAnchor()
+                          bankSelection.selectAll()
+                          skvSelection.selectAll()
                         }}
                       >
                         {t('batch_select_all', {
@@ -4528,7 +4935,7 @@ export default function TransactionsPage() {
 
             {/* Negative margin + matching padding: the scroll container runs
                 to the panel edges while the columns keep the page padding. */}
-            <div className="overflow-x-auto -mx-4 px-4 md:-mx-6 md:px-6">
+            <div className="overflow-x-auto -mx-4 px-2 md:-mx-6 md:px-4">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -4542,7 +4949,39 @@ export default function TransactionsPage() {
                     {txColumns.has('amount') && (
                       <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
                     )}
-                    <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
+                    <th className={cn(TH_CLASS, 'text-right !pr-0')}>
+                      {t('th_status')}
+                      {/* Column visibility, persisted per user. It lives on the
+                          table it changes, above the rows' own menus, not in the
+                          page toolbar: 2 of 945 page users touched it in 14 days,
+                          and Alla and Granska förslag have no optional columns. */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="-my-2 ml-2 mr-2 align-middle text-muted-foreground hover:text-foreground"
+                            aria-label={t('columns_button')}
+                            title={t('columns_button')}
+                          >
+                            <AdjustmentsHorizontalIcon className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[12rem]">
+                          {TX_COLUMNS.filter((c) => c.optional).map((c) => (
+                            <DropdownMenuItem
+                              key={c.id}
+                              onSelect={(e) => e.preventDefault()}
+                              onClick={() => toggleColumn(c.id)}
+                            >
+                              <CheckIcon className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
+                              {t(c.labelKey)}
+                            </DropdownMenuItem>
+                          ))}
+                          <DropdownMenuItem onClick={() => setColumnsHidden([])}>{t('columns_reset')}</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </th>
                   </tr>
                 </thead>
                 {/* data-ph-mask: session replay masks every text node under it in one
@@ -4577,13 +5016,15 @@ export default function TransactionsPage() {
                         onMoveCashAccount={openMoveAccountDialog}
                         cashAccounts={cashAccounts}
                         onToggleSelect={toggleBatchSelect}
-                        preMigrationCutoff={sieCoverageEnd}
+                        preMigration={preMigrationIds.has(item.data.id)}
                         columns={txColumns}
                         accountLabel={accountLabelFor(item.data)}
                         categoryLabel={categoryLabelFor(item.data)}
                         accountLogo={accountLogoFor(item.data)}
                         proposal={proposalFor(item.data)}
                         onBookProposal={bookProposal}
+                        salaryRunPeriod={salaryPayoutFor(item.data)?.period ?? null}
+                        giroCounterparty={giroCounterpartyFor(item.data)}
                       />
                     ) : (
                       <SkattekontoInboxCard
@@ -4600,35 +5041,13 @@ export default function TransactionsPage() {
                         onMatch={r => setSkvMatchTarget(r)}
                         onIgnore={handleSkvIgnore}
                         columns={txColumns}
-                        accountLabel={tSkvCard('account_label', { account: SKATTEKONTO_ACCOUNT })}
-                        accountLogo="/logos/skatteverket_color.svg"
+                        accountLabel={tSkvCard('account_label', { account: skvAccount })}
                       />
                     ),
                   )}
                 </tbody>
               </table>
             </div>
-            {/* Bridge to the bulk-match flow: a backlog of unbooked bank rows
-                is usually a migration/import whose counterpart vouchers
-                already exist, and the only match affordance here is per-row.
-                Static text + count (no probe): the reconciliation preview is
-                the honest source of how many actually match. Sits below the
-                list so the rows themselves stay first, and yields to the
-                review-suggestions attn at the top of the page (max one ochre
-                sentence per page): when the sweep has already persisted
-                suggestions, "Granska förslagen" is the more precise
-                destination for the same backlog. */}
-            {selectableInboxIds.length >= 5 && suggestionItems.length === 0 && (
-              <AttnLine
-                className="px-1 pt-3"
-                action={{
-                  label: t('recon_attn_action'),
-                  href: '/reconciliation?autorun=1',
-                }}
-              >
-                {t('recon_attn', { count: selectableInboxIds.length })}
-              </AttnLine>
-            )}
           </div>
         )
       ) : (
@@ -4637,7 +5056,11 @@ export default function TransactionsPage() {
           skvRows={skvRowsInScope}
           exitingIds={exitingIds}
           searchTerm={searchTerm}
+          onClearSearch={() => setSearchTerm('')}
           sourceFilter={effectiveSourceFilter}
+          filter={historyFilter}
+          onFilterChange={setHistoryFilter}
+          onUnignore={(id) => void handleUnignoreTransaction(id)}
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
@@ -4650,34 +5073,42 @@ export default function TransactionsPage() {
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
           onLoadMore={loadMoreTransactions}
+          giroCounterpartyFor={giroCounterpartyFor}
         />
       )}
 
-      {/* Footer status line (concept): honest counter from the visible
-          rows + bank sync status/actions + the Bankavstämning path (the
-          ignore flows point users there). */}
+      {/* Footer status line (concept): what the current scope hides, the
+          bank sync status (silent while healthy) and the way to Konton, where
+          each bank account is reconciled. The count of rows to handle
+          lives on the segment chip and the sync action in the header split
+          button, so neither repeats here. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
-        {/* The count only when there is one: "Inget att hantera" over an
-            empty list says what the empty list already says. */}
-        {mode === 'inbox' && inboxItems.length > 0 && (
-          <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
-        )}
-        {mode === 'inbox' && pendingOutsideCount > 0 && (
+        {mode === 'inbox' && inboxScope.outsidePeriod > 0 && (
           <span className="tabular-nums">
-            {t('period_pending_outside', { count: pendingOutsideCount })}{' '}
+            {t('period_pending_outside', { count: inboxScope.outsidePeriod })}{' '}
             <button type="button" className={QUIET_LINK_CLASS} onClick={clearPeriodFilter}>
               {t('period_show_all')}
             </button>
           </span>
         )}
+        {mode === 'inbox' && inboxScope.hiddenBySource > 0 && (
+          <span className="tabular-nums">
+            {t('source_pending_hidden', { count: inboxScope.hiddenBySource })}{' '}
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() => handleSourceFilterChange('all')}
+            >
+              {t('source_show_all')}
+            </button>
+          </span>
+        )}
         <BankSyncStatusChip />
-        <BankSyncNowButton />
-        <BankSyncSinceLastVisit />
         <Link
-          href="/reconciliation"
+          href="/accounts"
           className="ml-auto transition-colors duration-150 hover:text-foreground"
         >
-          Bankavstämning →
+          {t('footer_accounts_link')}
         </Link>
       </div>
 
@@ -4695,11 +5126,16 @@ export default function TransactionsPage() {
       {matchDialogOpen && (
         <InvoiceMatchDialog
           open
-          onOpenChange={setMatchDialogOpen}
+          onOpenChange={(open) => {
+            setMatchDialogOpen(open)
+            if (!open) setMatchAlreadyBooked(null)
+          }}
           transaction={selectedTransaction}
           isConfirming={isConfirmingMatch}
           onConfirm={handleConfirmInvoiceMatch}
           onLinkToExisting={handleLinkToExistingVoucher}
+          onSplitAcrossInvoices={handleSplitFromMatchDialog}
+          alreadyBooked={matchAlreadyBooked && matchAlreadyBooked.transactionId === selectedTransaction?.id ? matchAlreadyBooked : null}
         />
       )}
 
@@ -4738,6 +5174,10 @@ export default function TransactionsPage() {
           onOpenChange={(o) => { if (!o) setMatchVoucherTx(null) }}
           transaction={matchVoucherTx}
           onLinked={handleVoucherLinked}
+          preferredJournalEntryId={matchVoucherSalaryPayout?.journal_entry_id ?? null}
+          preferredNote={
+            matchVoucherSalaryPayout ? t('salary_run_payout_note', { period: matchVoucherSalaryPayout.period }) : null
+          }
         />
       )}
 
@@ -4746,9 +5186,13 @@ export default function TransactionsPage() {
           open
           onOpenChange={(o) => {
             setSplitMatchOpen(o)
-            if (!o) setSplitMatchTransaction(null)
+            if (!o) {
+              setSplitMatchTransaction(null)
+              setSplitMatchPrefill(null)
+            }
           }}
           transaction={splitMatchTransaction}
+          initialAllocations={splitMatchPrefill}
           onSuccess={handleSplitMatchSuccess}
         />
       )}
@@ -4780,6 +5224,7 @@ export default function TransactionsPage() {
           proposalLineDescription={bookingDialogLineDescription}
           preselectedAccount={bookingDialogAccount}
           onBooked={handleTransactionBooked}
+          onUnderlagChange={handleUnderlagChanged}
         />
       )}
 
@@ -4804,10 +5249,10 @@ export default function TransactionsPage() {
           (opened without an anchor). */}
       {templatePickerOpen && templatePickerAnchor && (
         <CategoryPopover anchor={templatePickerAnchor} onClose={() => setTemplatePickerOpen(false)}>
-          <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 text-[12.5px]">
+          <div className="flex min-w-0 items-center justify-between gap-3 border-b-hairline px-3 py-2 text-xs">
             {templatePickerTransaction && (
               <>
-                <span className="truncate" data-ph-mask>{templatePickerTransaction.description}</span>
+                <span className="min-w-0 truncate" title={templatePickerTransaction.description} data-ph-mask>{templatePickerTransaction.description}</span>
                 <span className="shrink-0 font-medium tabular-nums" data-ph-mask>
                   {templatePickerTransaction.amount > 0 ? '+' : ''}{formatCurrency(templatePickerTransaction.amount, templatePickerTransaction.currency)}
                 </span>
@@ -4817,7 +5262,7 @@ export default function TransactionsPage() {
           <div className="flex min-h-0 flex-col overflow-hidden">
             <TemplatePicker {...templatePickerProps} dense />
           </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-background px-3 py-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t-hairline bg-background px-3 py-2">
             {templatePickerLinks}
           </div>
         </CategoryPopover>
@@ -4827,7 +5272,7 @@ export default function TransactionsPage() {
         {/* Width capped at the space left of a docked sheet (--agent-sheet-w
             is docked-only) so the picker never clips off-screen left on
             narrow desktops; sheet closed = the old max-w-lg. */}
-        <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))]">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
@@ -4855,13 +5300,13 @@ export default function TransactionsPage() {
           if (!open) setInvoicePickerTransaction(null)
         }}
       >
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('dialog_match_invoice')}</DialogTitle>
           </DialogHeader>
           {invoicePickerTransaction && (
             <>
-              <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+              <div className="flex items-center justify-between rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
                 <span className="truncate text-muted-foreground">{invoicePickerTransaction.description}</span>
                 <span className="font-medium tabular-nums flex-shrink-0 ml-3 text-success">
                   +{formatCurrency(invoicePickerTransaction.amount, invoicePickerTransaction.currency)}
@@ -4870,6 +5315,7 @@ export default function TransactionsPage() {
               <InvoicePicker
                 transaction={invoicePickerTransaction}
                 onSelect={handleSelectInvoiceFromPicker}
+                onSelectSeveral={handleSelectSeveralFromPicker}
                 onSelectRotRutPayout={handleSelectRotRutPayoutFromPicker}
               />
             </>
@@ -4884,21 +5330,23 @@ export default function TransactionsPage() {
           if (!open) setSupplierInvoicePickerTransaction(null)
         }}
       >
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
-            <DialogTitle>Matcha med leverantörsfaktura</DialogTitle>
+            <DialogTitle>{t('dialog_pick_supplier_invoice')}</DialogTitle>
           </DialogHeader>
           {supplierInvoicePickerTransaction && (
             <>
-              <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+              <div className="flex items-center justify-between rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
                 <span className="truncate text-muted-foreground">{supplierInvoicePickerTransaction.description}</span>
                 <span className="font-medium tabular-nums flex-shrink-0 ml-3">
                   {formatCurrency(supplierInvoicePickerTransaction.amount, supplierInvoicePickerTransaction.currency)}
                 </span>
               </div>
-              <SupplierInvoicePicker
+              <InvoicePicker
+                kind="supplier"
                 transaction={supplierInvoicePickerTransaction}
                 onSelect={handleSelectSupplierInvoiceFromPicker}
+                onSelectSeveral={handleSelectSeveralFromPicker}
               />
             </>
           )}
@@ -4921,17 +5369,35 @@ export default function TransactionsPage() {
           carriedUnderlag={quickReview?.underlag ?? null}
           assistantRead={quickReview ? (assistantReadsRef.current[quickReview.transaction.id] ?? null) : null}
           onEditLines={handleEditProposedLines}
+          onUnderlagChange={handleUnderlagChanged}
+          onProposalChange={handleReviewProposalChange}
+          activateOnBooking={quickReview ? activationFor(reviewChoices, quickReview.transaction.id, quickReview.proposal) : null}
         />
       )}
 
-      {isDialogOpen && <Dialog open onOpenChange={setIsDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('dialog_add_transaction')}</DialogTitle>
-          </DialogHeader>
-          <TransactionForm onSubmit={handleCreateTransaction} isLoading={isCreating} />
-        </DialogContent>
-      </Dialog>}
+      {/* ?new opens the drawer: the Pengar area's create button links here. */}
+      {/* A viewer cannot create: the top bar's button is locked for them, and the
+          ?new link (the area sidebar's create row) opens nothing either. */}
+      <OpenOnParam
+        param="new"
+        onOpen={() => {
+          if (canWrite) setIsDialogOpen(true)
+        }}
+      />
+      {/* A manual transaction is created in a drawer over the list (V7
+          creation forms); the title is the create button's label. */}
+      {isDialogOpen && (
+        <CreateDrawer
+          open
+          onOpenChange={setIsDialogOpen}
+          title={t('action_new_transaction')}
+          formId="create-transaction-form"
+          submitLabel={t('create_submit')}
+          submitting={isCreating}
+        >
+          <TransactionForm onSubmit={handleCreateTransaction} isLoading={isCreating} formId="create-transaction-form" />
+        </CreateDrawer>
+      )}
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
@@ -4966,12 +5432,14 @@ export default function TransactionsPage() {
           open
           onClose={() => setSkvMatchTarget(null)}
           onMatched={handleSkvMatched}
+          skattekontoAccount={skvAccount}
         />
       )}
 
       {skvBookTarget && (
         <SkattekontoBookDialog
           row={skvBookTarget}
+          skattekontoAccount={skvAccount}
           open
           onOpenChange={(o) => {
             if (!o) setSkvBookTarget(null)
@@ -4981,6 +5449,18 @@ export default function TransactionsPage() {
             setSkvMatchTarget(skvBookTarget)
             setSkvBookTarget(null)
           }}
+          onLinked={handleSkvLinked}
+        />
+      )}
+
+      {skvLinkAllOpen && (
+        <SkattekontoLinkProposalsDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setSkvLinkAllOpen(false)
+          }}
+          onLinked={handleSkvLinked}
+          skattekontoAccount={skvAccount}
         />
       )}
 
@@ -5016,7 +5496,7 @@ export default function TransactionsPage() {
                 </span>
               </div>
             ))}
-            <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2 font-medium">
+            <div className="flex items-baseline justify-between gap-4 border-t-hairline pt-2 font-medium">
               <span>{t('skv_bulk_total', { count: skvBookableSelectedRows.length })}</span>
               <span className="tabular-nums">
                 {skvBulkTotal > 0 ? '+' : ''}
@@ -5036,7 +5516,7 @@ export default function TransactionsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('dialog_match_supplier_invoice')}</DialogTitle>
+            <DialogTitle>{t('dialog_pick_supplier_invoice')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
@@ -5044,19 +5524,19 @@ export default function TransactionsPage() {
               fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
               dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
               {siMatchSuggestion?.candidates.map((c) => (
                 <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
                     <div className="font-medium">
-                      {c.supplier_name || 'Leverantör'} · {c.invoice_number}
+                      {c.supplier_name || 'Leverantör'}
+                      {c.invoice_number ? ` · ${c.invoice_number}` : null}
                     </div>
                     <div className="text-xs text-muted-foreground tabular-nums">
                       {formatDate(c.invoice_date)} · kvar {formatCurrency(c.remaining_amount, c.currency)}
                     </div>
                   </div>
                   <Button
-                    size="sm"
                     onClick={() => handleMatchSuggestedSupplierInvoice(siMatchSuggestion.transactionId, c.supplier_invoice_id)}
                     disabled={siMatchProcessing}
                   >
@@ -5102,7 +5582,7 @@ export default function TransactionsPage() {
               istället för att bokföra direkt mot kundfordringskontot, annars skapas en dubblerad
               verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
               {ciMatchSuggestion?.candidates.map((c) => (
                 <div key={c.invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
@@ -5119,7 +5599,6 @@ export default function TransactionsPage() {
                     </div>
                   </div>
                   <Button
-                    size="sm"
                     onClick={() => handleMatchSuggestedInvoice(ciMatchSuggestion.transactionId, c.invoice_id)}
                     disabled={ciMatchProcessing}
                   >
@@ -5148,6 +5627,32 @@ export default function TransactionsPage() {
         </DialogContent>
       </Dialog>}
 
+      {filedVatConfirm && <VoucherWarningsDialog
+        warnings={filedVatConfirm.warnings}
+        processing={filedVatProcessing}
+        cancelLabel={tCommon('cancel')}
+        onCancel={() => setFiledVatConfirm(null)}
+        onConfirm={async () => {
+          const retry = filedVatConfirm.retry
+          setFiledVatProcessing(true)
+          try {
+            await retry()
+          } finally {
+            setFiledVatProcessing(false)
+            setFiledVatConfirm(null)
+          }
+        }}
+      />}
+
+      {batchFiledVatAsk && <VoucherWarningsDialog
+        warnings={batchFiledVatAsk.warnings}
+        processing={false}
+        intro={t('batch_filed_vat_intro', { count: batchFiledVatAsk.count })}
+        cancelLabel={tCommon('cancel')}
+        onCancel={() => answerBatchFiledVat(false)}
+        onConfirm={() => answerBatchFiledVat(true)}
+      />}
+
       {duplicateWarning && <DuplicateBookingDialog
         candidate={duplicateWarning.candidate}
         processing={duplicateProcessing}
@@ -5173,7 +5678,6 @@ export default function TransactionsPage() {
           setDuplicateWarning(null)
           const ignoredTx = transactions.find((t) => t.id === transactionId)
           setExitingIds((prev) => new Set(prev).add(transactionId))
-          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
           setTimeout(() => {
             setTransactions((prev) =>
               prev.map((t) => (t.id === transactionId ? { ...t, is_ignored: true } : t))

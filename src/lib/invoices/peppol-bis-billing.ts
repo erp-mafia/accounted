@@ -1,18 +1,25 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { escapeXml } from '@/lib/xml/escape'
 import {
   generateOcrReference,
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
-import { isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
+import { isLegalPersonOrgNumber, isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
 import { normalizeIban } from '@/lib/cash-accounts/service'
 import { isEntityType, legalFormProfile, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
-import { isValidBic, isValidIban } from '@/lib/supplier-invoices/payment-details-backfill'
-import { resolveInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
-import { computeLineAmounts, hasLineDiscount } from '@/lib/invoices/line-amounts'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { toSingleLine } from '@/lib/invoices/display'
+import { isValidBic, isValidIban } from '@/lib/payments/payment-details'
+import { resolveInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
+import { computeLineAmounts, computeLineVat, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { isPeppolInvoiceLine } from '@/lib/invoices/peppol-lines'
+import { toSingleLine } from '@/lib/utils'
+import { normalizeDeliveryAddress } from '@/lib/invoices/delivery-address'
 import { equalOre, ORE_TOLERANCE, roundOre } from '@/lib/money'
+import {
+  MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES,
+  PEPPOL_ATTACHMENT_MIME_TYPE,
+} from '@/lib/invoices/invoice-attachment-limits'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
 export const PEPPOL_BIS_BILLING_CUSTOMIZATION_ID =
@@ -38,7 +45,12 @@ export const UNIT_CODES: Record<string, string> = {
   'månad': 'MON',
   km: 'KMT',
   kg: 'KGM',
+  m: 'MTR',
+  kvm: 'MTK',
+  'år': 'ANN',
   l: 'LTR',
+  m3: 'MTQ',
+  vecka: 'WEE',
 }
 
 export interface PeppolValidationIssue {
@@ -48,11 +60,29 @@ export interface PeppolValidationIssue {
   messageEn: string
 }
 
+/** A file the e-faktura carries (crm#1545): the invoice's attachments as read from the archive. */
+export interface PeppolAttachmentFile {
+  filename: string
+  contentType: string
+  content: Buffer
+}
+
 export interface PeppolInvoiceInput {
   invoice: Invoice
   customer: Customer
   items: InvoiceItem[]
   company: CompanySettings
+  /** Embedded as cac:AdditionalDocumentReference (BG-24), in this order. */
+  attachments?: PeppolAttachmentFile[]
+  /**
+   * Render an invoice that has no number yet (a draft) for review
+   * (accounted#44): PEPPOL_PREVIEW_INVOICE_NUMBER stands in for the number
+   * finalize assigns, the OCR is derived from it, the XML opens with the
+   * preview marker and the file is named as a preview. A no-op for an invoice
+   * that already has its number: that XML is the real document. A preview is
+   * never staged (lib/invoices/peppol-delivery.ts refuses it).
+   */
+  preview?: boolean
 }
 
 export type PeppolInvoiceResult =
@@ -62,8 +92,33 @@ export type PeppolInvoiceResult =
       filename: string
       sender: { scheme: '0007'; identifier: string }
       recipient: { scheme: '0007'; identifier: string }
+      /** Set when the XML is a draft preview with placeholder number and OCR. */
+      preview?: true
     }
   | { ok: false; issues: PeppolValidationIssue[] }
+
+/**
+ * The invoice number a draft preview carries (cbc:ID), and the OCR is derived
+ * from it (000000, Luhn-valid). Zeros so nobody mistakes it for a real number.
+ */
+export const PEPPOL_PREVIEW_INVOICE_NUMBER = 'UTKAST-00000'
+
+/**
+ * Opens the comment a preview carries before the root element. User text in
+ * the XML is escaped (`<` becomes `&lt;`), so only the generator can write it.
+ */
+const PEPPOL_PREVIEW_MARKER = '<!-- ACCOUNTED-PEPPOL-PREVIEW'
+
+const PEPPOL_PREVIEW_COMMENT = `${PEPPOL_PREVIEW_MARKER}: Förhandsgranskning av ett utkast. ` +
+  'Det här är ingen faktura och den kan inte skickas via Peppol. Fakturanummer (cbc:ID) och OCR ' +
+  '(cbc:PaymentID) är platshållare tills fakturan slutförs. Preview of a draft: not an invoice and ' +
+  'it cannot be sent over Peppol. The invoice number (cbc:ID) and OCR (cbc:PaymentID) are placeholders ' +
+  'until the invoice is finalized. -->'
+
+/** True for XML rendered as a draft preview: the send paths refuse it. */
+export function isPeppolPreviewXml(xml: string): boolean {
+  return xml.includes(PEPPOL_PREVIEW_MARKER)
+}
 
 interface PreparedParty {
   name: string
@@ -191,7 +246,7 @@ function prepareParty(
       `${prefixEn} must have a valid Swedish organization number.`,
     ))
   }
-  if (orgNumber && Number(orgNumber[2]) < 2) {
+  if (orgNumber && !isLegalPersonOrgNumber(orgNumber)) {
     issues.push(validationIssue(
       `${role.toUpperCase()}_PARTICIPANT_IDENTIFIER_UNSUPPORTED`, `${fieldPrefix}.org_number`,
       `${prefixSv} måste använda ett organisationsnummer för 0007. Personnummerbaserade identifierare kräver GLN-stöd.`,
@@ -213,7 +268,7 @@ function prepareParty(
     ))
   }
 
-  if (!orgNumber || Number(orgNumber[2]) < 2 || !hasText(source.name) || !hasText(source.addressLine1) ||
+  if (!orgNumber || !isLegalPersonOrgNumber(orgNumber) || !hasText(source.name) || !hasText(source.addressLine1) ||
       !hasText(source.postalCode) || !hasText(source.city) || source.country?.toUpperCase() !== 'SE') {
     return null
   }
@@ -249,13 +304,47 @@ function prepareParty(
   }
 }
 
+function formatMegabytes(bytes: number): string {
+  return String(Math.round((bytes / (1024 * 1024)) * 10) / 10)
+}
+
+/**
+ * What an e-faktura cannot carry: a file that is not a PDF, or more file data
+ * than MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES. Sizes are the bytes actually read.
+ * Exported so the send can refuse before an invoice number is taken.
+ */
+export function peppolAttachmentIssues(
+  attachments: ReadonlyArray<{ filename: string; contentType: string | null; sizeBytes: number }>,
+): PeppolValidationIssue[] {
+  const issues: PeppolValidationIssue[] = []
+  attachments.forEach((file, index) => {
+    if (file.contentType !== PEPPOL_ATTACHMENT_MIME_TYPE) {
+      issues.push(validationIssue(
+        'PEPPOL_ATTACHMENT_NOT_PDF', `attachments[${index}]`,
+        `Via Peppol kan bara PDF-filer bifogas, och ${file.filename} är ingen PDF. Ta bort bilagan eller skicka fakturan med e-post.`,
+        `Only PDF files can be attached over Peppol, and ${file.filename} is not a PDF. Remove the attachment or send the invoice by email.`,
+      ))
+    }
+  })
+  const total = attachments.reduce((sum, file) => sum + file.sizeBytes, 0)
+  if (total > MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES) {
+    const limit = formatMegabytes(MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES)
+    issues.push(validationIssue(
+      'PEPPOL_ATTACHMENTS_TOO_LARGE', 'attachments',
+      `Bilagorna är ${formatMegabytes(total)} MB och får vara högst ${limit} MB tillsammans via Peppol. Ta bort en bilaga, komprimera PDF:en eller skicka fakturan med e-post.`,
+      `The attachments are ${formatMegabytes(total)} MB and may total at most ${limit} MB over Peppol. Remove an attachment, compress the PDF or send the invoice by email.`,
+    ))
+  }
+  return issues
+}
+
 function prepareInvoice(input: PeppolInvoiceInput):
   | { prepared: PreparedInvoice; issues: [] }
   | { prepared: null; issues: PeppolValidationIssue[] } {
   const { invoice, customer, company } = input
   const issues: PeppolValidationIssue[] = []
 
-  if (invoice.document_type !== 'invoice' || invoice.credited_invoice_id || invoice.is_self_billed) {
+  if (invoice.document_type !== 'invoice' || isCreditNoteDocument(invoice) || invoice.is_self_billed) {
     issues.push(validationIssue(
       'DOCUMENT_TYPE_UNSUPPORTED', 'invoice.document_type',
       'Endast vanliga kundfakturor kan exporteras i detta Peppol-format.',
@@ -291,8 +380,8 @@ function prepareInvoice(input: PeppolInvoiceInput):
       'Invoice, due, and delivery dates must be valid dates.',
     ))
   }
-  // BT-10 BuyerReference: fakturamärkning wins when set (SFTI convention:
-  // the buyer's routing/marking string), else Er referens.
+  // BT-10 BuyerReference carries Er referens and BT-13 OrderReference the
+  // fakturamärkning; either one satisfies PEPPOL-EN16931-R003.
   if (!hasText(invoice.invoice_marking) && !hasText(invoice.your_reference)) {
     issues.push(validationIssue(
       'BUYER_REFERENCE_REQUIRED', 'invoice.your_reference',
@@ -303,8 +392,8 @@ function prepareInvoice(input: PeppolInvoiceInput):
   if ((invoice.deduction_total ?? 0) !== 0) {
     issues.push(validationIssue(
       'DEDUCTION_UNSUPPORTED', 'invoice.deduction_total',
-      'ROT- och RUT-avdrag stöds ännu inte av Peppol-exporten.',
-      'ROT and RUT deductions are not yet supported by the Peppol export.',
+      'Skattereduktion (ROT, RUT eller grön teknik) stöds ännu inte av Peppol-exporten.',
+      'Tax reductions (ROT, RUT or green technology) are not yet supported by the Peppol export.',
     ))
   }
   if (!company.vat_registered || !['standard_25', 'reduced_12', 'reduced_6'].includes(invoice.vat_treatment)) {
@@ -407,7 +496,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
   }
 
   const productItems = input.items
-    .filter((item) => item.line_type !== 'text')
+    .filter(isPeppolInvoiceLine)
     .sort((left, right) => left.sort_order - right.sort_order)
   if (productItems.length === 0) {
     issues.push(validationIssue(
@@ -444,7 +533,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
     }
     // Net of any line discount: line_total must equal (qty × price) − rabatt,
     // the same exact öre arithmetic the write path stores
-    // (lib/invoices/line-amounts.ts) and the BG-27 allowance below renders.
+    // (lib/bookkeeping/invoice-line-amounts.ts) and the BG-27 allowance below renders.
     const expectedAmounts = computeLineAmounts(item.quantity, item.unit_price, item.discount_percent)
     if (!equalMoney(item.line_total, roundMoney(expectedAmounts.net))) {
       issues.push(validationIssue(
@@ -460,7 +549,8 @@ function prepareInvoice(input: PeppolInvoiceInput):
         `The discount on invoice line ${index + 1} must be between 0 and 100 percent.`,
       ))
     }
-    if (!equalMoney(item.vat_amount, roundMoney(item.line_total * item.vat_rate / 100))) {
+    // The one per-line VAT rule the write path stores (computeLineVat).
+    if (!equalMoney(item.vat_amount, computeLineVat(item.line_total, item.vat_rate))) {
       issues.push(validationIssue(
         'LINE_VAT_MISMATCH', `${lineField}.vat_amount`,
         `Momsbeloppet på fakturarad ${index + 1} stämmer inte.`,
@@ -477,7 +567,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
     .map(([rate, group]) => ({
       rate,
       taxableAmount: group.taxableAmount,
-      taxAmount: roundMoney(group.taxableAmount * rate / 100),
+      taxAmount: computeLineVat(group.taxableAmount, rate),
     }))
   // Sweden permits rounding VAT per invoice line; EN 16931 does not represent
   // it, so the two stages legitimately disagree by öre. BR-CO-17 stays
@@ -524,6 +614,12 @@ function prepareInvoice(input: PeppolInvoiceInput):
       'The payable amount must be greater than zero.',
     ))
   }
+
+  issues.push(...peppolAttachmentIssues((input.attachments ?? []).map((file) => ({
+    filename: file.filename,
+    contentType: file.contentType,
+    sizeBytes: file.content.byteLength,
+  }))))
 
   if (issues.length > 0 || !supplier || !buyer || !payment) return { prepared: null, issues }
   // BT-112 from the amounts the XML actually prints (BR-CO-15), BT-114 as the
@@ -616,6 +712,33 @@ function renderParty(
   ].filter(Boolean).join('\n')
 }
 
+function sellersItemIdentification(company: CompanySettings, item: InvoiceItem): string[] {
+  const articleNumber = item.article_number?.trim()
+  if (company.invoice_show_article_number !== true || !articleNumber) return []
+  return [
+    '      <cac:SellersItemIdentification>',
+    `        <cbc:ID>${escapeXml(articleNumber)}</cbc:ID>`,
+    '      </cac:SellersItemIdentification>',
+  ]
+}
+
+/**
+ * One cac:AdditionalDocumentReference per file (BG-24): BT-122 the file name,
+ * BT-125 the content base64-embedded with its mimeCode and filename. No
+ * DocumentTypeCode: in BIS Billing 3 that code marks an invoiced object
+ * (BT-18), not an attachment.
+ */
+function renderAttachments(attachments: PeppolAttachmentFile[]): string[] {
+  return attachments.flatMap((file) => [
+    '  <cac:AdditionalDocumentReference>',
+    `    <cbc:ID>${escapeXml(toSingleLine(file.filename))}</cbc:ID>`,
+    '    <cac:Attachment>',
+    `      <cbc:EmbeddedDocumentBinaryObject mimeCode="${escapeXml(file.contentType)}" filename="${escapeXml(toSingleLine(file.filename))}">${file.content.toString('base64')}</cbc:EmbeddedDocumentBinaryObject>`,
+    '    </cac:Attachment>',
+    '  </cac:AdditionalDocumentReference>',
+  ])
+}
+
 function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice): string {
   const { invoice, company } = input
   const taxTotal = roundMoney(prepared.taxBreakdown.reduce((sum, group) => sum + group.taxAmount, 0))
@@ -657,6 +780,10 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     // The UBL item name is a single-line field; descriptions may carry
     // line breaks.
     `      <cbc:Name>${escapeXml(toSingleLine(item.description))}</cbc:Name>`,
+    // BT-155 Item Seller's identifier: the article number frozen on the line,
+    // when the company prints it (crm#1084). UBL orders it after Name and
+    // before ClassifiedTaxCategory.
+    ...sellersItemIdentification(company, item),
     '      <cac:ClassifiedTaxCategory>',
     '        <cbc:ID>S</cbc:ID>',
     `        <cbc:Percent>${formatDecimal(item.vat_rate)}</cbc:Percent>`,
@@ -672,6 +799,7 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
+    input.preview ? PEPPOL_PREVIEW_COMMENT : null,
     '<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"',
     '  xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"',
     '  xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">',
@@ -683,12 +811,23 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     '  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>',
     invoice.notes ? `  <cbc:Note>${escapeXml(invoice.notes)}</cbc:Note>` : null,
     '  <cbc:DocumentCurrencyCode>SEK</cbc:DocumentCurrencyCode>',
-    `  <cbc:BuyerReference>${escapeXml((invoice.invoice_marking?.trim() || invoice.your_reference?.trim()) ?? '')}</cbc:BuyerReference>`,
+    // Swedish buyers expect BT-10 even when BT-13 is present, so the marking
+    // stands in for a missing Er referens.
+    `  <cbc:BuyerReference>${escapeXml((invoice.your_reference?.trim() || invoice.invoice_marking?.trim()) ?? '')}</cbc:BuyerReference>`,
+    ...(invoice.invoice_marking?.trim()
+      ? [
+          '  <cac:OrderReference>',
+          `    <cbc:ID>${escapeXml(invoice.invoice_marking.trim())}</cbc:ID>`,
+          '  </cac:OrderReference>',
+        ]
+      : []),
+    // BG-24 supporting documents: after the order reference and before the
+    // seller, the UBL 2.1 Invoice element order.
+    ...renderAttachments(input.attachments ?? []),
     renderParty('AccountingSupplierParty', prepared.supplier, company.f_skatt),
     renderParty('AccountingCustomerParty', prepared.buyer, false),
-    invoice.delivery_date
-      ? `  <cac:Delivery><cbc:ActualDeliveryDate>${invoice.delivery_date}</cbc:ActualDeliveryDate></cac:Delivery>`
-      : null,
+    // The buyer is a Swedish party (prepareParty refuses any other country).
+    renderDelivery(invoice, input.customer.country),
     '  <cac:PaymentMeans>',
     '    <cbc:PaymentMeansCode>30</cbc:PaymentMeansCode>',
     `    <cbc:PaymentID>${prepared.payment.paymentId}</cbc:PaymentID>`,
@@ -722,8 +861,50 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
   ].filter(Boolean).join('\n')
 }
 
+/**
+ * BG-13 Delivery information: BT-72 the actual delivery date, and the
+ * invoice's leveransadress (crm#1547) as BG-15 (BT-75 to BT-80 under
+ * DeliveryLocation) and BT-70 (DeliveryParty). BG-15 requires the country
+ * (BR-57): the address's own, else the goods' delivery_country, else the
+ * buyer's; without any the address is left out and the name still goes.
+ * Null when there is nothing to deliver to or date.
+ */
+export function renderDelivery(invoice: Pick<Invoice, 'delivery_date' | 'delivery_address' | 'delivery_country'>, buyerCountry: string | null | undefined): string | null {
+  const address = normalizeDeliveryAddress(invoice.delivery_address)
+  const country = address ? (address.country ?? invoice.delivery_country ?? buyerCountry ?? null)?.toUpperCase() ?? null : null
+  const hasStreet = !!address && !!(address.address_line1 || address.address_line2 || address.city || address.postal_code)
+  const element = (tag: string, value: string | null) => (value ? [`        <cbc:${tag}>${escapeXml(value)}</cbc:${tag}>`] : [])
+  const parts = [
+    ...(invoice.delivery_date ? [`    <cbc:ActualDeliveryDate>${invoice.delivery_date}</cbc:ActualDeliveryDate>`] : []),
+    ...(address && hasStreet && country
+      ? [
+          '    <cac:DeliveryLocation>',
+          '      <cac:Address>',
+          ...element('StreetName', address.address_line1),
+          ...element('AdditionalStreetName', address.address_line2),
+          ...element('CityName', address.city),
+          ...element('PostalZone', address.postal_code),
+          `        <cac:Country><cbc:IdentificationCode>${escapeXml(country)}</cbc:IdentificationCode></cac:Country>`,
+          '      </cac:Address>',
+          '    </cac:DeliveryLocation>',
+        ]
+      : []),
+    ...(address?.name ? [`    <cac:DeliveryParty><cac:PartyName><cbc:Name>${escapeXml(address.name)}</cbc:Name></cac:PartyName></cac:DeliveryParty>`] : []),
+  ]
+  if (parts.length === 0) return null
+  // The date alone keeps the one-line form it always had.
+  if (parts.length === 1 && invoice.delivery_date) {
+    return `  <cac:Delivery><cbc:ActualDeliveryDate>${invoice.delivery_date}</cbc:ActualDeliveryDate></cac:Delivery>`
+  }
+  return ['  <cac:Delivery>', ...parts, '  </cac:Delivery>'].join('\n')
+}
+
 export function generatePeppolBisBillingInvoice(input: PeppolInvoiceInput): PeppolInvoiceResult {
-  const validation = prepareInvoice(input)
+  const preview = input.preview === true && !hasText(input.invoice.invoice_number)
+  const rendered: PeppolInvoiceInput = preview
+    ? { ...input, invoice: { ...input.invoice, invoice_number: PEPPOL_PREVIEW_INVOICE_NUMBER } }
+    : { ...input, preview: false }
+  const validation = prepareInvoice(rendered)
   if (validation.prepared === null) return { ok: false, issues: validation.issues }
 
   const filenameNumber = (input.invoice.invoice_number ?? input.invoice.id)
@@ -731,9 +912,10 @@ export function generatePeppolBisBillingInvoice(input: PeppolInvoiceInput): Pepp
     .replace(/^-+|-+$/g, '') || input.invoice.id
   return {
     ok: true,
-    xml: renderInvoiceXml(input, validation.prepared),
-    filename: `peppol-invoice-${filenameNumber}.xml`,
+    xml: renderInvoiceXml(rendered, validation.prepared),
+    filename: preview ? `peppol-invoice-preview-${filenameNumber}.xml` : `peppol-invoice-${filenameNumber}.xml`,
     sender: { scheme: '0007', identifier: validation.prepared.supplier.orgNumber },
     recipient: { scheme: '0007', identifier: validation.prepared.buyer.orgNumber },
+    ...(preview ? { preview: true as const } : {}),
   }
 }

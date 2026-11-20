@@ -1,11 +1,10 @@
 'use client'
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ClipboardEvent } from 'react'
-import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import useSWR, { useSWRConfig } from 'swr'
-import { ArrowLeft, Plus, X } from 'lucide-react'
+import { ArrowLeftIcon, PlusIcon, XMarkIcon } from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
@@ -20,7 +19,7 @@ import { Field, KnowledgeChip, KnowledgePanel, Row } from './AgentDetail'
 import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
-import { fetchConnections, readOptions, simulatedClient, withKnowledgeFailed } from './data'
+import { fetchConnections, readOptions, simulatedClient, simulatedConnection, withKnowledgeFailed } from './data'
 import { RoutineRow, RoutineRowElsewhere, sendRoutine, useRoutineTranslate } from './RoutinePanel'
 import { useClaudeTarget } from './claude-target'
 import { AI_CLIENTS, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
@@ -93,6 +92,8 @@ export function CreateItem({ backHref, edit }: { backHref: string; edit?: EditTa
 
 function Create({ companyId, companyName, backHref, edit }: { companyId: string; companyName: string; backHref: string; edit?: EditTarget }) {
   const t = useTranslations('skills_registry')
+  // The top bar carries the menu row's name (Agenter › Arbetssätt).
+  const tNav = useTranslations('nav')
   const router = useRouter()
   const { mutate } = useSWRConfig()
   const { canWrite } = useCanWrite()
@@ -130,7 +131,7 @@ function Create({ companyId, companyName, backHref, edit }: { companyId: string;
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
-    void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) })
+    void (simulated ? Promise.resolve(simulatedConnection(simulated)) : fetchConnections(controller.signal)).then((read) => { if (read) setConnected(read.clients) })
     return () => controller.abort()
   }, [])
   const aiClient = pickConnectedAiClient(connected ?? [])
@@ -321,15 +322,14 @@ function Create({ companyId, companyName, backHref, edit }: { companyId: string;
   )
   return (
     <div className={styles.apage}>
-      <PageHeader title={t('title')} />
-      {edit
-        ? <button type="button" className={styles.back} onClick={edit.onCancel}><ArrowLeft className="h-4 w-4" aria-hidden />{t('edit_back')}</button>
-        : <Link href={back} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>}
+      <PageHeader title={edit ? t('edit') : t('create_manual')} parent={{ label: tNav('v3_skills'), href: back }} />
+      {/* Leaving an edit goes back to the item, not to the list, so it keeps its own way back. */}
+      {edit && <button type="button" className={styles.back} onClick={edit.onCancel}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('edit_back')}</button>}
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={edit ? t('edit') : t('create_manual')}>
           {/* One grain for the page: switching kind changes the colour, not the pattern. An edited item keeps its own grain. */}
-          <StrataField seed={seedOf(edit ? `own/${edit.installationId}` : 'ny')} ground={`hsl(${hue} 52% 88%)`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
+          <StrataField seed={seedOf(edit ? `own/${edit.installationId}` : 'ny')} ground={`hsl(${hue} var(--hue-ground))`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
           <div className={styles.stageTile}>
             <span key={kind} className={`${styles.tileSymbol} ${styles.fadeIn}`}><ItemSymbol kind={kind} hue={hue} size={104} open /></span>
             <b className={name.trim() ? undefined : styles.placeholderName} data-ph-mask="">{name.trim() || t('create_untitled')}</b>
@@ -380,11 +380,11 @@ function Create({ companyId, companyName, backHref, edit }: { companyId: string;
                                 aria-label={t('create_step_label', { n: i + 1 })}
                               />
                               {/* The cursor goes to the step before, not back to the top of the page. */}
-                              {steps.length > 1 && <button type="button" className={styles.chipX} aria-label={t('create_step_remove', { n: i + 1 })} onClick={() => { setSteps((c) => c.filter((_, j) => j !== i)); focusStep.current = Math.max(0, i - 1) }}><X className="h-3 w-3" aria-hidden /></button>}
+                              {steps.length > 1 && <button type="button" className={styles.chipX} aria-label={t('create_step_remove', { n: i + 1 })} onClick={() => { setSteps((c) => c.filter((_, j) => j !== i)); focusStep.current = Math.max(0, i - 1) }}><XMarkIcon className="h-3 w-3" aria-hidden /></button>}
                             </li>
                           ))}
                         </ol>
-                        <button type="button" className={styles.addStep} onClick={() => { setSteps((c) => [...c, '']); focusStep.current = steps.length }}><Plus className="h-3.5 w-3.5" aria-hidden />{t('create_step_add')}</button>
+                        <button type="button" className={styles.addStep} onClick={() => { setSteps((c) => [...c, '']); focusStep.current = steps.length }}><PlusIcon className="h-3.5 w-3.5" aria-hidden />{t('create_step_add')}</button>
                       </div>
                     )}
                   </Field>

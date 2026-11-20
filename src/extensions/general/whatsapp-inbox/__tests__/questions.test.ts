@@ -55,6 +55,22 @@ describe('evaluateQuestion', () => {
       .toEqual({ type: 'resend' })
   })
 
+  it('never asks for a resend, or for context, about a file nothing read (crm#1779)', () => {
+    // The company's plan has no AI reading: the skeleton is empty because the
+    // reading was skipped, not because the photo is bad.
+    const skeleton = extraction({
+      documentKind: null,
+      merchantCategory: null,
+      legibility: null,
+      supplier: { name: null, orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null },
+      totals: { subtotal: null, vatAmount: null, total: null },
+    })
+    expect(evaluateQuestion(input({ extracted: skeleton, filename: null, fileSizeBytes: 88_000, unread: true }))).toBeNull()
+    expect(evaluateQuestion(input({ extracted: skeleton, filename: null, fileSizeBytes: 88_000, unread: false }))).toEqual({ type: 'resend' })
+    // The caption still raises representation: it needs no reading.
+    expect(evaluateQuestion(input({ extracted: skeleton, caption: 'lunch kundmöte', unread: true }))).toEqual({ type: 'representation' })
+  })
+
   it('compressed-chat-photo signal triggers resend: jpeg, no filename, <150KB, empty extraction', () => {
     const empty = extraction({
       legibility: null,

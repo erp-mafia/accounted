@@ -194,6 +194,17 @@ export const CONNECT_CARD_HTML = `<!DOCTYPE html>
 
     if (sc.connected) {
       show('status');
+      if (isSkv && sc.can_file === false) {
+        // Connected for the company, but filing runs on the user's own
+        // BankID login (crm#1263): keep the link so they can connect.
+        el('lede').textContent = 'Skatteverket är anslutet för företaget och skattekontot synkas. Deklarationer lämnas med ditt eget BankID: anslut dig själv för att kunna lämna dem härifrån.';
+        if (connectUrl) {
+          el('url').textContent = connectUrl;
+          show('url');
+          show('actions');
+        }
+        return;
+      }
       if (isSkv) {
         el('lede').textContent = 'Skatteverket är anslutet. Skattekontot synkas automatiskt och deklarationer kan lämnas in härifrån.';
         hide('url'); hide('actions');

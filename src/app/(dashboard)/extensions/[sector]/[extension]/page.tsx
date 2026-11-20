@@ -1,14 +1,12 @@
 import { notFound } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
-import { getExtensionDefinition, getSector } from '@/lib/extensions/sectors'
+import { getExtensionDefinition } from '@/lib/extensions/sectors'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 import {
   extensionNameKey,
   extensionDescriptionKey,
   extensionLongDescriptionKey,
-  sectorNameKey,
 } from '@/lib/extensions/i18n'
-import type { SectorSlug } from '@/lib/extensions/types'
 import { getRequestAppName } from '@/lib/branding/request-brand'
 import CategoryBadge from '@/components/extensions/CategoryBadge'
 import { WORKSPACES } from '@/lib/extensions/_generated/workspace-map'
@@ -26,8 +24,6 @@ export default async function ExtensionDetailPage({
   const definition = getExtensionDefinition(sectorSlug, extensionSlug)
   if (!definition) notFound()
 
-  const sector = getSector(sectorSlug as SectorSlug)
-
   const t = await getTranslations('extensions')
   // Some long descriptions carry the {appName} ICU parameter (WL-12 appName
   // sweep); passing it unconditionally is harmless for messages without it.
@@ -39,12 +35,6 @@ export default async function ExtensionDetailPage({
   const extensionName = nameKey ? t(nameKey) : definition.name
   const extensionDescription = descriptionKey ? t(descriptionKey, { appName }) : definition.description
   const extensionLongDescription = longDescriptionKey ? t(longDescriptionKey, { appName }) : definition.longDescription
-
-  const sectorLabel = (() => {
-    if (!sector) return sectorSlug
-    const key = sectorNameKey(sector.slug)
-    return key ? t(key) : sector.name
-  })()
 
   const Icon = resolveIcon(definition.icon)
 
@@ -60,9 +50,10 @@ export default async function ExtensionDetailPage({
     <div>
       <PageHeader
         title={extensionName}
+        parent={{ label: t('breadcrumb'), href: '/extensions' }}
         action={
           hasWorkspace ? (
-            <Button size="sm" asChild>
+            <Button size="toolbar" asChild>
               <Link href={`/e/${sectorSlug}/${extensionSlug}`}>
                 {t('open')}
               </Link>
@@ -70,22 +61,6 @@ export default async function ExtensionDetailPage({
           ) : undefined
         }
       />
-
-      {/* Breadcrumb */}
-      <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-6">
-        <Link href="/extensions" className="hover:text-foreground transition-colors">
-          {t('breadcrumb')}
-        </Link>
-        <span>/</span>
-        <Link
-          href={`/extensions/${sectorSlug}`}
-          className="hover:text-foreground transition-colors"
-        >
-          {sectorLabel}
-        </Link>
-        <span>/</span>
-        <span className="text-foreground">{extensionName}</span>
-      </nav>
 
       {/* Header */}
       <div className="flex items-start gap-4 mb-8">
@@ -103,14 +78,14 @@ export default async function ExtensionDetailPage({
       {/* Details */}
       <div className="space-y-6">
         <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('description_heading')}</h2>
+          <h2 className="text-sm text-muted-foreground mb-2">{t('description_heading')}</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
             {extensionLongDescription}
           </p>
         </div>
 
         <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('data_source_heading')}</h2>
+          <h2 className="text-sm text-muted-foreground mb-2">{t('data_source_heading')}</h2>
           <p className="text-sm text-muted-foreground">
             {dataPatternLabels[definition.dataPattern]}
           </p>

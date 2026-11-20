@@ -1,18 +1,19 @@
 'use client'
 
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useFiscalPeriods, usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Lock } from 'lucide-react'
+import { ArrowLeftIcon, LockClosedIcon } from '@/components/icons'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Label } from '@/components/ui/label'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -26,6 +27,9 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { Asset, AssetDisposalType, VatTreatment } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { splitGrossVat } from '@/lib/bookkeeping/gross-split'
+import { parseAmountInput } from '@/lib/money'
 
 interface PeriodOption {
   id: string
@@ -42,21 +46,12 @@ const VAT_TREATMENTS = ['standard_25', 'reverse_charge', 'export', 'exempt'] as 
 // numbers get a fixed short width so the row does not stretch them.
 const FIELD_CLASS = 'max-w-44 flex-none tabular-nums'
 
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
-}
-
-// Accept Swedish-formatted amounts ("125 000,50") as well as dot decimals.
-function parseAmount(raw: string): number | null {
-  const normalized = raw.replace(/\s/g, '').replace(',', '.')
-  if (normalized === '') return null
-  const value = Number(normalized)
-  return Number.isFinite(value) ? value : null
-}
-
 export default function DisposeAssetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const t = useTranslations('assets.disposal')
+  const tNav = useTranslations('nav')
+  // The page sits under Tillgångar: the menu row's own label, as a link before the title.
+  const assetsParent = { label: tNav('v3_assets'), href: '/assets' }
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -78,15 +73,20 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     [fiscalPeriods],
   )
   const [loading, setLoading] = useState(true)
+  // A failed load says so in the page with "Försök igen" (Stil v3 states).
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [disposalType, setDisposalType] = useState<AssetDisposalType>('sale')
   const [disposalDate, setDisposalDate] = useState(
-    () => new Date().toISOString().slice(0, 10),
+    () => todayIsoStockholm(),
   )
   const [proceeds, setProceeds] = useState('')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment>('standard_25')
   const [periodId, setPeriodId] = useState('')
-  const [proceedsAccount, setProceedsAccount] = useState('1930')
+  const paymentLedger = usePaymentBankLedger()
+  const [proceedsAccountChoice, setProceedsAccount] = useState<string | null>(null)
+  const proceedsAccount = proceedsAccountChoice ?? paymentLedger
   const [originalInputVat, setOriginalInputVat] = useState('')
   const [originalDeductionPercent, setOriginalDeductionPercent] = useState('100')
   const [businessTransferConfirmed, setBusinessTransferConfirmed] = useState(false)
@@ -101,13 +101,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
         setAsset(assetResponse.data ?? null)
       })
       .catch(() => {
-        if (!cancelled) {
-          toast({
-            title: t('load_failed_title'),
-            description: t('try_again'),
-            variant: 'destructive',
-          })
-        }
+        if (!cancelled) setLoadFailed(true)
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -115,7 +109,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     return () => {
       cancelled = true
     }
-  }, [id, t, toast])
+  }, [id, loadAttempt])
 
   useEffect(() => {
     const match = periods.find(
@@ -132,15 +126,14 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     }
   }, [disposalType])
 
-  const parsedProceeds = parseAmount(proceeds)
+  const parsedProceeds = parseAmountInput(proceeds)
   const proceedsNumber = parsedProceeds ?? 0
   const proceedsInvalid =
     disposalType !== 'scrap' && proceeds.trim() !== '' && parsedProceeds === null
-  const vatAmount =
-    disposalType === 'sale' && vatTreatment === 'standard_25'
-      ? round2(proceedsNumber * (0.25 / 1.25))
-      : 0
-  const netProceeds = round2(proceedsNumber - vatAmount)
+  const { vat: vatAmount, net: netProceeds } = splitGrossVat(
+    proceedsNumber,
+    disposalType === 'sale' && vatTreatment === 'standard_25' ? 0.25 : 0,
+  )
   const selectedPeriod = periods.find((period) => period.id === periodId)
   const periodLocked = Boolean(
     selectedPeriod && (selectedPeriod.is_closed || selectedPeriod.locked_at !== null),
@@ -250,11 +243,27 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   if (loading) {
     return (
       <div className="space-y-8">
-        <PageHeader title={t('title')} />
-        <div className="space-y-3">
+        <PageHeader title={t('title')} parent={assetsParent} />
+        <LateReveal className="space-y-3">
           <Skeleton className="h-6 w-1/3" />
           <Skeleton className="h-4 w-2/3" />
-        </div>
+        </LateReveal>
+      </div>
+    )
+  }
+
+  if (loadFailed) {
+    return (
+      <div className="space-y-8">
+        <PageHeader title={t('title')} parent={assetsParent} />
+        <LoadError
+          title={t('load_failed_title')}
+          onRetry={() => {
+            setLoadFailed(false)
+            setLoading(true)
+            setLoadAttempt((n) => n + 1)
+          }}
+        />
       </div>
     )
   }
@@ -262,11 +271,11 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   if (!asset || asset.disposed_at) {
     return (
       <div className="space-y-8">
-        <PageHeader title={t('title')} />
+        <PageHeader title={t('title')} parent={assetsParent} />
         <p className="text-sm text-muted-foreground">
           {!asset ? t('not_found') : t('already_disposed', { date: formatDate(asset.disposed_at!) })}
         </p>
-        <Link href="/assets"><Button variant="secondary"><ArrowLeft className="mr-1 h-4 w-4" />{t('back')}</Button></Link>
+        <Link href="/assets"><Button variant="outline"><ArrowLeftIcon className="h-4 w-4" />{t('back')}</Button></Link>
       </div>
     )
   }
@@ -286,18 +295,41 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
 
   return (
     <div className="space-y-8 stagger-enter">
-      {/* Back link on its own quiet row, same as the register documents */}
-      <Link
-        href="/assets"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        {t('back')}
-      </Link>
+      {/* The top bar carries the way back (the parent link), Avbryt and the
+          page's one primary. data-ph-mask: the asset name is user data. meta,
+          not description: the top bar hides a description, so the page never
+          named the asset. */}
+      <PageHeader
+        title={t('title')}
+        parent={assetsParent}
+        meta={<span data-ph-mask="">{asset.name}</span>}
+        action={
+          <div className="flex items-center gap-2">
+            <Button
+              asChild
+              variant="ghost"
+              size="toolbar"
+              aria-disabled={submitting || undefined}
+              className={submitting ? 'pointer-events-none opacity-50' : undefined}
+            >
+              <Link href="/assets">{t('cancel')}</Link>
+            </Button>
+            <Button
+              size="toolbar"
+              onClick={handleSubmit}
+              loading={submitting}
+              disabled={!canWrite || !periodId || periodLocked || proceedsInvalid || missingJamkningData || (disposalType === 'business_transfer' && !businessTransferConfirmed) || (transferNeedsDocument && !adjustmentDocumentConfirmed)}
+              title={!canWrite ? t('write_required') : undefined}
+            >
+              {!canWrite && <LockClosedIcon className="h-4 w-4" />}
+              {t('submit')}
+            </Button>
+          </div>
+        }
+      />
 
-      {/* data-ph-mask: the asset name is user data */}
-      <PageHeader title={t('title')} description={<span data-ph-mask="">{asset.name}</span>} />
-
+      {/* The form column: capped like every settings and form column (760px). */}
+      <div className="max-w-[760px] space-y-8">
       {/* The asset being disposed: read-only context as plain rows */}
       <DetailSection kicker={t('asset_section')}>
         <DefRow label={t('acquisition_cost')}>
@@ -409,7 +441,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
               {t('within_adjustment_period', { years: eligibility.remainingYears, total: eligibility.totalYears })}
             </Badge>
           ) : (
-            <span className="text-[11px] text-muted-foreground">{t('outside_adjustment_period')}</span>
+            <span className="text-xs text-muted-foreground">{t('outside_adjustment_period')}</span>
           )
         }
       >
@@ -489,18 +521,6 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
         )}
       </DetailSection>
 
-      {/* Actions: one footer row, so the flow ends on the button it arms */}
-      <div className="flex flex-wrap justify-end gap-2">
-        <Link href="/assets"><Button variant="secondary" disabled={submitting}>{t('cancel')}</Button></Link>
-        <Button
-          onClick={handleSubmit}
-          loading={submitting}
-          disabled={!canWrite || !periodId || periodLocked || proceedsInvalid || missingJamkningData || (disposalType === 'business_transfer' && !businessTransferConfirmed) || (transferNeedsDocument && !adjustmentDocumentConfirmed)}
-          title={!canWrite ? t('write_required') : undefined}
-        >
-          {!canWrite && <Lock className="mr-1 h-4 w-4" />}
-          {t('submit')}
-        </Button>
       </div>
     </div>
   )

@@ -165,4 +165,21 @@ describe('resolvePaymentReference', () => {
     expect(reference).toEqual({ type: 'invoice_number', value: 'F-1001' })
     expect(ocrInvalid).toBe(false)
   })
+
+  // crm#1039: a supplier invoice may lack the supplier's number.
+  it('pays a number-less invoice by its valid OCR', () => {
+    const { reference, ocrInvalid } = resolvePaymentReference({
+      payment_reference: VALID_OCR,
+      supplier_invoice_number: null,
+    })
+    expect(reference).toEqual({ type: 'ocr', value: VALID_OCR })
+    expect(ocrInvalid).toBe(false)
+  })
+
+  it('has no reference without a valid OCR and without a number, never an empty message', () => {
+    expect(resolvePaymentReference({ payment_reference: null, supplier_invoice_number: null }))
+      .toEqual({ reference: null, ocrInvalid: false })
+    expect(resolvePaymentReference({ payment_reference: '1234568', supplier_invoice_number: null }))
+      .toEqual({ reference: null, ocrInvalid: true })
+  })
 })

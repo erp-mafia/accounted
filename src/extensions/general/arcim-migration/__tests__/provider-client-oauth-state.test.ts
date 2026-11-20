@@ -64,6 +64,10 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import {
   consumeOAuthState,
+  peekOAuthState,
+  moveOpenLogins,
+  consentHoldsTokens,
+  oauthStateRejectionReason,
   mintHandoff,
   consumeHandoff,
   generateOtc,
@@ -182,6 +186,220 @@ describe('consumeOAuthState', () => {
     useResults([{ data: null, error: { message: 'boom' } }])
 
     await expect(consumeOAuthState('state-token')).resolves.toBeNull()
+  })
+})
+
+/**
+ * A cancelled provider login (an error, no code) reads the state and leaves it
+ * unspent, so a second delivery of the cancel, or an approval after going Back
+ * at the provider, still finds it. The read must see exactly the rows a
+ * consume would have taken.
+ */
+describe('peekOAuthState', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  /** Every predicate on the provider_otc statement, without its timestamps. */
+  const predicates = (call: RecordedCall) =>
+    call.ops
+      .filter(([op]) => op === 'eq' || op === 'is' || op === 'gt')
+      .map(([op, args]) => (op === 'gt' ? [op, args[0]] : [op, ...args]))
+
+  it('reads the state row with a SELECT and never writes to it', async () => {
+    const { calls } = useResults([
+      { data: { consent_id: 'consent-1', user_id: 'user-1' } },
+      { data: { provider: 'fortnox', company_id: 'company-1' } },
+    ])
+
+    await peekOAuthState('state-token')
+
+    expect(calls[0].table).toBe('provider_otc')
+    expect(calls[0].ops[0]).toEqual(['select', ['consent_id, user_id, origin']])
+    for (const call of calls) {
+      for (const write of ['update', 'delete', 'insert', 'upsert']) {
+        expect(findOp(call, write)).toBeUndefined()
+      }
+    }
+  })
+
+  it('sees exactly the rows consumeOAuthState would take: unused, not a handoff, unexpired', async () => {
+    const peeked = useResults([{ data: null }])
+    await peekOAuthState('state-token')
+    const consumed = useResults([{ data: null }])
+    await consumeOAuthState('state-token')
+
+    expect(predicates(peeked.calls[0])).toEqual([
+      ['eq', 'code', 'state-token'],
+      ['is', 'used_at', null],
+      ['is', 'provider_code', null],
+      ['is', 'provider_error', null],
+      ['gt', 'expires_at'],
+    ])
+    expect(predicates(peeked.calls[0])).toEqual(predicates(consumed.calls[0]))
+  })
+
+  it('resolves the same flow a consume would, from the server-side rows', async () => {
+    const { calls } = useResults([
+      { data: { consent_id: 'consent-1', user_id: 'user-1', origin: 'https://brand-d.accounted.se' } },
+      { data: { provider: 'visma', company_id: 'company-1' } },
+    ])
+
+    await expect(peekOAuthState('state-token')).resolves.toEqual({
+      consentId: 'consent-1',
+      provider: 'visma',
+      companyId: 'company-1',
+      userId: 'user-1',
+      origin: 'https://brand-d.accounted.se',
+    })
+    expect(calls[1].table).toBe('provider_consents')
+    expect(findOp(calls[1], 'eq', 'id')?.[1]).toEqual(['id', 'consent-1'])
+  })
+
+  it('still resolves on a second read: a peek spends nothing', async () => {
+    const rows = [
+      { data: { consent_id: 'consent-1', user_id: 'user-1' } },
+      { data: { provider: 'fortnox', company_id: 'company-1' } },
+    ]
+    useResults([...rows, ...rows])
+
+    const first = await peekOAuthState('state-token')
+    const second = await peekOAuthState('state-token')
+
+    expect(first).not.toBeNull()
+    expect(second).toEqual(first)
+  })
+
+  // A used, expired, handoff or unknown row is excluded by the statement's
+  // own predicates (pinned in the predicate test above), so each of them
+  // reaches this code as the same thing: no row, and no consent is read.
+  it('returns null when the statement matches no row', async () => {
+    const { calls } = useResults([{ data: null }])
+
+    await expect(peekOAuthState('dead-token')).resolves.toBeNull()
+    expect(calls).toHaveLength(1)
+  })
+
+  it('returns null when the consent behind a live token is gone', async () => {
+    useResults([{ data: { consent_id: 'consent-1', user_id: 'user-1' } }, { data: null }])
+
+    await expect(peekOAuthState('state-token')).resolves.toBeNull()
+  })
+
+  it('returns null when the read itself errors', async () => {
+    useResults([{ data: null, error: { message: 'boom' } }])
+
+    await expect(peekOAuthState('state-token')).resolves.toBeNull()
+  })
+})
+
+/**
+ * The reason goes to the server log only (the callback answers every dead
+ * state with one sentence), so that a rejected callback can be sorted into
+ * replay or expiry after its row is purged.
+ */
+describe('moveOpenLogins', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const predicates = (call: RecordedCall) =>
+    call.ops
+      .filter(([op]) => op === 'in' || op === 'is' || op === 'gt')
+      .map(([op, args]) => (op === 'gt' ? [op, args[0]] : [op, ...args]))
+
+  it('moves only the states a callback could still use, under the same predicates as a peek', async () => {
+    const { calls } = useResults([{ data: [{ code: 'state-1' }] }])
+
+    await expect(moveOpenLogins(['consent-1', 'consent-2'], 'consent-new')).resolves.toBe(1)
+
+    expect(calls[0].table).toBe('provider_otc')
+    // Only the consent the state resolves to changes: initiator and origin stay.
+    expect(findOp(calls[0], 'update')?.[1]).toEqual([{ consent_id: 'consent-new' }])
+    expect(predicates(calls[0])).toEqual([
+      ['in', 'consent_id', ['consent-1', 'consent-2']],
+      ['is', 'used_at', null],
+      ['is', 'provider_code', null],
+      ['is', 'provider_error', null],
+      ['gt', 'expires_at'],
+    ])
+    for (const write of ['delete', 'insert', 'upsert']) expect(findOp(calls[0], write)).toBeUndefined()
+  })
+
+  it('touches nothing for no earlier attempts', async () => {
+    const { calls } = useResults([])
+    await expect(moveOpenLogins([], 'consent-new')).resolves.toBe(0)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('moves nothing when the update fails: /connect then cleans up as before', async () => {
+    useResults([{ data: null, error: { message: 'boom' } }])
+    await expect(moveOpenLogins(['consent-1'], 'consent-new')).resolves.toBe(0)
+  })
+})
+
+describe('consentHoldsTokens', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('reads the token row of the consent alone', async () => {
+    const { calls } = useResults([{ data: [{ consent_id: 'consent-1' }] }])
+    await expect(consentHoldsTokens('consent-1')).resolves.toBe(true)
+    expect(calls[0].table).toBe('provider_consent_tokens')
+    expect(findOp(calls[0], 'eq', 'consent_id')?.[1]).toEqual(['consent_id', 'consent-1'])
+  })
+
+  it('is false without a token row, and when the read fails', async () => {
+    useResults([{ data: [] }])
+    await expect(consentHoldsTokens('consent-1')).resolves.toBe(false)
+    useResults([{ data: null, error: { message: 'boom' } }])
+    await expect(consentHoldsTokens('consent-1')).resolves.toBe(false)
+  })
+})
+
+describe('oauthStateRejectionReason', () => {
+  const past = () => new Date(Date.now() - 60_000).toISOString()
+  const future = () => new Date(Date.now() + 60_000).toISOString()
+  const stateRow = (overrides: Record<string, unknown>) => ({
+    used_at: null, expires_at: future(), provider_code: null, provider_error: null, ...overrides,
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it.each([
+    ['unknown', 'no row has this code', null],
+    ['used', 'a code callback already spent it', stateRow({ used_at: past() })],
+    ['used', 'it was spent and has since expired', stateRow({ used_at: past(), expires_at: past() })],
+    ['expired', 'it outlived its lifetime unused', stateRow({ expires_at: past() })],
+    ['handoff', 'it is a live handoff holding a code', stateRow({ provider_code: 'v1:sealed' })],
+    ['handoff', 'it is a live handoff holding an error', stateRow({ provider_error: 'v1:sealed' })],
+    ['unknown', 'the row is a live state after all', stateRow({})],
+  ])('answers %s when %s', async (reason, _why, data) => {
+    useResults([{ data }])
+
+    await expect(oauthStateRejectionReason('dead-token')).resolves.toBe(reason)
+  })
+
+  it('looks the row up by code alone, once, and writes nothing', async () => {
+    const { calls } = useResults([{ data: stateRow({ used_at: past() }) }])
+
+    await oauthStateRejectionReason('dead-token')
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].table).toBe('provider_otc')
+    expect(calls[0].ops.map(([op]) => op)).toEqual(['select', 'eq', 'maybeSingle'])
+    expect(findOp(calls[0], 'eq', 'code')?.[1]).toEqual(['code', 'dead-token'])
+  })
+
+  it('never throws: a failed lookup is unknown', async () => {
+    useResults([{ data: null, error: { message: 'boom' } }])
+    await expect(oauthStateRejectionReason('dead-token')).resolves.toBe('unknown')
+
+    serviceClient = { from: vi.fn((): unknown => { throw new Error('unavailable') }) }
+    await expect(oauthStateRejectionReason('dead-token')).resolves.toBe('unknown')
   })
 })
 

@@ -1,34 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { MappingResult } from '@/types'
-import { costAccountReportsRcBasis, isReverseChargeBasisLeg } from './vat-entries'
-
-/**
- * Reconcile a reverse-charge purchase's basis pair with the account its cost
- * line was moved to. The category path adds the 45xx/4598 pair for its own
- * default cost account; when an override puts the cost line on an account
- * that reports ruta 20-24 by itself (a BAS basis account such as 4535, or a
- * class 4-6 account configured with a reverse_charge_* treatment, per
- * costAccountReportsRcBasis with the chart row's treatment), the pair would
- * count the purchase twice. The fiktiv moms (2645/2614) stays either way.
- *
- * Only the money-out side can carry a reverse-charge purchase, so an income
- * override is left alone. Shared by every account_override path (MCP and
- * approval commit via applyAccountOverride, the dashboard and v1 routes).
- */
-export function reconcileRcBasisWithCostAccount(
-  mappingResult: MappingResult,
-  transactionAmount: number,
-  account: string,
-  accountVatTreatment: string | null,
-): MappingResult {
-  if (transactionAmount >= 0) return mappingResult
-  if (!costAccountReportsRcBasis(account, accountVatTreatment)) return mappingResult
-  if (!mappingResult.vat_lines.some((l) => isReverseChargeBasisLeg(l.account_number))) return mappingResult
-  return {
-    ...mappingResult,
-    vat_lines: mappingResult.vat_lines.filter((l) => !isReverseChargeBasisLeg(l.account_number)),
-  }
-}
 
 /**
  * Apply an explicit account override to a category-derived MappingResult.
@@ -58,8 +29,18 @@ export function reconcileRcBasisWithCostAccount(
  * diverse are class 2 but not moms-line accounts; auto-VAT there would
  * double-post).
  *
- * Throws on unknown/inactive account or a degenerate same-account entry; the
- * message is Swedish and actionable for both the agent and the approval UI.
+ * A reverse-charge basis pair is left as the category booked it: the caller
+ * settles it on the final account afterwards (reconcileRcBasisWithChart in
+ * lib/bookkeeping/rc-basis-reconcile.ts), as every bank-categorization door does.
+ *
+ * Throws on unknown/inactive account (TX_CATEGORIZE_INVALID_ACCOUNT) or a
+ * degenerate same-account entry (TX_CATEGORIZE_INVALID_MAPPING); the message
+ * is Swedish and actionable for both the agent and the approval UI. A thrown
+ * error without a code is a database failure.
+ *
+ * `allowUnlisted` is the proposal preview's: it places an account the chart
+ * lacks or has inactive (the review activates the person's pick as it books)
+ * and reads its class from the number. Every booking leaves it off.
  */
 export async function applyAccountOverride(
   supabase: SupabaseClient,
@@ -68,10 +49,11 @@ export async function applyAccountOverride(
   transactionAmount: number,
   mappingResult: MappingResult,
   vatExplicit: boolean,
+  options: { allowUnlisted?: boolean } = {},
 ): Promise<MappingResult> {
   const { data: account, error } = await supabase
     .from('chart_of_accounts')
-    .select('account_number, account_class, is_active, default_vat_treatment')
+    .select('account_number, account_class, is_active')
     .eq('company_id', companyId)
     .eq('account_number', accountOverride)
     .maybeSingle()
@@ -79,13 +61,13 @@ export async function applyAccountOverride(
   if (error) {
     throw new Error(`Database error: ${error.message}`)
   }
-  if (!account) {
+  if (!account && !options.allowUnlisted) {
     throw unusableOverride(
       `Konto ${accountOverride} finns inte i kontoplanen: account_override kräver ett befintligt aktivt konto. ` +
       'Skapa det först (gnubok_create_account) eller välj ett annat konto.',
     )
   }
-  if (!account.is_active) {
+  if (account && !account.is_active && !options.allowUnlisted) {
     throw unusableOverride(
       `Konto ${accountOverride} är inaktivt i kontoplanen. ` +
       'Aktivera det först (gnubok_update_account med is_active=true) eller välj ett annat konto.',
@@ -99,24 +81,24 @@ export async function applyAccountOverride(
   }
 
   if (mappingResult.debit_account === mappingResult.credit_account) {
-    throw new Error(
-      `account_override ${accountOverride} är samma konto som motkontot: ` +
-      'verifikatet skulle debitera och kreditera samma konto. Välj ett annat konto.',
+    throw Object.assign(
+      new Error(
+        `account_override ${accountOverride} är samma konto som motkontot: ` +
+        'verifikatet skulle debitera och kreditera samma konto. Välj ett annat konto.',
+      ),
+      { code: 'TX_CATEGORIZE_INVALID_MAPPING' },
     )
   }
 
   const overrideNum = parseInt(accountOverride, 10)
   const isMomsLineAccount = overrideNum >= 2610 && overrideNum <= 2649
-  if (!vatExplicit || (account.account_class === 2 && !isMomsLineAccount)) {
+  // BAS: the class is the number's first digit, for an account the chart lacks.
+  const balanceSheetClass2 = account ? account.account_class === 2 : accountOverride.startsWith('2')
+  if (!vatExplicit || (balanceSheetClass2 && !isMomsLineAccount)) {
     mappingResult.vat_lines = []
   }
 
-  return reconcileRcBasisWithCostAccount(
-    mappingResult,
-    transactionAmount,
-    accountOverride,
-    account.default_vat_treatment ?? null,
-  )
+  return mappingResult
 }
 
 /**

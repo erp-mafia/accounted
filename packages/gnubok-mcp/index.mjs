@@ -18,6 +18,8 @@
  * Get your API key at: https://app.gnubok.se/settings/api
  */
 
+import { readFileSync } from 'node:fs'
+
 const API_KEY = process.env.GNUBOK_API_KEY
 const MCP_URL = process.env.GNUBOK_URL || 'https://app.gnubok.se/api/extensions/ext/mcp-server/mcp'
 // Optional distribution-channel marker (e.g. 'openclaw'). Forwarded as
@@ -28,6 +30,41 @@ const rawClient = process.env.GNUBOK_CLIENT
 const CLIENT = rawClient && /^[A-Za-z0-9._-]{1,64}$/.test(rawClient) ? rawClient : undefined
 if (rawClient && !CLIENT) {
   process.stderr.write('gnubok-mcp: ignoring GNUBOK_CLIENT: must match [A-Za-z0-9._-]{1,64}\n')
+}
+
+// A value reduced to [A-Za-z0-9._-], at most 64 characters: a valid
+// User-Agent product token. Undefined when nothing is left.
+function toUserAgentToken(value) {
+  if (typeof value !== 'string') return undefined
+  const token = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 64).replace(/-+$/, '')
+  return token || undefined
+}
+
+function readPackageVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+    return toUserAgentToken(pkg.version) ?? 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+// User-Agent: `gnubok-mcp/<version>`, and from the MCP client's initialize
+// request on `gnubok-mcp/<version> (<name>/<version>)` from its clientInfo.
+// Telemetry only, like GNUBOK_CLIENT; when that marker is set, clientInfo is
+// not read.
+const BASE_USER_AGENT = `gnubok-mcp/${readPackageVersion()}`
+let userAgent = BASE_USER_AGENT
+
+function noteClientInfo(message) {
+  if (CLIENT || !message || typeof message !== 'object') return
+  if (message.method !== 'initialize') return
+  const info = message.params && message.params.clientInfo
+  if (!info || typeof info !== 'object') return
+  const name = toUserAgentToken(info.name)
+  if (!name) return
+  const version = toUserAgentToken(info.version)
+  userAgent = `${BASE_USER_AGENT} (${version ? `${name}/${version}` : name})`
 }
 
 if (!API_KEY) {
@@ -83,6 +120,9 @@ async function handleMessage(line) {
     return
   }
 
+  // Reads the parsed copy only: the line itself is forwarded unchanged.
+  noteClientInfo(parsed)
+
   const isNotification = parsed.id === undefined || parsed.id === null
 
   try {
@@ -91,6 +131,7 @@ async function handleMessage(line) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${API_KEY}`,
+        'User-Agent': userAgent,
         ...(CLIENT ? { 'X-Gnubok-Client': CLIENT } : {}),
       },
       body: line,

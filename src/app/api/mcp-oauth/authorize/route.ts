@@ -12,7 +12,9 @@ import {
   type PickerCompany,
 } from '@/lib/company/company-picker'
 import { getBranding } from '@/lib/branding/service'
+import { STANDALONE_HEADING_CSS } from '@/lib/branding/standalone-page-css'
 import {
+  builtInOnwardOrigins,
   capScopesForRole,
   lookupCompanyRole,
   resolveRedirectUri,
@@ -25,6 +27,7 @@ import {
   API_KEY_SCOPES,
   DEFAULT_OAUTH_SCOPES,
   SCOPE_GROUPS,
+  STAGING_SCOPES,
   findStageApproveConflict,
   scopeKind,
   validateScopes,
@@ -53,7 +56,8 @@ type ScopeParseResult =
  *
  * Returns:
  *   - { ok, scopes: undefined } when no scope param was supplied: the consent
- *     UI pre-checks ALL_SCOPES (one-click consent; every write is staged for
+ *     UI offers ALL_SCOPES and pre-checks all of them except
+ *     pending_operations:approve (one-click consent; every write is staged for
  *     approval, and the empty-selection POST fallback stays read-only).
  *   - { ok, scopes: [...] } when at least one valid scope was requested.
  *   - { invalid_scope } when a scope param was supplied but every value was
@@ -114,11 +118,17 @@ function verifyScopeBinding(scopeParam: string, signature: string): boolean {
   return crypto.timingSafeEqual(expectedBuf, presentedBuf)
 }
 
-function buildLoginRedirect(request: Request): Response {
+// The login and step-up redirects are built on the same base as the iss this
+// route returns (resolveDiscoveryBaseUrl), never on request.url's origin.
+// Behind a reverse proxy the standalone Next.js server sees its own bind
+// address in request.url (http://0.0.0.0:3000 by default), so an
+// origin-relative redirect sends the browser to an unreachable host and the
+// connector's OAuth popup dies on the first unauthenticated hit.
+async function buildLoginRedirect(request: Request): Promise<Response> {
   const url = new URL(request.url)
   const next = `${url.pathname}${url.search}`
   return NextResponse.redirect(
-    new URL(`/login?next=${encodeURIComponent(next)}`, url.origin)
+    new URL(`/login?next=${encodeURIComponent(next)}`, await resolveDiscoveryBaseUrl(request))
   )
 }
 
@@ -149,8 +159,13 @@ async function requireAal2(
   if (!mfaStepUpApplies(user)) return null
   const url = new URL(request.url)
   const returnTo = `${url.pathname}${url.search}`
-  const stepUp = (page: '/mfa/verify' | '/mfa/enroll') =>
-    NextResponse.redirect(new URL(`${page}?returnTo=${encodeURIComponent(returnTo)}`, url.origin))
+  const stepUp = async (page: '/mfa/verify' | '/mfa/enroll') =>
+    NextResponse.redirect(
+      new URL(
+        `${page}?returnTo=${encodeURIComponent(returnTo)}`,
+        await resolveDiscoveryBaseUrl(request),
+      ),
+    )
 
   // Only a positive "this session is AAL2" answer lets consent through. A
   // failed or empty assurance lookup is treated as AAL1 (verify page), never
@@ -179,7 +194,7 @@ async function requireAal2(
   return shouldEnforceMfa(user) ? stepUp('/mfa/enroll') : null
 }
 
-function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {
+async function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Promise<Response> {
   const url = new URL(redirectUri)
   url.searchParams.set('error', error)
   url.searchParams.set('error_description', desc)
@@ -187,7 +202,7 @@ function errorRedirect(request: Request, redirectUri: string, state: string | nu
   // RFC 9207: identify the issuer in every authorization response so clients
   // can detect mix-up attacks. Must equal the issuer that discovery
   // advertised for the host the client connected through.
-  url.searchParams.set('iss', resolveDiscoveryBaseUrl(request))
+  url.searchParams.set('iss', await resolveDiscoveryBaseUrl(request))
   return NextResponse.redirect(url.toString(), 303)
 }
 
@@ -310,6 +325,7 @@ export async function GET(request: Request) {
   }
   const showCompanyPicker = pickerCompanies.length >= 2
 
+  const appName = escapeHtml(getBranding().appName)
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
 
   // Client identity and the host the browser will be sent to after consent.
@@ -370,20 +386,29 @@ export async function GET(request: Request) {
   //     Rows outside the ceiling are not rendered; the POST handler enforces
   //     the same bound server-side.
   //   - Pre-checked, built-in client (Claude, ChatGPT, localhost): the whole
-  //     ceiling. One-click consent (founder decision 2026-08-26; the read-only
-  //     default killed the agent flow with an insufficient-scope dead-end
-  //     mid-chat). The mitigations that make full-by-default defensible: every
-  //     write is STAGED for explicit approval before anything touches the
-  //     ledger, the full scope list stays on the page (collapsed but
-  //     expandable) with every row untickable, the warn line states the
-  //     staging rule above the button, and the grant is revocable under
-  //     Inställningar › API-nycklar. RFC 6749 §3.3 lets the resource owner
+  //     ceiling EXCEPT pending_operations:approve. One-click consent came from
+  //     the product decision of 2026-08-26 (the read-only default killed the
+  //     agent flow with an insufficient-scope dead-end mid-chat); the operator
+  //     decision of 2026-10-03 (issue #3408, option B) took approve out of
+  //     that default, so a default connection always leaves the final approval
+  //     with a human. Every write is STAGED as an agent proposal that the user
+  //     approves under Att göra › Rutin. A user who wants the agent to
+  //     approve its own proposals ticks approve themselves, and only then does
+  //     the page show the segregation-of-duties sentence and /token record the
+  //     acknowledgement. The full scope list stays on the page (collapsed but
+  //     expandable) with every row untickable, the warn box explains each
+  //     level above the button, and the grant is revocable under
+  //     Agenter › Koppla en agent. RFC 6749 §3.3 lets the resource owner
   //     authorise the set presented; the consent is the click on a page that
   //     shows exactly that set.
   //   - Pre-checked, DB-registered client: only what it explicitly asked for,
   //     or the :read scopes when it asked for nothing. Write and approve
   //     scopes stay unticked until the user opts in: a registration is just a
   //     URL some member typed into settings, not a vetted integration.
+  //   - Approve is never pre-checked, whoever the client is and whatever it
+  //     asked for: a client's scope request is not the user's choice, and
+  //     DEFAULT_OAUTH_SCOPES (lib/auth/scope-catalog.ts) requires approval
+  //     scopes to be affirmatively ticked by the user.
   const clientCeiling: ApiKeyScope[] = parsed.scopes ?? [...ALL_SCOPES]
   const roleCapped = companyId ? capScopesForRole(clientCeiling, role) : clientCeiling
   if (roleCapped.length === 0) {
@@ -398,32 +423,76 @@ export async function GET(request: Request) {
   const roleLimited = roleCapped.length < clientCeiling.length
   const grantCeiling = new Set<ApiKeyScope>(roleCapped)
   const preChecked = new Set<ApiKeyScope>(
-    resolution.kind === 'built_in' || parsed.scopes
+    (resolution.kind === 'built_in' || parsed.scopes
       ? roleCapped
       : roleCapped.filter((s) => scopeKind(s) === 'read')
+    ).filter((s) => s !== 'pending_operations:approve')
   )
   const allPreChecked = preChecked.size === grantCeiling.size
+  const preCheckedHasWrite = [...preChecked].some((s) => scopeKind(s) === 'write')
   const ceilingHasWrite = roleCapped.some((s) => scopeKind(s) === 'write')
+  const ceilingHasStaging = roleCapped.some((s) => STAGING_SCOPES.includes(s))
+  const approveOffered = grantCeiling.has('pending_operations:approve')
   const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
 
+  // preCheckedHasWrite implies the client-or-built-in branch above, so
+  // preChecked is then the ceiling minus approve: "allt utom Godkänn". A
+  // client that asked for approve alone gets nothing pre-checked; the fold
+  // then opens so the one box to tick is in view.
+  const nothingPreChecked = preChecked.size === 0
   const ledeHtml = !ceilingHasWrite
     ? `${escapeHtml(client.name)} begär läsåtkomst till ditt ${appNameLower}-konto. Inga skrivbehörigheter ingår.`
     : allPreChecked
       ? `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Alla behörigheter är förvalda; varje skrivning kräver ändå ditt godkännande innan den bokförs.`
-      : `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Endast läsbehörigheter är förvalda: skrivbehörigheter måste du själv välja nedan, och varje skrivning kräver ändå ditt godkännande innan den bokförs.`
+      : nothingPreChecked
+        ? `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Inget är förvalt: välj själv nedan vad ${escapeHtml(client.shortName)} ska få göra.`
+        : preCheckedHasWrite
+          ? `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Allt utom Godkänn är förvalt; Godkänn väljer du själv nedan.`
+          : `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Endast läsbehörigheter är förvalda: övriga behörigheter väljer du själv nedan.`
   const roleNoteHtml = roleLimited
     ? `<p class="note">Din roll i företaget är läsare, så bara läsbehörigheter kan ges här.</p>`
     : ''
   const summaryHintHtml = allPreChecked
     ? 'Alla förvalda &middot; visa och justera'
-    : 'Endast läs förvalt &middot; visa och justera'
+    : nothingPreChecked
+      ? 'Inget förvalt &middot; välj nedan'
+      : preCheckedHasWrite
+        ? 'Allt utom Godkänn förvalt &middot; visa och justera'
+        : 'Endast läs förvalt &middot; visa och justera'
+
+  // The warn box says what each level on offer means in plain words (issue
+  // #3408): read changes nothing, write turns bookkeeping into agent
+  // proposals the user approves (the write scopes also carry a few direct,
+  // non-ledger writes such as document uploads, so the line says so), approve
+  // lets the agent approve its own proposals with no review. Nothing in it
+  // promises a review that the approve box can take away. It also says how
+  // to change the level later: scopes cannot be edited on an existing key
+  // (PATCH /api/settings/api-keys/[id] excludes them by design), so the way
+  // is to disconnect and connect again.
+  const agentName = escapeHtml(client.shortName)
+  const levelLinesHtml = [
+    `<li><strong>Läs:</strong> ${agentName} kan läsa och svara på frågor om bokföringen men ändrar inget.</li>`,
+    ceilingHasStaging
+      ? `<li><strong>Skriv:</strong> ${agentName} förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Rutin. Enklare saker, som att ladda upp underlag, görs direkt.</li>`
+      : '',
+    approveOffered
+      ? `<li><strong>Godkänn:</strong> ${agentName} får godkänna sina egna förslag och då bokförs det utan din granskning.</li>`
+      : '',
+  ].join('')
   // Segregation of duties: a key that can both stage and approve lets the
   // agent commit bookkeeping without a human review in the app. Mirrors
   // app/api/settings/api-keys, where the same combination needs an explicit
-  // acknowledgement: here the statement sits above the button and the token
-  // route records the consent click as that acknowledgement.
+  // acknowledgement. The sentence is rendered visible whenever the ceiling
+  // allows the combination, and the inline script hides it on load and keeps
+  // it hidden until the user has actually ticked approve together with a
+  // staging scope (data-staging marks STAGING_SCOPES). That is exactly when
+  // the token route records the consent click as the acknowledgement
+  // (findStageApproveConflict over the granted scopes). Visible by default
+  // fails toward showing: without the script (JavaScript off, script blocked)
+  // the user still reads the rule before a click that may be recorded as
+  // consent to it, so the wording holds whether or not approve is ticked.
   const sodNoteHtml = findStageApproveConflict(roleCapped)
-    ? ` Ger du både skriv- och godkännandebehörighet kan klienten både förbereda och godkänna bokföring utan din granskning i ${appNameLower}; ditt godkännande här registreras som ett medgivande till det.`
+    ? `<p class="warn-sod" id="sod-note">När Godkänn är valt kan ${agentName} både förbereda och godkänna bokföring utan din granskning, och ditt klick på Tillåt åtkomst registreras då som ditt medgivande till det.</p>`
     : ''
 
   // Render consent page
@@ -437,29 +506,29 @@ export async function GET(request: Request) {
   <title>Anslut MCP-klient: ${appNameLower}</title>
   <style>
     :root {
-      --bg: hsl(0 0% 100%);
+      --bg: hsl(43 26% 95%);
       --surface: hsl(0 0% 100%);
-      --secondary: hsl(40 11% 89%);
-      --secondary-hover: hsl(40 11% 84%);
-      --muted: hsl(40 8% 93%);
-      --border: hsl(45 5% 85%);
-      --border-strong: hsl(45 5% 72%);
-      --fg: hsl(0 0% 9%);
-      --fg-muted: hsl(0 0% 40%);
-      --fg-faint: hsl(0 0% 55%);
-      --primary: hsl(0 0% 9%);
-      --primary-hover: hsl(0 0% 20%);
+      --secondary: hsl(38 36% 35% / 0.1);
+      --secondary-hover: hsl(38 36% 35% / 0.14);
+      --muted: hsl(38 36% 35% / 0.07);
+      --border: hsl(36 22% 9% / 0.1);
+      --border-strong: hsl(36 22% 9% / 0.22);
+      --fg: hsl(38 21% 7%);
+      --fg-muted: hsl(40 3% 44%);
+      --fg-faint: hsl(40 3% 44%);
+      --primary: hsl(36 22% 9% / 0.88);
+      --primary-hover: hsl(36 22% 9% / 0.8);
       --warning: hsl(38 55% 50%);
       --warning-bg: hsl(38 60% 96%);
       --warning-border: hsl(38 45% 82%);
       --warning-fg: hsl(28 60% 28%);
       --warm-accent: hsl(38 45% 52%);
-      --ring: hsl(0 0% 9%);
+      --ring: hsl(215 100% 44% / 0.7);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { -webkit-text-size-adjust: 100%; }
     body {
-      font-family: 'Geist', -apple-system, system-ui, 'Segoe UI', sans-serif;
+      font-family: Inter, -apple-system, system-ui, 'Segoe UI', sans-serif;
       background: var(--bg);
       color: var(--fg);
       display: flex;
@@ -474,7 +543,7 @@ export async function GET(request: Request) {
     }
     .card {
       background: var(--surface);
-      border: 1px solid var(--border);
+      box-shadow: 0 0 0 0.5px hsl(36 22% 9% / 0.07), 0 1px 2px 0 hsl(36 22% 9% / 0.04);
       border-radius: 12px;
       padding: 2.5rem;
       max-width: 960px;
@@ -491,33 +560,7 @@ export async function GET(request: Request) {
       .card { padding: 1.5rem; }
       .scope-groups { grid-template-columns: 1fr; column-gap: 0; }
     }
-    .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.375rem;
-      font-size: 0.6875rem;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--fg-faint);
-      margin-bottom: 0.875rem;
-    }
-    .eyebrow::before {
-      content: "";
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--warm-accent);
-    }
-    h1 {
-      font-family: 'Hedvig Letters Serif', Georgia, 'Times New Roman', serif;
-      font-size: 2rem;
-      font-weight: 400;
-      letter-spacing: -0.018em;
-      line-height: 1.1;
-      color: var(--fg);
-      margin-bottom: 0.625rem;
-    }
+    ${STANDALONE_HEADING_CSS}
     .lede {
       font-size: 0.875rem;
       color: var(--fg-muted);
@@ -740,6 +783,21 @@ export async function GET(request: Request) {
       margin: 1.5rem 0 0;
       line-height: 1.55;
     }
+    .warn-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      min-width: 0;
+    }
+    .warn-levels {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .warn-levels strong { font-weight: 600; }
+    .warn-sod { font-weight: 500; }
+    .warn-sod[hidden] { display: none; }
     .warn-icon {
       flex-shrink: 0;
       width: 14px;
@@ -758,7 +816,7 @@ export async function GET(request: Request) {
       font-family: inherit;
       font-size: 0.8125rem;
       font-weight: 500;
-      border-radius: 8px;
+      border-radius: 6px;
       cursor: pointer;
       border: 1px solid;
       transition: background 150ms, border-color 150ms, color 150ms;
@@ -867,7 +925,7 @@ export async function GET(request: Request) {
 </head>
 <body>
   <main class="card" role="main">
-    <div class="eyebrow">${appNameLower} · mcp</div>
+    <div class="eyebrow">${appName} · MCP</div>
     <h1>Anslut MCP-klient</h1>
     <p class="lede">${ledeHtml}</p>
 
@@ -883,7 +941,7 @@ export async function GET(request: Request) {
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
       ${companyPickerHtml}
 
-      <details class="scopes-details">
+      <details class="scopes-details"${nothingPreChecked ? ' open' : ''}>
         <summary>
           <span class="scopes-title">Behörigheter</span>
           <span class="scopes-summary-hint">${summaryHintHtml}</span>
@@ -906,7 +964,11 @@ export async function GET(request: Request) {
           <path d="M8 5v3.5" stroke-linecap="round"/>
           <circle cx="8" cy="11" r="0.5" fill="currentColor" stroke="none"/>
         </svg>
-        <span>Skrivbehörigheter låter agenten stagea verifikationer, fakturor och löner. Varje skrivoperation kräver ditt godkännande i ${appNameLower} innan den skrivs till databasen.${sodNoteHtml}</span>
+        <div class="warn-body">
+          <ul class="warn-levels">${levelLinesHtml}</ul>
+          ${sodNoteHtml}
+          <p class="warn-change">Vill du ändra senare? Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Agenter &rsaquo; Koppla en agent och anslut igen.</p>
+        </div>
       </div>
 
       <div class="actions">
@@ -915,16 +977,36 @@ export async function GET(request: Request) {
       </div>
     </form>
 
-    <p class="footer">Du kan när som helst återkalla åtkomsten under Inställningar &rsaquo; API-nycklar.</p>
+    <p class="footer">Du kan när som helst återkalla åtkomsten under Agenter &rsaquo; Koppla en agent.</p>
   </main>
 
   <script nonce="${cspNonce}">
     (function() {
       var form = document.getElementById('consent-form');
       var boxes = form.querySelectorAll('input[name="scopes"]');
+      // The segregation-of-duties sentence shows only while approve is ticked
+      // together with a staging scope: the same combination for which the
+      // token route records the consent click as the acknowledgement. The
+      // server renders it visible (the no-script fallback); the syncSod()
+      // call below hides it on load until that combination is ticked.
+      var sodNote = document.getElementById('sod-note');
+      function syncSod() {
+        if (!sodNote) return;
+        var approve = false;
+        var staging = false;
+        boxes.forEach(function(b) {
+          if (!b.checked) return;
+          if (b.value === 'pending_operations:approve') approve = true;
+          if (b.dataset.staging === '1') staging = true;
+        });
+        sodNote.hidden = !(approve && staging);
+      }
+      boxes.forEach(function(b) { b.addEventListener('change', syncSod); });
       function setAll(predicate) {
         boxes.forEach(function(b) { b.checked = predicate(b); });
+        syncSod();
       }
+      syncSod();
       document.getElementById('select-read').addEventListener('click', function() {
         setAll(function(b) { return b.dataset.kind === 'read'; });
       });
@@ -979,7 +1061,12 @@ export async function GET(request: Request) {
   // so the post-consent 303 would be blocked in Chromium. A scheme-source
   // (cursor:) is the only form CSP offers for such a URI.
   const redirectUrl = new URL(redirectUri)
-  const formActionSource = redirectUrl.origin === 'null' ? redirectUrl.protocol : redirectUrl.origin
+  // A built-in callback that forwards to another origin (www.cursor.com 308s
+  // to cursor.com) needs that origin named too, or the chain stops there.
+  const formActionSource = [
+    redirectUrl.origin === 'null' ? redirectUrl.protocol : redirectUrl.origin,
+    ...builtInOnwardOrigins(redirectUri),
+  ].join(' ')
   const csp = [
     "default-src 'none'",
     `script-src 'nonce-${cspNonce}'`,
@@ -1176,12 +1263,17 @@ export async function POST(request: Request) {
     ? boundedToClient
     : [...DEFAULT_OAUTH_SCOPES].filter(s => ceilingSet.has(s))
   if (grantedScopes.length === 0) {
+    // Two causes: the role allows none of the requested scopes, or the user
+    // ticked nothing on a page with no read default to fall back on (a
+    // client that asked for approve alone, which is never pre-ticked).
     return errorRedirect(
       request,
       redirectUri,
       state,
       'invalid_scope',
-      'None of the requested scopes are available to your role in this company'
+      roleCapped.length === 0
+        ? 'None of the requested scopes are available to your role in this company'
+        : 'No permission was ticked on the consent page; tick at least one to allow access'
     )
   }
 
@@ -1202,7 +1294,7 @@ export async function POST(request: Request) {
   if (state) callbackUrl.searchParams.set('state', state)
   // RFC 9207: issuer identification in the authorization response. Must match
   // the issuer discovery advertises for the host the client connected through.
-  callbackUrl.searchParams.set('iss', resolveDiscoveryBaseUrl(request))
+  callbackUrl.searchParams.set('iss', await resolveDiscoveryBaseUrl(request))
 
   // 303 See Other: forces browser to GET the callback URL, even though this
   // handler was reached via POST. NextResponse.redirect() defaults to 307,
@@ -1300,6 +1392,10 @@ function renderCompanyPicker(companies: PickerCompany[], activeCompanyId: string
 function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'): string {
   const meta = API_KEY_SCOPES[scope]
   const id = `scope-${scope.replace(/[^a-z0-9]/gi, '-')}`
+  // Marks the scopes that stage agent proposals, so the inline script can show
+  // the segregation-of-duties sentence for exactly the combination
+  // findStageApproveConflict flags.
+  const stagingAttr = STAGING_SCOPES.includes(scope) ? ' data-staging="1"' : ''
   // Labels are formatted "Område: verb" (läs/skriv/hantera/godkänn). Pull the
   // prefix as the display name and only render the verb as a tag for elevated
   // scopes: read-only is the implicit default and doesn't need a tag.
@@ -1310,7 +1406,7 @@ function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'):
     : ''
   return `
     <div class="scope-row ${kind}">
-      <input type="checkbox" id="${id}" name="scopes" value="${escapeHtml(scope)}" data-kind="${kind}" ${checked ? 'checked' : ''}>
+      <input type="checkbox" id="${id}" name="scopes" value="${escapeHtml(scope)}" data-kind="${kind}"${stagingAttr} ${checked ? 'checked' : ''}>
       <label for="${id}">
         <span class="scope-name-row">
           <span class="scope-name">${escapeHtml(displayName)}</span>
@@ -1328,33 +1424,41 @@ function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'):
  * the callback host (and marked verified, since only that vendor can receive
  * the code there); DB registrations show the name the registering member
  * typed in settings, tagged with who registered it, never as verified.
+ * `shortName` is the subject of the permission lines ("Claude kan läsa ...").
  */
 function describeClient(
   resolution: Exclude<RedirectUriResolution, { allowed: false }>,
-): { name: string; tag: string; verified: boolean } {
+): { name: string; shortName: string; tag: string; verified: boolean } {
   if (resolution.kind === 'built_in') {
     switch (resolution.provider) {
       case 'claude':
-        return { name: 'Claude (Anthropic)', tag: 'Verifierad', verified: true }
+        return { name: 'Claude (Anthropic)', shortName: 'Claude', tag: 'Verifierad', verified: true }
       case 'chatgpt':
-        return { name: 'ChatGPT (OpenAI)', tag: 'Verifierad', verified: true }
+        return { name: 'ChatGPT (OpenAI)', shortName: 'ChatGPT', tag: 'Verifierad', verified: true }
       case 'grok':
-        return { name: 'Grok (xAI)', tag: 'Verifierad', verified: true }
+        return { name: 'Grok (xAI)', shortName: 'Grok', tag: 'Verifierad', verified: true }
       case 'gemini':
-        return { name: 'Gemini (Google)', tag: 'Verifierad', verified: true }
+        return { name: 'Gemini (Google)', shortName: 'Gemini', tag: 'Verifierad', verified: true }
       case 'cursor':
-        return { name: 'Cursor (Anysphere)', tag: 'Verifierad', verified: true }
+        return { name: 'Cursor (Anysphere)', shortName: 'Cursor', tag: 'Verifierad', verified: true }
       case 'cursor_deeplink':
         // A custom scheme can be claimed by any local app (RFC 8252 section
         // 8.4), so it carries loopback trust, not vendor trust: same tag as
         // localhost, never marked verified.
-        return { name: 'Cursor (Anysphere)', tag: 'Din egen dator', verified: false }
+        return { name: 'Cursor (Anysphere)', shortName: 'Cursor', tag: 'Din egen dator', verified: false }
+      case 'squidler':
+        return { name: 'Squidler', shortName: 'Squidler', tag: 'Verifierad', verified: true }
+      case 'celemine':
+        return { name: 'Celemine', shortName: 'Celemine', tag: 'Verifierad', verified: true }
+      case 'flytt_extension':
+        return { name: 'Flytta till Accounted', shortName: 'Flytta till Accounted', tag: 'Verifierad', verified: true }
       case 'local':
-        return { name: 'Lokal utveckling (localhost)', tag: 'Din egen dator', verified: false }
+        return { name: 'Lokal utveckling (localhost)', shortName: 'Klienten', tag: 'Din egen dator', verified: false }
     }
   }
   return {
     name: resolution.clientName,
+    shortName: resolution.clientName,
     tag: resolution.registeredByConsentingUser ? 'Registrerad av dig' : 'Registrerad av en kollega',
     verified: false,
   }

@@ -7,13 +7,18 @@ import {
   ENTITY_TYPE_LABELS_SV,
   UnknownEntityTypeError,
   booksCurrentTax,
+  cashFlowStatementRequirement,
   creationFlagReader,
   filesIncomeReturn,
+  hasK3ArsredovisningDocument,
   hasOwners,
   isEntityTypeCreatable,
   legalFormGlossary,
   legalFormProfile,
+  maintenanceFundAccount,
   plannedLegalForms,
+  preparesForenklatArsbokslut,
+  requiresHousingKeyRatios,
   supportsAccountingFramework,
   supportsCorporateTaxDispositions,
   templateAccountForForm,
@@ -30,16 +35,27 @@ function leaves(profile: LegalFormProfile): Record<string, unknown> {
     'bookkeeping.defaultMethod': profile.bookkeeping.defaultMethod,
     'bookkeeping.simplifiedRegelverk': profile.bookkeeping.simplifiedRegelverk,
     'bookkeeping.templateColumn': profile.bookkeeping.templateColumn,
+    'bookkeeping.skattekontoAccounts': JSON.stringify(profile.bookkeeping.skattekontoAccounts),
     'equity.closing': profile.equity.closing,
     'equity.priorYearCarry': profile.equity.priorYearCarry,
     'equity.retained': profile.equity.retained,
     'equity.hasOwners': profile.equity.hasOwners,
     'equity.settlement': JSON.stringify(profile.equity.settlement),
+    'equity.memberCapital': profile.equity.memberCapital,
+    'equity.maintenanceFund': profile.equity.maintenanceFund,
+    'equity.shareRegister': profile.equity.shareRegister,
     'filings.incomeReturn': profile.filings.incomeReturn,
     'filings.booksCurrentTax': profile.filings.booksCurrentTax,
     'filings.corporateTaxDispositions': profile.filings.corporateTaxDispositions,
     'filings.arsredovisning': profile.filings.arsredovisning,
     'filings.frameworks': JSON.stringify(profile.filings.frameworks),
+    'filings.ixbrl': profile.filings.ixbrl,
+    'filings.k3Document': profile.filings.k3Document,
+    'filings.auditorAlwaysRequired': profile.filings.auditorAlwaysRequired,
+    'filings.forenklatArsbokslut': profile.filings.forenklatArsbokslut,
+    'filings.revisorspateckningLagrum': profile.filings.revisorspateckningLagrum,
+    'filings.cashFlowStatement': profile.filings.cashFlowStatement,
+    'filings.housingKeyRatios': profile.filings.housingKeyRatios,
   }
 }
 
@@ -54,6 +70,8 @@ describe('legal forms: the registry', () => {
       enskild_firma: 'Enskild firma',
       aktiebolag: 'Aktiebolag',
       ideell_forening: 'Ideell förening',
+      ekonomisk_forening: 'Ekonomisk förening',
+      bostadsrattsforening: 'Bostadsrättsförening',
     })
   })
 
@@ -63,8 +81,8 @@ describe('legal forms: the registry', () => {
 
   it('names only accounts that exist in the BAS reference', () => {
     for (const form of forms) {
-      const { closing, priorYearCarry, settlement } = LEGAL_FORMS[form].equity
-      const named = [closing, priorYearCarry, settlement.withdrawal, settlement.contribution].filter(
+      const { closing, priorYearCarry, settlement, maintenanceFund } = LEGAL_FORMS[form].equity
+      const named = [closing, priorYearCarry, settlement.withdrawal, settlement.contribution, maintenanceFund].filter(
         (n): n is string => n !== null,
       )
       for (const account of named) {
@@ -103,7 +121,7 @@ describe('legal forms: capability readers', () => {
   it('report the filing capabilities of each form', () => {
     expect(filesIncomeReturn('aktiebolag')).toBe('INK2')
     expect(filesIncomeReturn('enskild_firma')).toBe('NE')
-    expect(filesIncomeReturn('ideell_forening')).toBeNull()
+    expect(filesIncomeReturn('ideell_forening')).toBe('INK3')
     expect(booksCurrentTax('aktiebolag')).toBe(true)
     expect(booksCurrentTax('ideell_forening')).toBe(false)
     expect(supportsCorporateTaxDispositions('aktiebolag')).toBe(true)
@@ -112,6 +130,35 @@ describe('legal forms: capability readers', () => {
     expect(supportsAccountingFramework('aktiebolag', 'K3')).toBe(true)
     expect(supportsAccountingFramework('ideell_forening', 'K2')).toBe(false)
     expect(supportsAccountingFramework('ideell_forening', 'K1')).toBe(true)
+  })
+
+  it('give a bostadsrättsförening K3 only, an always-required kassaflödesanalys, the 6:3 a key ratios and its fund', () => {
+    expect(supportsAccountingFramework('bostadsrattsforening', 'K3')).toBe(true)
+    expect(supportsAccountingFramework('bostadsrattsforening', 'K2')).toBe(false)
+    expect(cashFlowStatementRequirement('bostadsrattsforening')).toBe('always')
+    expect(cashFlowStatementRequirement('aktiebolag')).toBe('larger')
+    expect(cashFlowStatementRequirement('enskild_firma')).toBeNull()
+    expect(requiresHousingKeyRatios('bostadsrattsforening')).toBe(true)
+    // The K3 document is the aktiebolag's: kapitel 38 is not in it yet.
+    expect(hasK3ArsredovisningDocument('bostadsrattsforening')).toBe(false)
+    expect(hasK3ArsredovisningDocument('ekonomisk_forening')).toBe(false)
+    expect(hasK3ArsredovisningDocument('aktiebolag')).toBe(true)
+    expect(requiresHousingKeyRatios('ekonomisk_forening')).toBe(false)
+    expect(maintenanceFundAccount('bostadsrattsforening')).toBe('2088')
+    expect(maintenanceFundAccount('aktiebolag')).toBeNull()
+    // Not modelled yet: no income return, no tax booking, no dispositions.
+    expect(filesIncomeReturn('bostadsrattsforening')).toBeNull()
+    expect(booksCurrentTax('bostadsrattsforening')).toBe(false)
+    expect(supportsCorporateTaxDispositions('bostadsrattsforening')).toBe(false)
+    expect(hasOwners('bostadsrattsforening')).toBe(false)
+  })
+
+  it('prepare the förenklat årsbokslut only where an allmänt råd for it is modelled', () => {
+    expect(preparesForenklatArsbokslut('ideell_forening')).toBe('BFNAR 2010:1')
+    expect(preparesForenklatArsbokslut('aktiebolag')).toBeNull()
+    expect(preparesForenklatArsbokslut('ekonomisk_forening')).toBeNull()
+    // BFNAR 2006:1 for the enskild firma is not built yet.
+    expect(preparesForenklatArsbokslut('enskild_firma')).toBeNull()
   })
 
   it('know that a förening has members, not owners', () => {
@@ -146,5 +193,12 @@ describe('legal forms: creation gate reads the profile flag', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
     expect(isEntityTypeCreatable('ideell_forening')).toBe(true)
     expect(isEntityTypeCreatable('aktiebolag')).toBe(true)
+  })
+
+  it('keeps bostadsrättsförening closed until its flag is on', () => {
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', '')
+    expect(isEntityTypeCreatable('bostadsrattsforening')).toBe(false)
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', 'true')
+    expect(isEntityTypeCreatable('bostadsrattsforening')).toBe(true)
   })
 })

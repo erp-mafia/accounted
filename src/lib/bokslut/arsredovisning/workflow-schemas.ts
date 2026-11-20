@@ -22,6 +22,12 @@ import {
   isValidParentCompanyIdentifier,
   PARENT_COMPANY_IDENTIFIER_ERROR,
 } from './parent-company-identifier'
+import { DISCLOSURE_REQUIREMENTS } from './disclosures'
+import { USER_CLASSIFIABLE_KINDS } from './equity-kinds'
+
+/** Every requirement id of the disclosure matrix (disclosures/index.ts). */
+const DISCLOSURE_IDS = DISCLOSURE_REQUIREMENTS.map((requirement) => requirement.id) as [string, ...string[]]
+const EQUITY_KINDS = [...USER_CLASSIFIABLE_KINDS] as [string, ...string[]]
 
 // Strip non-printable control characters that would corrupt PDF output or
 // mislead a human reader of the årsredovisning. Whitelist printable ASCII
@@ -108,6 +114,37 @@ export const narrativeShape = {
     .nullable()
     .optional()
     .describe('ÅRL 5:20 §: medelantal anställda as a whole number; null uses the computed average.'),
+  // ÅRL 6 kap. 3 §: förvaltningsberättelse disclosures of an ekonomisk
+  // förening. Stored for every form; rendered and required only for the
+  // ekonomisk förening (completeness AR-EF-MEMBER-INFO).
+  member_count_change: sanitizedText(2000)
+    .nullable()
+    .optional()
+    .describe('ÅRL 6 kap. 3 § (ekonomisk förening): change in the number of members during the year.'),
+  insatser_repayable_next_year: z
+    .number()
+    .min(0)
+    .max(1_000_000_000_000)
+    .nullable()
+    .optional()
+    .transform((value) =>
+      value === null || value === undefined ? value : Math.round(value * 100) / 100,
+    )
+    .describe('ÅRL 6 kap. 3 § (ekonomisk förening): insatser to repay next fiscal year, SEK; 0 when none.'),
+  forlagsinsatser_dividend_right: sanitizedText(2000)
+    .nullable()
+    .optional()
+    .describe('ÅRL 6 kap. 3 § (ekonomisk förening): the distribution right förlagsinsatser carry.'),
+  forlagsinsatser_redeemable_two_years: z
+    .number()
+    .min(0)
+    .max(1_000_000_000_000)
+    .nullable()
+    .optional()
+    .transform((value) =>
+      value === null || value === undefined ? value : Math.round(value * 100) / 100,
+    )
+    .describe('ÅRL 6 kap. 3 § (ekonomisk förening): förlagsinsatser redeemable within two years, SEK; 0 when none.'),
   long_term_debt_over_five_years_confirmed: z.boolean().optional(),
   securities_pledged_confirmed: z.boolean().optional(),
   contingent_liabilities_confirmed: z.boolean().optional(),
@@ -134,6 +171,33 @@ export const narrativeShape = {
   // not a större företag (ÅRL 2 kap. 1 §, 1 kap. 3 §), see cash-flow-omission.ts.
   omit_kassaflodesanalys: z.boolean().optional(),
   kassaflodesanalys_omission_confirmed: z.boolean().optional(),
+  // K3 disclosure matrix answers, keyed by requirement id. Merged into the
+  // stored answers: only the ids sent change, null removes an answer.
+  disclosure_answers: z
+    .partialRecord(
+      z.enum(DISCLOSURE_IDS),
+      z
+        .object({
+          applies: z.boolean().nullable().optional(),
+          text: sanitizedText(8000).nullable().optional(),
+          choice: z.string().max(64).nullable().optional(),
+          confirmed: z.boolean().optional(),
+        })
+        .strict()
+        .nullable(),
+    )
+    .optional()
+    .describe('K3 disclosure answers by requirement id ({applies, text, choice, confirmed}); merged, null removes one.'),
+  // The kind of an equity verifikat the ledger cannot classify, keyed by
+  // journal entry id. Merged like the answers; null removes one.
+  equity_movement_overrides: z
+    .record(z.string().uuid(), z.enum(EQUITY_KINDS).nullable())
+    .optional()
+    .describe('Kind of each unclassified equity verifikat by journal_entry_id (rattelse_av_fel, andrad_redovisningsprincip, ...); merged.'),
+  equity_statement_separate: z
+    .boolean()
+    .optional()
+    .describe('K3: print the specification of changes in equity as its own statement instead of in the förvaltningsberättelse.'),
 }
 
 type NarrativeRuleInput = {
@@ -153,6 +217,30 @@ export function narrativeRule(value: NarrativeRuleInput, ctx: z.RefinementCtx): 
 
 export const NarrativeUpdateSchema = z.object(narrativeShape).strict().superRefine(narrativeRule)
 export type NarrativeUpdateInput = z.infer<typeof NarrativeUpdateSchema>
+
+/**
+ * What the revisor's påteckning says about the revisionsberättelse, as the
+ * profile stores it (annual_report_profiles.auditor_opinion). 'unmodified'
+ * and 'modified' follow the taxonomy's split between a revisionsberättelse
+ * without and with modifierade uttalanden; the others add the påteckningsmening
+ * the revisor writes when the revisionsberättelse avstyrker, or neither
+ * tillstyrker nor avstyrker, that the statements are adopted (the vallista
+ * RevisorspateckningRevisionsberattelseAvstyrktResultatrakningenBalansrakningenList).
+ * The mapping to taxonomy members lives in lib/bokslut/ixbrl/revisorspateckning.ts.
+ */
+export const AUDITOR_OPINIONS = [
+  'unmodified',
+  'modified',
+  'avstyrkt_rr_br',
+  'avstyrkt_rr',
+  'avstyrkt_br',
+  'avstyrkt_rr_varken_br',
+  'avstyrkt_br_varken_rr',
+  'varken_rr_br',
+  'varken_rr',
+  'varken_br',
+] as const
+export type AuditorOpinion = (typeof AUDITOR_OPINIONS)[number]
 
 const NullableBoolean = z.boolean().nullable()
 
@@ -174,9 +262,27 @@ export const complianceShape = {
   has_convertible_debt: NullableBoolean.optional(),
   building_revenue_share_pct: z.number().min(0).max(100).nullable().optional(),
   has_material_deferred_tax: NullableBoolean.optional(),
+  previous_year_framework: z
+    .enum(['k2', 'k3', 'none'])
+    .nullable()
+    .optional()
+    .describe('K3: the framework of the previous årsredovisning (none: this is the first one).'),
+  has_other_temporary_differences: NullableBoolean.optional().describe(
+    'K3: temporary differences other than obeskattade reserver (buildings, underskottsavdrag, ...).',
+  ),
   reporting_currency: z.enum(['SEK', 'EUR']).optional(),
   auditor_report_required: NullableBoolean.optional(),
   auditor_report_included: z.boolean().optional(),
+  auditor_firm_name: sanitizedText(200)
+    .nullable()
+    .optional()
+    .transform((value) => (typeof value === 'string' ? value.trim() || null : value))
+    .describe('The registered revisionsbolag elected as revisor (ValtRevisionsbolagsnamn); null when a natural person is the revisor.'),
+  auditor_opinion: z
+    .enum(AUDITOR_OPINIONS)
+    .nullable()
+    .optional()
+    .describe('What the revisionsberättelse says, for the revisorspåteckning: unmodified, modified, or the avstyrkt/varken sentence.'),
   dividend_prudence_confirmed: NullableBoolean.optional(),
   narrative_confirmed: z.boolean().optional().describe('The user has reviewed the förvaltningsberättelse texts.'),
   k2_assessment_confirmed: z.boolean().optional().describe('The user confirms the K2 eligibility assessment.'),
@@ -192,8 +298,40 @@ export const ComplianceUpdateSchema = z
   .refine((value) => Object.keys(value).length > 0, { message: 'At least one field is required' })
 export type ComplianceUpdateInput = z.infer<typeof ComplianceUpdateSchema>
 
-/** The underskrifter roles ÅRL 2 kap. 7 § allows (the UI dropdown's set). */
-export const SIGNER_ROLES = ['Styrelseledamot', 'Styrelseordförande', 'VD', 'Verkställande direktör'] as const
+/** The underskrifter roles ÅRL 2 kap. 7 § allows: the board and the VD. */
+export const BOARD_SIGNER_ROLES = ['Styrelseledamot', 'Styrelseordförande', 'VD', 'Verkställande direktör'] as const
+
+/**
+ * The revisor's roles in the roster. The revisor does not sign the
+ * årsredovisning: ABL 9 kap. 28 § andra stycket has the revisor make a
+ * hänvisning to the revisionsberättelse on it (the revisorspåteckning), and
+ * 28 a § has every revisor do so when there are several. The role is the
+ * title printed under the name and tagged as UnderskriftHandlingTitel;
+ * "Huvudansvarig revisor" is the revisor a registered revisionsbolag
+ * designates (ABL 9 kap. 19 §), tagged UnderskriftRevisorspateckningRevisorHuvudansvarig.
+ */
+export const AUDITOR_SIGNER_ROLES = ['Auktoriserad revisor', 'Godkänd revisor', 'Huvudansvarig revisor'] as const
+
+/** Every roster role: the UI dropdown's set. */
+export const SIGNER_ROLES = [...BOARD_SIGNER_ROLES, ...AUDITOR_SIGNER_ROLES] as const
+
+/** Whether a roster role is one of the revisor's (case and spacing insensitive). */
+export function isAuditorRole(role: string | null | undefined): boolean {
+  if (!role) return false
+  const key = role.trim().replace(/\s+/g, ' ').toLocaleLowerCase('sv')
+  return AUDITOR_SIGNER_ROLES.some((auditorRole) => auditorRole.toLocaleLowerCase('sv') === key)
+}
+
+/**
+ * Who may sign the fastställelseintyg: a board member or the verkställande
+ * direktör (product decision 2026-10-15, following
+ * .claude/skills/swedish-financial-reporting references/bolagsverket-filing.md
+ * § 5: "Styrelseledamot or VD" signs it; the intyg is filed with the
+ * årsredovisning under ÅRL 8 kap. 3 §). Every board role qualifies; the
+ * revisor never does.
+ */
+export const CERTIFICATE_SIGNER_ROLES = BOARD_SIGNER_ROLES
+
 
 export const versionShape = {
   action: z
@@ -203,7 +341,7 @@ export const versionShape = {
     .object({
       first_name: z.string().min(1).max(100),
       last_name: z.string().min(1).max(100),
-      role: z.enum(SIGNER_ROLES),
+      role: z.enum(CERTIFICATE_SIGNER_ROLES),
     })
     .strict()
     .optional()
@@ -220,7 +358,11 @@ export type VersionCreateInput = z.infer<typeof VersionCreateSchema>
 const PERSONNUMMER_SHAPED = /\d{6}[-+]?\d{4}/
 
 export const signatoryShape = {
-  role: z.enum(SIGNER_ROLES).describe('Styrelseledamot, Styrelseordförande, VD or Verkställande direktör.'),
+  role: z
+    .enum(SIGNER_ROLES)
+    .describe(
+      'Styrelseledamot, Styrelseordförande, VD or Verkställande direktör for the board; Auktoriserad revisor, Godkänd revisor or Huvudansvarig revisor for the revisor, whose slot holds the revisorspåteckning.',
+    ),
   signer_name: z
     .string()
     .trim()

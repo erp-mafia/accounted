@@ -1,4 +1,6 @@
 import type { EntityType } from '@/types'
+import type { RangePreset } from './report-range-preset'
+import { ENTITY_TYPES, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
 
 /**
  * Single source of truth for the reports surface.
@@ -43,7 +45,8 @@ export interface ReportDescriptor {
   descKey: string
   category: ReportCategory
   /** When set, the report only appears for this entity type. */
-  entityType?: EntityType
+  /** Restrict to one legal form or a list of forms; omitted means every form. */
+  entityType?: EntityType | readonly EntityType[]
   /** When true, only shown if the company has employees. */
   needsEmployees?: boolean
   params: ReportParams
@@ -62,7 +65,7 @@ export interface ReportDescriptor {
   /**
    * Accepts the per-dimension value filter (?dim_no/&dim_code → jsonb @>).
    * P&L-safe reports ONLY: statutory outputs (balance sheet, balansrapport,
-   * kassaflöde, årsredovisning, INK2, NE, VAT, SIE) must never carry this
+   * kassaflöde, årsredovisning, INK2, INK3, NE, VAT, SIE) must never carry this
    * flag; a filtered filing is a wrong filing. The whitelist is pinned by
    * lib/reports/__tests__/dimension-statutory-guard.test.ts.
    */
@@ -77,8 +80,14 @@ export interface ReportDescriptor {
   /** Only shown when company_settings.dimensions_enabled is true. */
   needsDimensions?: boolean
   /**
+   * The window a date-range report opens on until the user picks one for it,
+   * remembered apart from the choice the other reports share. Omitted: the
+   * shared choice, YTD by default.
+   */
+  defaultRange?: Exclude<RangePreset, 'custom'>
+  /**
    * Nav-promoted page that happens to render in the focused-report shell.
-   * Hides the report-library back link and the shell's fiscal-year selector —
+   * Hides the report-library back link and the shell's fiscal-year selector:
    * the view owns all of its period controls.
    */
   standalone?: boolean
@@ -129,6 +138,20 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     needsDimensions: true,
   },
   {
+    // Resultat across two dimensions (accounted#133): one dimension's values
+    // as rows, another's as columns, both tags on the same line. The two
+    // dimensions are axes, not a filter, so no `dimensions` flag.
+    slug: 'dimension-cross',
+    labelKey: 'name_dimension_cross',
+    descKey: 'desc_dimension_cross',
+    category: 'interim',
+    params: 'fiscal-range',
+    exports: ['pdf', 'xlsx'],
+    needsDimensions: true,
+    searchTerms:
+      'två dimensioner korstabell pivot matris region kanal projekt kostnadsställe per dimension resultat per region resultat per kanal cross tab two dimensions matrix',
+  },
+  {
     slug: 'balansrapport',
     labelKey: 'name_balansrapport',
     descKey: 'desc_balansrapport',
@@ -141,7 +164,10 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_trial_balance',
     descKey: 'desc_trial_balance',
     category: 'interim',
-    params: 'fiscal',
+    // A saldobalans per månad or per any date inside the räkenskapsår, as in
+    // the systems people come from (crm#1350). generateTrialBalance has
+    // taken the range all along; only the report never asked for it.
+    params: 'fiscal-range',
     exports: ['xlsx'],
   },
   {
@@ -153,6 +179,20 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     route: '/kpi',
     libraryOnly: true,
     dimensions: true,
+  },
+  {
+    // Likviditetsprognos (accounted#136): where the bank balance is heading
+    // for 13 ISO weeks, from the open invoices, the payment queue, salaries,
+    // the skattekonto and the forecast rows. Looks forward from today rather
+    // than over a period, so it owns its route.
+    slug: 'likviditetsprognos',
+    labelKey: 'name_likviditetsprognos',
+    descKey: 'desc_likviditetsprognos',
+    category: 'interim',
+    params: 'none',
+    route: '/reports/likviditetsprognos',
+    searchTerms:
+      'likviditet likviditetsprognos kassaprognos kassaflödesprognos prognos framåt banksaldo saldo räcker pengarna betalningsförmåga cash forecast liquidity',
   },
 
   // --- Bokslut (year-end) ---
@@ -197,9 +237,23 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_arsredovisning',
     descKey: 'desc_arsredovisning',
     category: 'year_end',
-    entityType: 'aktiebolag',
+    entityType: ['aktiebolag', 'ekonomisk_forening'],
     params: 'fiscal',
     route: '/bookkeeping/year-end/arsredovisning',
+  },
+  {
+    // Förenklat årsbokslut (BFNAR 2010:1): shown to the forms whose profile
+    // prepares one, read from the capability rather than listed by name.
+    // Owns its page in the year-end flow, like the årsredovisning.
+    slug: 'forenklat-arsbokslut',
+    labelKey: 'name_forenklat_arsbokslut',
+    descKey: 'desc_forenklat_arsbokslut',
+    category: 'year_end',
+    entityType: ENTITY_TYPES.filter((form) => preparesForenklatArsbokslut(form) !== null),
+    params: 'fiscal',
+    route: '/bookkeeping/year-end/forenklat-arsbokslut',
+    searchTerms:
+      'förenklat årsbokslut årsbokslut k1 bfnar 2010:1 ideell förening resultaträkning balansräkning styrelse underskrift',
   },
 
   // --- Skatt & moms (tax & VAT) ---
@@ -210,7 +264,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     category: 'tax_vat',
     params: 'calendar',
     exports: ['xlsx'],
-    // Promoted to the Skatt & bokslut nav group — reached directly, not via
+    // Promoted to the Skatt & bokslut nav group - reached directly, not via
     // the report library, and it manages its own period selection.
     standalone: true,
   },
@@ -220,6 +274,17 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     descKey: 'desc_periodisk_sammanstallning',
     category: 'tax_vat',
     params: 'calendar',
+  },
+  {
+    // Built from the webshop orders booked on the OSS accounts
+    // (lib/webshop-orders/oss-underlag.ts); the view owns its quarter picker.
+    slug: 'oss-underlag',
+    labelKey: 'name_oss_underlag',
+    descKey: 'desc_oss_underlag',
+    category: 'tax_vat',
+    params: 'calendar',
+    exports: ['xlsx'],
+    searchTerms: 'oss one stop shop unionsordningen distansförsäljning eu-moms utländsk moms',
   },
   {
     slug: 'ne-declaration',
@@ -234,8 +299,21 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_ink2_declaration',
     descKey: 'desc_ink2_declaration',
     category: 'tax_vat',
-    entityType: 'aktiebolag',
+    entityType: ['aktiebolag', 'ekonomisk_forening'],
     params: 'fiscal',
+  },
+  {
+    // INK3 underlag (#47): the figures an ideell förening types into
+    // Skatteverket's e-tjänst. No file is filed from here.
+    slug: 'ink3-declaration',
+    labelKey: 'name_ink3_declaration',
+    descKey: 'desc_ink3_declaration',
+    category: 'tax_vat',
+    entityType: ['ideell_forening'],
+    params: 'fiscal',
+    exports: ['pdf'],
+    searchTerms:
+      'ink3 inkomstdeklaration 3 deklaration förening ink3r ink3s ink3suf räkenskapsschema skattemässiga justeringar särskild uppgift skattefri skattepliktig allmännyttig',
   },
 
   // --- Huvudböcker (ledgers) ---
@@ -353,6 +431,10 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     descKey: 'desc_behandlingshistorik',
     category: 'export',
     params: 'fiscal-range',
+    // A year of a busy company is ~100 000 events: the page opens on the
+    // current month, and the whole year stays one choice away (and in the
+    // PDF and XLSX exports).
+    defaultRange: 'this_month',
     exports: ['pdf', 'xlsx'],
     libraryOnly: true,
     searchTerms:
@@ -404,13 +486,21 @@ export function getReport(slug: string): ReportDescriptor | undefined {
   return REPORT_CATALOG.find((r) => r.slug === slug)
 }
 
+export function reportAppliesToForm(
+  gate: EntityType | readonly EntityType[],
+  entityType: EntityType | undefined,
+): boolean {
+  if (entityType === undefined) return false
+  return Array.isArray(gate) ? gate.includes(entityType) : gate === entityType
+}
+
 function isVisible(
   r: ReportDescriptor,
   entityType?: EntityType,
   hasEmployees?: boolean,
   dimensionsEnabled?: boolean,
 ): boolean {
-  if (r.entityType && r.entityType !== entityType) return false
+  if (r.entityType && !reportAppliesToForm(r.entityType, entityType)) return false
   if (r.needsEmployees && !hasEmployees) return false
   if (r.needsDimensions && !dimensionsEnabled) return false
   return true

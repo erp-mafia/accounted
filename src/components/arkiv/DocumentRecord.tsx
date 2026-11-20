@@ -2,11 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { EllipsisHorizontalIcon, TrashIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { DocumentRecordView } from '@/app/api/arkiv/documents/[id]/route'
 import type { DocumentTextView } from '@/app/api/documents/[id]/text/route'
@@ -14,10 +18,22 @@ import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatCurrency, formatDateLong } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
+import { RequestSignatureDialog } from '@/components/signing/RequestSignatureDialog'
+import { SigningRequestsSection } from '@/components/signing/SigningRequestsSection'
+import { useSigningAvailability } from '@/components/signing/use-signing-availability'
+import { isSignableMimeType } from '@/lib/signing/signable-file'
 import { DefList, DefRow, Section, SourceLink, inlineHref } from './DefList'
 import { DocumentDecision } from './DocumentDecision'
 import { useFieldLabel } from './useFieldLabel'
+
+/** load() throws the status: a 404 is a document that does not exist (or left the archive), anything else can be tried again. */
+function failureOf(error: unknown): 'missing' | 'error' {
+  return error instanceof Error && error.message === '404' ? 'missing' : 'error'
+}
 
 /**
  * A registration, a decision or any other document as a record (canvas
@@ -29,10 +45,12 @@ import { useFieldLabel } from './useFieldLabel'
  */
 export function DocumentRecord({ documentId, initialPage = null }: { documentId: string; initialPage?: number | null }) {
   const t = useTranslations('arkiv')
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const fieldLabel = useFieldLabel()
   const [view, setView] = useState<DocumentRecordView | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [failure, setFailure] = useState<'missing' | 'error' | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [text, setText] = useState<DocumentTextView | null>(null)
   const [textOpen, setTextOpen] = useState(false)
@@ -40,6 +58,13 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
   // a document held at the door gets its one question here too.
   const [deciding, setDeciding] = useState<'held' | 'type' | null>(null)
   const { toast } = useToast()
+  const router = useRouter()
+  const { canWrite, lockedTitle } = useViewerLock()
+  const { dialogProps: deleteDialogProps, confirm: confirmDelete } = useDestructiveConfirm()
+  // BankID signing of an archived PDF: sending one needs the plan, chasing one sent only the feature.
+  const signing = useSigningAvailability()
+  const [requestingSignature, setRequestingSignature] = useState(false)
+  const [signingReload, setSigningReload] = useState(0)
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/arkiv/documents/${documentId}`)
@@ -80,16 +105,62 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
       .then((data) => {
         if (!cancelled) setView(data)
       })
-      .catch(() => {
-        if (!cancelled) setFailed(true)
+      .catch((error: unknown) => {
+        if (!cancelled) setFailure(failureOf(error))
       })
     return () => {
       cancelled = true
     }
   }, [load])
 
-  if (failed) return <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
-  if (!view) return <Skeleton className="h-40 w-full" />
+  // Offered only where the server would take it (view.deletable, canDeleteDocument): a document tied to a verifikat
+  // is räkenskapsinformation and stays. The server still has the last word, so a refusal shows its own message.
+  // An agreement read from the document goes with it (agreements.source_document_id cascades), so the confirm says so.
+  const handleDelete = async (fileName: string, agreementTitle: string | null) => {
+    const ok = await confirmDelete(
+      {
+        title: t('record_delete_title', { name: fileName }),
+        description: agreementTitle
+          ? `${t('record_delete_description')} ${t('record_delete_agreement', { title: agreementTitle })}`
+          : t('record_delete_description'),
+        confirmLabel: t('record_delete_confirm'),
+        cancelLabel: tCommon('cancel'),
+      },
+      async () => {
+        const res = await fetch(`/api/documents/${documentId}`, { method: 'DELETE' }).catch(() => null)
+        if (!res?.ok) {
+          const body = res ? await res.json().catch(() => null) : null
+          toast({ title: t('record_delete_failed'), description: body ? getErrorMessage(body, { locale: locale as ErrorLocale }) : undefined, variant: 'destructive' })
+          throw new Error(String(res?.status ?? 'network'))
+        }
+      },
+    )
+    if (!ok) return
+    toast({ title: t('record_deleted') })
+    router.push('/arkiv')
+    router.refresh()
+  }
+
+  if (failure === 'missing') {
+    return <NotFoundState title={t('document_not_found')} description={t('record_not_found_hint')} backHref="/arkiv" backLabel={tCommon('back_to_list')} />
+  }
+  if (failure) {
+    return (
+      <LoadError
+        onRetry={() => {
+          setFailure(null)
+          load().then(setView, (error: unknown) => setFailure(failureOf(error)))
+        }}
+      />
+    )
+  }
+  if (!view) {
+    return (
+      <LateReveal>
+        <Skeleton className="h-40 w-full" />
+      </LateReveal>
+    )
+  }
 
   const typeLabel = view.doc_type && (DOC_TYPES as readonly string[]).includes(view.doc_type) ? t(`types.${view.doc_type}` as never) : t('type_unknown')
   const signals = view.classification?.signals ?? []
@@ -124,22 +195,67 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
   return (
     <div className="space-y-8">
       <PageHeader
+        parent={{ label: tNav('v3_archive'), href: '/arkiv' }}
         title={view.title}
-        description={meta}
+        // The facts line stays in the top bar (a description is hidden there).
+        meta={<span data-ph-mask="">{meta}</span>}
         action={
-          // One action: the viewer below has its own "open in a new tab" link, so the header asks the document's one open question.
-          view.admission_state === 'held' ? (
-            <Button size="sm" onClick={() => setDeciding('held')}>
-              {t('graph_waiting_held')}
-            </Button>
-          ) : (
-            <Button size="sm" variant="outline" onClick={() => setDeciding('type')}>
-              {/* A booked document is not a question: the verifikat already says what it is. */}
-              {(view.doc_type && view.doc_type !== 'other') || view.journal_entry ? t('record_change_type') : t('linked_say_what')}
-            </Button>
-          )
+          // The viewer below has its own "open in a new tab" link, so the header asks the document's one open question,
+          // beside signing where it is open, and keeps the delete for a document nothing is booked on (crm#230) in the
+          // menu after them: a text button between two pills read as a third, odd action.
+          <div className="flex items-center gap-2">
+            {signing.available && isSignableMimeType(view.mime_type) ? (
+              <Button size="toolbar" variant="outline" onClick={() => setRequestingSignature(true)} disabled={!canWrite} title={lockedTitle}>
+                {t('record_request_signature')}
+              </Button>
+            ) : null}
+            {view.admission_state === 'held' ? (
+              <Button size="toolbar" onClick={() => setDeciding('held')} disabled={!canWrite} title={lockedTitle}>
+                {t('graph_waiting_held')}
+              </Button>
+            ) : (
+              <Button size="toolbar" variant="outline" onClick={() => setDeciding('type')} disabled={!canWrite} title={lockedTitle}>
+                {/* A booked document is not a question: the verifikat already says what it is. */}
+                {(view.doc_type && view.doc_type !== 'other') || view.journal_entry ? t('record_change_type') : t('linked_say_what')}
+              </Button>
+            )}
+            {view.deletable ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon-toolbar" variant="ghost" aria-label={t('record_more_actions')}>
+                    <EllipsisHorizontalIcon className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onSelect={() => void handleDelete(view.file_name, view.agreement?.title ?? null)}
+                    disabled={!canWrite}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                    {t('record_delete')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+          </div>
         }
       />
+      <DestructiveConfirmDialog {...deleteDialogProps} />
+      {requestingSignature && (
+        <RequestSignatureDialog
+          documentId={view.document_id}
+          fileName={view.file_name}
+          onOpenChange={setRequestingSignature}
+          onCreated={() => {
+            // The document is now held by an open signing (no delete), and the section lists the request.
+            setSigningReload((n) => n + 1)
+            load()
+              .then(setView)
+              .catch((error: unknown) => setFailure(failureOf(error)))
+          }}
+        />
+      )}
       <DocumentDecision
         doc={
           deciding
@@ -152,15 +268,14 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
           toast({ title: message })
           load()
             .then(setView)
-            .catch(() => setFailed(true))
+            .catch((error: unknown) => setFailure(failureOf(error)))
         }}
         onFailed={() => toast({ title: t('action_failed'), variant: 'destructive' })}
       />
       {view.classification?.summary && (
-        <Section title={t('record_classification')}>
-          {/* Written by a model, so it says so: the document itself, beside it, is the source (founder: raw first). */}
+        // Written by a model, so it says so behind the "?": the document itself, beside it, is the source (raw first).
+        <Section title={t('record_classification')} help={t('record_classification_note')}>
           <p className="m-0 text-[13px]">{view.classification.summary}</p>
-          <p className="mt-1 text-[12.5px] text-muted-foreground">{t('record_classification_note')}</p>
         </Section>
       )}
 
@@ -170,6 +285,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
           <DocumentViewerPane documentId={view.document_id} fileName={view.file_name} mime={view.mime_type ?? 'application/octet-stream'} page={initialPage} className="h-[72vh]" />
         </div>
         <div className="space-y-8">
+        <SigningRequestsSection documentId={view.document_id} available={signing.offered} reloadKey={signingReload} />
         {view.record && (
         <Section title={t('record_fields')} help={t('record_fields_help')}>
           {(
@@ -203,29 +319,29 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
           {view.record && (folded > 0 || showAll) ? (
             <button
               type="button"
-              className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+              className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground"
               onClick={() => setShowAll((v) => !v)}
             >
               {showAll ? t('show_fewer_fields') : t('show_all_fields', { count: allFields.length })}
             </button>
           ) : null}
           {view.line_items.length > 0 && (
-            <table className="mt-4 w-full border-collapse text-[13px]">
+            <table className="mt-4 -mx-2 w-[calc(100%+1rem)] border-collapse text-[13px]">
               <thead>
                 <tr>
-                  <th className={`${TH_CLASS} pl-0`}>{t('record_line_items')}</th>
+                  <th className={TH_CLASS}>{t('record_line_items')}</th>
                   <th className={`${TH_CLASS} text-right`}>{t('col_quantity')}</th>
                   <th className={`${TH_CLASS} text-right`}>{t('col_vat_rate')}</th>
-                  <th className={`${TH_CLASS} pr-0 text-right`}>{t('col_amount')}</th>
+                  <th className={`${TH_CLASS} text-right`}>{t('col_amount')}</th>
                 </tr>
               </thead>
               <tbody>
                 {view.line_items.map((li, i) => (
                   <tr key={i}>
-                    <td className={`${TD_CLASS} whitespace-normal pl-0`}>{li.description}</td>
+                    <td className={`${TD_CLASS} whitespace-normal`}>{li.description}</td>
                     <td className={`${TD_CLASS} text-right tabular-nums`}>{li.quantity ?? ''}</td>
                     <td className={`${TD_CLASS} text-right tabular-nums`}>{li.vat_rate != null ? `${li.vat_rate} %` : ''}</td>
-                    <td className={`${TD_CLASS} pr-0 text-right tabular-nums`}>{li.line_total != null ? formatCurrency(li.line_total, 'SEK', { minimumFractionDigits: 2 }) : ''}</td>
+                    <td className={`${TD_CLASS} text-right tabular-nums`}>{li.line_total != null ? formatCurrency(li.line_total, 'SEK', { minimumFractionDigits: 2 }) : ''}</td>
                   </tr>
                 ))}
               </tbody>
@@ -250,18 +366,18 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
             {!text ? (
               <div className="space-y-1.5">
                 {view.read.state !== 'read' ? (
-                  <p className="text-[12.5px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     {t(`record_text_${view.read.state}` as never)}
                     {view.read.lane === 'history_tied' ? ` ${t('record_text_lane_tied')}` : ''}
                   </p>
                 ) : null}
-                <Button size="sm" variant="outline" loading={reading} onClick={() => void loadText()}>
+                <Button variant="outline" loading={reading} onClick={() => void loadText()}>
                   {reading ? t('record_text_reading') : view.read.state === 'read' ? t('record_text_show') : t('record_text_read_now')}
                 </Button>
                 {/* A read the model does takes seconds: say what is happening, and show where the text will land. */}
                 {reading && view.read.state !== 'read' ? (
                   <>
-                    <p className="text-[12.5px] text-muted-foreground">{t('record_text_reading_hint', { count: view.page_count ?? 0 })}</p>
+                    <p className="text-xs text-muted-foreground">{t('record_text_reading_hint', { count: view.page_count ?? 0 })}</p>
                     <div className="space-y-2 pt-1">
                       <Skeleton className="h-4 w-full" />
                       <Skeleton className="h-4 w-5/6" />
@@ -275,9 +391,9 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                 {(textOpen ? text.pages : text.pages.slice(0, 1)).map((p) => (
                   <div key={p.page_no} id={`arkiv-page-${p.page_no}`} className={p.page_no === initialPage ? 'scroll-mt-4 border-l-2 border-foreground pl-3' : undefined}>
                     {text.pages.length > 1 ? (
-                      <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{t('source_page_short_only', { page: p.page_no })}</div>
+                      <div className="mb-1 text-xs font-medium text-muted-foreground">{t('source_page_short_only', { page: p.page_no })}</div>
                     ) : null}
-                    <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-sm bg-secondary px-4 py-3 font-sans text-[12.5px] leading-relaxed">
+                    <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-sm bg-secondary px-4 py-3 font-sans text-xs leading-relaxed">
                       {textOpen ? p.text : p.text.slice(0, 1500)}
                     </pre>
                   </div>
@@ -285,7 +401,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                 {(!textOpen && (text.pages.length > 1 || (text.pages[0]?.text.length ?? 0) > 1500)) || text.truncated ? (
                   <button
                     type="button"
-                    className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                    className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground"
                     onClick={() => setTextOpen((v) => !v)}
                   >
                     {textOpen ? t('show_fewer_fields') : t('record_text_all', { count: text.page_count ?? text.pages.length })}

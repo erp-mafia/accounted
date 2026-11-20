@@ -81,7 +81,7 @@ function buildCtx(user: { id: string } | null = { id: 'user-1' }): ExtensionCont
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user } }),
   }
-  return { supabase, companyId: 'company-1', log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } } as unknown as ExtensionContext
+  return { supabase, companyId: 'company-1', userId: user?.id, log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } } as unknown as ExtensionContext
 }
 
 function reconcileRequest(body?: Record<string, unknown>) {
@@ -98,16 +98,6 @@ describe('POST /reconcile', () => {
     mRelink.mockResolvedValue(LINK_RESULT)
     mRefresh.mockResolvedValue(REFRESH_RESULT)
     mGetConsent.mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
-  })
-
-  it('returns 401 without a user and touches nothing', async () => {
-    const res = await handler(reconcileRequest({ consentId: 'consent-1' }), buildCtx(null))
-
-    expect(res.status).toBe(401)
-    expect(mGetConsent).not.toHaveBeenCalled()
-    expect(mReconcile).not.toHaveBeenCalled()
-    expect(mRelink).not.toHaveBeenCalled()
-    expect(mRefresh).not.toHaveBeenCalled()
   })
 
   it('without consentId runs the payment reconcile only and answers as before', async () => {
@@ -234,8 +224,7 @@ describe('Bokio supplier completion opt-in', () => {
     vi.clearAllMocks()
     mGetConsent.mockResolvedValue({ id: 'consent-1', status: 1, provider: 'bokio' })
   })
-  it('rejects missing authentication and a consent from another provider', async () => {
-    expect((await handler(reconcileRequest({ completeBokioSupplierInvoices: true, consentId: 'consent-1' }), buildCtx(null))).status).toBe(401)
+  it('rejects a consent from another provider', async () => {
     mGetConsent.mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
     expect((await handler(reconcileRequest({ completeBokioSupplierInvoices: true, consentId: 'consent-1' }), buildCtx())).status).toBe(400)
     expect(completeBokioSupplierInvoices).not.toHaveBeenCalled()

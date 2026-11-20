@@ -11,16 +11,8 @@ rules:
       # zizmor's position is that `workflow_run` is almost always used
       # insecurely, and it is right in general: the usual mistake is triggering
       # on a fork's build and then checking out that fork's code with secrets in
-      # scope. Both uses below are the opposite pattern, and both are the
-      # documented fix for the trigger they replaced.
+      # scope. The use below is the opposite pattern.
       #
-      # Stage 2 of the fork-safe compliance review. It holds the AWS secrets and
-      # a write token, and it checks out ONLY the base repo: fork code never
-      # executes here. The untrusted PR diff arrives as a downloaded artifact
-      # and is passed to the model as data. This is precisely what GitHub
-      # recommends instead of `pull_request_target` + checking out the PR head,
-      # which is what this workflow used to be.
-      - swedish-compliance-review.yml
       # Re-scans an image that has already been published to GHCR. It checks out
       # no source at all and only fires on `conclusion == 'success'` of a
       # workflow that itself runs only on main and release tags, so there is no

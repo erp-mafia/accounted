@@ -27,7 +27,7 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import { DOMESTIC_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import { POST as createInvoice } from '../route'
 import { POST as bulkCreateInvoices } from '../bulk-create/route'
 
@@ -265,10 +265,101 @@ describe('POST /invoices with vat_treatment + delivery_country (#2906)', () => {
   })
 })
 
-describe('POST /invoices/bulk-create refuses a per-invoice VAT treatment it cannot apply', () => {
-  it('fails that item with VALIDATION_ERROR instead of silently invoicing the customer default', async () => {
+describe('POST /invoices with vat_treatment reverse_charge_domestic (construction services, crm#1007)', () => {
+  const BYGG_BODY = {
+    ...BODY,
+    vat_treatment: 'reverse_charge_domestic',
+    items: [{ description: 'Snickeriarbete, kök', quantity: 10, unit: 'tim', unit_price: 1000 }],
+  }
+
+  it('returns 401 without a bearer token', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase({}))
+    const res = await createInvoice(post(BYGG_BODY, { auth: false }), params)
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 404 INVOICE_CUSTOMER_NOT_FOUND for a customer outside the company', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase(baseTables({ customers: { data: null, error: null } })))
+    const res = await createInvoice(post(BYGG_BODY), params)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('INVOICE_CUSTOMER_NOT_FOUND')
+  })
+
+  it('refuses a buyer without a Swedish VAT number, and writes nothing', async () => {
     const captures: Capture[] = []
-    mockServiceClient.mockReturnValue(makeSupabase(baseTables(), captures))
+    mockServiceClient.mockReturnValue(
+      makeSupabase(baseTables({ customers: { data: { ...SWEDISH_BUYER, vat_number: null }, error: null } }), captures),
+    )
+    const res = await createInvoice(post(BYGG_BODY), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED')
+    expect(body.error.details).toMatchObject({ reason: 'missing', vat_treatment: 'reverse_charge_domestic' })
+    expect(captures.filter((c) => c.table.startsWith('invoice'))).toEqual([])
+  })
+
+  it('refuses a delivery country (a construction service is no goods delivery)', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase(baseTables()))
+    const res = await createInvoice(post({ ...BYGG_BODY, delivery_country: 'SE' }), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH')
+    expect(body.error.details.required).toBe('no_delivery_country')
+  })
+
+  it('refuses a Swedish rate on a line: the buyer accounts for the VAT', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase(baseTables()))
+    const res = await createInvoice(
+      post({ ...BYGG_BODY, items: [{ ...BYGG_BODY.items[0], vat_rate: 25 }] }),
+      params,
+    )
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
+  })
+
+  it('creates the draft: 0 %, ruta 41, the notice, the statement stored', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeSupabase(
+        baseTables({
+          invoices: { data: { id: INVOICE_ID, customer_id: CUSTOMER_ID, status: 'draft', total: 10000 }, error: null },
+          invoice_items: { data: null, error: null },
+        }),
+        captures,
+      ),
+    )
+
+    const res = await createInvoice(post(BYGG_BODY), params)
+
+    expect(res.status).toBe(201)
+    expect(captures.find((c) => c.table === 'invoices' && c.op === 'insert')?.payload).toMatchObject({
+      vat_treatment: 'reverse_charge_domestic',
+      moms_ruta: '41',
+      reverse_charge_text: DOMESTIC_REVERSE_CHARGE_NOTICE,
+      vat_amount: 0,
+      total: 10000,
+      vat_treatment_override: 'reverse_charge_domestic',
+      delivery_country: null,
+    })
+    const itemsInsert = captures.find((c) => c.table === 'invoice_items' && c.op === 'insert')?.payload as Array<{
+      vat_rate: number
+    }>
+    expect(itemsInsert[0].vat_rate).toBe(0)
+  })
+})
+
+describe('POST /invoices/bulk-create applies a per-invoice VAT treatment like POST /invoices', () => {
+  it('creates the item as an export of goods: 0 %, ruta 36, the statement stored', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeSupabase(
+        baseTables({
+          invoices: { data: { id: INVOICE_ID, customer_id: CUSTOMER_ID, status: 'draft', total: 10000 }, error: null },
+          invoice_items: { data: null, error: null },
+        }),
+        captures,
+      ),
+    )
 
     const res = await bulkCreateInvoices(
       post({ invoices: [{ ...BODY, vat_treatment: 'export', delivery_country: 'NO' }] }, { path: '/bulk-create' }),
@@ -276,9 +367,33 @@ describe('POST /invoices/bulk-create refuses a per-invoice VAT treatment it cann
     )
 
     const body = await res.json()
+    expect(body.data.results[0].ok).toBe(true)
+    expect(captures.find((c) => c.table === 'invoices' && c.op === 'insert')?.payload).toMatchObject({
+      vat_treatment: 'export',
+      moms_ruta: '36',
+      vat_amount: 0,
+      total: 10000,
+      vat_treatment_override: 'export',
+      delivery_country: 'NO',
+    })
+  })
+
+  it('fails only that item with the code POST /invoices answers when the facts do not support it', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(makeSupabase(baseTables(), captures))
+
+    const res = await bulkCreateInvoices(
+      post({ invoices: [{ ...BODY, vat_treatment: 'export', delivery_country: 'DK' }] }, { path: '/bulk-create' }),
+      params,
+    )
+
+    const body = await res.json()
     const item = body.data.results[0]
     expect(item.ok).toBe(false)
-    expect(item.error).toMatchObject({ code: 'VALIDATION_ERROR', details: { field: 'vat_treatment' } })
+    expect(item.error).toMatchObject({
+      code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+      details: { delivery_country: 'DK', required: 'outside_eu' },
+    })
     expect(captures.filter((c) => c.table === 'invoices')).toEqual([])
   })
 })

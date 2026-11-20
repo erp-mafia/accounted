@@ -18,8 +18,9 @@
  *
  * Uncredit:
  *   - the credit note's posted verifikat is cancelled with a storno
- *     (reverseEntry), never edited or deleted; an already reversed or never
- *     posted verifikat is fine and the row cleanup continues;
+ *     (reverseEntry, through the posting port), never edited or deleted; an
+ *     already reversed or never posted verifikat is fine and the row cleanup
+ *     continues;
  *   - the credit note row is kept and marked 'reversed' (BFL 7 kap retention,
  *     unbroken ankomstnummer series, sambandskravet);
  *   - the original's status and remaining amount are recomputed from its
@@ -33,11 +34,15 @@
  * A dry run reads and checks; it writes nothing (it is also the MCP staging
  * preview).
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { SupplierInvoice, SupplierInvoicePayment } from '@/types'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import {
   CannotReverseNonPostedError,
   EntryAlreadyReversedError,
@@ -45,9 +50,11 @@ import {
 } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { createServiceClient } from '@/lib/supabase/server'
+import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import {
-  BANK_ENTERED_SUPPLIER_INVOICE_STATUSES,
   canMarkSupplierInvoiceBankEntered,
+  payableSupplierInvoiceStatuses,
 } from '@/lib/supplier-invoices/lifecycle'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -79,13 +86,16 @@ export async function deleteSupplierInvoice(
 
   const { data: existing } = await supabase
     .from('supplier_invoices')
-    .select('status, registration_journal_entry_id, is_credit_note, arrival_number, supplier_invoice_number, total, currency')
+    .select('status, registration_journal_entry_id, is_credit_note, is_self_billed, arrival_number, supplier_invoice_number, total, currency')
     .eq('id', supplierInvoiceId)
     .eq('company_id', companyId)
     .single()
   if (!existing) return NOT_FOUND
 
   if (existing.is_credit_note) return { ok: false, code: 'SI_DELETE_CREDIT_NOTE' }
+  // An issued self-billing invoice holds a number of our own series and a
+  // document the seller may have: correct it with a credit note (crm#1367).
+  if (existing.is_self_billed) return { ok: false, code: 'SI_DELETE_SELF_BILLED' }
 
   if (!(DELETABLE_STATUSES as readonly string[]).includes(existing.status as string)) {
     return { ok: false, code: 'SI_DELETE_INVALID_STATUS', details: { currentStatus: existing.status } }
@@ -137,6 +147,25 @@ export async function deleteSupplierInvoice(
     return { ok: false, code: 'SI_DELETE_IN_PAYMENT_BATCH', details: { batchId: linkedBatchItem.batch_id } }
   }
 
+  // payment_orders.supplier_invoice_id is ON DELETE RESTRICT too. An order
+  // that was ever claimed for a bank documents a payment instruction and keeps
+  // the invoice; orders that never left the app (a draft, an approval, a
+  // cancel, nothing sent) go with it, so a wrong invoice can still be deleted.
+  // Checked before anything is deleted.
+  const { data: orderRows, error: orderLookupError } = await supabase
+    .from('payment_orders')
+    .select('id, status, submitted_at, provider_payment_id, batch_id')
+    .eq('company_id', companyId)
+    .eq('supplier_invoice_id', supplierInvoiceId)
+  if (orderLookupError) return failed(orderLookupError)
+  const orders = (orderRows ?? []) as Array<{ id: string; status: string; submitted_at: string | null; provider_payment_id: string | null; batch_id: string | null }>
+  const sentOrder = orders.find(
+    (o) => o.submitted_at || o.provider_payment_id || o.batch_id || !['draft', 'approved', 'cancelled'].includes(o.status),
+  )
+  if (sentOrder) {
+    return { ok: false, code: 'SI_DELETE_HAS_BANK_PAYMENT', details: { paymentOrderId: sentOrder.id } }
+  }
+
   if (options.dryRun) {
     return {
       ok: true,
@@ -148,8 +177,25 @@ export async function deleteSupplierInvoice(
         status: existing.status,
         total: existing.total ?? null,
         currency: existing.currency ?? null,
-        will: 'delete the unbooked supplier invoice and its rows; no verifikat exists, so nothing in the books changes',
+        will:
+          orders.length > 0
+            ? `delete the unbooked supplier invoice, its rows and ${orders.length} unsent bank payment draft(s); no verifikat exists, so nothing in the books changes`
+            : 'delete the unbooked supplier invoice and its rows; no verifikat exists, so nothing in the books changes',
       },
+    }
+  }
+
+  // Unsent bank payment drafts first: only server code writes payment orders.
+  if (orders.length > 0) {
+    const { error: orderDeleteError } = await createServiceClient()
+      .from('payment_orders')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('supplier_invoice_id', supplierInvoiceId)
+      .in('id', orders.map((o) => o.id))
+    if (orderDeleteError) {
+      log.error('unsent payment orders could not be deleted with their invoice', orderDeleteError as unknown as Error, { supplierInvoiceId })
+      return failed(orderDeleteError)
     }
   }
 
@@ -193,7 +239,7 @@ export function restoredAfterUncredit(
     status = 'paid'
   } else if (paidSum > 0) {
     status = 'partially_paid'
-  } else if (original.due_date && new Date(original.due_date) < now) {
+  } else if (original.due_date && isPastDue(original.due_date, todayIsoStockholm(now))) {
     status = 'overdue'
   } else if (original.registration_journal_entry_id) {
     // A posted verifikat exists: safe to restore to 'approved'.
@@ -297,7 +343,7 @@ export async function uncreditSupplierInvoice(
         postsStorno = true
         creditEntry = {
           entry_date: entry.entry_date as string,
-          voucher: entry.voucher_number ? `${entry.voucher_series ?? ''}${entry.voucher_number}` : null,
+          voucher: entry.voucher_number ? formatVoucher(entry) : null,
         }
       }
     }
@@ -326,7 +372,16 @@ export async function uncreditSupplierInvoice(
   let reversalEntryId: string | null = null
   if (creditNote?.registration_journal_entry_id) {
     try {
-      const reversal = await reverseEntry(supabase, companyId, userId, creditNote.registration_journal_entry_id)
+      // Through the posting port: while POSTING_EVENTS is on, the storno
+      // records ledger.storno of the credit note, dated the day it is undone.
+      const reversal = await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        entryId: creditNote.registration_journal_entry_id,
+        event: () => supplierInvoiceStornoBusinessEvent(creditNote.id, todayIsoStockholm(), linkBasisColumns('user_created')),
+        role: 'reversal',
+      })
       reversalEntryId = reversal.id
     } catch (err) {
       // Already reversed (by hand or a concurrent uncredit): continue with
@@ -433,8 +488,30 @@ export async function setSupplierInvoiceBankEntered(
     .maybeSingle()
   if (!invoice) return NOT_FOUND
 
-  if (entered && !canMarkSupplierInvoiceBankEntered(invoice)) {
+  // Whether a registered invoice is payable depends on the company's attest
+  // step (kontantmetoden has none, crm#1141); every other status answers the
+  // same for every company, so the method is read only when it decides.
+  let accountingMethod: string | null = null
+  if (entered && invoice.status === 'registered') {
+    const { data: settings, error: settingsError } = await supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (settingsError) return failed(settingsError)
+    accountingMethod = (settings?.accounting_method as string | null | undefined) ?? null
+  }
+
+  if (entered && !canMarkSupplierInvoiceBankEntered(invoice, accountingMethod)) {
     return { ok: false, code: 'SI_BANK_ENTERED_NOT_PAYABLE', details: { currentStatus: invoice.status } }
+  }
+  // Typing the payment into the internet bank by hand beside a bank payment
+  // signed for the same invoice pays the supplier twice (crm#1243).
+  if (entered) {
+    const signedBankPayment = await findSignedBankPayment(supabase, companyId, supplierInvoiceId)
+    if (signedBankPayment) {
+      return { ok: false, code: 'SI_BANK_PAYMENT_UNDER_WAY', details: signedBankPaymentDetails(signedBankPayment) }
+    }
   }
 
   // Marking an already-marked invoice keeps the first timestamp (that is
@@ -466,7 +543,7 @@ export async function setSupplierInvoiceBankEntered(
   if (entered) {
     // Compare-and-set on the eligibility just read: a payment landing in
     // between becomes zero matched rows, not a mark on a paid invoice.
-    update = update.in('status', [...BANK_ENTERED_SUPPLIER_INVOICE_STATUSES]).eq('is_credit_note', false)
+    update = update.in('status', [...payableSupplierInvoiceStatuses(accountingMethod)]).eq('is_credit_note', false)
   }
   const { data, error } = await update.select('id, bank_entered_at').maybeSingle()
   if (error) {

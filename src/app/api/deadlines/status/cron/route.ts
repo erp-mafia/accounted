@@ -1,25 +1,16 @@
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { updateDeadlineStatuses } from '@/lib/deadlines/status-engine'
-import { withCronContext } from '@/lib/api/with-cron-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
+
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
 
 /**
  * GET /api/deadlines/status/cron: daily 06:00 UTC.
  * Updates deadline statuses across all companies.
  */
-export const GET = withCronContext('cron.deadlines_status', async (_request, ctx) => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+export const GET = withServiceCronContext('cron.deadlines_status', async (_request, ctx) => {
+  const supabase = ctx.supabase
 
   const result = await updateDeadlineStatuses(supabase)
 

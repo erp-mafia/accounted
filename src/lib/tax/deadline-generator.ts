@@ -7,16 +7,31 @@ import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isEntityType } from '@/lib/company/entity-type'
 import type { TaxDeadlineType, DeadlineStatus } from '@/types'
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
+import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 
 const log = createLogger('deadline-generator')
 import {
+  fiscalYearEndKey,
+  fiscalYearsEndingIn,
   getApplicableDeadlineConfigs,
+  helarsmomsDeadline,
+  helarsmomsPeriodOf,
   type CompanySettingsForDeadlines,
+  type DeadlineFiscalYear,
   type DeadlineInstance,
+  type FiscalYearForDeadlines,
   type TaxAssessmentNoticeForDeadline,
 } from './deadline-config'
+import {
+  fiscalYearsWithEuTrade,
+  needsEuTradeEvidence,
+  readEuTradeChecks,
+  readRecordedEuTradeYears,
+  recordEuTradeChecks,
+} from './fiscal-year-eu-trade'
 import { adjustDeadlineToNextBankingDay } from './swedish-holidays'
-import { formatDateISO } from '@/lib/calendar/utils'
+import { formatDateISO, parseDate } from '@/lib/calendar/utils'
 
 /**
  * Rolling generation horizons. Recurring skattekonto obligations (monthly
@@ -125,7 +140,113 @@ export function toDeadlineSettings(
     punktskatt_enabled: settings.punktskatt_enabled ?? false,
     fyllnadsinbetalning_enabled: settings.fyllnadsinbetalning_enabled ?? false,
     tax_assessment_notices: settings.tax_assessment_notices,
+    fiscal_years: settings.fiscal_years,
+    salaried_employee_since: settings.salaried_employee_since,
+    eu_trade_fiscal_year_ends: settings.eu_trade_fiscal_year_ends,
   }
+}
+
+/**
+ * Every company's (or one company's) earliest employment_start among active
+ * employees with a monthly salary or hourly rate set: the employer evidence
+ * isAgiEmployer reads while neither employer flag is attested
+ * (CompanySettingsForDeadlines.salaried_employee_since). "Active" is
+ * is_active alone, as everywhere else (lib/agent/composer/employee-facts.ts):
+ * deactivation sets it false. One paginated query for every company when
+ * companyId is omitted (cron paths).
+ */
+async function fetchSalariedEmployeeSince(
+  supabase: SupabaseClient,
+  companyId?: string,
+): Promise<Map<string, string>> {
+  const rows = await fetchAllRows<{
+    company_id: string
+    employment_start: string | null
+    monthly_salary: number | string | null
+    hourly_rate: number | string | null
+  }>(({ from, to }) => {
+    let query = supabase
+      .from('employees')
+      .select('company_id, employment_start, monthly_salary, hourly_rate')
+      .eq('is_active', true)
+    if (companyId) query = query.eq('company_id', companyId)
+    return query.order('id', { ascending: true }).range(from, to)
+  })
+  const since = new Map<string, string>()
+  for (const row of rows) {
+    const salaried = Number(row.monthly_salary ?? 0) > 0 || Number(row.hourly_rate ?? 0) > 0
+    if (!salaried || !row.employment_start) continue
+    const current = since.get(row.company_id)
+    if (!current || row.employment_start < current) since.set(row.company_id, row.employment_start)
+  }
+  return since
+}
+
+/** Only an unattested company reads the employee evidence (isAgiEmployer). */
+function needsEmployeeEvidence(settings: Partial<CompanySettingsForDeadlines>): boolean {
+  return settings.employer_registered == null && !settings.pays_salaries
+}
+
+async function hydrateSalariedEmployeeSince(
+  supabase: SupabaseClient,
+  settingsRows: DeadlineSettingsRow[],
+): Promise<DeadlineSettingsRow[]> {
+  const byCompany = await fetchSalariedEmployeeSince(supabase)
+  return settingsRows.map((settings) => ({
+    ...settings,
+    salaried_employee_since: byCompany.get(settings.company_id) ?? null,
+  }))
+}
+
+/**
+ * Every company's fiscal_periods (or one company's), grouped by company: the
+ * räkenskapsår the yearly deadlines are computed from
+ * (CompanySettingsForDeadlines.fiscal_years). One paginated query for every
+ * company when companyId is omitted (cron paths).
+ */
+async function fetchFiscalYears(
+  supabase: SupabaseClient,
+  companyId?: string,
+): Promise<Map<string, FiscalYearForDeadlines[]>> {
+  const rows = await fetchAllRows<{ company_id: string; period_start: string; period_end: string }>(
+    ({ from, to }) => {
+      let query = supabase
+        .from('fiscal_periods')
+        .select('company_id, period_start, period_end')
+      if (companyId) query = query.eq('company_id', companyId)
+      return query.order('id', { ascending: true }).range(from, to)
+    },
+  )
+  const byCompany = new Map<string, FiscalYearForDeadlines[]>()
+  for (const row of rows) {
+    const current = byCompany.get(row.company_id) ?? []
+    current.push({ start: row.period_start, end: row.period_end })
+    byCompany.set(row.company_id, current)
+  }
+  return byCompany
+}
+
+async function hydrateFiscalYears(
+  supabase: SupabaseClient,
+  settingsRows: DeadlineSettingsRow[],
+): Promise<DeadlineSettingsRow[]> {
+  const byCompany = await fetchFiscalYears(supabase)
+  return settingsRows.map((settings) => ({
+    ...settings,
+    fiscal_years: byCompany.get(settings.company_id) ?? [],
+  }))
+}
+
+/** Every company's recorded EU-trade years (CompanySettingsForDeadlines.eu_trade_fiscal_year_ends), in one read. */
+async function hydrateRecordedEuTradeYears(
+  supabase: SupabaseClient,
+  settingsRows: DeadlineSettingsRow[],
+): Promise<DeadlineSettingsRow[]> {
+  const { byCompany } = await readRecordedEuTradeYears(supabase)
+  return settingsRows.map((settings) => ({
+    ...settings,
+    eu_trade_fiscal_year_ends: byCompany.get(settings.company_id) ?? [],
+  }))
 }
 
 interface TaxAssessmentNoticeRow {
@@ -241,12 +362,15 @@ export function shouldRegenerateTaxDeadlines(
  * conservative choice for a compliance surface: a stale filing date is a
  * missed filing, a lost title edit is cosmetic.
  */
+// due_date is read, never inherited: once a helårsmoms period's earlier date
+// has passed, its open row's date decides where it stays (helarsmomsSettledByOpenRows).
 const SUPERSEDED_ROW_SELECT =
-  'tax_deadline_type, tax_period, status, status_changed_at, notes, due_time, priority, customer_id' as const
+  'tax_deadline_type, tax_period, due_date, status, status_changed_at, notes, due_time, priority, customer_id' as const
 
 interface SupersededDeadlineRow {
   tax_deadline_type: string | null
   tax_period: string | null
+  due_date: string | null
   status: DeadlineStatus | null
   status_changed_at: string | null
   notes: string | null
@@ -265,6 +389,65 @@ interface SupersededDeadlineRow {
 const MANUAL_STATUSES = new Set<DeadlineStatus>(['in_progress', 'submitted', 'confirmed'])
 
 /**
+ * The AGI periods of `years` already filed at Skatteverket, keyed like the
+ * generator's rows (`arbetsgivardeklaration:YYYY-MM`), each with the earliest
+ * filing moment known (`now` when none is recorded). Filed means the period
+ * has a kvittens (agi_kvittenser) or its declaration carries one
+ * (AGI_RECEIPT_STATUSES). The earliest filing is the one that met the
+ * deadline: a correction filed later does not move it.
+ *
+ * The generator reads this because every filing signal (the kvittens
+ * reconcile through completeTaxDeadline) only completes a row that already
+ * exists. A company that files before it has any AGI deadline, typically a
+ * new company's first AGI, got the filed period created open afterwards and
+ * nothing ever completed it (#201). Reading the filing here, where the row
+ * is born, makes the order irrelevant. (VAT closes the same gap at the other
+ * end: recording a moms filing creates the period's missing row completed,
+ * lib/vat/filing-record-store.ts.)
+ */
+async function fetchFiledAgiPeriods(
+  supabase: SupabaseClient,
+  companyId: string,
+  years: number[],
+  now: string,
+): Promise<Map<string, string>> {
+  const [kvittenser, declarations] = await Promise.all([
+    fetchAllRows<{ period_year: number; period_month: number; signerad_tid: string | null; recorded_at: string }>(
+      ({ from, to }) =>
+        supabase
+          .from('agi_kvittenser')
+          .select('period_year, period_month, signerad_tid, recorded_at')
+          .eq('company_id', companyId)
+          .in('period_year', years)
+          .order('id', { ascending: true })
+          .range(from, to),
+    ),
+    fetchAllRows<{ period_year: number; period_month: number; submitted_at: string | null }>(({ from, to }) =>
+      supabase
+        .from('agi_declarations')
+        .select('period_year, period_month, submitted_at')
+        .eq('company_id', companyId)
+        .in('period_year', years)
+        .in('status', [...AGI_RECEIPT_STATUSES])
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
+  ])
+
+  const filedAt = new Map<string, string>()
+  const record = (year: number, month: number, at: string) => {
+    const key = `arbetsgivardeklaration:${year}-${String(month).padStart(2, '0')}`
+    const current = filedAt.get(key)
+    if (!current || Date.parse(at) < Date.parse(current)) filedAt.set(key, at)
+  }
+  // signerad_tid is Skatteverket's signing moment; recorded_at, when it is
+  // missing, is when the receipt was read (an upper bound).
+  for (const row of kvittenser) record(row.period_year, row.period_month, row.signerad_tid ?? row.recorded_at)
+  for (const row of declarations) record(row.period_year, row.period_month, row.submitted_at ?? now)
+  return filedAt
+}
+
+/**
  * Generate all tax deadlines for a user based on their company settings
  */
 export async function generateTaxDeadlinesForUser(
@@ -281,20 +464,48 @@ export async function generateTaxDeadlinesForUser(
     }
   }
 
+  // The company's real räkenskapsår decide the yearly deadlines (and, for a
+  // company whose first year starts mid-month, where its periods begin).
+  if (settings.fiscal_years === undefined) {
+    const fiscalYears = await fetchFiscalYears(supabase, companyId)
+    settings = { ...settings, fiscal_years: fiscalYears.get(companyId) ?? [] }
+  }
+
+  // An active employee with a salary makes an unattested company an employer
+  // for the AGI rows (isAgiEmployer, crm#1790). Read only when it can matter.
+  if (settings.salaried_employee_since === undefined) {
+    const since = needsEmployeeEvidence(settings)
+      ? (await fetchSalariedEmployeeSince(supabase, companyId)).get(companyId) ?? null
+      : null
+    settings = { ...settings, salaried_employee_since: since }
+  }
+
+  // A helårsmoms period the nightly job saw EU trade in takes the earlier
+  // date, as the setting would give it (vat_eu_trade_fiscal_years,
+  // alignYearlyVatDeadlinesWithBooks). Read only when it can matter.
+  if (settings.eu_trade_fiscal_year_ends === undefined) {
+    const recorded = needsEuTradeEvidence(settings)
+      ? (await readRecordedEuTradeYears(supabase, companyId)).byCompany.get(companyId) ?? []
+      : []
+    settings = { ...settings, eu_trade_fiscal_year_ends: recorded }
+  }
+
   // Recurring deadlines use the current rolling window. Explicit tax notices
   // also include their own due-date years so a newly entered overdue notice is
   // represented instead of disappearing only because its exact date has passed.
   if (years.length === 0) {
-    const currentYear = new Date().getFullYear()
+    const currentYear = stockholmYearMonth().year
     const noticeYears = (settings.tax_assessment_notices ?? [])
       .map((notice) => Number(notice.paymentDueDate.slice(0, 4)))
       .filter(Number.isInteger)
     years = Array.from(new Set([currentYear, currentYear + 1, ...noticeYears]))
   }
 
-  // The ROT/RUT begäran deadline is data-dependent: a row for year Y only
-  // exists when Y has paid ROT/RUT invoices (Lag 2009:194 8 §, payment
-  // dates). Resolve the payment years here, in the one place that inserts
+  // The begäran deadline is data-dependent: a row for year Y only exists
+  // when Y has paid deduction invoices (ROT/RUT per Lag 2009:194 8 §, and
+  // grön teknik, which has the same 31 January rule; payment dates). The
+  // query below is kind-agnostic (deduction_total > 0), so grön teknik years
+  // count too. Resolve the payment years here, in the one place that inserts
   // and deletes rows, so every generation path agrees. Callers that pass
   // pure settings (backfill detection) leave the field undefined and simply
   // never expect rot_rut_begaran rows.
@@ -324,9 +535,8 @@ export async function generateTaxDeadlinesForUser(
   // Get applicable deadline configs based on settings
   const applicableConfigs = getApplicableDeadlineConfigs(settings)
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const todayIso = formatDateISO(today)
+  const todayIso = todayIsoStockholm()
+  const today = parseDate(todayIso)
   const endDate = `${Math.max(...years) + 1}-12-31`
 
   // Completed deadlines represent real filing progress and dismissed
@@ -378,11 +588,29 @@ export async function generateTaxDeadlinesForUser(
     supersededByKey.set(`${row.tax_deadline_type}:${row.tax_period}`, row)
   }
 
+  // Once a helårsmoms period's earlier date has passed, its open row stays
+  // where it is, whatever the EU-trade answer says now.
+  settings = {
+    ...settings,
+    helarsmoms_settled: helarsmomsSettledByOpenRows(
+      settings,
+      (supersededRows ?? []) as SupersededDeadlineRow[],
+      todayIso,
+    ),
+  }
+
+  const nowIso = new Date().toISOString()
+
+  // A period already filed at Skatteverket is created completed, keyed like
+  // completedKeys. Read only when the company has AGI deadlines at all.
+  const filedAtByKey = applicableConfigs.some((config) => config.type === 'arbetsgivardeklaration')
+    ? await fetchFiledAgiPeriods(supabase, companyId, years, nowIso)
+    : new Map<string, string>()
+
   // Generate new deadlines. Every row carries the identical key set: a
   // PostgREST bulk insert rejects objects whose keys differ (PGRST102), so
   // inherited columns are always present, null when there is nothing to
   // inherit.
-  const nowIso = new Date().toISOString()
   const deadlines: Array<{
     company_id: string
     title: string
@@ -391,6 +619,7 @@ export async function generateTaxDeadlinesForUser(
     deadline_type: 'tax'
     priority: 'critical' | 'important' | 'normal'
     is_completed: boolean
+    completed_at: string | null
     source: 'system'
     status: DeadlineStatus
     status_changed_at: string
@@ -441,14 +670,21 @@ export async function generateTaxDeadlinesForUser(
         // manually reported progress carry across (see SUPERSEDED_ROW_SELECT).
         const superseded = supersededByKey.get(deadlineKey)
 
+        // A period Skatteverket already has a filing for is born completed,
+        // with the status the kvittens path sets (completeTaxDeadline).
+        const filedAt = filedAtByKey.get(deadlineKey)
+        const filed = filedAt !== undefined
+
         // Determine initial status based on days until deadline, keeping a
         // manually reported status from the row being replaced.
         const daysUntil = Math.ceil((adjustedDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
         const keepsManualStatus =
-          superseded?.status != null && MANUAL_STATUSES.has(superseded.status)
-        const status: DeadlineStatus = keepsManualStatus
-          ? superseded!.status!
-          : daysUntil <= 14 ? 'action_needed' : 'upcoming'
+          !filed && superseded?.status != null && MANUAL_STATUSES.has(superseded.status)
+        const status: DeadlineStatus = filed
+          ? 'confirmed'
+          : keepsManualStatus
+            ? superseded!.status!
+            : daysUntil <= 14 ? 'action_needed' : 'upcoming'
 
         // Generate title from template
         const title = config.titleTemplate.replace('{periodLabel}', instance.periodLabel)
@@ -463,7 +699,8 @@ export async function generateTaxDeadlinesForUser(
           due_time: superseded?.due_time ?? null,
           deadline_type: 'tax',
           priority: superseded?.priority ?? config.priority,
-          is_completed: false,
+          is_completed: filed,
+          completed_at: filedAt ?? null,
           source: 'system',
           status,
           // Only meaningful alongside a carried status; a recomputed status
@@ -492,15 +729,90 @@ export async function generateTaxDeadlinesForUser(
     ).values(),
   )
 
-  // Insert the replacement rows BEFORE deleting the old set. A failed insert
-  // then leaves the previous deadlines intact: the old delete-first order
-  // meant any insert failure (like the 23502 user_id regression) wiped the
-  // company's tax deadlines without replacing them.
+  // The new set replaces the old one in one transaction, under a per-company
+  // lock (replace_system_tax_deadlines, migration 20261113020219): the rows
+  // are inserted, then every other pending system row in the window is
+  // deleted. A failed insert leaves the previous deadlines intact, and two
+  // regenerations that overlap (a settings save racing the nightly repair)
+  // run one after the other, so the company always holds one whole set. As
+  // two separate statements each deleted the other's freshly inserted rows.
   //
-  // Not concurrency-safe: two overlapping regenerations (settings save racing
-  // the cron backfill) can each delete the other's freshly inserted rows and
-  // leave the company with fewer rows than expected. Accepted: the daily
-  // backfill cron detects the missing keys and repairs on its next run.
+  // Dismissed rows survive the delete: deleting one would erase the opt-out
+  // and let the next regeneration recreate the obligation as a fresh pending
+  // row.
+  //
+  // An obligation the settings no longer produce is deleted even when the
+  // user had edited it. Its notes go with it, and that is the right trade:
+  // the settings change is the user's own explicit statement that the
+  // obligation does not apply, and a deadlines page that keeps showing a
+  // momsdeklaration to a company that deregistered from moms is worse than a
+  // lost note. Notes on obligations that still apply survive, which is the
+  // case this preservation is about; anything worth keeping past a settings
+  // change belongs in a manual (source='user') deadline, which the generator
+  // never touches.
+  const { data: replaced, error: replaceError } = await supabase.rpc('replace_system_tax_deadlines', {
+    p_company_id: companyId,
+    p_rows: uniqueDeadlines,
+    p_from: todayIso,
+    p_to: endDate,
+  })
+
+  if (replaceError && (replaceError as { code?: string }).code === REPLACE_FUNCTION_NOT_DEPLOYED_CODE) {
+    // Right after a deploy the database may not have the function yet. The
+    // two statements are not safe against a second regeneration, which is
+    // acceptable for those minutes and no longer: an error, said once per
+    // process, so a fallback that keeps happening is seen.
+    if (!replaceFallbackReported) {
+      replaceFallbackReported = true
+      log.error(
+        'replace_system_tax_deadlines is not in the database; deadlines are replaced in two statements',
+        replaceError,
+        { companyId },
+      )
+    }
+    return replaceDeadlinesInTwoStatements(supabase, companyId, uniqueDeadlines, todayIso, endDate)
+  }
+  if (replaceError) {
+    log.error('Error replacing deadlines:', replaceError)
+    throw replaceError
+  }
+
+  const counts = (Array.isArray(replaced) ? replaced[0] : replaced) as
+    | { created?: number; deleted?: number }
+    | null
+    | undefined
+  return {
+    created: counts?.created ?? uniqueDeadlines.length,
+    deleted: counts?.deleted ?? 0,
+  }
+}
+
+/**
+ * PostgREST's answer for a function its schema cache does not hold: the
+ * migration has not run yet. Only this code means "not deployed": 42883 is
+ * also what Postgres raises for a function or operator it cannot resolve
+ * inside the body or a trigger it fires, and that is a failure to report,
+ * not a reason to run the unsafe path.
+ */
+const REPLACE_FUNCTION_NOT_DEPLOYED_CODE = 'PGRST202'
+
+/** Whether this process already reported the fallback. */
+let replaceFallbackReported = false
+
+/**
+ * The replacement as it was before replace_system_tax_deadlines, kept for a
+ * database that does not have the function yet: insert, then delete the
+ * rest. Insert first, so a failed insert leaves the old set in place. Not
+ * safe against a second regeneration of the same company running at the same
+ * time, which is what the function is for.
+ */
+async function replaceDeadlinesInTwoStatements(
+  supabase: SupabaseClient,
+  companyId: string,
+  uniqueDeadlines: Array<Record<string, unknown>>,
+  todayIso: string,
+  endDate: string,
+): Promise<{ created: number; deleted: number }> {
   let newIds: string[] = []
   if (uniqueDeadlines.length > 0) {
     const { data: insertedData, error: insertError } = await supabase
@@ -515,20 +827,6 @@ export async function generateTaxDeadlinesForUser(
     newIds = (insertedData ?? []).map((d: { id: string }) => d.id)
   }
 
-  // Delete the superseded system-generated deadlines for these years,
-  // excluding the rows just inserted. Dismissed rows survive: deleting one
-  // would erase the opt-out and let the next regeneration recreate the
-  // obligation as a fresh pending row.
-  //
-  // An obligation the settings no longer produce is deleted even when the
-  // user had edited it. Its notes go with it, and that is the right trade:
-  // the settings change is the user's own explicit statement that the
-  // obligation does not apply, and a deadlines page that keeps showing a
-  // momsdeklaration to a company that deregistered from moms is worse than a
-  // lost note. Notes on obligations that still apply survive, which is the
-  // case this preservation is about; anything worth keeping past a settings
-  // change belongs in a manual (source='user') deadline, which the generator
-  // never touches.
   let deleteQuery = supabase
     .from('deadlines')
     .delete()
@@ -602,7 +900,7 @@ export async function regenerateTaxDeadlinesForUser(
   companyId: string,
   newSettings: CompanySettingsForDeadlines
 ): Promise<{ created: number; deleted: number }> {
-  const currentYear = new Date().getFullYear()
+  const currentYear = stockholmYearMonth().year
   return generateTaxDeadlinesForUser(supabase, companyId, newSettings, [currentYear, currentYear + 1])
 }
 
@@ -646,13 +944,16 @@ export function getExpectedUpcomingDeadlineKeys(
   fromDate: Date = new Date(),
 ): Set<string> {
   if (years.length === 0) {
-    const currentYear = fromDate.getFullYear()
+    const currentYear = stockholmYearMonth(fromDate).year
     years = [currentYear, currentYear + 1]
   }
 
-  const today = new Date(fromDate)
-  today.setHours(0, 0, 0, 0)
-  const keys = new Set<string>()
+  const today = parseDate(todayIsoStockholm(fromDate))
+  // Keyed by type:period, last one wins, exactly like the generator's own
+  // de-duplication: two räkenskapsår ending in the same calendar year (a
+  // re-laid year) can share a label, and expecting both dates while the
+  // generator inserts one would flag the company every night.
+  const keysByTypeAndPeriod = new Map<string, string>()
 
   for (const config of getApplicableDeadlineConfigs(settings)) {
     const horizonEnd = horizonEndFor(config.type, today)
@@ -665,13 +966,32 @@ export function getExpectedUpcomingDeadlineKeys(
         // Same window as the generator: past rows and rows beyond the
         // rolling horizon are never expected.
         if (adjustedDate >= today && adjustedDate <= horizonEnd) {
-          keys.add(deadlineIdentity(config.type, instance.period, formatDateISO(adjustedDate)))
+          keysByTypeAndPeriod.set(
+            `${config.type}:${instance.period}`,
+            deadlineIdentity(config.type, instance.period, formatDateISO(adjustedDate)),
+          )
         }
       }
     }
   }
 
-  return keys
+  return new Set(keysByTypeAndPeriod.values())
+}
+
+function groupRowsByCompany(rows: readonly UpcomingDeadlineCompanyRow[]): Map<string, UpcomingDeadlineCompanyRow[]> {
+  const byCompany = new Map<string, UpcomingDeadlineCompanyRow[]>()
+  for (const row of rows) byCompany.set(row.company_id, [...(byCompany.get(row.company_id) ?? []), row])
+  return byCompany
+}
+
+/** Detection reads helarsmomsSettledByOpenRows from the same open rows the generator replaces. */
+function withHelarsmomsSettled(
+  settings: CompanySettingsForDeadlines,
+  rows: readonly UpcomingDeadlineCompanyRow[],
+  todayIso: string,
+): CompanySettingsForDeadlines {
+  const open = rows.filter((row) => !row.is_completed && !row.dismissed_at)
+  return { ...settings, helarsmoms_settled: helarsmomsSettledByOpenRows(settings, open, todayIso) }
 }
 
 export function findSettingsMissingUpcomingDeadlines(
@@ -682,6 +1002,8 @@ export function findSettingsMissingUpcomingDeadlines(
 ): DeadlineSettingsRow[] {
   const actualKeysByCompany = new Map<string, Set<string>>()
   const completedKeysByCompany = new Map<string, Set<string>>()
+  const rowsByCompany = groupRowsByCompany(upcomingDeadlineRows)
+  const todayIso = todayIsoStockholm(fromDate)
   for (const row of upcomingDeadlineRows) {
     const keys = actualKeysByCompany.get(row.company_id) ?? new Set<string>()
     keys.add(deadlineIdentity(row.tax_deadline_type, row.tax_period, row.due_date))
@@ -697,7 +1019,7 @@ export function findSettingsMissingUpcomingDeadlines(
   return settingsRows.filter((settings) => {
     try {
       const expectedKeys = getExpectedUpcomingDeadlineKeys(
-        toDeadlineSettings(settings),
+        withHelarsmomsSettled(toDeadlineSettings(settings), rowsByCompany.get(settings.company_id) ?? [], todayIso),
         years,
         fromDate,
       )
@@ -718,6 +1040,68 @@ export function findSettingsMissingUpcomingDeadlines(
   })
 }
 
+/**
+ * Types whose rows detection cannot predict from settings alone:
+ * rot_rut_begaran exists only for years with paid deduction invoices, which
+ * the generator reads from the invoices table and detection never loads.
+ */
+const UNPREDICTABLE_TYPES = new Set<string>(['rot_rut_begaran'])
+
+/**
+ * Companies holding a pending system deadline the generator would not create
+ * today, the mirror of findSettingsMissingUpcomingDeadlines. Without it a row
+ * for an obligation that never existed (a räkenskapsår that is not the
+ * company's, a quarter before it was registered) stays on the deadlines page
+ * and in the calendar feed after the schedule is fixed, because nothing ever
+ * regenerates a company that is missing nothing.
+ *
+ * Only rows regeneration actually replaces count, so a flagged company stops
+ * being flagged after one run: pending (not completed, not dismissed), due
+ * from today through the end of the year after the window, and of a type
+ * detection can predict.
+ */
+export function findSettingsWithStaleUpcomingDeadlines(
+  settingsRows: DeadlineSettingsRow[],
+  upcomingDeadlineRows: UpcomingDeadlineCompanyRow[],
+  years: number[] = [],
+  fromDate: Date = new Date(),
+): DeadlineSettingsRow[] {
+  const currentYear = stockholmYearMonth(fromDate).year
+  const windowYears = years.length > 0 ? years : [currentYear, currentYear + 1]
+  const todayIso = todayIsoStockholm(fromDate)
+  // The generator's delete window (generateTaxDeadlinesForUser's endDate).
+  const windowEnd = `${Math.max(...windowYears) + 1}-12-31`
+
+  const replaceableByCompany = new Map<string, UpcomingDeadlineCompanyRow[]>()
+  for (const row of upcomingDeadlineRows) {
+    if (row.is_completed || row.dismissed_at) continue
+    if (!row.due_date || row.due_date < todayIso || row.due_date > windowEnd) continue
+    if (row.tax_deadline_type && UNPREDICTABLE_TYPES.has(row.tax_deadline_type)) continue
+    const rows = replaceableByCompany.get(row.company_id) ?? []
+    rows.push(row)
+    replaceableByCompany.set(row.company_id, rows)
+  }
+
+  const rowsByCompany = groupRowsByCompany(upcomingDeadlineRows)
+  return settingsRows.filter((settings) => {
+    const rows = replaceableByCompany.get(settings.company_id)
+    if (!rows) return false
+    try {
+      const expectedKeys = getExpectedUpcomingDeadlineKeys(
+        withHelarsmomsSettled(toDeadlineSettings(settings), rowsByCompany.get(settings.company_id) ?? [], todayIso),
+        windowYears,
+        fromDate,
+      )
+      return rows.some(
+        (row) => !expectedKeys.has(deadlineIdentity(row.tax_deadline_type, row.tax_period, row.due_date)),
+      )
+    } catch {
+      // Malformed settings are already returned by the missing-side check.
+      return false
+    }
+  })
+}
+
 // Paginate: PostgREST silently caps a plain .select() at 1000 rows, which
 // would leave companies beyond the cap without deadlines.
 async function fetchAllDeadlineSettings(supabase: SupabaseClient): Promise<DeadlineSettingsRow[]> {
@@ -730,22 +1114,49 @@ async function fetchAllDeadlineSettings(supabase: SupabaseClient): Promise<Deadl
   )
 }
 
+/** A time budget for a pass over many companies: no company is started after `deadline` (epoch ms). */
+export interface DeadlinePassOptions {
+  deadline?: number
+}
+
+function pastDeadline(options: DeadlinePassOptions): boolean {
+  return options.deadline !== undefined && Date.now() >= options.deadline
+}
+
 /**
  * Generate tax deadlines for the new year for every company.
+ *
+ * One company at a time, so the pass stops starting companies at
+ * `options.deadline` and counts the rest in `companiesNotReached`. Nothing
+ * records a company as done: one that was not reached still lacks the rows
+ * the horizon expects, so backfillMissingTaxDeadlines finds it on its next
+ * run.
  */
 export async function generateNewYearDeadlines(
-  supabase: SupabaseClient
-): Promise<{ usersProcessed: number; totalCreated: number }> {
-  const newYear = new Date().getFullYear()
-  const allSettings = await hydrateTaxAssessmentNotices(
+  supabase: SupabaseClient,
+  options: DeadlinePassOptions = {},
+): Promise<{ usersProcessed: number; totalCreated: number; companiesNotReached: number }> {
+  const newYear = stockholmYearMonth().year
+  const allSettings = await hydrateRecordedEuTradeYears(
     supabase,
-    await fetchAllDeadlineSettings(supabase),
+    await hydrateSalariedEmployeeSince(
+      supabase,
+      await hydrateFiscalYears(
+        supabase,
+        await hydrateTaxAssessmentNotices(supabase, await fetchAllDeadlineSettings(supabase)),
+      ),
+    ),
   )
 
   let usersProcessed = 0
   let totalCreated = 0
+  let companiesNotReached = 0
 
-  for (const settings of allSettings) {
+  for (const [index, settings] of allSettings.entries()) {
+    if (pastDeadline(options)) {
+      companiesNotReached = allSettings.length - index
+      break
+    }
     try {
       const result = await generateTaxDeadlinesForUser(
         supabase,
@@ -760,22 +1171,36 @@ export async function generateNewYearDeadlines(
     }
   }
 
-  return { usersProcessed, totalCreated }
+  return { usersProcessed, totalCreated, companiesNotReached }
 }
 
 /**
  * Repair companies whose upcoming system tax deadlines are missing or carry
  * dates from superseded schedule logic.
+ *
+ * The rolling horizon flags every company with a recurring obligation on the
+ * night a due date enters it, and the repairs run one company at a time
+ * (2026-11-10: 175 s against a 300 s limit, median 6.6 s). So no repair is
+ * started after `options.deadline`; the companies left are counted in
+ * `companiesNotReached` and nothing marks them as done: they still miss rows,
+ * so the next run finds them again, and the ones repaired tonight are no
+ * longer in its way.
  */
 export async function backfillMissingTaxDeadlines(
   supabase: SupabaseClient,
-): Promise<{ companiesScanned: number; companiesRepaired: number; totalCreated: number }> {
+  options: DeadlinePassOptions = {},
+): Promise<{
+  companiesScanned: number
+  companiesRepaired: number
+  totalCreated: number
+  companiesNotReached: number
+}> {
   // Window starts a year back, not today: completed rows with a superseded
   // (already passed) due date must still count as satisfied, otherwise the
   // repair loop flags the company forever while the generator (correctly)
   // refuses to recreate a filed obligation. Matches the generator's own
   // completed-row floor.
-  const pastFloor = `${new Date().getFullYear() - 1}-01-01`
+  const pastFloor = `${stockholmYearMonth().year - 1}-01-01`
   const [rawSettings, upcomingDeadlineRows] = await Promise.all([
     fetchAllDeadlineSettings(supabase),
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
@@ -789,13 +1214,40 @@ export async function backfillMissingTaxDeadlines(
         .range(from, to),
     ),
   ])
-  const allSettings = await hydrateTaxAssessmentNotices(supabase, rawSettings)
+  // Fiscal years, the employee evidence and the recorded EU-trade years must
+  // be hydrated here exactly as the generator resolves them: if detection
+  // expected a räkenskapsår (an AGI row, a helårsmoms date) the generator
+  // refuses to create, or missed one it creates, the company would be
+  // regenerated every night.
+  const allSettings = await hydrateRecordedEuTradeYears(
+    supabase,
+    await hydrateSalariedEmployeeSince(
+      supabase,
+      await hydrateFiscalYears(
+        supabase,
+        await hydrateTaxAssessmentNotices(supabase, rawSettings),
+      ),
+    ),
+  )
 
-  const missingSettings = findSettingsMissingUpcomingDeadlines(allSettings, upcomingDeadlineRows)
+  // Missing rows and rows the schedule no longer produces both need a
+  // regeneration; one per company.
+  const toRepair = new Map<string, DeadlineSettingsRow>()
+  for (const settings of [
+    ...findSettingsMissingUpcomingDeadlines(allSettings, upcomingDeadlineRows),
+    ...findSettingsWithStaleUpcomingDeadlines(allSettings, upcomingDeadlineRows),
+  ]) {
+    toRepair.set(settings.company_id, settings)
+  }
   let companiesRepaired = 0
   let totalCreated = 0
+  let companiesNotReached = 0
 
-  for (const settings of missingSettings) {
+  for (const [index, settings] of Array.from(toRepair.values()).entries()) {
+    if (pastDeadline(options)) {
+      companiesNotReached = toRepair.size - index
+      break
+    }
     try {
       const result = await regenerateTaxDeadlinesForUser(
         supabase,
@@ -813,5 +1265,185 @@ export async function backfillMissingTaxDeadlines(
     companiesScanned: allSettings.length,
     companiesRepaired,
     totalCreated,
+    companiesNotReached,
   }
+}
+
+/** needsEuTradeEvidence over a raw settings row, before toDeadlineSettings fills its defaults. */
+function needsEuTradeEvidenceRow(row: DeadlineSettingsRow): boolean {
+  return needsEuTradeEvidence({
+    vat_registered: row.vat_registered ?? false,
+    moms_period: row.moms_period ?? null,
+    vat_has_eu_trade: row.vat_has_eu_trade ?? false,
+  })
+}
+
+/** An instance's due date as the rows carry it: moved to the next banking day. */
+function dueIso(instance: DeadlineInstance): string {
+  return formatDateISO(adjustDeadlineToNextBankingDay(new Date(instance.year, instance.month, instance.day)))
+}
+
+/**
+ * The helårsmoms periods whose EU-trade date has passed, keyed like
+ * eu_trade_fiscal_year_ends, with the EU-trade answer their open row was
+ * placed by (CompanySettingsForDeadlines.helarsmoms_settled). The generator
+ * writes no row in the past, so without this a later answer would undo the
+ * row: the books recorded after the row should have moved, or the setting
+ * turned on, would delete a row still ahead and write none; the setting
+ * turned off would add a second, later row next to the overdue one. A row
+ * still ahead stays on the later date (false); otherwise a row on the earlier
+ * date stays the period's row (true). A label two periods share (a re-laid
+ * aktiebolag year) is left to the plain answer: its rows cannot be told
+ * apart.
+ */
+export function helarsmomsSettledByOpenRows(
+  settings: CompanySettingsForDeadlines,
+  openRows: ReadonlyArray<{ tax_deadline_type: string | null; tax_period: string | null; due_date: string | null }>,
+  todayIso: string,
+): Readonly<Record<string, boolean>> | undefined {
+  const open = openRows.filter((row) => row.tax_deadline_type === 'moms_yearly' && row.tax_period && row.due_date)
+  if (open.length === 0) return undefined
+  const year = Number(todayIso.slice(0, 4))
+  const periods = fiscalYearsEndingIn([year - 2, year - 1, year, year + 1], settings).flatMap((fy) => {
+    const withTrade = helarsmomsDeadline(fy, settings, true)
+    if (!withTrade) return []
+    const without = helarsmomsDeadline(fy, settings, false)
+    return [{
+      key: fiscalYearEndKey(helarsmomsPeriodOf(fy, settings)),
+      label: withTrade.period,
+      earlier: dueIso(withTrade),
+      later: without ? dueIso(without) : null,
+    }]
+  })
+  // Two periods (not two räkenskapsår of one period, as an enskild firma's
+  // broken years re-laid to the calendar year are) under one label.
+  const sharedLabels = new Set(
+    periods
+      .filter((period) => periods.some((other) => other.label === period.label && other.key !== period.key))
+      .map((period) => period.label),
+  )
+  const settled: Record<string, boolean> = {}
+  for (const period of periods) {
+    if (period.earlier >= todayIso || sharedLabels.has(period.label)) continue
+    const rows = open.filter((row) => row.tax_period === period.label)
+    // A row still ahead first: a period that already has one next to an
+    // overdue row (the setting turned off after the earlier date, before this
+    // rule) keeps both rather than losing the one the user goes by.
+    if (period.later !== null && rows.some((row) => row.due_date! >= todayIso)) settled[period.key] = false
+    else if (rows.some((row) => row.due_date === period.earlier)) settled[period.key] = true
+  }
+  return Object.keys(settled).length > 0 ? settled : undefined
+}
+
+/**
+ * The helårsmoms periods (helarsmomsPeriodOf) of the räkenskapsår the
+ * generator dates for `years` that the books can still move: started, not
+ * recorded with EU trade, and with the EU-trade date still ahead. Without EU
+ * trade the date is later, so once the EU-trade date has passed the row stays
+ * where it is (helarsmomsSettledByOpenRows).
+ */
+function periodsTheBooksCanMove(
+  settings: CompanySettingsForDeadlines,
+  years: readonly number[],
+  recorded: readonly string[],
+  todayIso: string,
+): DeadlineFiscalYear[] {
+  const periods = new Map<string, DeadlineFiscalYear>()
+  const endYears = Array.from(new Set(years.flatMap((year) => [year - 1, year])))
+  for (const fy of fiscalYearsEndingIn(endYears, settings)) {
+    const period = helarsmomsPeriodOf(fy, settings)
+    const key = fiscalYearEndKey(period)
+    if (recorded.includes(key) || period.start > todayIso) continue
+    const instance = helarsmomsDeadline(fy, settings, true)
+    if (instance && dueIso(instance) >= todayIso) periods.set(key, period)
+  }
+  return Array.from(periods.values())
+}
+
+/**
+ * Read the open helårsmoms periods' books for the yearly filers that have not
+ * said they trade within the EU, write what each read found
+ * (vat_eu_trade_fiscal_years), and regenerate each company a period with EU
+ * trade was found for, so its row takes the earlier date the VAT close check
+ * names. Nothing else would: booking an EU purchase changes no setting, and
+ * the generator and the repair's detection read only what is recorded.
+ *
+ * A period is read while its EU-trade date is still ahead and until it is
+ * found with EU trade; it is never read again after that. One read of a
+ * declaration per open period, so the companies whose periods were read
+ * longest ago (never read first) come first, and none is started after
+ * `options.deadline`: a run that stops early leaves the most recently read
+ * ones to the next, and every company is reached in turn.
+ */
+export async function alignYearlyVatDeadlinesWithBooks(
+  supabase: SupabaseClient,
+  options: DeadlinePassOptions = {},
+): Promise<{ companiesChecked: number; companiesMoved: number; companiesNotReached: number }> {
+  const nothing = { companiesChecked: 0, companiesMoved: 0, companiesNotReached: 0 }
+  // The reads below count against the budget too: none of them when it is spent.
+  if (pastDeadline(options)) return nothing
+  const candidates = (await fetchAllDeadlineSettings(supabase)).filter(
+    (row) => isEntityType(row.entity_type) && needsEuTradeEvidenceRow(row),
+  )
+  if (candidates.length === 0) return nothing
+  const checks = await readEuTradeChecks(supabase)
+  // Deployed before its migration: nowhere to record yet.
+  if (!checks.available) return nothing
+  if (pastDeadline(options)) return nothing
+
+  const todayIso = todayIsoStockholm()
+  const currentYear = stockholmYearMonth().year
+  const years = [currentYear, currentYear + 1]
+  const queue = (await hydrateFiscalYears(supabase, candidates))
+    .map((row) => {
+      const settings = toDeadlineSettings(row)
+      const recorded = checks.recorded.get(row.company_id) ?? []
+      const open = periodsTheBooksCanMove(settings, years, recorded, todayIso)
+      const checkedAt = checks.checkedAt.get(row.company_id)
+      // '' sorts first: a period never read.
+      const oldestRead = open.map((period) => checkedAt?.get(fiscalYearEndKey(period)) ?? '').sort()[0] ?? ''
+      return { companyId: row.company_id, settings, recorded, open, oldestRead }
+    })
+    .filter((entry) => entry.open.length > 0)
+    .sort((a, b) => a.oldestRead.localeCompare(b.oldestRead) || a.companyId.localeCompare(b.companyId))
+
+  let companiesChecked = 0
+  let companiesMoved = 0
+  for (const [index, entry] of queue.entries()) {
+    if (pastDeadline(options)) {
+      return { companiesChecked, companiesMoved, companiesNotReached: queue.length - index }
+    }
+    try {
+      companiesChecked++
+      const found = await fiscalYearsWithEuTrade(supabase, entry.companyId, entry.open, todayIso)
+      await recordEuTradeChecks(
+        supabase,
+        entry.companyId,
+        entry.open.map((period) => {
+          const key = fiscalYearEndKey(period)
+          return { key, hasEuTrade: found.includes(key) }
+        }),
+      )
+      if (found.length === 0) continue
+      // A failed regeneration is repaired by the next run's detection, which
+      // reads the periods just recorded.
+      await regenerateTaxDeadlinesForUser(supabase, entry.companyId, {
+        ...entry.settings,
+        eu_trade_fiscal_year_ends: [...entry.recorded, ...found],
+      })
+      companiesMoved++
+    } catch (err) {
+      log.error(`Error reading EU trade for the helårsmoms of company ${entry.companyId}:`, err)
+      // Written as read without EU trade, so a company whose read keeps
+      // failing does not go first every night and spend the pass on itself: a
+      // no only orders the queue, and the next read decides. A yes is never
+      // overwritten (recordEuTradeChecks).
+      await recordEuTradeChecks(
+        supabase,
+        entry.companyId,
+        entry.open.map((period) => ({ key: fiscalYearEndKey(period), hasEuTrade: false })),
+      ).catch((touchError) => log.warn(`EU-trade read time not recorded for company ${entry.companyId}`, { error: String(touchError) }))
+    }
+  }
+  return { companiesChecked, companiesMoved, companiesNotReached: 0 }
 }

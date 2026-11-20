@@ -138,6 +138,8 @@ describe('proxy: per-request CSP nonce', () => {
   it.each([
     '/api/documents/6f1c2a3e-1234-4bcd-9abc-0123456789ab/inline',
     '/api/storage/v1/object/sign/documents/a.pdf',
+    '/api/signera/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd/document',
+    '/api/signing/me/6f1c2a3e-1234-4bcd-9abc-0123456789ab/document',
   ])('leaves the document route %s to its headers() rule', async (path) => {
     const response = await run(path)
     expect(response.headers.get('content-security-policy')).toBeNull()
@@ -160,10 +162,11 @@ describe('proxy matcher and the static CSP rule partition the path space', () =>
     buildCustomRoute('header', { source: STATIC_POLICY_SOURCE, headers: [] }).regex,
     'i',
   )
-  const inlineRe = new RegExp(
-    buildCustomRoute('header', { source: '/api/documents/:id/inline', headers: [] }).regex,
-    'i',
-  )
+  const embeddableRes = [
+    '/api/documents/:id/inline',
+    '/api/signera/:token/document',
+    '/api/signing/me/:signerId/document',
+  ].map((source) => new RegExp(buildCustomRoute('header', { source, headers: [] }).regex, 'i'))
 
   it.each([
     '/',
@@ -174,6 +177,9 @@ describe('proxy matcher and the static CSP rule partition the path space', () =>
     '/llms.txt',
     '/docs/api.md',
     '/robots.txt',
+    '/robots.txt/x',
+    '/sitemap.xml',
+    '/sitemap.xml.gz',
     '/does/not/exist',
     '/api/settings',
     '/api/nonexistent',
@@ -185,6 +191,11 @@ describe('proxy matcher and the static CSP rule partition the path space', () =>
     '/api/storagefoo',
     '/api/documents/6f1c2a3e-1234-4bcd-9abc-0123456789ab',
     '/api/documents/6f1c2a3e-1234-4bcd-9abc-0123456789ab/inline',
+    '/signera/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd',
+    '/api/signera/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd',
+    '/api/signera/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd/document',
+    '/api/signera/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd/poll',
+    '/api/signing/me/6f1c2a3e-1234-4bcd-9abc-0123456789ab/document',
     '/_next/static/chunks/abc.js',
     '/_next/static/media/font.woff2',
     '/_next/image',
@@ -205,7 +216,34 @@ describe('proxy matcher and the static CSP rule partition the path space', () =>
   ])('%s gets exactly one Content-Security-Policy source', (path) => {
     const fromProxy = proxyRe.test(path) && proxyOwnsContentSecurityPolicy(path)
     const fromStaticRule = staticRe.test(path)
-    const fromInlineRule = inlineRe.test(path)
-    expect([fromProxy, fromStaticRule, fromInlineRule].filter(Boolean)).toHaveLength(1)
+    const fromEmbeddableRules = embeddableRes.map((re) => re.test(path))
+    expect([fromProxy, fromStaticRule, ...fromEmbeddableRules].filter(Boolean)).toHaveLength(1)
+  })
+
+  // Crawlers fetch these anonymously; through updateSession() every fetch
+  // was 307-bounced to /login. app/robots.ts serves robots.txt; sitemap.xml
+  // has no route and answers 404 without the proxy.
+  it.each(['/robots.txt', '/sitemap.xml'])('never runs the proxy for %s', (path) => {
+    expect(proxyRe.test(path)).toBe(false)
+  })
+
+  // The exclusions are anchored: only the exact crawler files skip the
+  // proxy, never a path that merely starts with their names, and every
+  // signed-in or token page still gets its session and auth checks.
+  it.each([
+    '/robots.txt/x',
+    '/robots.txtx',
+    '/sitemap.xml.gz',
+    '/sitemap.xmlx',
+    '/',
+    '/login',
+    '/invoices',
+    '/invite/6f1c2a3e-token',
+    '/payslip/6f1c2a3e-token',
+    '/betala/6f1c2a3e-token',
+    '/attest/6f1c2a3e-token',
+    '/api/settings',
+  ])('still runs the proxy for %s', (path) => {
+    expect(proxyRe.test(path)).toBe(true)
   })
 })

@@ -1,6 +1,7 @@
 import type { AccountingMethod, MomsPeriod } from '@/types'
 import { roundOre } from '@/lib/money'
 import { daysBetween } from '@/lib/arkiv/agreements/dates'
+import { orgNumberKey, sameOrgNumber } from '@/lib/invariants/org-number'
 
 /**
  * Arkiv phase 6: the nightly lint. Pure checks over what the archive knows
@@ -58,7 +59,7 @@ const yesNo = (v: string) => (v === 'yes' || v === 'approved' ? true : v === 'no
 
 export const SETTINGS_RULES: SettingsRule[] = [
   { predicate: 'legal_name', field: 'company_name', proposed: (v) => v.trim(), same: (a, b) => fold(String(a ?? '')) === fold(String(b ?? '')) },
-  { predicate: 'org_number', field: 'org_number', proposed: (v) => digits(v), same: (a, b) => digits(String(a ?? '')) === digits(String(b ?? '')) },
+  { predicate: 'org_number', field: 'org_number', proposed: (v) => orgNumberKey(v) ?? digits(v), same: (a, b) => sameOrgNumber(String(a ?? ''), String(b ?? '')) },
   { predicate: 'f_skatt', field: 'f_skatt', proposed: yesNo, same: (a, b) => a === b },
   { predicate: 'vat_registered', field: 'vat_registered', proposed: yesNo, same: (a, b) => a === b },
   { predicate: 'employer_registered', field: 'employer_registered', proposed: yesNo, same: (a, b) => a === b },

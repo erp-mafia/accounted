@@ -1,0 +1,41 @@
+[
+  {
+    "name": "a caller without its own storno event",
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0001"
+      ]
+    ],
+    "gapExplanations": []
+  },
+  {
+    "name": "a caller that hands down its storno event",
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0002"
+      ]
+    ],
+    "gapExplanations": []
+  },
+  {
+    "name": "the engine refuses the storno of a caller without an event",
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0003"
+      ]
+    ],
+    "gapExplanations": []
+  }
+]

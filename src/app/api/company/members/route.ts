@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getMultiUserState } from '@/lib/entitlements/multi-user'
+import { readClientProfileChoice } from '@/lib/company/client-profile'
 
 /**
  * GET /api/company/members
@@ -38,16 +39,18 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
     members = membersWithSource
   }
 
-  // Fetch emails from profiles
+  // Emails and names from profiles: the name is what attribution lines read
+  // ("Claude åt Jonas Ek", lib/attribution).
   const userIds = (members || []).map((m) => m.user_id)
   const { data: profiles } = userIds.length > 0
     ? await serviceClient
         .from('profiles')
-        .select('id, email')
+        .select('id, email, full_name')
         .in('id', userIds)
     : { data: [] }
 
   const emailMap = new Map((profiles || []).map((p) => [p.id, p.email]))
+  const nameMap = new Map((profiles || []).map((p) => [p.id, (p.full_name as string | null)?.trim() || null]))
 
   // Fetch pending company invitations
   const { data: invitations } = await serviceClient
@@ -64,9 +67,15 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
   // Multi-user seat gate: when the company is frozen (no multi_user grant
   // active or in grace), the invite POST answers 403, so the UI swaps the
   // invite form for the paid-plan upsell instead of a dead form.
-  const multiUserAccess = canInvite
-    ? await getMultiUserState(serviceClient, companyId)
-    : null
+  // The byrå's profile choice (Profiles and Suggestions): present only when
+  // the company is a client on the caller's byrå team. The invite form then
+  // requires a profile for the client; everyone else's form is unchanged.
+  const [multiUserAccess, profileChoice] = canInvite
+    ? await Promise.all([
+        getMultiUserState(serviceClient, companyId),
+        readClientProfileChoice(serviceClient, companyId, user.id),
+      ])
+    : [null, null]
 
   return NextResponse.json({
     data: {
@@ -74,6 +83,7 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
         id: m.id,
         user_id: m.user_id,
         email: emailMap.get(m.user_id) || '',
+        full_name: nameMap.get(m.user_id) ?? null,
         role: m.role,
         source: m.source,
         joined_at: m.joined_at,
@@ -82,6 +92,7 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
       invitations: invitations || [],
       canInvite,
       inviteRequiresUpgrade: multiUserAccess?.state === 'frozen',
+      profileChoice,
     },
   })
 })

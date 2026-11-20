@@ -165,7 +165,7 @@ export function planAlias(input: PlanInput): AliasDecision {
   // counterpart instead of a reading beside the party. A suggested party
   // (the ledger grouping's own, not a person's) is skipped when the
   // classifier says the text names no counterpart, so a salary line never
-  // lands on a "Lön Jakob" suggestion.
+  // lands on a "Lön Anna" suggestion.
   if (input.ledger && (input.ledger.confirmed || !NO_COUNTERPART_LABELS.has(pre.label))) {
     const l = input.ledger
     return { ...b, partyId: l.partyId, displayName: l.name, what: null, kind: pre.label === 'authority' ? 'authority' : 'merchant', source: 'ledger', confidence: l.confirmed ? 0.96 : 0.9, band: 'link', model: null, verified: false, needsVerify: false }

@@ -6,21 +6,31 @@ import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import type { CommunityMeta } from '@/lib/agent-skills/community'
 import { isCheckable } from '@/lib/agent-skills/agents'
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
-import { AI_CLIENTS, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import type { ItemKind, Presence } from './hues'
 
 /** Reads shared by the Agenter list and an agent's page. */
 export type SkillSummary = Omit<CatalogSkill, 'body'>
 
-/** Null when the status is unavailable: a failed read never makes a connected client look disconnected. */
-export async function fetchConnections(signal: AbortSignal): Promise<AiClient[] | null> {
+/**
+ * Null when the status is unavailable: a failed read never makes a connected
+ * client look disconnected. `connected` is any live agent key, also one that
+ * names no client; `clients` is who work can be handed to (AiConnection).
+ */
+export async function fetchConnections(signal: AbortSignal): Promise<AiConnection | null> {
   try {
     const response = await fetch('/api/ai/connections', { signal })
     if (!response.ok) return null
-    return (await response.json()).data as AiClient[]
+    const body = (await response.json()) as { data: AiClient[]; agentConnected?: boolean }
+    return aiConnectionFromWire(body.data, body.agentConnected)
   } catch {
     return null
   }
+}
+
+/** Dev only: the connection /skills?ai=… simulates (see simulatedClient). */
+export function simulatedConnection(client: AiClient): AiConnection {
+  return { connected: true, clients: [client] }
 }
 
 /**
@@ -91,7 +101,7 @@ export function agentStatus({ id, aiKnown, overview, waiting, lastAt, t, formatD
   t: (key: string, values?: Record<string, string | number>) => string
   formatDate: (iso: string) => string
 }): { presence: Presence; text: string } | undefined {
-  // Only when the agent is stuck (founder: no "12 att göra", no "Redo"): no AI yet, or a connection it cannot work without.
+  // Only when the agent is stuck (no "12 att göra", no "Redo"): no AI yet, or a connection it cannot work without.
   void waiting; void lastAt; void formatDate
   if (aiKnown === false) return { presence: 'idle', text: t('status_ai_missing') }
   const missing = overview?.agents.find((a) => a.id === id)?.connections.find((c) => isCheckable(c.kind) && c.status === 'missing')

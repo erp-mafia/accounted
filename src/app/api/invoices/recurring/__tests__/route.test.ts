@@ -6,7 +6,7 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -419,5 +419,86 @@ describe('POST /api/invoices/recurring: text rows and billing period', () => {
     )
     expect(status).toBe(400)
     expect(JSON.stringify(body)).toContain('Periodstart')
+  })
+})
+
+describe('POST /api/invoices/recurring: article links (accounted#52)', () => {
+  const CUSTOMER = '550e8400-e29b-41d4-a716-446655440000'
+  const ARTICLE = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  function body() {
+    return {
+      customer_id: CUSTOMER,
+      name: 'Hosting',
+      day_of_month: 15,
+      payment_terms_days: 30,
+      currency: 'SEK',
+      auto_send: false,
+      items: [
+        { description: 'Hosting', quantity: 1, unit: 'st', unit_price: 500, article_id: ARTICLE },
+        { line_type: 'text', description: 'Avser drift', quantity: 0, unit: '', unit_price: 0, article_id: ARTICLE },
+      ],
+    }
+  }
+
+  it('stores the article on the product line and never on a text row', async () => {
+    enqueue({ data: { id: CUSTOMER }, error: null }) // customer
+    enqueue({ data: [{ id: ARTICLE }], error: null }) // articles (company-scoped)
+    enqueue({ data: { id: 's-1' }, error: null }) // schedule insert
+    enqueue({ data: null, error: null }) // items insert
+    enqueue({ data: { id: 's-1', items: [] }, error: null }) // re-fetch
+
+    const response = await POST(
+      createMockRequest('/api/invoices/recurring', { method: 'POST', body: body() }),
+      { params: Promise.resolve({}) },
+    )
+    expect((await parseJsonResponse(response)).status).toBe(201)
+
+    expect(findCalls('articles', 'eq')).toContainEqual(['company_id', 'company-1'])
+    const rows = findCall('recurring_invoice_schedule_items', 'insert')![0] as Array<Record<string, unknown>>
+    expect(rows[0]).toMatchObject({ line_type: 'product', article_id: ARTICLE })
+    expect(rows[1]).toMatchObject({ line_type: 'text', article_id: null })
+  })
+
+  it('returns 400 for an article that is not this company\'s, before any write', async () => {
+    enqueue({ data: { id: CUSTOMER }, error: null }) // customer
+    enqueue({ data: [], error: null }) // articles: none in this company
+
+    const response = await POST(
+      createMockRequest('/api/invoices/recurring', { method: 'POST', body: body() }),
+      { params: Promise.resolve({}) },
+    )
+    const { status, body: res } = await parseJsonResponse<{ type: string }>(response)
+    expect(status).toBe(400)
+    expect(res.type).toBe('validation_error')
+    expect(findCall('recurring_invoice_schedules', 'insert')).toBeUndefined()
+  })
+
+  it('saves the lines without the link while the column is not migrated yet', async () => {
+    enqueue({ data: { id: CUSTOMER }, error: null }) // customer
+    enqueue({ data: [{ id: ARTICLE }], error: null }) // articles
+    enqueue({ data: { id: 's-1' }, error: null }) // schedule insert
+    enqueue({ data: null, error: { code: 'PGRST204', message: "Could not find the 'article_id' column" } })
+    enqueue({ data: null, error: null }) // retry without article_id
+    enqueue({ data: { id: 's-1', items: [] }, error: null }) // re-fetch
+
+    const response = await POST(
+      createMockRequest('/api/invoices/recurring', { method: 'POST', body: body() }),
+      { params: Promise.resolve({}) },
+    )
+    expect((await parseJsonResponse(response)).status).toBe(201)
+
+    const inserts = findCalls('recurring_invoice_schedule_items', 'insert')
+    expect(inserts).toHaveLength(2)
+    const retried = inserts[1][0] as Array<Record<string, unknown>>
+    expect(retried.every((row) => !('article_id' in row))).toBe(true)
+    expect(findCall('recurring_invoice_schedules', 'delete')).toBeUndefined()
   })
 })

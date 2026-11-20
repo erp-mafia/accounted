@@ -1,7 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { CreateJournalEntryInput, JournalEntry } from '@/types'
+import type { CreateJournalEntryInput, CreateJournalEntryLineInput, DeductionType, JournalEntry } from '@/types'
 import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/rot-rut-rules'
+import { postingPort } from '@/lib/posting/port'
+import { createLogger } from '@/lib/logger'
+import { resolvePrimaryBankAccount } from './settlement-account'
+import { findFiscalPeriod } from './engine'
+import { installmentOutputVat } from './invoice-lines'
+import {
+  rotRutPayoutBusinessEvent,
+  rotRutReclaimBusinessEvent,
+  rotRutReclassificationBusinessEvent,
+  type RotRutPostingContext,
+} from './rot-rut-business-events'
 
 /**
  * Settlement voucher for a rot/rut payout from Skatteverket.
@@ -9,7 +20,7 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
  * When the agency pays out a begäran, the 1513 receivable created at
  * invoicing (fakturamodellen) clears against the bank:
  *
- *   Debit  19xx bank account (default 1930)  [amount]
+ *   Debit  19xx bank account  [amount]
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * One voucher per bank transfer: that mirrors the actual bank transaction.
@@ -34,11 +45,30 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
  * remainder stays on 1513 until the user corrects it (kundfordran/kundförlust
  * depending on the outcome with the buyer): deliberately manual, never
  * guessed.
+ *
+ * Kontantmetoden (bokslutsmetoden) books a ROT/RUT invoice in two steps
+ * (ML 2023:200 7 kap. 16 §; Skatteverket, "Så fungerar rotavdraget"): the
+ * customer's payment booked only the customer's share, so the payout is the
+ * moment Skatteverket's share is received. For those invoices a leg's
+ * `recognition` replaces the 1513 credit with the share's försäljning and
+ * utgående moms, for what Skatteverket paid:
+ *
+ *   Debit  19xx bank account                 [paid]
+ *   Credit 30xx Försäljning                  [paid, excl. moms]
+ *   Credit 26xx Utgående moms                [moms in paid]
+ *
+ * Posting port (step 2f-2): the three generators here post through
+ * lib/posting, which hands `input` to the engine unchanged and, while
+ * POSTING_EVENTS is shadow or strict, records the business event first
+ * (./rot-rut-business-events.ts) and has the engine link it to the draft
+ * before a voucher number is drawn. Each takes `posting`, what the door saw
+ * (its link basis, whether a bank line carried the payout), called only while
+ * the port is on: off, the engine gets the call it always did.
  */
 export interface RotRutPayoutLeg {
   requestId: string
   requestName: string
-  deductionType: 'rot' | 'rut'
+  deductionType: DeductionType
   /** What Skatteverket paid for this begäran (kr). */
   amount: number
   /**
@@ -49,38 +79,54 @@ export interface RotRutPayoutLeg {
   oreRounding?: number
   /** Invoices in the begäran: bounds oreRounding (< 1 kr each). Defaults to 1. */
   invoiceCount?: number
+  /**
+   * Kontantmetoden's second step (lib/invoices/rot-rut-payout-recognition.ts):
+   * the part of `amount` paid on invoices whose deduction share was never put
+   * on 1513, booked as that share's försäljning and utgående moms (`lines`,
+   * credits adding up to `amount`) instead of a 1513 credit. Omit for none.
+   */
+  recognition?: { amount: number; lines: CreateJournalEntryLineInput[] }
 }
 
+/**
+ * The deduction as named inside the voucher text: one kind reads as its own
+ * (DEDUCTION_TYPE_LABELS.noun: 'ROT-avdrag', 'RUT-avdrag', 'skattereduktion
+ * grön teknik'); ROT and RUT together keep 'ROT/RUT-avdrag'; any other mix
+ * is the plain 'skattereduktion'.
+ */
 function deductionLabel(legs: Array<Pick<RotRutPayoutLeg, 'deductionType'>>): string {
   const types = new Set(legs.map((leg) => leg.deductionType))
-  if (types.size === 1) return types.has('rut') ? 'RUT' : 'ROT'
-  return 'ROT/RUT'
+  if (types.size === 1) {
+    const [only] = [...types]
+    return (DEDUCTION_TYPE_LABELS[only] ?? DEDUCTION_TYPE_LABELS.rot).noun
+  }
+  if ([...types].every((type) => type === 'rot' || type === 'rut')) return 'ROT/RUT-avdrag'
+  return 'skattereduktion'
 }
+
+const log = createLogger('bookkeeping/rot-rut-entries')
 
 function payoutDescription(label: string, names: string[]): string {
-  return `Utbetalning ${label}-avdrag från Skatteverket (${names.join(', ')})`
+  return `Utbetalning ${label} från Skatteverket (${names.join(', ')})`
 }
 
-export async function createRotRutPayoutSetEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  params: {
-    paymentDate: string
-    /** BAS 19xx account the payout landed on. Defaults to 1930. */
-    bankAccount?: string
-    /** One leg per begäran the transfer settles; at least one. */
-    legs: RotRutPayoutLeg[]
-  },
-): Promise<JournalEntry> {
+/**
+ * The payout voucher's lines, pure: what createRotRutPayoutSetEntry books,
+ * and what a set-off on the skattekonto books (the payout received there
+ * instead of the bank, skattekonto-booking.ts: `bankAccount` is then the
+ * skattekonto account). The first line is the money in. Throws on a leg the
+ * voucher cannot carry (bad öre rounding, a recognition its lines do not
+ * add up to).
+ */
+export function buildRotRutPayoutLines(params: {
+  /** The account the payout landed on. */
+  bankAccount: string
+  /** One leg per begäran the transfer settles; at least one. */
+  legs: RotRutPayoutLeg[]
+}): { description: string; total: number; lines: CreateJournalEntryLineInput[]; recognisedVatSek: number } {
   if (params.legs.length === 0) {
     throw new Error('A rot/rut payout voucher needs at least one begäran')
   }
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, params.paymentDate)
-  if (!fiscalPeriodId) {
-    throw new Error(`No open fiscal period found for payment date ${params.paymentDate}`)
-  }
-
   const legs = params.legs.map((leg) => ({
     ...leg,
     amount: roundOre(leg.amount),
@@ -98,49 +144,102 @@ export async function createRotRutPayoutSetEntry(
   if (badRounding) {
     throw new Error(`Invalid öre rounding ${badRounding.oreRounding} on begäran ${badRounding.requestName}`)
   }
+  // A recognised part is never more than the leg, and its lines carry it
+  // exactly: what is left of the leg (plus its öre) clears 1513.
+  for (const leg of legs) {
+    if (!leg.recognition) continue
+    const recognised = roundOre(leg.recognition.amount)
+    const linesTotal = roundOre(
+      leg.recognition.lines.reduce((sum, line) => sum + line.credit_amount - line.debit_amount, 0),
+    )
+    if (recognised < 0 || recognised > leg.amount || linesTotal !== recognised) {
+      throw new Error(`Invalid revenue recognition ${recognised} on begäran ${leg.requestName}`)
+    }
+  }
   const total = roundOre(legs.reduce((sum, leg) => sum + leg.amount, 0))
-  const bankAccount = params.bankAccount ?? '1930'
+  const { bankAccount } = params
   const description = payoutDescription(
     deductionLabel(legs),
     legs.map((leg) => leg.requestName),
   )
 
-  const input: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: params.paymentDate,
-    description,
-    source_type: 'rot_rut_payout',
-    source_id: legs[0].requestId,
-    lines: [
-      {
-        account_number: bankAccount,
-        debit_amount: total,
+  const lines: CreateJournalEntryLineInput[] = [
+    {
+      account_number: bankAccount,
+      debit_amount: total,
+      credit_amount: 0,
+      line_description: description,
+    },
+    ...legs
+      .filter((leg) => leg.oreRounding > 0)
+      .map((leg) => ({
+        account_number: ORE_ROUNDING_ACCOUNT,
+        debit_amount: leg.oreRounding,
         credit_amount: 0,
-        line_description: description,
-      },
-      ...legs
-        .filter((leg) => leg.oreRounding > 0)
-        .map((leg) => ({
-          account_number: ORE_ROUNDING_ACCOUNT,
-          debit_amount: leg.oreRounding,
-          credit_amount: 0,
-          line_description: `Öresavrundning ${deductionLabel([leg])}-avdrag (${leg.requestName})`,
-        })),
-      ...legs.map((leg) => ({
+        line_description: `Öresavrundning ${deductionLabel([leg])} (${leg.requestName})`,
+      })),
+    ...legs
+      .map((leg) => ({
         account_number: '1513',
         debit_amount: 0,
-        credit_amount: roundOre(leg.amount + leg.oreRounding),
+        credit_amount: roundOre(leg.amount - roundOre(leg.recognition?.amount ?? 0) + leg.oreRounding),
         // A single begäran keeps the voucher text on both legs (as before);
         // a bundle names its own begäran on each 1513 leg.
         line_description:
           legs.length === 1
             ? description
             : payoutDescription(deductionLabel([leg]), [leg.requestName]),
-      })),
-    ],
+      }))
+      .filter((line) => line.credit_amount > 0),
+    ...legs.flatMap((leg) => leg.recognition?.lines ?? []),
+  ]
+  const recognisedVatSek = installmentOutputVat(legs.flatMap((leg) => leg.recognition?.lines ?? []))
+  return { description, total, lines, recognisedVatSek }
+}
+
+export async function createRotRutPayoutSetEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  params: {
+    paymentDate: string
+    /** BAS 19xx account the payout landed on; the company's primary bank account when nothing names one. */
+    bankAccount?: string
+    /** One leg per begäran the transfer settles; at least one. */
+    legs: RotRutPayoutLeg[]
+  },
+  posting?: () => RotRutPostingContext,
+): Promise<JournalEntry> {
+  if (params.legs.length === 0) {
+    throw new Error('A rot/rut payout voucher needs at least one begäran')
+  }
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, params.paymentDate)
+  if (!fiscalPeriodId) {
+    throw new Error(`No open fiscal period found for payment date ${params.paymentDate}`)
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  const bankAccount = params.bankAccount ?? (await resolvePrimaryBankAccount(supabase, companyId, log))
+  const { description, total, lines, recognisedVatSek } = buildRotRutPayoutLines({ ...params, bankAccount })
+  const input: CreateJournalEntryInput = {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: params.paymentDate,
+    description,
+    source_type: 'rot_rut_payout',
+    source_id: params.legs[0].requestId,
+    lines,
+  }
+
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      rotRutPayoutBusinessEvent(
+        { paymentDate: params.paymentDate, amount: total, recognisedVatSek },
+        posting?.(),
+      ),
+    input,
+  })
 }
 
 /** One begäran: the bundle voucher with a single 1513 leg. */
@@ -151,31 +250,41 @@ export async function createRotRutPayoutEntry(
   params: {
     requestId: string
     requestName: string
-    deductionType: 'rot' | 'rut'
+    deductionType: DeductionType
     paymentDate: string
     amount: number
     /** See RotRutPayoutLeg.oreRounding. */
     oreRounding?: number
     /** See RotRutPayoutLeg.invoiceCount. */
     invoiceCount?: number
-    /** BAS 19xx account the payout landed on. Defaults to 1930. */
+    /** BAS 19xx account the payout landed on; the company's primary bank account when nothing names one. */
     bankAccount?: string
+    /** See RotRutPayoutLeg.recognition. */
+    recognition?: RotRutPayoutLeg['recognition']
   },
+  posting?: () => RotRutPostingContext,
 ): Promise<JournalEntry> {
-  return createRotRutPayoutSetEntry(supabase, companyId, userId, {
-    paymentDate: params.paymentDate,
-    bankAccount: params.bankAccount,
-    legs: [
-      {
-        requestId: params.requestId,
-        requestName: params.requestName,
-        deductionType: params.deductionType,
-        amount: params.amount,
-        oreRounding: params.oreRounding,
-        invoiceCount: params.invoiceCount,
-      },
-    ],
-  })
+  return createRotRutPayoutSetEntry(
+    supabase,
+    companyId,
+    userId,
+    {
+      paymentDate: params.paymentDate,
+      bankAccount: params.bankAccount,
+      legs: [
+        {
+          requestId: params.requestId,
+          requestName: params.requestName,
+          deductionType: params.deductionType,
+          amount: params.amount,
+          oreRounding: params.oreRounding,
+          invoiceCount: params.invoiceCount,
+          recognition: params.recognition,
+        },
+      ],
+    },
+    posting,
+  )
 }
 
 /**
@@ -206,11 +315,12 @@ export async function createRotRutReclaimEntry(
   params: {
     requestId: string
     requestName: string
-    deductionType: 'rot' | 'rut'
+    deductionType: DeductionType
     bookingDate: string
     /** One leg per invoice with a refused share; at least one, all > 0. */
     legs: RotRutReclaimLeg[]
   },
+  posting?: () => RotRutPostingContext,
 ): Promise<JournalEntry> {
   const legs = params.legs
     .map((leg) => ({ ...leg, amount: roundOre(leg.amount) }))
@@ -223,10 +333,11 @@ export async function createRotRutReclaimEntry(
     throw new Error(`No open fiscal period found for booking date ${params.bookingDate}`)
   }
 
-  const label = params.deductionType === 'rut' ? 'RUT' : 'ROT'
-  const description = `Nekat ${label}-avdrag från Skatteverket (${params.requestName})`
+  // 'Nekat ROT-avdrag', 'Nekat RUT-avdrag' or 'Nekad skattereduktion grön teknik'.
+  const refused = (DEDUCTION_TYPE_LABELS[params.deductionType] ?? DEDUCTION_TYPE_LABELS.rot).refused
+  const description = `${refused} från Skatteverket (${params.requestName})`
   const legDescription = (leg: RotRutReclaimLeg) =>
-    `Nekat ${label}-avdrag faktura ${leg.invoiceNumber ?? leg.invoiceId}`
+    `${refused} faktura ${leg.invoiceNumber ?? leg.invoiceId}`
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -250,5 +361,74 @@ export async function createRotRutReclaimEntry(
     ],
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  const refusedTotal = roundOre(legs.reduce((sum, leg) => sum + leg.amount, 0))
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => rotRutReclaimBusinessEvent({ bookingDate: params.bookingDate, amount: refusedTotal }, posting?.()),
+    input,
+  })
+}
+
+/**
+ * Reclassification voucher for the household deduction of a migrated
+ * invoice. Visma books the whole invoice on 1510; an invoice issued here
+ * books the deduction on 1513 from day one (fakturamodellen,
+ * swedish-invoice-compliance section 8). This moves it there:
+ *
+ *   Debit  1513 Skattereduktion rot/rut      [deduction]
+ *   Credit 1510 Kundfordringar               [deduction]
+ *
+ * One voucher per invoice (source_id = invoice id, guarded by the partial
+ * unique index journal_entries_rot_rut_reclassification_live_unique). Both
+ * accounts carry SRU 7251, so no balance sheet, INK2 or VAT figure moves.
+ */
+export async function createMigratedDeductionEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  params: {
+    invoiceId: string
+    invoiceNumber: string | null
+    deductionType: DeductionType
+    /** The deduction (kr), > 0. */
+    amount: number
+    bookingDate: string
+  },
+  posting?: () => RotRutPostingContext,
+): Promise<JournalEntry> {
+  const amount = roundOre(params.amount)
+  if (!(amount > 0)) {
+    throw new Error('A deduction reclassification voucher needs a positive amount')
+  }
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, params.bookingDate)
+  if (!fiscalPeriodId) {
+    throw new Error(`No open fiscal period found for booking date ${params.bookingDate}`)
+  }
+
+  // 'RUT-avdrag faktura 1042, omföring vid systembyte'.
+  const ledger = (DEDUCTION_TYPE_LABELS[params.deductionType] ?? DEDUCTION_TYPE_LABELS.rot).ledger
+  const description = `${ledger} faktura ${params.invoiceNumber ?? params.invoiceId}, omföring vid systembyte`
+
+  const input: CreateJournalEntryInput = {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: params.bookingDate,
+    description,
+    source_type: 'rot_rut_reclassification',
+    source_id: params.invoiceId,
+    lines: [
+      { account_number: '1513', debit_amount: amount, credit_amount: 0, line_description: description },
+      { account_number: '1510', debit_amount: 0, credit_amount: amount, line_description: description },
+    ],
+  }
+
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      rotRutReclassificationBusinessEvent({ invoiceId: params.invoiceId, bookingDate: params.bookingDate, amount }, posting?.()),
+    input,
+  })
 }

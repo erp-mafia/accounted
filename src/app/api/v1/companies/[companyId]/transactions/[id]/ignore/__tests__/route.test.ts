@@ -28,37 +28,10 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST, DELETE } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const updates: Record<string, unknown[]> = {}
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          if (prop === 'update') (updates[table] ??= []).push(args[0])
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { supabase: { from: vi.fn((table: string) => buildChain(table)) }, updates }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -78,15 +51,12 @@ function routeParams(id: string = TX_ID) {
 }
 
 function unbookedSupabase(transactionOverrides: Record<string, unknown> = {}) {
-  return makeFlexibleSupabase({
+  return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     transactions: [
-      { data: { id: TX_ID, journal_entry_id: null, is_ignored: false, ...transactionOverrides }, error: null },
+      { data: { id: TX_ID, journal_entry_id: null, is_booked: false, is_ignored: false, ...transactionOverrides }, error: null },
       { data: null, error: null }, // update
     ],
-    transaction_voucher_links: { data: [], error: null },
-    invoice_payments: { data: [], error: null },
-    supplier_invoice_payments: { data: [], error: null },
     idempotency_keys: { data: null, error: null },
   })
 }
@@ -126,12 +96,12 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
   })
 
   it('requires an Idempotency-Key (400)', async () => {
-    const { supabase, updates } = unbookedSupabase()
+    const { supabase, payloads } = unbookedSupabase()
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest('POST', { idempotencyKey: null }), routeParams())
     expect(res.status).toBe(400)
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('rejects a non-UUID transaction id with 400 VALIDATION_ERROR', async () => {
@@ -147,7 +117,7 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
   })
 
   it('returns 404 TX_CATEGORIZE_TX_NOT_FOUND when the row is not in this company', async () => {
-    const { supabase, updates } = makeFlexibleSupabase({
+    const { supabase, payloads } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: { data: null, error: null },
     })
@@ -157,11 +127,11 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
     const body = await res.json()
     expect(res.status).toBe(404)
     expect(body.error.code).toBe('TX_CATEGORIZE_TX_NOT_FOUND')
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('returns 409 TX_IGNORE_ALREADY_BOOKED for a directly booked row', async () => {
-    const { supabase, updates } = unbookedSupabase({ journal_entry_id: 'je-1' })
+    const { supabase, payloads } = unbookedSupabase({ journal_entry_id: 'je-1', is_booked: true })
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest('POST'), routeParams())
@@ -169,44 +139,22 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
     expect(res.status).toBe(409)
     expect(body.error.code).toBe('TX_IGNORE_ALREADY_BOOKED')
     expect(body.error.details.transaction_id).toBe(TX_ID)
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
-  it('returns 409 for a bulk-booked row anchored only through transaction_voucher_links', async () => {
-    const { supabase, updates } = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      transactions: { data: { id: TX_ID, journal_entry_id: null, is_ignored: false }, error: null },
-      transaction_voucher_links: { data: [{ transaction_id: TX_ID }], error: null },
-      invoice_payments: { data: [], error: null },
-      supplier_invoice_payments: { data: [], error: null },
-    })
+  it('returns 409 for a row booked with no pointer (a voucher link, a payment allocation)', async () => {
+    const { supabase, payloads } = unbookedSupabase({ is_booked: true })
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest('POST'), routeParams())
     const body = await res.json()
     expect(res.status).toBe(409)
     expect(body.error.code).toBe('TX_IGNORE_ALREADY_BOOKED')
-    expect(updates.transactions).toBeUndefined()
-  })
-
-  it('returns 409 for a multi-allocated row anchored only through invoice_payments', async () => {
-    const { supabase } = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      transactions: { data: { id: TX_ID, journal_entry_id: null, is_ignored: false }, error: null },
-      transaction_voucher_links: { data: [], error: null },
-      invoice_payments: { data: [{ transaction_id: TX_ID }], error: null },
-      supplier_invoice_payments: { data: [], error: null },
-    })
-    mockServiceClient.mockReturnValue(supabase)
-
-    const res = await POST(makeRequest('POST'), routeParams())
-    const body = await res.json()
-    expect(res.status).toBe(409)
-    expect(body.error.code).toBe('TX_IGNORE_ALREADY_BOOKED')
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('is idempotent: an already-ignored row returns already_ignored=true without writing', async () => {
-    const { supabase, updates } = unbookedSupabase({ is_ignored: true })
+    const { supabase, payloads } = unbookedSupabase({ is_ignored: true })
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest('POST'), routeParams())
@@ -218,11 +166,11 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
       is_ignored: true,
       already_ignored: true,
     })
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('ignores an unbooked row (happy path)', async () => {
-    const { supabase, updates } = unbookedSupabase()
+    const { supabase, payloads } = unbookedSupabase()
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest('POST'), routeParams())
@@ -234,11 +182,11 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
       is_ignored: true,
       already_ignored: false,
     })
-    expect(updates.transactions).toEqual([{ is_ignored: true }])
+    expect(payloads('transactions', 'update')).toEqual([{ is_ignored: true }])
   })
 
   it('dry-run previews without writing', async () => {
-    const { supabase, updates } = unbookedSupabase()
+    const { supabase, payloads } = unbookedSupabase()
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest('POST', { url: `${URL}?dry_run=true` }), routeParams())
@@ -250,7 +198,7 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
       would_set_ignored: true,
       already_ignored: false,
     })
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 })
 
@@ -264,7 +212,7 @@ describe('DELETE /api/v1/.../transactions/{id}/ignore', () => {
   })
 
   it('returns 404 when the row is not in this company', async () => {
-    const { supabase } = makeFlexibleSupabase({
+    const { supabase } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: { data: null, error: null },
     })
@@ -277,7 +225,7 @@ describe('DELETE /api/v1/.../transactions/{id}/ignore', () => {
   })
 
   it('restores an ignored row (happy path)', async () => {
-    const { supabase, updates } = unbookedSupabase({ is_ignored: true })
+    const { supabase, payloads } = unbookedSupabase({ is_ignored: true })
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await DELETE(makeRequest('DELETE'), routeParams())
@@ -289,17 +237,17 @@ describe('DELETE /api/v1/.../transactions/{id}/ignore', () => {
       is_ignored: false,
       was_ignored: true,
     })
-    expect(updates.transactions).toEqual([{ is_ignored: false }])
+    expect(payloads('transactions', 'update')).toEqual([{ is_ignored: false }])
   })
 
   it('is idempotent: restoring a row that is not ignored returns was_ignored=false without writing', async () => {
-    const { supabase, updates } = unbookedSupabase()
+    const { supabase, payloads } = unbookedSupabase()
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await DELETE(makeRequest('DELETE'), routeParams())
     const body = await res.json()
     expect(res.status).toBe(200)
     expect(body.data.was_ignored).toBe(false)
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 })

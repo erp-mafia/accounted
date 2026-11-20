@@ -1,0 +1,182 @@
+[
+  {
+    "name": "two assets, one acquired mid-year",
+    "createAssetDepreciationEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-12-31",
+          "description": "Planenlig avskrivning 2026: Fräsmaskin",
+          "source_type": "year_end",
+          "lines": [
+            {
+              "account_number": "7832",
+              "debit_amount": 20000,
+              "credit_amount": 0,
+              "line_description": "Avskrivning Fräsmaskin"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 0,
+              "credit_amount": 20000,
+              "line_description": "Ack. avskrivning Fräsmaskin"
+            }
+          ]
+        },
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000001",
+          "planned_depreciation": 20000,
+          "opening_accumulated_depreciation": 0,
+          "opening_depreciation_date": null
+        }
+      ],
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-12-31",
+          "description": "Planenlig avskrivning 2026: Server",
+          "source_type": "year_end",
+          "lines": [
+            {
+              "account_number": "7832",
+              "debit_amount": 9041,
+              "credit_amount": 0,
+              "line_description": "Avskrivning Server"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 0,
+              "credit_amount": 9041,
+              "line_description": "Ack. avskrivning Server"
+            }
+          ]
+        },
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000002",
+          "planned_depreciation": 9041,
+          "opening_accumulated_depreciation": 0,
+          "opening_depreciation_date": null
+        }
+      ]
+    ]
+  },
+  {
+    "name": "an asset that arrived partly depreciated from the previous system",
+    "createAssetDepreciationEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-12-31",
+          "description": "Planenlig avskrivning 2026: Truck",
+          "source_type": "year_end",
+          "lines": [
+            {
+              "account_number": "7832",
+              "debit_amount": 30000,
+              "credit_amount": 0,
+              "line_description": "Avskrivning Truck"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Ack. avskrivning Truck"
+            }
+          ]
+        },
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000003",
+          "planned_depreciation": 30000,
+          "opening_accumulated_depreciation": 60000,
+          "opening_depreciation_date": "2025-12-31"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "an asset already posted in the period is skipped, the other posted",
+    "createAssetDepreciationEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-12-31",
+          "description": "Planenlig avskrivning 2026: Kompressor",
+          "source_type": "year_end",
+          "lines": [
+            {
+              "account_number": "7832",
+              "debit_amount": 12000,
+              "credit_amount": 0,
+              "line_description": "Avskrivning Kompressor"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 0,
+              "credit_amount": 12000,
+              "line_description": "Ack. avskrivning Kompressor"
+            }
+          ]
+        },
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000005",
+          "planned_depreciation": 12000,
+          "opening_accumulated_depreciation": 0,
+          "opening_depreciation_date": null
+        }
+      ]
+    ]
+  },
+  {
+    "name": "only the assets the caller names",
+    "createAssetDepreciationEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-12-31",
+          "description": "Planenlig avskrivning 2026: Bärbar dator",
+          "source_type": "year_end",
+          "lines": [
+            {
+              "account_number": "7832",
+              "debit_amount": 3025,
+              "credit_amount": 0,
+              "line_description": "Avskrivning Bärbar dator"
+            },
+            {
+              "account_number": "1229",
+              "debit_amount": 0,
+              "credit_amount": 3025,
+              "line_description": "Ack. avskrivning Bärbar dator"
+            }
+          ]
+        },
+        {
+          "asset_id": "00000000-0000-4000-8000-000000000006",
+          "planned_depreciation": 3025,
+          "opening_accumulated_depreciation": 0,
+          "opening_depreciation_date": null
+        }
+      ]
+    ]
+  }
+]

@@ -42,7 +42,6 @@ vi.mock('@react-pdf/renderer', () => ({
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue('mock-pdf-element'),
   brandingFromCompanySettings: vi.fn().mockReturnValue({}),
-  SHOW_SWISH_ON_INVOICE: false,
 }))
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 
@@ -99,6 +98,11 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
 }))
 
+const mockLoadInvoiceEmailAttachments = vi.fn()
+vi.mock('@/lib/invoices/invoice-attachments', () => ({
+  loadInvoiceEmailAttachments: (...args: unknown[]) => mockLoadInvoiceEmailAttachments(...args),
+}))
+
 const mockLinkToJournalEntry = vi.fn().mockResolvedValue(undefined)
 const mockUploadDocument = vi.fn().mockResolvedValue({ id: 'underlag-1' })
 vi.mock('@/lib/core/documents/document-service', () => ({
@@ -111,6 +115,11 @@ vi.mock('@/lib/email/invoice-templates', () => ({
   generateInvoiceEmailText: vi.fn().mockReturnValue('Invoice text'),
   generateInvoiceEmailSubject: vi.fn().mockReturnValue('Faktura F-2024001'),
 }))
+import {
+  generateInvoiceEmailHtml,
+  generateInvoiceEmailSubject,
+  generateInvoiceEmailText,
+} from '@/lib/email/invoice-templates'
 
 const mockCreateInvoiceJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
@@ -119,7 +128,8 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
 }))
 
 const mockIssueCreditNote = vi.fn()
-vi.mock('@/lib/invoices/issue-credit-note', () => ({
+vi.mock('@/lib/invoices/issue-credit-note', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/issue-credit-note')>()),
   issueCreditNote: (...args: unknown[]) => mockIssueCreditNote(...args),
 }))
 
@@ -174,6 +184,7 @@ describe('POST /api/invoices/[id]/send', () => {
     eventBus.clear()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     mockIsConfigured.mockReturnValue(true)
+    mockLoadInvoiceEmailAttachments.mockResolvedValue({ ok: true, value: [] })
     mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
     mockCreateSchedules.mockResolvedValue({ created: 0, failed: 0 })
     mockIssueCreditNote.mockResolvedValue({
@@ -316,6 +327,24 @@ describe('POST /api/invoices/[id]/send', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_NO_CUSTOMER_EMAIL')
   })
 
+  it('returns 409 INVOICE_CUSTOMER_MISSING for a draft whose customer was deleted (crm#263)', async () => {
+    // invoices.customer_id is ON DELETE SET NULL: the join comes back null.
+    enqueue({
+      data: { ...makeInvoice({ id: 'inv-1', items: [] }), customer_id: null, customer: null },
+      error: null,
+    })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_CUSTOMER_MISSING')
+    expect(body.error.message).toContain('Fakturan saknar kund')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+  })
+
   it('returns 400 when the stored customer email is malformed', async () => {
     enqueue({
       data: makeInvoice({
@@ -392,6 +421,33 @@ describe('POST /api/invoices/[id]/send', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('INVOICE_SEND_VAT_NUMBER_MISSING')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('refuses a delivery note before anything is issued: it is marked sent, never emailed', async () => {
+    enqueue({ data: makeInvoice({ ...invoice, document_type: 'delivery_note' }), error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_DELIVERY_NOTE')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('refuses a credit note imported without a link before a number is taken', async () => {
+    enqueue({ data: makeInvoice({ ...invoice, invoice_number: null, total: -500, credited_invoice_id: null }), error: null })
+    enqueue({ data: company, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_CREDIT_NOTE_NOT_ISSUABLE')
     expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
@@ -567,12 +623,13 @@ describe('POST /api/invoices/[id]/send', () => {
       expect.objectContaining({ id: 'inv-1' }),
       'enskild_firma',
       customer.name,
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     // Issued and booked BEFORE the email leaves (the one issue ordering).
     expect(mockCreateInvoiceJournalEntry.mock.invocationCallOrder[0]).toBeLessThan(
       mockSendEmail.mock.invocationCallOrder[0],
     )
-    expect(mockLinkToJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'document-1', 'je-1')
+    expect(mockLinkToJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'document-1', 'je-1', { link_basis: 'system_derived', link_evidence: null })
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'invoice.sent' })
     )
@@ -687,6 +744,64 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  // accounted#45: the email door passes the defer flag to the shared issue
+  // step and answers its refusal (the original could not be booked first)
+  // with the code that names the fix, before any email is sent.
+  it('refuses a deferred credit with the original-booking code and emails nothing', async () => {
+    const deferredCompany = makeCompanySettings({
+      accounting_method: 'accrual',
+      defer_invoice_booking: true,
+      bankgiro: '123-4567',
+    })
+    const creditNote = makeInvoice({
+      id: 'credit-1',
+      invoice_number: 'KR-F-2024001',
+      status: 'draft',
+      credited_invoice_id: 'inv-1',
+      customer,
+      items: invoice.items,
+    })
+    const unbookedOriginal = {
+      id: 'inv-1',
+      invoice_number: 'F-2024001',
+      status: 'sent',
+      journal_entry_id: null,
+      paid_at: null,
+      paid_amount: 0,
+      total: 12500,
+    }
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: deferredCompany, error: null })
+    enqueue({ data: unbookedOriginal, error: null })
+    enqueue({ data: [{ id: 'credit-1' }], error: null })
+    mockIssueCreditNote.mockResolvedValue({
+      complete: false,
+      journalEntryId: null,
+      journalEntryRequired: true,
+      repairRequired: false,
+      failures: [{
+        step: 'original_booking',
+        reason: 'not bookable',
+        code: 'INVOICE_CREDIT_ORIGINAL_BOOK_FAILED',
+        details: { original_invoice_id: 'inv-1', original_booking_code: 'INVOICE_BOOK_NO_FISCAL_PERIOD' },
+      }],
+    })
+    enqueue({ data: null, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/credit-1/send', { method: 'POST' }),
+      createMockRouteParams({ id: 'credit-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_CREDIT_ORIGINAL_BOOK_FAILED')
+    expect(mockIssueCreditNote).toHaveBeenCalledWith(
+      expect.objectContaining({ originalInvoice: unbookedOriginal, deferInvoiceBooking: true }),
+    )
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('retries delivery for an already-issued credit note after provider failure', async () => {
     const creditNote = makeInvoice({
       id: 'credit-1',
@@ -739,6 +854,36 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  // crm#1202: sending an offert sends the offert. It never books, its
+  // decision (quote_status) is left alone, and the reply names it.
+  it('sends a quote as a quote: no verifikat, decision untouched, "Offerten" in the reply', async () => {
+    const quote = makeInvoice({
+      ...invoice,
+      id: 'quote-1',
+      invoice_number: 'OF-001',
+      document_type: 'quote',
+      quote_status: 'open',
+      valid_until: '2024-07-15',
+    })
+    enqueue({ data: quote, error: null })
+    enqueue({ data: company, error: null })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-q' })
+    // Update the quote's status to 'sent' (optimistic lock: returns the row)
+    enqueue({ data: [{ id: 'quote-1' }], error: null })
+
+    const request = createMockRequest('/api/invoices/quote-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'quote-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; message: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.message).toBe('Offerten har skickats till kund@test.se')
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    const updates = findCalls('invoices', 'update').map((call) => call[0] as Record<string, unknown>)
+    expect(updates.length).toBeGreaterThan(0)
+    for (const payload of updates) expect(payload).not.toHaveProperty('quote_status')
   })
 
   it('never emails an invoice whose verifikat the engine refuses: the draft is restored and the refusal returned', async () => {
@@ -829,6 +974,7 @@ describe('POST /api/invoices/[id]/send', () => {
       expect.objectContaining({ invoice_number: 'F-2026010' }),
       'enskild_firma',
       customer.name,
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
   })
 
@@ -1004,6 +1150,57 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('emails the invoice\'s own attachments with the delivery (crm#1269)', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-1' })
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
+    enqueue({ data: null, error: null })
+    const timeReport = {
+      filename: 'tidrapport-juli.pdf',
+      content: Buffer.from('%PDF-1.7 time report'),
+      contentType: 'application/pdf',
+    }
+    mockLoadInvoiceEmailAttachments.mockResolvedValue({ ok: true, value: [timeReport] })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/send', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockLoadInvoiceEmailAttachments).toHaveBeenCalledWith(expect.anything(), 'company-1', 'inv-1')
+    expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ extraAttachments: [timeReport] }),
+    )
+    // Read before anything irreversible: the reservation (and the number
+    // after it) come only once the files are in hand.
+    expect(mockLoadInvoiceEmailAttachments.mock.invocationCallOrder[0]).toBeLessThan(
+      mockReserveInvoiceDelivery.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('refuses attachments over the size limit before a number is allocated or anything issued', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    mockLoadInvoiceEmailAttachments.mockResolvedValue({ ok: false, code: 'INVOICE_ATTACHMENTS_TOO_LARGE' })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/send', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_ATTACHMENTS_TOO_LARGE')
+    expect(body.error.message).toContain('25 MB')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('returns 400 on malformed lines before any email is sent', async () => {
     enqueue({ data: invoice, error: null }) // ownership fetch precedes validation
     const request = createMockRequest('/api/invoices/inv-1/send', {
@@ -1076,6 +1273,60 @@ describe('POST /api/invoices/[id]/send', () => {
         ],
       })
     )
+  })
+
+  it('returns 400 for an email subject over 200 characters, before anything is issued or sent', async () => {
+    enqueue({ data: invoice, error: null }) // ownership fetch precedes validation
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: { email_subject: 'x'.repeat(201) },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for an email message over 5000 characters', async () => {
+    enqueue({ data: invoice, error: null })
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: { email_body: 'x'.repeat(5001) },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+
+    expect(response.status).toBe(400)
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('writes the email with this send\'s own subject and message, without storing them', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-texts' })
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status flip
+    enqueue({ data: null, error: null }) // journal_entry_id link
+
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: { email_subject: 'Faktura {fakturanummer} för juli', email_body: 'Hej! Här kommer julifakturan.' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+
+    expect(response.status).toBe(200)
+    const expectedData = expect.objectContaining({
+      overrides: { subject: 'Faktura {fakturanummer} för juli', body: 'Hej! Här kommer julifakturan.' },
+    })
+    expect(vi.mocked(generateInvoiceEmailSubject)).toHaveBeenCalledWith(expectedData)
+    expect(vi.mocked(generateInvoiceEmailHtml)).toHaveBeenCalledWith(expectedData)
+    expect(vi.mocked(generateInvoiceEmailText)).toHaveBeenCalledWith(expectedData)
+    // Never written to the invoice row.
+    for (const [payload] of findCalls('invoices', 'update')) {
+      expect(payload).not.toHaveProperty('email_subject')
+      expect(payload).not.toHaveProperty('email_body')
+    }
   })
 
   it('renders the final PDF as if already sent (no UTKAST banner)', async () => {

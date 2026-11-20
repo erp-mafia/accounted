@@ -1,22 +1,19 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
 import { getLatestPostedVouchers } from './latest-vouchers'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import type {
+  BudgetComparison,
   LatestVoucherPerSeries,
   ResultatrapportReport,
   ResultatrapportRow,
   ResultatrapportGroup,
   TrialBalanceRow,
 } from '@/types'
-
-const CLASS_LABELS: Record<number, string> = {
-  3: '3 Rörelsens inkomster/intäkter',
-  4: '4 Material- och varukostnader',
-  5: '5 Övriga externa kostnader',
-  6: '6 Övriga externa kostnader',
-  7: '7 Personalkostnader',
-  8: '8 Finansiella poster och bokslutsdispositioner',
-}
+import { roundOre } from '@/lib/money'
+import { loadReportBudget, type LoadedReportBudget } from '@/lib/budgets/report-budget'
+import { figures } from '@/lib/budgets/budget-vs-actual'
+import { RESULT_CLASS_LABELS as CLASS_LABELS } from './result-class-labels'
 
 /**
  * Resultatrapport: operational P&L report.
@@ -44,6 +41,13 @@ export async function generateResultatrapport(
     toDate?: string
     /** SIE dim → code filter ({"6":"P001"}). P&L-safe: see trial-balance.ts. */
     dimensions?: Record<string, string>
+    /**
+     * Compare with this budget (accounted#134): Budget and Avvikelse figures
+     * on every row, and rows for accounts budgeted but not booked. Whole
+     * months only (report-budget.ts); a budget line matches the dimension
+     * filter by containment, as a journal line does.
+     */
+    budgetId?: string
   }
 ): Promise<ResultatrapportReport> {
   const { data: period } = await supabase
@@ -78,39 +82,23 @@ export async function generateResultatrapport(
   const hasRange = Boolean(options?.fromDate || options?.toDate)
   const isFullPeriod = !hasRange && !options?.dimensions
   if (isFullPeriod) {
-    // Prefer the explicit continuity chain; fall back to the period that ends
-    // immediately before this one. The fallback keeps the comparison working
-    // for companies whose chain was never linked: e.g. multi-year SIE imports
-    // created before the importer started setting previous_period_id.
-    let priorPeriodId: string | null = period.previous_period_id ?? null
-    if (!priorPeriodId) {
-      const { data: priorByDate } = await supabase
-        .from('fiscal_periods')
-        .select('id')
-        .eq('company_id', companyId)
-        .lt('period_end', period.period_start)
-        .order('period_end', { ascending: false })
-        .limit(1)
-      priorPeriodId = priorByDate && priorByDate.length > 0 ? priorByDate[0].id : null
-    }
-
-    if (priorPeriodId) {
-      const { data: prior } = await supabase
-        .from('fiscal_periods')
-        .select('period_start, period_end')
-        .eq('id', priorPeriodId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (prior) {
-        // Same exclusion as the current period: a prior year is almost always
-        // closed, so without it the comparison column reads zero throughout.
-        const priorTb = await generateTrialBalance(supabase, companyId, priorPeriodId, {
-          closingEntry: 'exclude-all-year-end',
-        })
-        priorRows = filterPnl(priorTb.rows)
-        priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
-      }
+    // The year ending the day before this one starts: the continuity link
+    // when it is adjacent, the date otherwise (multi-year SIE imports created
+    // before the importer set previous_period_id), never a year across a gap.
+    const prior = await resolvePreviousFiscalPeriod<{ id: string; period_start: string; period_end: string }>(
+      supabase,
+      companyId,
+      period,
+      'id, period_start, period_end',
+    )
+    if (prior) {
+      // Same exclusion as the current period: a prior year is almost always
+      // closed, so without it the comparison column reads zero throughout.
+      const priorTb = await generateTrialBalance(supabase, companyId, prior.id, {
+        closingEntry: 'exclude-all-year-end',
+      })
+      priorRows = filterPnl(priorTb.rows)
+      priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
     }
   } else if (hasRange && !options?.dimensions) {
     // Same window, prior year. Shift the window back one year (leap-day
@@ -148,8 +136,8 @@ export async function generateResultatrapport(
           if (!existing) {
             merged.set(row.account_number, { ...row })
           } else {
-            existing.period_debit = round2(existing.period_debit + row.period_debit)
-            existing.period_credit = round2(existing.period_credit + row.period_credit)
+            existing.period_debit = roundOre(existing.period_debit + row.period_debit)
+            existing.period_credit = roundOre(existing.period_credit + row.period_credit)
           }
         }
       }
@@ -163,7 +151,17 @@ export async function generateResultatrapport(
   const priorByAccount = new Map<string, TrialBalanceRow>()
   for (const r of priorRows) priorByAccount.set(r.account_number, r)
 
-  const groups = buildGroups(currentRows, priorByAccount)
+  const budget = options?.budgetId
+    ? await loadReportBudget(supabase, companyId, {
+        budgetId: options.budgetId,
+        fiscalPeriodId,
+        period: { start: period.period_start, end: period.period_end },
+        window: { from: effectiveFromDate, to: effectiveToDate },
+        dimensions: options.dimensions,
+      })
+    : null
+
+  const groups = buildGroups(currentRows, priorByAccount, budget?.info.applied ? budget : null)
 
   const netResultCurrent = sumNet(currentRows)
   const netResultPrior = sumNet(priorRows)
@@ -188,12 +186,26 @@ export async function generateResultatrapport(
 
   return {
     groups,
-    net_result_current: round2(netResultCurrent),
-    net_result_prior: round2(netResultPrior),
+    net_result_current: roundOre(netResultCurrent),
+    net_result_prior: roundOre(netResultPrior),
     period: { start: effectiveFromDate, end: effectiveToDate },
     prior_period: priorPeriodInfo,
     ...(latestVouchers.length > 0 ? { latest_vouchers: latestVouchers } : {}),
+    ...(budget ? { budget: budget.info } : {}),
+    ...(budget?.info.applied
+      ? { net_result_budget: comparison(sumBudget(budget), netResultCurrent) }
+      : {}),
   }
+}
+
+/** Budget, deviation and deviation % for one figure (both in the report's sign). */
+function comparison(budget: number, actual: number): BudgetComparison {
+  const f = figures(budget, actual)
+  return { budget: f.budget, deviation: f.deviation, deviation_percent: f.deviation_percent }
+}
+
+function sumBudget(budget: LoadedReportBudget): number {
+  return [...budget.byAccount.values()].reduce((s, v) => s + v, 0)
 }
 
 /**
@@ -272,7 +284,8 @@ function sumNet(rows: TrialBalanceRow[]): number {
 
 function buildGroups(
   currentRows: TrialBalanceRow[],
-  priorByAccount: Map<string, TrialBalanceRow>
+  priorByAccount: Map<string, TrialBalanceRow>,
+  budget: LoadedReportBudget | null,
 ): ResultatrapportGroup[] {
   const accountIndex = new Map<string, { name: string; class: number }>()
   for (const r of currentRows) {
@@ -281,6 +294,13 @@ function buildGroups(
   for (const r of priorByAccount.values()) {
     if (!accountIndex.has(r.account_number)) {
       accountIndex.set(r.account_number, { name: r.account_name, class: r.account_class })
+    }
+  }
+  // An account budgeted but not booked is a row too: its whole budget is the
+  // deviation, and leaving it out would hide exactly the shortfall.
+  for (const account of budget?.byAccount.keys() ?? []) {
+    if (!accountIndex.has(account)) {
+      accountIndex.set(account, { name: budget!.accountNames.get(account) ?? '', class: Number(account[0]) })
     }
   }
 
@@ -297,20 +317,24 @@ function buildGroups(
     const rows: ResultatrapportRow[] = []
     let subtotalCurrent = 0
     let subtotalPrior = 0
+    let subtotalBudget = 0
     for (const { account_number, name } of accountsInClass) {
       const cur = currentByAccount.get(account_number)
       const pr = priorByAccount.get(account_number)
       const currentAmount = cur ? signedAmount(cur) : 0
       const priorAmount = pr ? signedAmount(pr) : 0
-      if (Math.abs(currentAmount) < 0.005 && Math.abs(priorAmount) < 0.005) continue
+      const budgetAmount = budget?.byAccount.get(account_number) ?? 0
+      if (Math.abs(currentAmount) < 0.005 && Math.abs(priorAmount) < 0.005 && Math.abs(budgetAmount) < 0.005) continue
       rows.push({
         account_number,
         account_name: name,
-        current_period: round2(currentAmount),
-        prior_period: round2(priorAmount),
+        current_period: roundOre(currentAmount),
+        prior_period: roundOre(priorAmount),
+        ...(budget ? { budget: comparison(budgetAmount, currentAmount) } : {}),
       })
       subtotalCurrent += currentAmount
       subtotalPrior += priorAmount
+      subtotalBudget += budgetAmount
     }
 
     if (rows.length === 0) continue
@@ -319,14 +343,12 @@ function buildGroups(
       class: klass,
       class_label: CLASS_LABELS[klass],
       rows,
-      subtotal_current: round2(subtotalCurrent),
-      subtotal_prior: round2(subtotalPrior),
+      subtotal_current: roundOre(subtotalCurrent),
+      subtotal_prior: roundOre(subtotalPrior),
+      ...(budget ? { subtotal_budget: comparison(subtotalBudget, subtotalCurrent) } : {}),
     })
   }
 
   return groups
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}

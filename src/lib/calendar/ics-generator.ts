@@ -5,6 +5,7 @@
 
 import { createEvents, type EventAttributes, type DateArray } from 'ics'
 import type { Deadline, Invoice } from '@/types'
+import { stockholmWallTimeToUtc } from '@/lib/dates/iso'
 
 export interface FeedOptions {
   includeTaxDeadlines: boolean
@@ -33,15 +34,19 @@ function dateToArray(dateStr: string): DateArray {
 }
 
 /**
- * Convert date and optional time to ICS DateArray with hours/minutes
+ * Convert date and optional Swedish time (default 09:00) to a UTC DateArray.
+ * Deadline times are Swedish wall-clock times; written as local time they
+ * followed the server's zone (UTC), so 09:00 showed as 10:00 or 11:00.
  */
-function dateTimeToArray(dateStr: string, timeStr?: string | null): DateArray {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  if (timeStr) {
-    const [hours, minutes] = timeStr.split(':').map(Number)
-    return [year, month, day, hours, minutes]
-  }
-  return [year, month, day, 9, 0] // Default to 9:00 AM
+function dateTimeToUtcArray(dateStr: string, timeStr?: string | null): DateArray {
+  const instant = stockholmWallTimeToUtc(dateStr, timeStr || '09:00')
+  return [
+    instant.getUTCFullYear(),
+    instant.getUTCMonth() + 1,
+    instant.getUTCDate(),
+    instant.getUTCHours(),
+    instant.getUTCMinutes(),
+  ]
 }
 
 /**
@@ -56,6 +61,25 @@ function createAlarms(daysBefore: number[]): EventAttributes['alarms'] {
 }
 
 /**
+ * The `ics` package writes every duration as `P<weeks><days>T<time>` and keeps
+ * the `T` even when no hours, minutes or seconds follow, so whole-day alarms
+ * come out as `TRIGGER:-P14DT`, a zero offset as `TRIGGER:-PT` and a one-day
+ * event as `DURATION:P1DT`. RFC 5545 section 3.3.6 requires a time component
+ * after `T`, so calendar apps may drop those alarms. Rewrite exactly these
+ * shapes (`-P14DT` to `-P14D`, `-PT` to `PT0S`); valid values such as `PT1H`
+ * do not match and pass through untouched.
+ */
+const DANGLING_T_DURATION = /^(TRIGGER|DURATION):([+-]?)P((?:\d+W)?(?:\d+D)?)T(\r?)$/gm
+
+function normalizeDurations(ics: string): string {
+  return ics.replace(
+    DANGLING_T_DURATION,
+    (_line, property: string, sign: string, datePart: string, cr: string) =>
+      datePart ? `${property}:${sign}P${datePart}${cr}` : `${property}:PT0S${cr}`,
+  )
+}
+
+/**
  * Generate deadline events
  */
 function generateDeadlineEvents(deadlines: Deadline[]): EventAttributes[] {
@@ -63,7 +87,9 @@ function generateDeadlineEvents(deadlines: Deadline[]): EventAttributes[] {
     const event: EventAttributes = {
       uid: getEventUID('deadline', deadline.id),
       title: deadline.title,
-      start: dateTimeToArray(deadline.due_date, deadline.due_time),
+      start: dateTimeToUtcArray(deadline.due_date, deadline.due_time),
+      startInputType: 'utc',
+      startOutputType: 'utc',
       duration: { hours: 1 },
       description: formatDeadlineDescription(deadline),
       categories: ['Deadline', deadline.deadline_type === 'tax' ? 'Skatt' : deadline.deadline_type],
@@ -167,7 +193,7 @@ export function generateCalendarFeed(
       if (error) {
         reject(error)
       } else {
-        resolve(value)
+        resolve(normalizeDurations(value))
       }
     })
   })
@@ -186,8 +212,13 @@ function getSwedishTaxTypeLabel(type: string): string {
     skatteinbetalning: 'Skatteinbetalning (storföretag)',
     inkomstdeklaration_ef: 'Inkomstdeklaration EF',
     inkomstdeklaration_ab: 'Inkomstdeklaration AB',
+    inkomstdeklaration_ekonomisk_forening: 'Inkomstdeklaration 2 (ekonomisk förening)',
+    inkomstdeklaration_ideell_forening: 'Inkomstdeklaration 3 (ideell förening)',
     arsredovisning: 'Årsredovisning',
+    arsredovisning_ekonomisk_forening: 'Årsredovisning och revisionsberättelse',
     arsstamma: 'Årsstämma',
+    foreningsstamma: 'Föreningsstämma',
+    forenklat_arsbokslut: 'Förenklat årsbokslut',
     periodisk_sammanstallning: 'Periodisk sammanställning',
   }
   return labels[type] || type

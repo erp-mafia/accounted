@@ -13,6 +13,9 @@
  */
 import { z } from 'zod'
 import { matchInboxItemSupplier, matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import { documentFitGate } from '@/lib/documents/bank-match/fit'
+import { MISMATCH_REASON } from './documents'
+import { proposeBankMatchForInboxItem } from './inbox-bank-match'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -56,6 +59,8 @@ export const inboxItemsMatchSupplier = defineOperation({
   run: async (ctx, { inbox_item_id, supplier_id }, { dryRun }) => {
     const outcome = await matchInboxItemSupplier(ctx, inbox_item_id, supplier_id, { dryRun })
     if (!outcome.ok || outcome.dryRun) return outcome
+    // The supplier's name and giro are part of what match on arrival compares.
+    await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, inbox_item_id, ctx.log)
     return { ok: true, data: { inbox_item_id: outcome.data.id, matched_supplier_id: outcome.data.matched_supplier_id } }
   },
 })
@@ -75,6 +80,7 @@ export const inboxItemsMatchTransaction = defineOperation({
       'Registering a supplier invoice from the item (POST /inbox-items/{id}/convert) or attaching an arbitrary document to a transaction (POST /transactions/{id}/attach-document).',
     pitfalls: [
       'The transaction must belong to the same company: otherwise 404 TX_CATEGORIZE_TX_NOT_FOUND.',
+      'A document that asks for more than the transaction paid AND names another seller, or that names its seller and whose money goes the other way (a purchase on money in, a refund or credit note on money out), returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway.',
       'A transaction that already carries another document keeps it (details in the dry run: transaction_has_other_document).',
       'Matching a booked transaction in a locked period links the document best-effort; check the verifikat afterwards.',
     ],
@@ -86,16 +92,21 @@ export const inboxItemsMatchTransaction = defineOperation({
   input: z.object({
     inbox_item_id: INBOX_ITEM_ID,
     transaction_id: z.string().uuid().describe('The bank transaction id (from GET /transactions).'),
+    mismatch_reason: MISMATCH_REASON,
   }),
   output: z.object({ inbox_item_id: z.string().uuid(), matched_transaction_id: z.string().uuid() }),
-  errorCodes: ['INBOX_ITEM_NOT_FOUND', 'TX_CATEGORIZE_TX_NOT_FOUND'],
+  errorCodes: ['INBOX_ITEM_NOT_FOUND', 'TX_CATEGORIZE_TX_NOT_FOUND', 'DOC_ROW_MISMATCH'],
   http: {
     method: 'POST',
     path: '/api/v1/companies/:companyId/inbox-items/:id/match-transaction',
     pathParams: { id: 'inbox_item_id' },
   },
-  run: async (ctx, { inbox_item_id, transaction_id }, { dryRun }) => {
-    const outcome = await matchInboxItemTransaction(ctx, inbox_item_id, transaction_id, { dryRun })
+  run: async (ctx, { inbox_item_id, transaction_id, mismatch_reason }, { dryRun }) => {
+    // Every agent and API pairing compares the two sides (crm#1479).
+    const outcome = await matchInboxItemTransaction(ctx, inbox_item_id, transaction_id, {
+      dryRun,
+      fitCheck: documentFitGate(ctx.supabase, ctx.companyId, mismatch_reason),
+    })
     if (!outcome.ok || outcome.dryRun) return outcome
     return {
       ok: true,

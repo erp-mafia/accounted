@@ -14,6 +14,7 @@ import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
+import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { tools } from '../server'
 import { KPI_METRIC_KEYS } from '../kpi-report'
 
@@ -21,6 +22,8 @@ vi.mock('@/lib/reports/income-statement', () => ({ generateIncomeStatement: vi.f
 vi.mock('@/lib/reports/trial-balance', () => ({ generateTrialBalance: vi.fn() }))
 vi.mock('@/lib/reports/ar-ledger', () => ({ generateARLedger: vi.fn() }))
 vi.mock('@/lib/reports/monthly-breakdown', () => ({ generateMonthlyBreakdown: vi.fn() }))
+// Its own reads would draw from the queued client; covered in report-data-status.test.ts.
+vi.mock('@/lib/reports/data-status', () => ({ buildReportDataStatus: vi.fn() }))
 
 const kpiTool = tools.find((t) => t.name === 'gnubok_get_kpi_report')!
 
@@ -38,7 +41,9 @@ const TB_ROWS = [
   { account_number: '2641', account_name: 'Ingående moms', account_class: 2, closing_debit: 100, closing_credit: 0 },
 ]
 
-const PAID = Array.from({ length: 5 }, () => ({ invoice_date: '2025-03-01', paid_at: '2025-03-21T00:00:00Z' }))
+/** get_paid_invoice_days: five invoices paid 20 days after their date. */
+const PAID = { invoice_count: 5, total_days: 100 }
+const NONE_PAID = { invoice_count: 0, total_days: 0 }
 
 function mockGenerators() {
   vi.mocked(generateIncomeStatement).mockResolvedValue({
@@ -59,6 +64,7 @@ function mockGenerators() {
   } as never)
   vi.mocked(generateARLedger).mockResolvedValue({ total_outstanding: 2500.5, total_overdue: 500 } as never)
   vi.mocked(generateMonthlyBreakdown).mockResolvedValue({ months: [] } as never)
+  vi.mocked(buildReportDataStatus).mockResolvedValue({ unavailable: true, reason: 'not under test' })
 }
 
 beforeEach(() => {
@@ -74,7 +80,7 @@ describe('gnubok_get_kpi_report', () => {
     enqueue({
       data: { value: { accountOverrides: { cashPosition: ['1930'], vatLiability: ['2611'] } } },
     }) // extension_data preferences
-    enqueue({ data: PAID }) // invoices
+    enqueue({ data: PAID }) // rpc get_paid_invoice_days
 
     const result = (await kpiTool.execute({ period_id: 'fp-2025' }, 'company-1', 'user-1', supabase as never)) as Record<string, unknown>
 
@@ -88,7 +94,7 @@ describe('gnubok_get_kpi_report', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PAST_PERIOD })
     enqueue({ data: null }) // no preferences row
-    enqueue({ data: [] })
+    enqueue({ data: NONE_PAID })
 
     const result = (await kpiTool.execute({ period_id: 'fp-2025' }, 'company-1', 'user-1', supabase as never)) as Record<string, unknown>
 
@@ -100,7 +106,7 @@ describe('gnubok_get_kpi_report', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PAST_PERIOD })
     enqueue({ data: null })
-    enqueue({ data: [] })
+    enqueue({ data: NONE_PAID })
 
     const result = (await kpiTool.execute({ period_id: 'fp-2025' }, 'company-1', 'user-1', supabase as never)) as Record<string, unknown>
 
@@ -110,7 +116,7 @@ describe('gnubok_get_kpi_report', () => {
   })
 
   it('scopes payment days to payments inside the range', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PAST_PERIOD })
     enqueue({ data: null })
     enqueue({ data: PAID })
@@ -122,8 +128,12 @@ describe('gnubok_get_kpi_report', () => {
       supabase as never,
     )) as Record<string, unknown>
 
-    expect(findCalls('invoices', 'gte')).toContainEqual(['paid_at', '2025-01-01'])
-    expect(findCalls('invoices', 'lt')).toContainEqual(['paid_at', '2025-07-01'])
+    // Exclusive next day, so a payment on the range's last day counts.
+    expect(supabase.rpc).toHaveBeenCalledWith('get_paid_invoice_days', {
+      p_company_id: 'company-1',
+      p_from: '2025-01-01',
+      p_paid_before: '2025-07-01',
+    })
     expect(result.avg_payment_days).toBe(20)
     expect(result.paid_invoice_count).toBe(5)
     expect(result.range).toEqual({ start: '2025-01-01', end: '2025-06-30' })
@@ -140,7 +150,7 @@ describe('gnubok_get_kpi_report', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PAST_PERIOD })
     enqueue({ data: null })
-    enqueue({ data: [] })
+    enqueue({ data: NONE_PAID })
 
     const result = (await kpiTool.execute(
       { period_id: 'fp-2025', metrics: ['cash_position', 'net_result'] },
@@ -150,7 +160,7 @@ describe('gnubok_get_kpi_report', () => {
     )) as Record<string, unknown>
 
     expect(Object.keys(result).sort()).toEqual(
-      ['cash_position', 'net_result', 'period_end', 'period_name', 'period_start', 'range', 'receivables_as_of'].sort(),
+      ['cash_position', 'data_status', 'net_result', 'period_end', 'period_name', 'period_start', 'range', 'receivables_as_of'].sort(),
     )
     expect(result.net_result).toBe(6000)
   })

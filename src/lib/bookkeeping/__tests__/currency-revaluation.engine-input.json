@@ -1,0 +1,110 @@
+[
+  {
+    "name": "a EUR receivable valued up and a USD payable valued up: a gain and a loss in one verifikat",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Omvärdering utländsk valuta 2025-12-31",
+          "source_type": "currency_revaluation",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Omvärdering kundfordringar: orealiserad kursvinst"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Omvärdering leverantörsskulder: orealiserad kursförlust"
+            },
+            {
+              "account_number": "3960",
+              "debit_amount": 0,
+              "credit_amount": 500,
+              "line_description": "Orealiserade valutakursvinster"
+            },
+            {
+              "account_number": "7960",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Orealiserade valutakursförluster"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a EUR receivable valued down: a loss only",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Omvärdering utländsk valuta 2025-12-31",
+          "source_type": "currency_revaluation",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 750,
+              "line_description": "Omvärdering kundfordringar: orealiserad kursförlust"
+            },
+            {
+              "account_number": "7960",
+              "debit_amount": 750,
+              "credit_amount": 0,
+              "line_description": "Orealiserade valutakursförluster"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a USD payable valued down, called without a user (the posting falls back to the company id): a gain only",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000c001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Omvärdering utländsk valuta 2025-12-31",
+          "source_type": "currency_revaluation",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 100,
+              "credit_amount": 0,
+              "line_description": "Omvärdering leverantörsskulder: orealiserad kursvinst"
+            },
+            {
+              "account_number": "3960",
+              "debit_amount": 0,
+              "credit_amount": 100,
+              "line_description": "Orealiserade valutakursvinster"
+            }
+          ]
+        }
+      ]
+    ]
+  }
+]

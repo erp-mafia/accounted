@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { getStructuredError } from '../get-structured-error'
 import { getErrorEntry } from '../structured-errors'
-import { codedRefusal, fieldValidationError, serviceRefusal, zodErrorFieldIssues, zodFieldIssues } from '../refusal'
+import { badArgument, codedRefusal, fieldValidationError, serviceRefusal, zodErrorFieldIssues, zodFieldIssues } from '../refusal'
 
 describe('codedRefusal', () => {
   it('keeps the code, takes message_en from the thrown text and message_sv from the registry', () => {
@@ -48,6 +48,27 @@ describe('fieldValidationError', () => {
     const s = getStructuredError(fieldValidationError('Invalid employee', issues))
     expect(s.message_en).toBe('Invalid employee: f0: bad 0; f1: bad 1; f2: bad 2 (+2 more)')
     expect(s.message_sv).toBe('f0: Fel 0. f1: Fel 1. f2: Fel 2. (+2 till)')
+  })
+})
+
+describe('badArgument', () => {
+  it('keeps the English sentence verbatim and names the field in Swedish', () => {
+    expect(getStructuredError(badArgument('invoice_id', 'invoice_id is required'))).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message_en: 'invoice_id is required',
+      message_sv: 'invoice_id: Obligatoriskt fält saknas.',
+      retryable: false,
+    })
+  })
+
+  it('says a wrong value is wrong, keeps a Swedish sentence and takes an explicit reason', () => {
+    expect(getStructuredError(badArgument('limit', 'limit must be a positive integer')).message_sv).toBe('limit: Ogiltigt värde.')
+    expect(
+      getStructuredError(badArgument('filters', 'Ange minst ett filter: en företagsbred omtaggning måste avgränsas.')).message_sv,
+    ).toBe('filters: Ange minst ett filter: en företagsbred omtaggning måste avgränsas.')
+    expect(getStructuredError(badArgument('batch_id', 'Pass either operation_id or batch_id, not both', 'Ange inte båda.')).message_sv).toBe(
+      'batch_id: Ange inte båda.',
+    )
   })
 })
 

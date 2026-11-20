@@ -71,7 +71,7 @@ export default function EditTransactionTitleDialog({
         onOpenChange(v)
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('edit_title_dialog_title')}</DialogTitle>
           <DialogDescription>{t('edit_title_warning')}</DialogDescription>

@@ -1,7 +1,6 @@
-import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer'
-import { AFRelationship, PDFDocument } from 'pdf-lib'
-import { htmlToText } from './extract-invoice-fields'
+import { htmlToText } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { sanitiseFilename } from './upload-and-extract'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * A receipt that IS the mail body (#2751).
@@ -47,6 +46,12 @@ export interface InboundAttachmentShape {
   content_disposition?: string | null
   content_id?: string | null
   size?: number | null
+  /**
+   * The HTML body shows this part: its content id is referenced as `cid:`
+   * (Resend), or it sits in the body's multipart/related (mailparser's
+   * `related`). Inline whatever the disposition says.
+   */
+  embedded?: boolean | null
 }
 
 export function isSignatureImage(att: InboundAttachmentShape): boolean {
@@ -55,10 +60,37 @@ export function isSignatureImage(att: InboundAttachmentShape): boolean {
   const disposition = (att.content_disposition ?? '').toLowerCase().trim()
   // Resend leaves the raw header value unnormalised; mailparser lowercases.
   // A missing disposition with a content id is an inline part in practice.
-  const inline = disposition.startsWith('inline') || (disposition === '' && !!att.content_id)
+  // Some senders mark the images their HTML shows as attachments (Booking.com
+  // via MIME::Lite::HTML): those are inline because the body embeds them.
+  const inline = disposition.startsWith('inline') || (disposition === '' && !!att.content_id) || att.embedded === true
   if (!inline) return false
   // Size unknown: it may be a photo; keep it as a document.
   return typeof att.size === 'number' && att.size >= 0 && att.size <= SIGNATURE_IMAGE_MAX_BYTES
+}
+
+/**
+ * A content id in the form a `cid:` reference uses: without the angle
+ * brackets of the Content-ID header, URL-decoded (RFC 2392), lowercased.
+ */
+export function normaliseContentId(id: string | null | undefined): string {
+  const bare = (id ?? '').trim().replace(/^<|>$/g, '').trim()
+  let decoded = bare
+  try {
+    decoded = decodeURIComponent(bare)
+  } catch {
+    // A stray "%" is part of the id, not an escape.
+  }
+  return decoded.toLowerCase()
+}
+
+/** The content ids an HTML body embeds (`<img src="cid:...">`, CSS `url(cid:...)`), normalised. */
+export function contentIdsReferencedByHtml(html: string | null | undefined): Set<string> {
+  const ids = new Set<string>()
+  for (const match of (html ?? '').matchAll(/\bcid:([^'"\s>)]+)/gi)) {
+    const id = normaliseContentId(match[1])
+    if (id) ids.add(id)
+  }
+  return ids
 }
 
 /**
@@ -248,122 +280,6 @@ export function emailBodyUnderlagFilename(subject: string | null | undefined): s
   return `mail-${sanitiseFilename(flat, 'meddelande')}.pdf`
 }
 
-// ── PDF ─────────────────────────────────────────────────────────
-
-// Built on first render, not at import. The extension registry imports this
-// module into every route that loads extensions, and many route tests mock
-// '@react-pdf/renderer' with renderToBuffer only: a top-level StyleSheet.create
-// made those files fail to load.
-function buildStyles() {
-  return StyleSheet.create({
-    page: {
-      paddingTop: 40,
-      paddingHorizontal: 44,
-      paddingBottom: 56,
-      fontSize: 9.5,
-      fontFamily: 'Helvetica',
-      color: '#1a1a1a',
-    },
-    title: {
-      fontSize: 14,
-      fontWeight: 'bold',
-      marginBottom: 10,
-    },
-    headerBlock: {
-      borderBottomWidth: 1,
-      borderBottomColor: '#d4d4d4',
-      paddingBottom: 10,
-      marginBottom: 14,
-    },
-    headerRow: {
-      flexDirection: 'row',
-      marginBottom: 2,
-    },
-    headerLabel: {
-      width: 72,
-      fontSize: 7.5,
-      fontWeight: 'bold',
-      color: '#666',
-      textTransform: 'uppercase',
-      paddingTop: 1,
-    },
-    headerValue: {
-      flex: 1,
-      fontSize: 9,
-    },
-    // Tight on purpose: a long receipt should not spill onto more pages than
-    // the extraction page budget reads (maxPagesForAutoExtract).
-    line: {
-      lineHeight: 1.1,
-    },
-    blank: {
-      height: 5,
-    },
-    footer: {
-      position: 'absolute',
-      bottom: 24,
-      left: 44,
-      right: 44,
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      fontSize: 7.5,
-      color: '#888',
-    },
-  })
-}
-
-let cachedStyles: ReturnType<typeof buildStyles> | null = null
-function getStyles(): ReturnType<typeof buildStyles> {
-  return (cachedStyles ??= buildStyles())
-}
-
-function HeaderRow({ label, value }: { label: string; value: string }) {
-  if (!value) return null
-  const styles = getStyles()
-  return (
-    <View style={styles.headerRow}>
-      <Text style={styles.headerLabel}>{label}</Text>
-      <Text style={styles.headerValue}>{value}</Text>
-    </View>
-  )
-}
-
-export function EmailBodyUnderlagPDF({ model, generatedAt }: { model: EmailBodyUnderlagModel; generatedAt: string }) {
-  const styles = getStyles()
-  return (
-    <Document
-      title={model.subject}
-      subject="E-postmeddelande sparat som underlag"
-      keywords={model.messageId}
-      creator="Accounted"
-      producer="Accounted"
-    >
-      <Page size="A4" style={styles.page}>
-        <Text style={styles.title}>E-postmeddelande sparat som underlag</Text>
-        <View style={styles.headerBlock}>
-          <HeaderRow label="Från" value={model.from} />
-          <HeaderRow label="Till" value={model.to} />
-          <HeaderRow label="Ämne" value={model.subject} />
-          <HeaderRow label="Mottaget" value={model.receivedAt} />
-          <HeaderRow label="Message-ID" value={model.messageId} />
-        </View>
-        <View>
-          {model.lines.map((line, i) =>
-            line === '' ? <View key={i} style={styles.blank} /> : <Text key={i} style={styles.line}>{line}</Text>,
-          )}
-          {model.truncated && (
-            <Text style={styles.line}>[Texten är förkortad. Hela meddelandet finns inbäddat i denna PDF.]</Text>
-          )}
-        </View>
-        <View style={styles.footer} fixed>
-          <Text>Återgivning av mejltexten. Originalet i mottagen form ligger inbäddat i denna PDF.</Text>
-          <Text render={({ pageNumber, totalPages }) => `Skapad ${generatedAt} · Sida ${pageNumber} av ${totalPages}`} />
-        </View>
-      </Page>
-    </Document>
-  )
-}
-
 export interface RenderedEmailBodyUnderlag {
   name: string
   buffer: ArrayBuffer
@@ -381,22 +297,11 @@ export async function renderEmailBodyUnderlag(
   const model = buildEmailBodyUnderlagModel(input, opts)
   if (!model) return null
 
-  const generatedAt = opts.generatedAt ?? new Date().toISOString().split('T')[0]
-  const rendered = await renderToBuffer(<EmailBodyUnderlagPDF model={model} generatedAt={generatedAt} />)
-
-  const pdf = await PDFDocument.load(rendered, { updateMetadata: false })
-  const received = input.receivedAt ? new Date(input.receivedAt) : new Date()
-  const stamp = Number.isNaN(received.getTime()) ? new Date() : received
-  for (const original of model.originals) {
-    await pdf.attach(original.bytes, original.name, {
-      mimeType: original.mimeType,
-      description: `Mottaget e-postmeddelande i ursprunglig form (Message-ID: ${model.messageId || 'saknas'})`,
-      creationDate: stamp,
-      modificationDate: stamp,
-      afRelationship: AFRelationship.Source,
-    })
-  }
-  const bytes = await pdf.save()
+  const generatedAt = opts.generatedAt ?? todayIsoStockholm()
+  // react-pdf and pdf-lib load here, for a mail that becomes a body underlag,
+  // not with every route that loads the extension registry.
+  const { renderEmailBodyUnderlagPdf } = await import('./email-body-underlag-pdf')
+  const bytes = await renderEmailBodyUnderlagPdf(model, generatedAt, input.receivedAt)
   // Copy into a fresh ArrayBuffer: Uint8Array.buffer is ArrayBufferLike
   // (possibly SharedArrayBuffer-backed) and may span more than the view.
   const out = new ArrayBuffer(bytes.byteLength)

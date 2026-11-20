@@ -6,7 +6,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { tools, isDefaultCatalogTool } from '../server'
-import { toolInputSchema } from '../operation-tools'
+import { coerceStringifiedScalars, toolInputSchema } from '../operation-tools'
+import { toToolError } from '../tool-result'
 import { OPERATIONS } from '@/lib/operations/registry'
 
 describe('toolInputSchema', () => {
@@ -21,6 +22,52 @@ describe('toolInputSchema', () => {
     expect(properties.n.maximum).toBeUndefined()
     expect(properties.nested.additionalProperties).toBe(false)
     expect(schema.required).toEqual(['id', 'nested'])
+  })
+
+  it('names the types of an enum that lists numbers, and leaves a string enum bare', () => {
+    // A bare enum is a parameter without a type, which clients send as a
+    // string: default_vat_rate 0 arrived as "0" (agent feedback seq 1088767).
+    const schema = toolInputSchema(
+      z.object({
+        rate: z.literal([0, 0.06, 0.12, 0.25, null]).optional(),
+        flag: z.literal([0, 1]).optional(),
+        box: z.literal(['10', '11', null]).optional(),
+      }),
+    )
+    const properties = schema.properties as Record<string, Record<string, unknown>>
+    expect(properties.rate).toEqual({ type: ['number', 'null'], enum: [0, 0.06, 0.12, 0.25, null] })
+    expect(properties.flag).toEqual({ type: 'number', enum: [0, 1] })
+    expect(properties.box).toEqual({ enum: ['10', '11', null] })
+  })
+})
+
+describe('coerceStringifiedScalars', () => {
+  const schema = toolInputSchema(
+    z.object({
+      rate: z.literal([0, 0.06, 0.12, 0.25, null]).optional(),
+      box: z.literal(['10', '11', null]).optional(),
+      count: z.number().int().optional(),
+      name: z.string().nullable().optional(),
+      code: z.string().optional(),
+    }),
+  )
+
+  it('reads a numeric string back as a number where the schema takes no string', () => {
+    expect(coerceStringifiedScalars(schema, { rate: '0', count: '12' })).toEqual({ rate: 0, count: 12 })
+    expect(coerceStringifiedScalars(schema, { rate: '0.0' })).toEqual({ rate: 0 })
+    expect(coerceStringifiedScalars(schema, { rate: '0.25' })).toEqual({ rate: 0.25 })
+  })
+
+  it('reads "null" back as null where null is allowed and the string "null" is not', () => {
+    expect(coerceStringifiedScalars(schema, { rate: 'null', box: 'null' })).toEqual({ rate: null, box: null })
+    // A free-text field takes "null" as text.
+    expect(coerceStringifiedScalars(schema, { name: 'null' })).toEqual({ name: 'null' })
+  })
+
+  it('leaves strings, non-numeric text and already typed values untouched', () => {
+    const args = { rate: 0.12, box: '10', code: '0', count: 'twelve', unknown_key: '1' }
+    expect(coerceStringifiedScalars(schema, args)).toBe(args)
+    expect(coerceStringifiedScalars(schema, { rate: '1e3' })).toEqual({ rate: '1e3' })
   })
 })
 
@@ -102,5 +149,54 @@ describe('generated operation tools', () => {
     expect(written).toEqual([])
     // A dry run is also the staging preview: it never seeds the system dims.
     expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  // crm#1982: what an agent reads when it asks for a year in the middle of a
+  // hole longer than one räkenskapsår (a year ending 2023-09-30, the next one
+  // starting 2026-10-01). The envelope carries no details for this code, so
+  // the sentence and the remediation must say the way forward themselves.
+  it('refuses a year in the middle of a multi-year gap with where the fill starts, without staging anything', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_create_fiscal_period')!
+    const written: string[] = []
+    const answers: Record<string, unknown> = {
+      fiscal_periods: [
+        { id: 'old', period_start: '2022-10-01', period_end: '2023-09-30', is_closed: true },
+        { id: 'current', period_start: '2026-10-01', period_end: '2027-09-30', is_closed: false },
+      ],
+      companies: { entity_type: 'aktiebolag' },
+    }
+    const chain = (table: string): unknown =>
+      new Proxy(
+        {},
+        {
+          get(_t, prop) {
+            if (prop === 'then') return (resolve: (v: unknown) => void) => resolve({ data: answers[table] ?? null, error: null })
+            return (..._args: unknown[]) => {
+              if (prop === 'insert' || prop === 'update') written.push(table)
+              return chain(table)
+            }
+          },
+        },
+      )
+    const supabase = { from: vi.fn((table: string) => chain(table)), rpc: vi.fn() }
+
+    const refusal = await tool
+      .execute(
+        { name: 'Räkenskapsår 2025/2026', period_start: '2025-10-01', period_end: '2026-09-30' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+      .then(
+        () => null,
+        (err: unknown) => err,
+      )
+
+    const { error } = toToolError(refusal)
+    expect(error).toMatchObject({ code: 'FISCAL_PERIOD_NOT_CONTIGUOUS', retryable: false })
+    expect(error.message_sv).toContain('måste börja 2023-10-01')
+    expect(error.message_sv).toContain('fylls ett räkenskapsår i taget')
+    expect(error.remediation?.description).toContain('one year at a time')
+    expect(written).toEqual([])
   })
 })

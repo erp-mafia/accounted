@@ -10,6 +10,13 @@ import { eventBus } from '@/lib/events/bus'
 const mocks = vi.hoisted(() => ({
   validateApiKey: vi.fn(),
   checkRateLimit: vi.fn(),
+  resolveBrandResultByHost: vi.fn(),
+}))
+
+// The brands table, the registry of white-label hosts the challenge may name.
+vi.mock('@/lib/branding/resolve', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/branding/resolve')>()),
+  resolveBrandResultByHost: (...args: unknown[]) => mocks.resolveBrandResultByHost(...args),
 }))
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
@@ -91,6 +98,34 @@ describe('MCP eager authentication (auth=required)', () => {
     expect(response.status).toBe(401)
     expect(response.headers.get('WWW-Authenticate')).toContain(
       '/.well-known/oauth-protected-resource?tool_namespace=accounted"'
+    )
+  })
+
+  it('points the challenge at the metadata on the byrå domain the client called', async () => {
+    // A connector configured with a brand-domain URL validates the metadata
+    // against that domain; a canonical pointer here failed every sign-in.
+    mocks.resolveBrandResultByHost.mockResolvedValue({
+      brand: { domain: 'byra.example.se' },
+      lookupFailed: false,
+    })
+    const response = await handleMcpRequest(
+      new Request(
+        'https://byra.example.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector&auth=required',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', host: 'byra.example.se' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 7,
+            method: 'initialize',
+            params: { protocolVersion: '2025-06-18' },
+          }),
+        }
+      )
+    )
+    expect(response.status).toBe(401)
+    expect(response.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="https://byra.example.se/.well-known/oauth-protected-resource?tool_namespace=accounted"'
     )
   })
 

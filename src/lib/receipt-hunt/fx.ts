@@ -17,8 +17,8 @@
  * comfortably inside the 5% the matcher already allows.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { roundOre } from '@/lib/money'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { createLogger } from '@/lib/logger'
 import type { HuntPoolItem } from './select'
 
@@ -112,7 +112,7 @@ export async function attachSekTotals(
       ...item,
       // Öre, like every other money value here: a raw float would put
       // 1015.9700000000001 into a comparison against a bank amount.
-      sek_total: roundOre(convertToSEK(sig.total, rate)),
+      sek_total: sekOfForeign(sig.total, rate),
     })
   }
 

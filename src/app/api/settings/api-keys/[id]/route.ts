@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
@@ -43,6 +44,39 @@ const patchSchema = z
     { message: 'Ange unattended_commit_limit, company_ids eller read_only_company_ids.' },
   )
 
+interface ManageableKey {
+  id: string
+  user_id: string | null
+  company_id: string
+}
+
+/**
+ * The live key `id` when this caller may address it here: one homed in the
+ * active company (the company view, where an admin also manages colleagues'
+ * keys), or the caller's own wherever it is homed (the byrå cockpit lists a
+ * person's own connections across clients, GET ?scope=mine). The read runs
+ * on the session client, so the api_keys policies apply first; every write
+ * after it is filtered on the key's own company and stays subject to them:
+ * changing a key takes an owner or admin role there.
+ */
+async function findManageableKey(
+  supabase: SupabaseClient,
+  id: string,
+  companyId: string,
+  userId: string,
+): Promise<{ key: ManageableKey | null; error: unknown }> {
+  const { data, error } = await supabase
+    .from('api_keys')
+    .select('id, user_id, company_id')
+    .eq('id', id)
+    .is('revoked_at', null)
+    .maybeSingle()
+  if (error) return { key: null, error }
+  const key = data as ManageableKey | null
+  if (!key || (key.company_id !== companyId && key.user_id !== userId)) return { key: null, error: null }
+  return { key, error: null }
+}
+
 /**
  * DELETE /api/settings/api-keys/[id]: Revoke an API key (soft delete)
  */
@@ -50,13 +84,21 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'api_key.revoke',
   async (_request, ctx, { params }) => {
     const { id } = await params
-    const { supabase, companyId } = ctx
+    const { user, supabase, companyId } = ctx
+
+    const { key, error: lookupError } = await findManageableKey(supabase, id, companyId, user.id)
+    if (lookupError) {
+      return NextResponse.json({ error: getUserErrorMessage(lookupError) }, { status: 500 })
+    }
+    // Nothing this caller may revoke under that id: the answer a revoke of a
+    // missing or already revoked key always gave.
+    if (!key) return NextResponse.json({ success: true })
 
     const { error } = await supabase
       .from('api_keys')
       .update({ revoked_at: new Date().toISOString() })
       .eq('id', id)
-      .eq('company_id', companyId)
+      .eq('company_id', key.company_id)
       .is('revoked_at', null)
 
     if (error) {
@@ -103,28 +145,24 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // and lifting a read-only level lets it write. Checked before any write,
     // so a request that also sets the limit cannot half apply.
     const editsCompanies = requestedCompanyIds !== undefined || requestedReadOnly !== undefined
-    if (editsCompanies) {
-      // The key must be this company's and live, same gate as the limit.
-      const { data: existing, error: lookupError } = await supabase
-        .from('api_keys')
-        .select('id, user_id')
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .is('revoked_at', null)
-        .maybeSingle()
-      if (lookupError) {
-        return NextResponse.json({ error: getUserErrorMessage(lookupError) }, { status: 500 })
-      }
-      if (!existing) {
-        return NextResponse.json({ error: 'API-nyckeln hittades inte.' }, { status: 404 })
-      }
-      if ((existing as { user_id?: string | null }).user_id !== user.id) {
-        return errorResponseFromCode('FORBIDDEN', log, {
-          requestId,
-          details: { field: 'company_ids', reason: 'owner_required' },
-        })
-      }
+    // The key must be one this caller may address here, and live.
+    const { key: existing, error: lookupError } = await findManageableKey(supabase, id, companyId, user.id)
+    if (lookupError) {
+      return NextResponse.json({ error: getUserErrorMessage(lookupError) }, { status: 500 })
     }
+    if (!existing) {
+      return NextResponse.json({ error: 'API-nyckeln hittades inte.' }, { status: 404 })
+    }
+    if (editsCompanies && existing.user_id !== user.id) {
+      return errorResponseFromCode('FORBIDDEN', log, {
+        requestId,
+        details: { field: 'company_ids', reason: 'owner_required' },
+      })
+    }
+    // The company the key is listed under and defaults to. It is the active
+    // company in the company view; the byrå cockpit edits the caller's own
+    // keys wherever they are homed, so every check below anchors on the key.
+    const keyCompanyId = existing.company_id
 
     if (limit !== undefined) {
       // Revoked keys are deliberately excluded: raising a limit on a key that no
@@ -133,7 +171,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         .from('api_keys')
         .update({ unattended_commit_limit: limit })
         .eq('id', id)
-        .eq('company_id', companyId)
+        .eq('company_id', keyCompanyId)
         .is('revoked_at', null)
         .select('id, unattended_commit_limit')
         .maybeSingle()
@@ -152,7 +190,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (editsCompanies) {
       let memberships
       try {
-        memberships = await listUserCompaniesForPicker(supabase, user.id, { activeCompanyId: companyId })
+        memberships = await listUserCompaniesForPicker(supabase, user.id, { activeCompanyId: keyCompanyId })
       } catch (err) {
         log.error('company picker list failed', err)
         return errorResponse(err, log, { requestId })
@@ -162,6 +200,11 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       // otherwise), same validation as create. Checked before any
       // service-role read, like everything a caller can cause.
       const memberIds = new Set(memberships.map((company) => company.company_id))
+      // A key homed in a company the caller has since left is not theirs to
+      // manage from here, the same rule as the own list (GET ?scope=mine).
+      if (!memberIds.has(keyCompanyId)) {
+        return NextResponse.json({ error: 'API-nyckeln hittades inte.' }, { status: 404 })
+      }
       const foreignSelection = (requestedCompanyIds ?? []).filter((cid) => !memberIds.has(cid))
       const foreign = Array.from(
         new Set([...foreignSelection, ...(requestedReadOnly ?? []).filter((cid) => !memberIds.has(cid))]),
@@ -176,12 +219,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
           },
         })
       }
-      // The key is listed under, and defaults to, this company: an explicit
-      // list that drops it would leave the default outside the set.
-      if (requestedCompanyIds && !requestedCompanyIds.includes(companyId)) {
+      // The key is listed under, and defaults to, its own company: an
+      // explicit list that drops it would leave the default outside the set.
+      if (requestedCompanyIds && !requestedCompanyIds.includes(keyCompanyId)) {
         return errorResponseFromCode('VALIDATION_ERROR', log, {
           requestId,
-          details: { field: 'company_ids', reason: 'key_company_required', company_id: companyId },
+          details: { field: 'company_ids', reason: 'key_company_required', company_id: keyCompanyId },
         })
       }
 
@@ -225,7 +268,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         })
       }
 
-      const selection = resolveCompanySelection(nextSelection, memberships, companyId, nextReadOnly)
+      const selection = resolveCompanySelection(nextSelection, memberships, keyCompanyId, nextReadOnly)
       if (!selection) {
         // Only reachable when every company the key kept is one the user has
         // since left: refusing beats reading "nothing left" as "everything".
@@ -238,10 +281,10 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       readOnly = selection.readOnlyCompanyIds
       // Backstop for a kept set (company_ids omitted): the key's own company
       // must stay inside it, like the explicit check above.
-      if (allowlist && !allowlist.includes(companyId)) {
+      if (allowlist && !allowlist.includes(keyCompanyId)) {
         return errorResponseFromCode('VALIDATION_ERROR', log, {
           requestId,
-          details: { field: 'company_ids', reason: 'key_company_required', company_id: companyId },
+          details: { field: 'company_ids', reason: 'key_company_required', company_id: keyCompanyId },
         })
       }
 

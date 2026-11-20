@@ -1,0 +1,100 @@
+[
+  {
+    "name": "session: a categorized row has its posted verifikat reversed",
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0001"
+      ]
+    ],
+    "resets": [
+      {
+        "is_business": null,
+        "category": null,
+        "journal_entry_id": null
+      }
+    ],
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "session: a verifikat that is not posted is refused before the engine",
+    "reversals": [],
+    "resets": [],
+    "outcome": {
+      "status": 400,
+      "error": "Journal entry is not posted"
+    }
+  },
+  {
+    "name": "session: the engine refuses the storno",
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0003"
+      ]
+    ],
+    "resets": [],
+    "outcome": {
+      "status": 400,
+      "error": "CANNOT_REVERSE_NON_POSTED"
+    }
+  },
+  {
+    "name": "v1: a categorized row has its posted verifikat reversed",
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0004"
+      ]
+    ],
+    "resets": [
+      {
+        "is_business": null,
+        "category": null,
+        "journal_entry_id": null
+      }
+    ],
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "v1: a verifikat that is not posted is refused before the engine",
+    "reversals": [],
+    "resets": [],
+    "outcome": {
+      "status": 400,
+      "error": "TX_UNCATEGORIZE_JE_NOT_POSTED"
+    }
+  },
+  {
+    "name": "v1: the engine refuses the storno",
+    "reversals": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0006"
+      ]
+    ],
+    "resets": [],
+    "outcome": {
+      "status": 400,
+      "error": "TX_UNCATEGORIZE_JE_NOT_POSTED"
+    }
+  }
+]

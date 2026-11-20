@@ -11,3 +11,14 @@ it('requires explicit evidence before blocking a connection', () => {
     expect(fortnoxCompletionBlock(error)).toBeNull()
   }
 })
+
+it('blocks on the documented refusal codes only, read by the shared classifier', () => {
+  const fortnox = (status: number, code: number, message: string) =>
+    new FortnoxApiError('refused', status, JSON.stringify({ ErrorInformation: { error: 1, message, code } }))
+  expect(fortnoxCompletionBlock(fortnox(400, 2001103, 'Api-licens saknas.'))).toBe('PROVIDER_LICENSE_MISSING')
+  expect(fortnoxCompletionBlock(fortnox(400, 2001101, 'Det finns ingen aktiv licens för önskat scope.'))).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+  expect(fortnoxCompletionBlock(fortnox(403, 2000663, 'Har inte behörighet för scope.'))).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+  // A refusal that names a register by an undocumented code is still not
+  // enough to suspend scheduled work.
+  expect(fortnoxCompletionBlock(fortnox(400, 2002182, 'Saknar behörighet för leverantörsfaktura.'))).toBeNull()
+})

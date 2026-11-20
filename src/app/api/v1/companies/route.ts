@@ -18,8 +18,9 @@ import {
   PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
-import { withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { claimV1IdempotencyKey, v1RequestHash, withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import type { IdempotencyClaim } from '@/lib/api/idempotency'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { createCompanyCore } from '@/lib/company/create-company'
@@ -31,7 +32,7 @@ const Company = z.object({
   name: z.string(),
   org_number: z.string().nullable(),
   entity_type: z.string(),
-  role: z.enum(['owner', 'admin', 'member', 'viewer']),
+  role: z.enum(['owner', 'admin', 'member', 'viewer', 'invoicer']),
   created_at: z.string(),
 })
 
@@ -48,7 +49,7 @@ registerEndpoint({
   useWhen:
     'You need to discover which company IDs an API key has access to before calling company-scoped endpoints.',
   doNotUseFor:
-    'Fetching a single company you already know the id of: use GET /api/v1/companies/{companyId} for that.',
+    'Reading one company\'s settings: GET /api/v1/companies/{companyId}/settings. There is no single-company GET: this list already carries each company\'s name, org number, form and role.',
   pitfalls: [
     'Multi-company keys (e.g. consultants) will see >1 result. Always pass the correct companyId in subsequent paths.',
     'Archived companies are excluded; if a company disappears the user has been removed from it or it was archived.',
@@ -100,7 +101,7 @@ registerEndpoint({
     'automatic tax deadlines. A 30-day trial with every paid capability starts immediately. ' +
     'Intended for partner platforms provisioning client companies (byrå/vertical SaaS) and for agents onboarding a user.',
   useWhen:
-    'A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner; invite the end customer afterwards.',
+    'A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner. Members and invitations have no API: the owner invites people in the app under Settings > Users (/settings/members).',
   doNotUseFor:
     'Companies that already exist (list them with GET /api/v1/companies), or changing settings on an existing company (PATCH /api/v1/companies/{companyId}/settings).',
   pitfalls: [
@@ -108,9 +109,10 @@ registerEndpoint({
     'Bookkeeping duty under BFL starts when the company exists with a fiscal period: do not create companies to try things out. Use a test-mode key (dry run) for that.',
     'Enskild firma always runs on the calendar year; fiscal_year_start_month is ignored for it.',
     'first_fiscal_year is only for a company in its first year (BFL 3 kap.: up to 18 months). Omit it for an established company.',
-    'Not idempotent, and Idempotency-Key is not honoured on this company-less route: a retry after a network failure creates a second company. List GET /api/v1/companies before retrying.',
+    'Send an Idempotency-Key. With one, a retry with the same key and body returns the company the first call created (200, Idempotent-Replayed: true), never a second one; the same key with another body answers 409 IDEMPOTENCY_KEY_REUSE. Keep the key for the whole provisioning attempt (24 h). The header is optional for compatibility: without it, a retry after a network failure creates a second company.',
     'org_number is required for a VAT-registered company (the invoice momsregistreringsnummer derives from it), and f_skatt must be stated explicitly: F-skatt approval is never assumed.',
     'accounting_method may be omitted: it then defaults by form (aktiebolag accrual, enskild firma cash) and the response shows the resolved value. The cash default is only legal when turnover normally stays under 3 MSEK (BFL 4 kap 4 §): send accrual explicitly for a larger enskild firma.',
+    'ideell_forening, ekonomisk_forening and bostadsrattsforening are rolled out per installation behind the server-side flags NEXT_PUBLIC_IDEELL_FORENING_ENABLED, NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED and NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED. Until the flag is on, a request with that entity_type is refused with VALIDATION_ERROR on entity_type; enskild_firma and aktiebolag are always creatable.',
   ],
   example: {
     request: {
@@ -143,7 +145,7 @@ registerEndpoint({
   reversible: false,
   dryRunSupported: true,
   request: { body: CompanySetupSchema },
-  response: { success: dataEnvelope(CreatedCompany), errorCodes: ['VALIDATION_ERROR', 'FORBIDDEN', 'INTERNAL_ERROR'] },
+  response: { success: dataEnvelope(CreatedCompany), errorCodes: ['VALIDATION_ERROR', 'FORBIDDEN', 'IDEMPOTENCY_KEY_REUSE', 'INTERNAL_ERROR'] },
 })
 
 export const POST = withApiV1('companies.create', async (request, ctx) => {
@@ -207,16 +209,50 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  const result = await createCompanyCore(ctx.supabase, plan.input, () =>
-    ctx.supabase.rpc('create_company_for_user', {
-      p_user_id: ctx.userId,
-      p_name: setup.name,
-      p_entity_type: setup.entity_type,
-      p_team_id: teamId,
-    }),
-  )
+  // Idempotency-Key. The wrapper's claim is keyed by the URL :companyId,
+  // which this route does not have, so it claims here instead: per
+  // (user, key) under the company_create scope, completed under the company
+  // the first call created. The key is optional for compatibility (the route
+  // documented it as ignored until 2026-10-15): with it a retry, or a repeat
+  // sent while the first call still runs (409 IDEMPOTENCY_KEY_IN_PROGRESS),
+  // can never create a second company; without it nothing is claimed or
+  // cached. A dry run returned above and is never cached.
+  const idempotencyKey = ctx.idempotencyKey ?? null
+  let claim: IdempotencyClaim | null = null
+  if (idempotencyKey) {
+    const claimed = await claimV1IdempotencyKey(
+      ctx.supabase,
+      {
+        userId: ctx.userId,
+        companyId: null,
+        scope: 'company_create',
+        key: idempotencyKey,
+        requestHash: v1RequestHash(request, rawBody, false),
+      },
+      ctx,
+    )
+    if ('response' in claimed) return claimed.response
+    claim = claimed.claim
+  }
+
+  let result: Awaited<ReturnType<typeof createCompanyCore>>
+  try {
+    result = await createCompanyCore(ctx.supabase, plan.input, () =>
+      ctx.supabase.rpc('create_company_for_user', {
+        p_user_id: ctx.userId,
+        p_name: setup.name,
+        p_entity_type: setup.entity_type,
+        p_team_id: teamId,
+      }),
+    )
+  } catch (err) {
+    // A failure is never cached: a retry with the same key runs again.
+    await claim?.release()
+    throw err
+  }
 
   if (result.error !== undefined) {
+    await claim?.release()
     if (result.error === 'org_number_invalid') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -230,8 +266,14 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  return created(shape(result.companyId), { requestId: ctx.requestId })
-})
+  const response = created(shape(result.companyId), { requestId: ctx.requestId })
+  // Best-effort like the wrapper's cache: the company exists either way, and
+  // a failed write only weakens a later retry (logged inside).
+  await claim?.complete('success', (await response.clone().json()) as Record<string, unknown>, {
+    companyId: result.companyId,
+  })
+  return response
+}, { requireIdempotencyKey: false, handlerIdempotency: true })
 
 export const GET = withApiV1('companies.list', async (request, ctx) => {
   const url = new URL(request.url)
@@ -306,7 +348,7 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
     // `company_members.id`: the membership row's own UUID, used as the
     // cursor's secondary key. Not exposed in the response.
     id: string
-    role: 'owner' | 'admin' | 'member' | 'viewer'
+    role: 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
     joined_at: string
     // PostgREST returns the joined company as either an object (one-to-one FK
     // resolution) or an array. Accept both: Supabase's auto-typing chooses

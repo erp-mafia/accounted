@@ -3,6 +3,7 @@ import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/emai
 import { getSenderForCompany } from '@/lib/email/brand-sender'
 import { deleteDocument, uploadDocument } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { InvoiceDelivery } from '@/types'
 
 const PDF_CONTENT_TYPE = 'application/pdf'
@@ -33,6 +34,17 @@ export interface TrackedInvoiceEmailInput {
   text: string
   filename: string
   pdfBuffer: Buffer
+  /**
+   * The invoice's own attachments (lib/invoices/invoice-attachments.ts),
+   * emailed after the PDF in this order with their original file names.
+   */
+  extraAttachments?: NonNullable<SendEmailOptions['attachments']>
+  /**
+   * The archive already holds `pdfBuffer`: a resend of the file an earlier
+   * delivery archived (crm#1339). The delivery then points at that document
+   * instead of archiving a copy, and a failed send never deletes it.
+   */
+  archivedDocument?: { id: string; sha256Hash: string }
 }
 
 export interface TrackedInvoiceEmailResult extends SendEmailResult {
@@ -93,20 +105,26 @@ export async function sendTrackedInvoiceEmail(
     text,
     filename,
     pdfBuffer,
+    extraAttachments = [],
+    archivedDocument,
   } = input
 
-  const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
-  const document = await uploadDocument(
-    supabase,
-    userId,
-    companyId,
-    {
-      name: filename,
-      buffer: pdfArrayBuffer,
-      type: PDF_CONTENT_TYPE,
-    },
-    { upload_source: 'system' },
-  )
+  // Only a document archived for this delivery is this delivery's to clean
+  // up; a reused one belongs to the delivery that archived it.
+  const ownsDocument = !archivedDocument
+  const document = archivedDocument
+    ? { id: archivedDocument.id, sha256_hash: archivedDocument.sha256Hash }
+    : await uploadDocument(
+        supabase,
+        userId,
+        companyId,
+        {
+          name: filename,
+          buffer: new Uint8Array(pdfBuffer).buffer as ArrayBuffer,
+          type: PDF_CONTENT_TYPE,
+        },
+        { upload_source: 'system' },
+      )
 
   // These service-only RPCs re-authorize userId against companyId and bind
   // every transition to the reserved invoice, so no caller-supplied tenant or
@@ -135,11 +153,13 @@ export async function sendTrackedInvoiceEmail(
   )
 
   if (deliveryError || capturedDeliveryId !== deliveryId) {
-    try {
-      await deleteDocument(supabase, companyId, document.id)
-    } catch {
-      // Best-effort cleanup only. The send must remain blocked even if the
-      // unlinked archive cannot be removed after a snapshot insert failure.
+    if (ownsDocument) {
+      try {
+        await deleteDocument(supabase, companyId, document.id)
+      } catch {
+        // Best-effort cleanup only. The send must remain blocked even if the
+        // unlinked archive cannot be removed after a snapshot insert failure.
+      }
     }
     throw new InvoiceDeliverySnapshotError(
       `Failed to persist invoice delivery snapshot: ${deliveryError?.message || 'unknown error'}`,
@@ -165,12 +185,14 @@ export async function sendTrackedInvoiceEmail(
     // The company's own verified sender wins over the brand address
     // (buildFromHeader gives `from` precedence).
     from,
+    // The invoice PDF first, then the files the invoice carries.
     attachments: [
       {
         filename,
         content: pdfBuffer,
         contentType: PDF_CONTENT_TYPE,
       },
+      ...extraAttachments,
     ],
   }
   const result = await emailService.sendEmail(emailOptions)
@@ -191,7 +213,7 @@ export async function sendTrackedInvoiceEmail(
 
     const failureRecorded = !failureRecordError && failedDeliveryId === deliveryId
     let cleanupFailed = false
-    if (failureRecorded) {
+    if (failureRecorded && ownsDocument) {
       try {
         const cleanup = await deleteDocument(supabase, companyId, document.id)
         cleanupFailed = !cleanup.ok
@@ -261,4 +283,57 @@ export async function recordManualInvoiceDelivery(args: {
   }
 
   return data as InvoiceDelivery
+}
+
+/**
+ * Record the invoice PDF imported from the previous system (Fortnox) as the
+ * invoice's archived copy: a delivery with channel 'import', no recipients and
+ * no message. The service-only RPC re-authorizes userId as a writable member,
+ * reads the evidence columns from the stored document and keeps one imported
+ * original per invoice. Returns the delivery id, or null when the invoice
+ * already holds its imported original (another run got there first).
+ */
+export async function recordImportedInvoiceDelivery(args: {
+  companyId: string
+  userId: string
+  invoiceId: string
+  provider: string
+  providerMessageId: string
+  documentId: string
+}): Promise<string | null> {
+  const { data, error } = await createServiceClient().rpc('record_imported_invoice_delivery', {
+    p_company_id: args.companyId,
+    p_invoice_id: args.invoiceId,
+    p_actor_user_id: args.userId,
+    p_provider: args.provider,
+    p_provider_message_id: args.providerMessageId,
+    p_document_attachment_id: args.documentId,
+  })
+
+  if (error) {
+    throw new InvoiceDeliverySnapshotError(
+      `Failed to persist imported invoice delivery: ${error.message || 'unknown error'}`,
+    )
+  }
+
+  return typeof data === 'string' ? data : null
+}
+
+/**
+ * The company's invoices that already hold an imported original. Read with
+ * the service client: the delivery history's SELECT policy shows a member only
+ * the deliveries they made, and an import another member ran counts too.
+ */
+export async function fetchInvoicesWithImportedCopy(companyId: string): Promise<Set<string>> {
+  const service = createServiceClient()
+  const rows = await fetchAllRows<{ id: string; invoice_id: string }>(({ from, to }) =>
+    service
+      .from('invoice_deliveries')
+      .select('id, invoice_id')
+      .eq('company_id', companyId)
+      .eq('channel', 'import')
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  return new Set(rows.map((row) => row.invoice_id))
 }

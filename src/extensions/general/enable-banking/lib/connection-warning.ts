@@ -32,7 +32,7 @@ export const ONE_SESSION_BANKS = ['SEB']
 
 /**
  * Banks VERIFIED to tolerate several concurrent AIS sessions for one PSU.
- * Evidence bar: distinct session_ids observed syncing concurrently in prod.
+ * Evidence bar: distinct session_ids observed syncing concurrently in production.
  * Handelsbanken verified 2026-08-28: three users with 2-4 concurrent business
  * connections each, all on DISTINCT session_ids, all syncing daily.
  * Extend only with the same standard of evidence; connection count alone is

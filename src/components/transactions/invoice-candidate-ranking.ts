@@ -1,14 +1,14 @@
 /**
- * Pure amount-proximity ranking for the manual invoice pickers
- * (InvoicePicker, SupplierInvoicePicker).
+ * Pure amount-proximity ranking for the manual invoice picker
+ * (InvoicePicker, both directions: customer and supplier invoices).
  *
- * Lives outside those components (both `'use client'`) so the rule below can be
+ * Lives outside the component (`'use client'`) so the rule below can be
  * unit tested: this repo runs Vitest in the `node` environment and never
  * renders components, so logic embedded in JSX is unverifiable by construction.
  *
  * # Why this exists
  *
- * Both pickers ranked candidates by `Math.abs(remaining - |tx.amount|)` with no
+ * Both directions ranked candidates by `Math.abs(remaining - |tx.amount|)` with no
  * regard for currency, so a 1 000 EUR invoice sorted to the very top as a
  * perfect match for a 1 000 SEK bank row: same number, roughly eleven times the
  * money. The genuine 1 000 SEK invoice sat below it, and the pre-selected row
@@ -49,6 +49,8 @@
  * Ranking on the same rule means the order the user sees agrees with what the
  * booking path will actually accept.
  */
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 import { isValidExchangeRate } from '@/lib/utils'
 
 /**
@@ -64,11 +66,6 @@ export const DOMESTIC_CURRENCY = 'SEK'
 export function normalizeCurrency(currency: string | null | undefined): string {
   const normalized = (currency ?? '').trim().toUpperCase()
   return normalized === '' ? DOMESTIC_CURRENCY : normalized
-}
-
-/** Money rounding per CLAUDE.md: never `toFixed()`. */
-function roundOre(amount: number): number {
-  return Math.round(amount * 100) / 100
 }
 
 export interface ProximityTarget {
@@ -136,7 +133,7 @@ function convertToSek(
 ): number | null {
   if (currency === DOMESTIC_CURRENCY) return null
   if (!isValidExchangeRate(exchangeRate)) return null
-  return roundOre(amount * exchangeRate)
+  return sekOfForeign(amount, exchangeRate)
 }
 
 /**

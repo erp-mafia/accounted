@@ -1,4 +1,5 @@
 import type { McpResource } from './types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const periodActiveResource: McpResource = {
   uri: 'Accounted://period/active',
@@ -6,7 +7,7 @@ export const periodActiveResource: McpResource = {
   description: 'The fiscal period that the current date falls within: lock state, opening-balance status, retention deadline. Use to check whether new entries can be posted.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayIsoStockholm()
 
     const { data: active, error: activeError } = await supabase
       .from('fiscal_periods')

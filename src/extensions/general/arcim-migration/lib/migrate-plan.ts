@@ -15,30 +15,13 @@
 
 import type { MigrationResults } from '../types'
 
-export type MigrateStepKey =
-  | 'importCompanyInfo'
-  | 'importCustomers'
-  | 'importSuppliers'
-  | 'importSalesInvoices'
-  | 'importSupplierInvoices'
-  | 'importAssets'
+export type MigrateStepKey = 'importCompanyInfo' | 'importAssets'
 
-/** Order the steps run in: parties before the invoices that reference them. */
-export const MIGRATE_STEP_ORDER: readonly MigrateStepKey[] = [
-  'importCompanyInfo',
-  'importCustomers',
-  'importSuppliers',
-  'importSalesInvoices',
-  'importSupplierInvoices',
-  'importAssets',
-]
+/** Order the steps run in. The registers go through the background import (/migration-jobs). */
+export const MIGRATE_STEP_ORDER: readonly MigrateStepKey[] = ['importCompanyInfo', 'importAssets']
 
 export const MIGRATE_STEP_LABELS: Record<MigrateStepKey, string> = {
   importCompanyInfo: 'Hämtar företagsinformation...',
-  importCustomers: 'Importerar kunder...',
-  importSuppliers: 'Importerar leverantörer...',
-  importSalesInvoices: 'Importerar kundfakturor...',
-  importSupplierInvoices: 'Importerar leverantörsfakturor...',
   importAssets: 'Importerar anläggningstillgångar...',
 }
 
@@ -46,23 +29,6 @@ export interface MigrateRequestBody extends Record<MigrateStepKey, boolean> {
   consentId: string
   reconcileVouchers: boolean
   suggestParties: boolean
-}
-
-/**
- * Whether the results so far prove the grant answers on this token: rows
- * came back from at least one register. Sent as `grantProven` on the next
- * request so an opaque 403 there is read as one closed register, exactly as
- * it was when every step shared a request. See ProviderRunState.
- */
-export function migrationProvedGrant(results: MigrationResults): boolean {
-  return (
-    results.companyInfo?.imported === true ||
-    (results.customers?.total ?? 0) > 0 ||
-    (results.suppliers?.total ?? 0) > 0 ||
-    (results.salesInvoices?.total ?? 0) > 0 ||
-    (results.supplierInvoices?.total ?? 0) > 0 ||
-    (results.assets?.total ?? 0) > 0
-  )
 }
 
 export interface MigrateRequest {

@@ -6,8 +6,8 @@
  * vouchers that settle accounts payable (Dr 2440 / Cr 1930): is imported
  * separately via SIE. Supplier invoices are imported as standalone
  * `supplier_invoices` rows with NO link to those vouchers (the entity mapper
- * never sets `payment_journal_entry_id`). Fortnox is queried with
- * `?filter=unpaid`, so an invoice whose payment was booked in the source GL but
+ * never sets `payment_journal_entry_id`). Only open Fortnox invoices are
+ * imported by default, so an invoice whose payment was booked in the source GL but
  * never registered against the leverantörsfaktura object arrives here as an
  * open payable. Once its due date passes the nightly cron flips it to
  * `overdue`: even though the settling voucher already exists in the GL.
@@ -34,14 +34,18 @@ import {
   linkSupplierInvoiceToVoucher,
   type SupplierVoucherCandidate,
 } from './supplier-voucher-matching'
+import { CONFIDENCE } from './invoice-matching'
+import { counterpartySearchTerms } from './duplicate-payment-guard'
 import type { SupplierInvoice, Supplier } from '@/types'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
 
 const log = createLogger('bulk-reconcile-supplier-vouchers')
 
 /**
  * Minimum confidence for an UNATTENDED auto-link. 0.95 = a reference hit whose
  * amount settles the invoice (0.99) or exact-remaining-amount AND supplier-name
- * corroboration (0.95). A reference with another amount (0.90) and amount-only
+ * corroboration (0.95, the whole name: voucherNamesSupplier). A reference with another amount (0.90) and amount-only
  * matches (0.80, even with the +0.05 date bump → 0.85) are deliberately
  * excluded: the first is at best a partial payment a person should confirm,
  * the second collides on round amounts.
@@ -53,13 +57,44 @@ const AUTO_LINK_MIN_CONFIDENCE = 0.95
  * margin (not exact equality) absorbs the ±0.05 date-proximity perturbation.
  */
 const AUTO_LINK_MIN_MARGIN = 0.1
+/**
+ * The rule that cleared AUTO_LINK_MIN_CONFIDENCE. Only a reference hit reaches
+ * OCR_REFERENCE_MATCH, the date bump stops below it; what else clears the bar
+ * is the exact amount with the supplier's name.
+ */
+function autoLinkBasis(confidence: number): ScopeFreeLinkBasis {
+  return confidence >= CONFIDENCE.OCR_REFERENCE_MATCH ? 'rule_ocr_reference' : 'rule_counterparty'
+}
+
+/** What separates words, on both sides of voucherNamesSupplier. */
+const WORD_SEPARATORS = /[^A-Za-z0-9À-ɏ]+/g
+
+/**
+ * Whether the voucher text names the supplier in full: every distinctive word
+ * of its name (counterpartySearchTerms: three characters or more, legal forms
+ * dropped) stands in the text as a word of its own.
+ *
+ * The scorer's name corroboration is any one word of the name anywhere in the
+ * text. That is a fair hint for a person choosing in the picker, but no reason
+ * to link with nobody looking: a town or trade word is shared by unrelated
+ * suppliers, and another supplier's payment of the same amount, whose text
+ * named the same town, read as this supplier's (crm#1648). An exact amount
+ * with the name only in part stays a candidate for review.
+ */
+export function voucherNamesSupplier(
+  supplierName: string | null | undefined,
+  description: string | null | undefined,
+): boolean {
+  if (!supplierName || !description) return false
+  const terms = counterpartySearchTerms(supplierName.replace(WORD_SEPARATORS, ' '))
+  if (terms.length === 0) return false
+  const words = new Set(description.toLowerCase().split(WORD_SEPARATORS))
+  return terms.every((term) => words.has(term))
+}
 /** 0.5 öre: mirrors the tolerance used across the matching/RPC paths. */
 const AMOUNT_TOLERANCE = 0.005
 /** Safety cap on invoices processed in a single run (Vercel 300s budget). */
 const DEFAULT_MAX_INVOICES = 2000
-
-/** Supplier-invoice statuses that represent an open payable. */
-const PAYABLE_STATUSES = ['registered', 'approved', 'overdue', 'partially_paid']
 
 type ReconcileInvoiceRow = SupplierInvoice & {
   is_credit_note?: boolean | null
@@ -71,6 +106,8 @@ export type ReconcileReviewReason =
   | 'low_confidence' // best candidate below AUTO_LINK_MIN_CONFIDENCE
   | 'amount_exceeds_remaining' // best candidate would overpay the invoice
   | 'voucher_contested' // one voucher is the top pick for >1 invoice, or RPC rejected
+  | 'paid_before_invoice' // every candidate is dated before the invoice (PH 241)
+  | 'names_other_invoice' // every candidate cites another invoice's number (PH 264)
 
 export interface ReconcileLink {
   supplier_invoice_id: string
@@ -80,6 +117,8 @@ export interface ReconcileLink {
   invoice_status: 'paid' | 'partially_paid'
   confidence: number
   match_reason: string
+  /** The rule that chose the pair. A dry run's plan carries it to the provider migration's settle phase. */
+  link_basis: ScopeFreeLinkBasis
 }
 
 export interface ReconcileReviewItem {
@@ -119,7 +158,45 @@ export interface ReconcileOptions {
 }
 
 const SELECT_COLUMNS =
-  'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, is_credit_note, supplier:suppliers(id, name)'
+  'id, supplier_invoice_number, fortnox_number, arrival_number, status, currency, total, paid_amount, remaining_amount, invoice_date, due_date, paid_at, exchange_rate, supplier_id, is_credit_note, supplier:suppliers(id, name)'
+
+/**
+ * A voucher dated before the invoice cannot be its payment: the debt did not
+ * exist yet. With a recurring supplier (the same amount every month) last
+ * month's payment, already settling last month's invoice in the source
+ * system, scores as this invoice's exact amount and name (PH 241: 79 of 130
+ * auto-links in production on 2026-11-03). An unattended link never takes one; a
+ * person still can, from the review list.
+ */
+export function paidBeforeInvoice(
+  candidate: Pick<SupplierVoucherCandidate, 'entry_date'>,
+  invoice: { invoice_date?: string | null },
+): boolean {
+  return !!invoice.invoice_date && candidate.entry_date < invoice.invoice_date
+}
+
+/** The number a Fortnox payment voucher cites last in its text: "Levbet Leverantör AB (487)". */
+const CITED_INVOICE_NUMBER = /\((\d+)\)\s*$/
+
+/**
+ * Whether the voucher text cites another invoice than this one. Fortnox ends
+ * a payment voucher's text with its own number for the invoice it paid, and an
+ * invoice imported from Fortnox keeps that number (fortnox_number). A
+ * recurring supplier's payment of an earlier invoice, same amount and same
+ * name, dated after this invoice arrived, passes every other check and marked
+ * an unpaid invoice as paid (PH 264). A voucher that cites another number is
+ * that invoice's payment; an unattended link never takes it, a person still
+ * can, from the review list. No number on either side decides nothing.
+ */
+export function citesOtherInvoice(
+  candidate: Pick<SupplierVoucherCandidate, 'description'>,
+  invoice: { fortnox_number?: string | null },
+): boolean {
+  const own = invoice.fortnox_number?.trim()
+  if (!own) return false
+  const cited = CITED_INVOICE_NUMBER.exec(candidate.description ?? '')?.[1]
+  return !!cited && cited !== own
+}
 
 /**
  * The invoice's outstanding balance, in the INVOICE's currency (total /
@@ -166,7 +243,7 @@ export async function reconcileSupplierInvoiceVouchers(
         .from('supplier_invoices')
         .select(SELECT_COLUMNS)
         .eq('company_id', companyId)
-        .in('status', PAYABLE_STATUSES)
+        .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
       if (opts.invoiceIds) query = query.in('id', opts.invoiceIds)
       return query
         .order('due_date', { ascending: true })
@@ -195,8 +272,9 @@ export async function reconcileSupplierInvoiceVouchers(
   }
 
   // 2. Pre-load every voucher already consumed as a supplier payment (for ANY
-  //    invoice in the company). Neither the matcher nor the RPC stop the SAME
-  //    voucher being linked to a SECOND invoice, so we enforce exclusivity here.
+  //    invoice in the company). The matcher and the RPC let one voucher pay
+  //    several invoices up to what it holds (20261011153000); an UNATTENDED
+  //    link never shares a voucher, so exclusivity is enforced here.
   const existingPayments = opts.invoiceIds ? [] : await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
     supabase
       .from('supplier_invoice_payments')
@@ -248,11 +326,41 @@ export async function reconcileSupplierInvoiceVouchers(
       continue
     }
 
-    const top = fresh[0]
-    const runnerUp = fresh[1]
+    // Only a voucher dated on or after the invoice can be its payment.
+    const datable = fresh.filter((c) => !paidBeforeInvoice(c, invoice))
+    if (datable.length === 0) {
+      result.ambiguous++
+      result.review.push({
+        supplier_invoice_id: invoice.id,
+        supplier_invoice_number: invoice.supplier_invoice_number ?? null,
+        reason: 'paid_before_invoice',
+        candidates: fresh,
+      })
+      continue
+    }
+
+    // Nor can a voucher that cites another invoice's number.
+    const citing = datable.filter((c) => !citesOtherInvoice(c, invoice))
+    if (citing.length === 0) {
+      result.ambiguous++
+      result.review.push({
+        supplier_invoice_id: invoice.id,
+        supplier_invoice_number: invoice.supplier_invoice_number ?? null,
+        reason: 'names_other_invoice',
+        candidates: fresh,
+      })
+      continue
+    }
+
+    const top = citing[0]
+    const runnerUp = citing[1]
     const remaining = remainingOf(invoice)
 
+    // Below a reference hit, what cleared the bar is the exact amount with the
+    // supplier's name: the whole name, not one word of it (voucherNamesSupplier).
     const confidentEnough = top.confidence >= AUTO_LINK_MIN_CONFIDENCE
+      && (top.confidence >= CONFIDENCE.OCR_REFERENCE_MATCH
+        || voucherNamesSupplier(invoice.supplier?.name, top.description))
     const clearMargin = !runnerUp || top.confidence - runnerUp.confidence >= AUTO_LINK_MIN_MARGIN
     // The RPC rejects a voucher whose AP debit exceeds the remaining amount; a
     // total-amount match on a partly paid invoice could trip this, so screen
@@ -330,6 +438,8 @@ export async function reconcileSupplierInvoiceVouchers(
       continue
     }
 
+    const linkBasis = autoLinkBasis(top.confidence)
+
     if (dryRun) {
       const willBeFullyPaid = top.ap_debit_amount >= remaining - AMOUNT_TOLERANCE
       result.autoLinked++
@@ -341,6 +451,7 @@ export async function reconcileSupplierInvoiceVouchers(
         invoice_status: willBeFullyPaid ? 'paid' : 'partially_paid',
         confidence: top.confidence,
         match_reason: top.match_reason,
+        link_basis: linkBasis,
       })
       consumedVouchers.add(top.journal_entry_id)
       done++
@@ -349,9 +460,12 @@ export async function reconcileSupplierInvoiceVouchers(
     }
 
     const outcome = await linkSupplierInvoiceToVoucher(supabase, userId, companyId, {
+      // A migrated invoice's registration came in with the SIE journal: never book it again.
+      registrationInLedger: true,
       supplierInvoiceId: plan.invoice.id,
       journalEntryId: top.journal_entry_id,
       notes: `Auto-länkad vid avstämning (${Math.round(top.confidence * 100)}% säkerhet): ${top.match_reason}`,
+      linkBasis,
     })
 
     if (outcome.ok) {
@@ -365,6 +479,7 @@ export async function reconcileSupplierInvoiceVouchers(
         invoice_status: outcome.result.invoiceStatus,
         confidence: top.confidence,
         match_reason: top.match_reason,
+        link_basis: linkBasis,
       })
     } else {
       // The RPC re-validates atomically; a rejection here (race, already-linked,

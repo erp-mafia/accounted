@@ -93,10 +93,17 @@ export interface SkatteverketActionServices {
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
-const DISABLED: Failure = { ok: false, code: 'EXTENSION_DISABLED' }
+// EXTENSION_DISABLED's registry copy names no feature (several raise it):
+// these doors say which one, in the copy the extension itself uses.
+const DISABLED: Failure = {
+  ok: false,
+  code: 'EXTENSION_DISABLED',
+  messageSv: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
+  details: { extension: 'skatteverket' },
+}
 
-function services<K extends keyof SkatteverketActionServices>(key: K): SkatteverketActionServices[K] | null {
-  const wired = extensionRegistry.get('skatteverket')?.services as Partial<SkatteverketActionServices> | undefined
+async function services<K extends keyof SkatteverketActionServices>(key: K): Promise<SkatteverketActionServices[K] | null> {
+  const wired = (await extensionRegistry.get('skatteverket'))?.services as Partial<SkatteverketActionServices> | undefined
   return wired?.[key] ?? null
 }
 
@@ -119,7 +126,7 @@ export async function validateAgiAtSkatteverket(
   uppgift: AgiUppgift,
   payload: Record<string, unknown>,
 ): Promise<OperationOutcome<AgiKontrollsvar>> {
-  const validate = services('validateAgiUppgift')
+  const validate = await services('validateAgiUppgift')
   if (!validate) return DISABLED
   const result = await validate(ctx.supabase, ctx.userId, ctx.companyId, { uppgift, payload })
   if (!result.ok) return toFailure(result)
@@ -136,7 +143,7 @@ export async function syncSkattekontoFromSkatteverket(
   options: { dryRun?: boolean } = {},
 ): Promise<OperationOutcome<SkattekontoSyncSummary>> {
   if (options.dryRun) {
-    const preview = services('previewSkattekontoSync')
+    const preview = await services('previewSkattekontoSync')
     if (!preview) return DISABLED
     const result = await preview(ctx.supabase, ctx.userId, ctx.companyId)
     if (!result.ok) return toFailure(result)
@@ -149,7 +156,7 @@ export async function syncSkattekontoFromSkatteverket(
       },
     }
   }
-  const sync = services('syncSkattekontoNow')
+  const sync = await services('syncSkattekontoNow')
   if (!sync) return DISABLED
   const result = await sync(ctx.supabase, ctx.userId, ctx.companyId)
   if (!result.ok) return toFailure(result)

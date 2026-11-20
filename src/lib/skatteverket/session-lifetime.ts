@@ -15,6 +15,15 @@
  * existed, so a connection dead for days still showed as healthy and the
  * reconnect banner never fired until a submission failed live.
  *
+ * What actually ends a consent (seen 2026-10, crm#1442): Skatteverket
+ * refuses every refresh once about 10 hours (600 minutes) have passed since
+ * the BankID consent, whatever the refresh count. The hourly skattekonto cron
+ * refreshes lazily at expiry, so a consent lives 10 to 11 hours (median 10.5)
+ * and the 10-refresh cap is reached at about the same moment. Refresh tokens
+ * were also seen working up to two hours after issue, so the 65-minute window
+ * below is the conservative reading of SKV's documentation, not the observed
+ * limit.
+ *
  * Core code (lib/notices) consumes this, so it lives in lib/, not in the
  * extension.
  */
@@ -24,6 +33,15 @@ export const SKV_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * 1000
 
 /** Refresh-token lifetime Skatteverket grants in the per flow. */
 export const SKV_REFRESH_TOKEN_LIFETIME_MS = 65 * 60 * 1000
+
+/**
+ * The longest a refresh token has been seen working after issue (prod,
+ * 2026-10, see above): two hours, not the documented 65 minutes. A rule that
+ * must not act on a token that might still be refreshable (the token-refresh
+ * race in the extension's api-client) waits this long, not the documented
+ * lifetime.
+ */
+export const SKV_REFRESH_TOKEN_OBSERVED_LIFETIME_MS = 2 * 60 * 60 * 1000
 
 /**
  * How long past access-token expiry the refresh token still works: the

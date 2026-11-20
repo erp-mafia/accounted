@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -35,6 +35,12 @@ export interface PairRowProps {
   onIgnore: () => void
   onUnignore: () => void
   onBook: () => void
+  /**
+   * Skattekonto: opens the manual match view. A row the ledger already holds
+   * (covered_by_ledger) is linked there, so it becomes the row's main action
+   * and booking moves behind the menu.
+   */
+  onLinkInstead?: () => void
   /** "Märk som IB" for a ledger row without a bank counterpart (bank accounts). */
   onMarkIb?: () => void
   /** Other bank accounts a stray transaction can be moved to. */
@@ -62,7 +68,7 @@ export function PairsHead({ externalLabel }: { externalLabel: string }) {
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-full border border-border px-2 py-px text-[11px] text-muted-foreground">
+    <span className="inline-flex items-center rounded-md border border-border px-2 py-px text-xs text-muted-foreground">
       {children}
     </span>
   )
@@ -80,6 +86,7 @@ export function PairRow({
   onIgnore,
   onUnignore,
   onBook,
+  onLinkInstead,
   onMarkIb,
   moveTargets,
   onMove,
@@ -90,6 +97,9 @@ export function PairRow({
     e.voucher_number != null ? formatVoucher({ voucher_series: e.voucher_series, voucher_number: e.voucher_number }) : null
   const money = (n: number) => formatCurrency(n, currency)
   const external = item.side === 'external'
+  // The ledger already holds this event inside an unlinked verifikat on 1630
+  // (a summarised one): link it, never book it a second time.
+  const covered = external && isSkv && item.covered_by_ledger === true
 
   // ---- the ledger side -----------------------------------------------------
   let ledgerDate: string | null = null
@@ -98,6 +108,12 @@ export function PairRow({
   if (!external) {
     ledgerDate = item.date
     ledgerAmount = item.amount
+    // Verifikat linked to each other (a wrong verifikat and its rättelse):
+    // the chip names the others, so the row reads as explained, by what.
+    const settlement = item.settlement ?? null
+    const settledWith = settlement
+      ? settlement.counterparts.map((c) => voucherOf(c) ?? c.journal_entry_id.slice(0, 8)).join(', ')
+      : ''
     ledgerText = (
       <span className="flex min-w-0 items-center gap-2">
         <span className="truncate" data-ph-mask title={item.description}>
@@ -109,6 +125,23 @@ export function PairRow({
         {item.entry_status === 'draft' && <Chip>{t('chip_draft')}</Chip>}
         {item.entry_status === 'reversed' && <Chip>{t('chip_reversed')}</Chip>}
         {item.awaiting_external && <Chip>{t('chip_awaiting', { source: sourceLabel })}</Chip>}
+        {item.partially_linked && (
+          <Chip>
+            {t('chip_remainder', {
+              total: money(item.partially_linked.entry_amount),
+              count: item.partially_linked.linked_count,
+            })}
+          </Chip>
+        )}
+        {settlement && (
+          <span className="shrink-0" data-ph-mask title={t('settled_title', { date: formatDate(settlement.settled_at) })}>
+            <Chip>
+              {settlement.state === 'broken'
+                ? t('chip_settlement_broken', { vouchers: settledWith })
+                : t('chip_settled_with', { vouchers: settledWith })}
+            </Chip>
+          </span>
+        )}
       </span>
     )
   } else if (item.proposal && item.proposal.vouchers && item.proposal.vouchers.length > 1) {
@@ -129,7 +162,7 @@ export function PairRow({
             </Link>
           </span>
         ))}
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {t('confidence', { percent: Math.round(item.proposal.confidence * 100) })}
         </span>
       </span>
@@ -148,7 +181,7 @@ export function PairRow({
         <Link href={`/bookkeeping/${p.journal_entry_id}`} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
           {voucherOf(p) ?? p.journal_entry_id.slice(0, 8)}
         </Link>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
+        <span className="shrink-0 text-xs text-muted-foreground">
           {t('confidence', { percent: Math.round(p.confidence * 100) })}
         </span>
       </span>
@@ -168,6 +201,8 @@ export function PairRow({
         {item.link_problem === 'entry_missing' && <Chip>{t('chip_missing')}</Chip>}
       </span>
     )
+  } else if (covered) {
+    ledgerText = <Chip>{t('chip_covered')}</Chip>
   } else if (item.bucket === 'ignored') {
     ledgerText = <Chip>{t('v2_chip_ignored')}</Chip>
   } else if (item.bucket === 'upcoming') {
@@ -181,19 +216,25 @@ export function PairRow({
   let primary: React.ReactNode = null
   if (can('match') && item.proposal) {
     primary = (
-      <Button size="sm" variant="outline" onClick={onMatch} disabled={anyBusy} aria-busy={busy}>
+      <Button variant="outline" onClick={onMatch} disabled={anyBusy} aria-busy={busy}>
+        {t('row_match')}
+      </Button>
+    )
+  } else if (covered && onLinkInstead) {
+    primary = (
+      <Button variant="outline" onClick={onLinkInstead} disabled={anyBusy}>
         {t('row_match')}
       </Button>
     )
   } else if (can('book') && isSkv) {
     primary = (
-      <Button size="sm" variant="outline" onClick={onBook} disabled={anyBusy}>
+      <Button variant="outline" onClick={onBook} disabled={anyBusy}>
         {t('row_book')}
       </Button>
     )
   } else if (can('book') && openHref) {
     primary = (
-      <Button size="sm" variant="outline" asChild>
+      <Button variant="outline" asChild>
         <Link href={openHref}>{t('row_book')}</Link>
       </Button>
     )
@@ -211,6 +252,9 @@ export function PairRow({
     )
   }
   const menu: Array<{ key: string; label: string; onSelect: () => void }> = []
+  // Booking a covered row stays possible, as the deliberate second choice:
+  // the dialog it opens explains what already covers the row.
+  if (covered && onLinkInstead && can('book')) menu.push({ key: 'book', label: t('row_book_anyway'), onSelect: onBook })
   if (can('unmatch')) menu.push({ key: 'unmatch', label: t('row_unmatch'), onSelect: onUnmatch })
   if (can('ignore')) menu.push({ key: 'ignore', label: t('row_ignore'), onSelect: onIgnore })
   if (onMarkIb) menu.push({ key: 'ib', label: t('row_mark_ib'), onSelect: onMarkIb })
@@ -224,7 +268,7 @@ export function PairRow({
 
   return (
     <tr className="group transition-colors duration-150 hover:bg-secondary/35">
-      <td className={cn(TD_CLASS, '!pl-0', DATE)}>{external ? formatDate(item.date) : ''}</td>
+      <td className={cn(TD_CLASS, '!pl-0 date-figures', DATE)}>{external ? formatDate(item.date) : ''}</td>
       <td className={cn(TD_CLASS, 'max-w-0')}>
         {external && (
           <span className="block truncate" data-ph-mask title={item.description}>
@@ -235,7 +279,7 @@ export function PairRow({
       <td className={cn(TD_CLASS, NUM)} data-ph-mask>
         {external ? money(item.amount) : ''}
       </td>
-      <td className={cn(TD_CLASS, DATE, 'pl-6')}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
+      <td className={cn(TD_CLASS, DATE, 'pl-6 date-figures')}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
       <td className={cn(TD_CLASS, 'max-w-0')}>{ledgerText}</td>
       <td className={cn(TD_CLASS, NUM)} data-ph-mask>
         {ledgerAmount != null ? money(ledgerAmount) : ''}
@@ -248,12 +292,12 @@ export function PairRow({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
                   aria-label={t('v2_more')}
                   disabled={anyBusy}
                 >
-                  <MoreHorizontal className="h-4 w-4" />
+                  <EllipsisHorizontalIcon className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

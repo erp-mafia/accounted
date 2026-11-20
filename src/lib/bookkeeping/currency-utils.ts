@@ -5,6 +5,38 @@
  * These helpers resolve the correct SEK amount from the various currency fields
  * available on invoices, transactions, and supplier invoices.
  */
+import { multiplyOre, roundOre } from '@/lib/money'
+
+/**
+ * A foreign amount in kronor, in whole öre: the one rounding of amount x rate.
+ *
+ * On the decimals the two numbers are written with, half away from zero, as
+ * PostgreSQL's round(amount * rate, 2) answers on numeric: the double product
+ * lands on the wrong side of a half öre (30 x 10.9455 is 328.36499... as a
+ * double, 328.365 in decimals: 328.37), and whole euros at a rate ending in 5
+ * are exact half öre on 8 % of foreign invoices. A preview in floats showed
+ * another 1510 than the RPC posted.
+ *
+ * The sign stays outside the magnitude, so minus an amount converts to minus
+ * its SEK and a credit note cancels its invoice to the öre. roundOre takes a
+ * negative exact half toward zero, a pinned decision about kronor: at a foreign
+ * rate it put a credit note one öre beside the invoice it cancels.
+ *
+ * The rate is the caller's and must be positive: resolveSekAmountOrNull is the
+ * ladder for a row that may have none.
+ */
+export function sekOfForeign(amount: number, rate: number): number {
+  return multiplyOre(amount, rate)
+}
+
+/**
+ * Whether an amount in `currency` is already kronor: SEK, or no code at all
+ * (transactions.currency defaults to SEK, and a legacy row may carry none).
+ * The same answer as the first step of resolveSekAmountOrNull below.
+ */
+export function isKronorCurrency(currency: string | null | undefined): boolean {
+  return !currency || currency.toUpperCase() === 'SEK'
+}
 
 /**
  * Resolve the SEK amount for a journal entry line, or null when the row carries
@@ -42,16 +74,16 @@ export function resolveSekAmountOrNull(
   currency: string | null | undefined,
   exchangeRate: number | null | undefined
 ): number | null {
-  if (!currency || currency === 'SEK') {
+  if (isKronorCurrency(currency)) {
     return amount
   }
 
   if (amountSek != null) {
-    return Math.round(amountSek * 100) / 100
+    return roundOre(amountSek)
   }
 
   if (exchangeRate != null && exchangeRate > 0) {
-    return Math.round(amount * exchangeRate * 100) / 100
+    return sekOfForeign(amount, exchangeRate)
   }
 
   return null
@@ -108,4 +140,14 @@ export function buildCurrencyMetadata(
     ...(amountInCurrency != null ? { amount_in_currency: amountInCurrency } : {}),
     ...(exchangeRate != null && exchangeRate > 0 ? { exchange_rate: exchangeRate } : {}),
   }
+}
+
+/**
+ * Whether `currency` is the ledger currency (kronor today; unset means
+ * kronor). Code that only needs "is this invoice foreign?" asks here, so
+ * the answer follows the jurisdiction setting instead of a 'SEK' literal at
+ * each call site.
+ */
+export function isLedgerCurrency(currency: string | null | undefined): boolean {
+  return !currency || currency === 'SEK'
 }

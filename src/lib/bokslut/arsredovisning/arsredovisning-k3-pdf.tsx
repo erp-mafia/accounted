@@ -1,24 +1,35 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
+import { pdfTextDeep } from '@/lib/pdf/number-text'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
+import { EquitySpecificationTable } from './equity-specification-pdf'
+import {
+  CERTIFICATE_SIGNER,
+  CERTIFICATE_SIGNER_LINE,
+  draftCertificateNote,
+  eSigningCertificateNote,
+  type ArsredovisningPdfMode,
+} from './signature-pages'
+import { SignaturesPdf } from './signatures-pdf'
 
 /**
  * K3 årsredovisning PDF template (BFNAR 2012:1).
  *
- * Layout extends the K2 template with two additional statements required
- * for K3:
- *   - Kassaflödesanalys (K3 ch.7)
- *   - Förändring av eget kapital (K3 ch.6: separate statement, not a
- *     förvaltningsberättelse table).
+ * Layout extends the K2 template with:
+ *   - Kassaflödesanalys (K3 ch.7), when the report carries one
+ *   - Förändring av eget kapital (ÅRL 6 kap. 2 § andra stycket, K3 6.3):
+ *     in förvaltningsberättelsen by default, or as a statement of its own
+ *     (K3 3.10 allows both) when the specification's placement says so.
  *
  * Page order:
  *   1. Cover
- *   2. Förvaltningsberättelse (+ flerårsöversikt + förslag till
- *      resultatdisposition)
+ *   2. Förvaltningsberättelse (+ flerårsöversikt + förändring av eget
+ *      kapital + förslag till resultatdisposition)
  *   3. Resultaträkning
  *   4. Balansräkning
  *   5. Kassaflödesanalys
- *   6. Förändring av eget kapital
+ *   6. Förändring av eget kapital, when chosen as a statement of its own
  *   7+ Noter (paginates automatically: the richer K3 note set rarely fits
  *      on one page so we let @react-pdf wrap)
  *   last. Underskrifter + Fastställelseintyg
@@ -135,17 +146,35 @@ const styles = StyleSheet.create({
     borderBottomColor: '#333',
     paddingBottom: 2,
   },
+  signatureRole: {
+    width: 120,
+  },
+  signatureDate: {
+    width: 120,
+  },
+  // Explains, in a draft, what a page will hold once it can be filled in.
+  draftNote: {
+    fontSize: 9,
+    color: '#666',
+    lineHeight: 1.4,
+    marginBottom: 12,
+  },
+  draftSigner: {
+    flexDirection: 'row',
+    paddingVertical: 3,
+  },
   reconciliationBlock: {
     marginTop: 12,
     padding: 10,
     borderWidth: 0.5,
     borderColor: '#888',
   },
-  // Draft watermark: completeness.ts classifies every K3 report as
-  // AR-K3-DRAFT-ONLY (it can never be finalized), so the rendered PDF must
-  // say so on every page, not just in a cover banner. Rendered with the
-  // `fixed` prop inside PageChrome so it repeats on wrap-generated
-  // continuation pages too.
+  // Draft watermark: while the K3 release flag is off (k3-release.ts)
+  // completeness.ts classifies every K3 report as AR-K3-DRAFT-ONLY, so the
+  // rendered PDF must say so on every page, not just in a cover banner.
+  // Rendered with the `fixed` prop inside PageChrome so it repeats on
+  // wrap-generated continuation pages too. A released document
+  // (k3_release 'final') carries none.
   draftWatermark: {
     position: 'absolute',
     top: '45%',
@@ -167,7 +196,7 @@ function fmt(amount: number): string {
 
 /**
  * Renders ÅRL post-level statement rows (see statement-rows.ts) with a
- * jämförelseår column — mirrors the K2 template so the two documents stay
+ * jämförelseår column - mirrors the K2 template so the two documents stay
  * visually consistent.
  */
 function StatementTable({
@@ -220,26 +249,37 @@ function PageChrome({
     <>
       <View style={styles.pageHeader} fixed>
         <Text>
-          {data.company.name} · {data.company.org_number}
+          {data.company.name} · {formatOrgNumberDisplay(data.company.org_number)}
         </Text>
         <Text>Årsredovisning {data.fiscal_period.name}</Text>
       </View>
       <Text style={styles.pageFooter} fixed>
         {pageLabel ?? ''}
       </Text>
-      <Text style={styles.draftWatermark} fixed>
-        GRANSKNINGSUTKAST
-      </Text>
+      {data.k3_release !== 'final' && (
+        <Text style={styles.draftWatermark} fixed>
+          GRANSKNINGSUTKAST
+        </Text>
+      )}
     </>
   )
 }
 
-export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
-  const reportSignatureDate = data.signatures
-    .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
-    .filter((date): date is string => date !== null)
-    .sort()
-    .at(-1)
+/**
+ * @param mode 'signing' for a version locked for signature (blank lines to
+ *   fill in by hand), 'draft' otherwise: see signature-pages.ts. A K3
+ *   document can be locked only once K3 is released (k3-release.ts).
+ */
+export function ArsredovisningK3PDF({
+  data: reportData,
+  mode = 'draft',
+}: {
+  data: ArsredovisningData
+  mode?: ArsredovisningPdfMode
+}) {
+  // As in the K2 template: the typed texts are made safe for Helvetica
+  // (no U+2212 glyph) once, where the data enters (crm#1887).
+  const data = pdfTextDeep(reportData)
   const agmDispositionDecision =
     data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
       ? `Årsstämman beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
@@ -258,9 +298,9 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
           </Text>
           <Text style={styles.k3Banner}>Upprättad enligt K3 (BFNAR 2012:1)</Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>
-          <Text style={styles.paragraph}>Organisationsnummer: {data.company.org_number}</Text>
-          {data.company.city && (
-            <Text style={styles.paragraph}>Säte: {data.company.city}</Text>
+          <Text style={styles.paragraph}>Organisationsnummer: {formatOrgNumberDisplay(data.company.org_number)}</Text>
+          {data.company.registered_office && (
+            <Text style={styles.paragraph}>Säte: {data.company.registered_office}</Text>
           )}
         </View>
       </Page>
@@ -276,7 +316,15 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         <Text style={styles.sectionTitle}>Väsentliga händelser under räkenskapsåret</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.important_events}</Text>
 
-        {data.forvaltningsberattelse.kontrollbalans_required && (
+        {(data.k3_forvaltningsberattelse ?? []).map((item) => (
+          <View key={item.concept ?? item.heading}>
+            <Text style={styles.sectionTitle}>{item.heading}</Text>
+            <Text style={styles.paragraph}>{item.text}</Text>
+          </View>
+        ))}
+
+        {data.forvaltningsberattelse.kontrollbalans_required
+          && !data.k3_forvaltningsberattelse?.some((item) => item.concept === 'Kontrollbalansrakning') && (
           <>
             <Text style={styles.sectionTitle}>Kontrollbalansräkning</Text>
             <Text style={styles.paragraph}>
@@ -303,6 +351,13 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
           </View>
         ))}
 
+        {data.equity_specification?.placement === 'management_report' && (
+          <>
+            <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
+            <EquitySpecificationTable year={data.equity_specification.current} />
+          </>
+        )}
+
         <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
         {[
@@ -323,7 +378,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         ))}
       </Page>
 
-      {/* Resultaträkning — ÅRL post level, no account numbers. */}
+      {/* Resultaträkning - ÅRL post level, no account numbers. */}
       <Page size="A4" style={styles.page} wrap>
         <PageChrome data={data} pageLabel="Resultaträkning" />
         <Text style={styles.sectionTitle}>Resultaträkning (kr)</Text>
@@ -335,7 +390,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         <StatementTable rows={data.resultatrakning} hasPrevious={data.previous_period !== null} />
       </Page>
 
-      {/* Balansräkning — ÅRL post level, no account numbers. */}
+      {/* Balansräkning - ÅRL post level, no account numbers. */}
       <Page size="A4" style={styles.page} wrap>
         <PageChrome data={data} pageLabel="Balansräkning" />
         <Text style={styles.sectionTitle}>Tillgångar (kr)</Text>
@@ -534,8 +589,26 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         </Page>
       )}
 
-      {/* Förändring av eget kapital: K3 separate statement */}
-      {data.equity_changes_statement && (
+      {/* Förändring av eget kapital as a statement of its own: both years. */}
+      {data.equity_specification?.placement === 'separate_statement' && (
+        <Page size="A4" style={styles.page}>
+          <PageChrome data={data} pageLabel="Förändring av eget kapital" />
+          <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
+          {data.equity_specification.previous && (
+            <EquitySpecificationTable
+              year={data.equity_specification.previous}
+              caption={data.equity_specification.previous.name}
+            />
+          )}
+          <EquitySpecificationTable
+            year={data.equity_specification.current}
+            caption={data.equity_specification.current.name}
+          />
+        </Page>
+      )}
+
+      {/* A version saved before the specification: its statement as stored. */}
+      {!data.equity_specification && data.equity_changes_statement && (
         <Page size="A4" style={styles.page}>
           <PageChrome data={data} pageLabel="Förändring av eget kapital" />
           <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
@@ -571,65 +644,62 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         ))}
       </Page>
 
-      {/* Underskrifter */}
+      {/* Underskrifter: blank lines only in a version locked for
+          signature; a draft prints who is registered and a note
+          (signature-pages.ts). */}
       <Page size="A4" style={styles.page}>
         <PageChrome data={data} pageLabel="Underskrifter" />
         <Text style={styles.sectionTitle}>Underskrifter</Text>
-        <Text style={styles.paragraph}>
-          {data.company.city ? `${data.company.city}, ` : ''}
-          {reportSignatureDate ?? '____________________'}
-        </Text>
-        {(data.signatures.length > 0
-          ? data.signatures
-          : [
-              { role: 'Styrelseledamot', name: '', signed_at: null },
-              { role: 'Styrelseledamot', name: '', signed_at: null },
-            ]
-        ).map((sig, i) => (
-          <View key={i} style={styles.signatureLine}>
-            <View style={styles.signatureSlot}>
-              <Text>{sig.name || ' '}</Text>
-            </View>
-            <Text style={{ width: 120 }}>{sig.role}</Text>
-          </View>
-        ))}
+        <SignaturesPdf data={data} mode={mode} styles={styles} />
       </Page>
 
       {/*
         Fastställelseintyg: mirrors the K2 template. K3 documents face the
-        same Bolagsverket filing requirement (ÅRL 8 kap 3 §). Signer label
-        remains "Styrelseledamot (närvarande vid stämman)".
+        same Bolagsverket filing requirement (ÅRL 8 kap 3 §) and the same
+        signer rule: a styrelseledamot or the verkställande direktör
+        (CERTIFICATE_SIGNER). A draft prints the text only once the AGM date
+        is recorded, never a blank line.
       */}
       <Page size="A4" style={styles.page}>
         <PageChrome data={data} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
-        <Text style={styles.paragraph}>
-          Undertecknad styrelseledamot, närvarande vid årsstämman, intygar härmed
-          att resultaträkningen och balansräkningen har fastställts på årsstämma
-          den {data.forvaltningsberattelse.agm_date ?? '____________________'} och
-          att årsstämman beslutade om disposition av bolagets resultat i enlighet
-          med vad som anges nedan.
-        </Text>
-        <Text style={styles.paragraph}>
-          Jag intygar också att årsredovisningen ger en rättvisande bild av
-          företagets ställning och resultat samt att förvaltningsberättelsen ger
-          en rättvisande översikt över utvecklingen av företagets verksamhet,
-          ställning och resultat.
-        </Text>
-        <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
-        <Text style={styles.paragraph}>
-          {agmDispositionDecision ?? 'Årsstämmans beslut har ännu inte registrerats.'}
-        </Text>
-        <View style={styles.signatureLine}>
-          <View style={styles.signatureSlot}>
-            <Text> </Text>
-          </View>
-          <Text style={{ width: 240 }}>Styrelseledamot (närvarande vid stämman)</Text>
-        </View>
-        <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
-          {data.company.city ? `${data.company.city}, ` : ''}
-          datum: {data.forvaltningsberattelse.agm_date ?? '____________________'}
-        </Text>
+        {mode === 'draft' && <Text style={styles.draftNote}>{draftCertificateNote('årsstämman')}</Text>}
+        {mode === 'e_signing' && <Text style={styles.draftNote}>{eSigningCertificateNote('årsstämman')}</Text>}
+        {(mode === 'signing' || data.forvaltningsberattelse.agm_date) && (
+          <>
+            <Text style={styles.paragraph}>
+              Undertecknad {CERTIFICATE_SIGNER}, närvarande vid årsstämman, intygar härmed
+              att resultaträkningen och balansräkningen har fastställts på årsstämma
+              den {data.forvaltningsberattelse.agm_date ?? '____________________'} och
+              att årsstämman beslutade om disposition av bolagets resultat i enlighet
+              med vad som anges nedan.
+            </Text>
+            <Text style={styles.paragraph}>
+              Jag intygar också att årsredovisningen ger en rättvisande bild av
+              företagets ställning och resultat samt att förvaltningsberättelsen ger
+              en rättvisande översikt över utvecklingen av företagets verksamhet,
+              ställning och resultat.
+            </Text>
+            <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
+            <Text style={styles.paragraph}>
+              {agmDispositionDecision ?? 'Årsstämmans beslut har ännu inte registrerats.'}
+            </Text>
+          </>
+        )}
+        {mode === 'signing' && (
+          <>
+            <View style={styles.signatureLine}>
+              <View style={styles.signatureSlot}>
+                <Text> </Text>
+              </View>
+              <Text style={{ width: 260 }}>{CERTIFICATE_SIGNER_LINE}</Text>
+            </View>
+            <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
+              {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
+              datum: {data.forvaltningsberattelse.agm_date ?? '____________________'}
+            </Text>
+          </>
+        )}
       </Page>
     </Document>
   )

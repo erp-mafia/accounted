@@ -2,8 +2,18 @@ import { describe, it, expect } from 'vitest'
 import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
+// FROZEN on 2026-11-06.
+// These ceilings grew from 20K to 67.6K tokens, one justified raise at a time
+// (the history is in the cases below), and 140 tools are listed by default;
+// past a few dozen tool definitions models get worse at picking the right one.
+// Never raise any of the three. A new listed tool pays for itself: trim
+// descriptions, merge it into an existing tool, or give it
+// catalogVisibility: 'search'. The headroom left at the freeze is for wire
+// data on existing tools. A raise needs a maintainer decision, stated in the PR.
+const FULL_CATALOG_CEILING = 67_600
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_100
+const SIMPLE_CATALOG_CEILING = 63_100
+const DEFAULT_CATALOG_TOOL_LIMIT = 140
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -210,7 +220,7 @@ describe('tools/list payload size guard', () => {
     //   * 59.75K to 59.85K with personal_number on gnubok_create_customer: a
     //     private person's personnummer had no input at all on the MCP path,
     //     so agents put it in org_number, where nothing masks it (GDPR art.
-    //     5.1 c; 134 such rows across 10 companies on prod). The property is
+    //     5.1 c). The property is
     //     the contract; its description and the org_number/payment_terms
     //     descriptions were trimmed to one short sentence first; headroom
     //     before the change was ~11 tokens, so even the trimmed form crossed.
@@ -388,7 +398,7 @@ describe('tools/list payload size guard', () => {
     //   * 59.0K to 59.1K: second examples batch (2026-09-01, #2066), 7
     //     examples on 5 more tools for 80 tokens, spending under half the
     //     margin the envelope trim created. Picked by evidence: search_tools
-    //     was sent a nonexistent `offset` in prod the same day, the upload
+    //     was sent a nonexistent `offset` in production the same day, the upload
     //     pair's examples ARE the two-step flow, and
     //     list_uncategorized_transactions is the highest-traffic read.
     //
@@ -618,13 +628,13 @@ describe('tools/list payload size guard', () => {
     //     (list_sales_orders, list_articles, list_dimensions) sum to ~1 085,
     //     short of the ~1 233 overshoot, and the rest are seasonal, widgets,
     //     onboarding entries or Arkiv tools main put there on purpose.
-    //     FOUNDER CALL: keep this bump, or demote those three reads plus
+    //     PRODUCT CALL: keep this bump, or demote those three reads plus
     //     gnubok_client_overview to search-only and ratchet back to 63.5K.
     //   * 65K to 65.5K, 2026-09-28, folding #2752 and #2753 into #3169 on
     //     top of current main: main alone measures 63 497 (its own ceiling
     //     was 63.5K), the union 65 030. The simple company mode catalog
     //     measures 60 028 (next case), so a single-company session still
-    //     starts ~3 470 tokens lighter than on main. The founder call above
+    //     starts ~3 470 tokens lighter than on main. The product call above
     //     stands.
     //   * KPI report correctness (fix/mcp-kpi-report-correctness):
     //     gnubok_get_kpi_report gains from_date/to_date, a metrics filter and
@@ -634,7 +644,159 @@ describe('tools/list payload size guard', () => {
     //     envelope's operation_id note and the generated tools' dry_run and
     //     idempotency_key notes. Measured 63 302 on the old base; rebased onto
     //     #3169 it measures 64 860, 170 under main alone. Ceiling unchanged.
-    expect(approxTokens).toBeLessThan(65_500)
+    //   * Report trust envelope (#3103, #3105): gnubok_get_income_statement
+    //     names nettoomsattning (3000-3799) as the revenue figure and
+    //     declares it in its outputSchema (#3103). The per-figure account
+    //     definitions and the report data_status (#3105) travel in the
+    //     response and are declared in no outputSchema, so they cost the
+    //     catalog nothing. Measured 64 937 on 2026-10-01 on top of main;
+    //     #3105 changes no tool schema or description. Ceiling unchanged.
+    //   * Note, unlock, SIE undo and attach generated from their operations
+    //     (2026-10-11): the generated schemas carry uuid formats, the shared
+    //     id notes and dry_run/idempotency_key on unlock too, ~200 over the
+    //     hand-written ones. Paid for by shorter shared staging-arg notes, a
+    //     nullable scalar folded into one node, and trimmed descriptions.
+    //     Measured 65 492. Ceiling unchanged.
+    //   * 65 500 to 65 600 on 2026-10-11 (merge batches landing together):
+    //     the party drill-ins gnubok_get_customer, gnubok_get_supplier and
+    //     gnubok_get_employee (crm#1061), gnubok_update_supplier (crm#1060),
+    //     the share on gnubok_link_supplier_invoice_to_voucher and the four
+    //     tools generated from their operations each fitted alone. Together
+    //     they measured 65 596, after the share's description had already
+    //     been shortened to its minimum.
+    //   * 65.6K to 65.8K (and the single-company catalog 60.6K to 60.8K):
+    //     pfond_existing_fonder on gnubok_preview_ef_declaration (Plan 2
+    //     step 24), about 108 tokens with its description at the minimum
+    //     that still tells an agent to ask the owner. Main had 66 tokens
+    //     of headroom, so no parameter of use fitted under the old ceiling.
+    //   * Typed numeric enums (agent feedback seq 1088767): default_vat_rate
+    //     on gnubok_create_account and gnubok_update_account names
+    //     type ["number","null"] so clients stop sending "0". String enums
+    //     stay bare. Measured 65 778 (single-company 60 769). Ceiling unchanged.
+    //   * callable_via parity (agent feedback seq 995216): the search_tools
+    //     tools_list_note travels in the response and is declared in no
+    //     outputSchema: main had 6 tokens of headroom, too few for even a
+    //     bare declaration. Costs the catalog nothing. Ceiling unchanged.
+    //   * Link and batch allocation generated from their operations
+    //     (2026-10-12): gnubok_match_batch_allocate gains uuid formats, the
+    //     union discriminated on kind and dry_run/idempotency_key, ~95 over
+    //     the hand-written schema (the link tool is search-only). Paid for by
+    //     the shared idempotency_key note on nine hand-written tools that
+    //     spelled out their own. Measured 65 793. Ceiling unchanged.
+    //   * Bulk booking generated from its operation (2026-10-12): the
+    //     operation's input (template path, manual_lines, uuid formats,
+    //     dry_run/idempotency_key) is ~25 over the hand-written schema. Paid
+    //     for by dropping `type: string` from generated propertyNames and by
+    //     a uuid format instead of the "UUID of the fiscal period" note on
+    //     ten hand-written tools. Measured 65 754. Ceiling unchanged.
+    //   * Staging boilerplate (2026-10-12): every hand-written write tool's
+    //     dry_run and idempotency_key are STAGING_ARGS_PROPERTIES. Tools that
+    //     declared a bare dry_run gain the shared note, those with a longer
+    //     one lose theirs: +21. Measured 65 775. Ceiling unchanged.
+    //   * 65.8K to 65.9K (and the single-company catalog 60.8K to 60.9K),
+    //     2026-10-14: förhöjt skatteavdrag per employee (crm#1073, SFL 11
+    //     kap. 22 §). gnubok_create_employee gains extra_tax_amount and
+    //     extra_tax_percentage with one short note each (the percentage is a
+    //     requested TOTAL, which an agent cannot guess), gnubok_update_employee
+    //     the same two as bare nullable types. Main had ~25 tokens of
+    //     headroom. Measured 65 871 (single-company 60 862).
+    //   * Personalkategori (2026-10-14): gnubok_create_employee and
+    //     gnubok_update_employee gain personnel_category (arbetare 70xx,
+    //     tjansteman 72xx); gnubok_update_payslip_line's description was
+    //     tightened to pay for it. Measured 65 899. Ceiling unchanged.
+    //   * Customer card on the agent tools (crm#1198, 2026-10-15):
+    //     gnubok_create_customer and gnubok_update_customer gain
+    //     contact_person and invoice_email_cc_addresses, and create also
+    //     phone, address_line2, language and notes, all as bare types. Paid
+    //     for by dropping descriptions that restated a property name (name,
+    //     type, email, VAT number, address) and shortening both tool
+    //     descriptions. Measured 65 890 (single-company 60 881). Ceiling
+    //     unchanged.
+    //   * Shared underlag (crm#1171 item 9, 2026-10-15):
+    //     gnubok_link_document_to_voucher gains copy (a byte-identical copy
+    //     for a second verifikat). Paid for by dropping document_id's
+    //     description, a shorter line pin and the bulk tool's "shared
+    //     underlag" clause. Measured 65 895 (single-company 60 886). Ceiling
+    //     unchanged.
+    //   * Fakturareferens (crm#1200, 2026-10-15): gnubok_create_customer and
+    //     gnubok_update_customer gain invoice_reference as a bare type. Paid
+    //     for by shorter tool descriptions and shorter org_number,
+    //     personal_number, payment_terms, customer_type and country notes on
+    //     the same two tools. Measured 65 895 (single-company 60 886).
+    //     Ceiling unchanged.
+    //   * 65.9K to 66.1K (and the single-company catalog 60.9K to 61.1K),
+    //     2026-10-15: idempotent writes. The six tools that write without
+    //     staging and could write twice on a resent call (gnubok_create_company,
+    //     gnubok_create_skill, gnubok_upload_document,
+    //     gnubok_generate_rot_rut_file, gnubok_create_transactions,
+    //     gnubok_auto_match_period) declare the shared idempotency_key
+    //     (withRetryKey, retry-key.ts), +192. Safety, not convenience: the
+    //     stateless MCP revision recovers a broken call by resending it.
+    //     Measured 66 087 (single-company 61 078).
+    //   * Typed id fields admit their handle (2026-10-16, handle-args.ts):
+    //     the id fields that declared format uuid advertise one pattern per
+    //     type instead, ^(fp_[0-9a-f]{32}|[-0-9a-fA-F]{36})$, so a host that
+    //     enforces formats lets a handle through; company_id, on every
+    //     company-scoped tool, drops its format rather than carry the
+    //     pattern 135 times. With the team_ prefix, gnubok_create_company's
+    //     team_id is a typed id field too. Measured 65 693 (was 66 083).
+    //     Ceiling unchanged.
+    //   * Kundförlust status (2026-10-15): gnubok_list_invoices' status
+    //     filter gains written_off, paid for by tightening the filter's
+    //     overdue note. Measured 65 899 (single-company 60 890) before the
+    //     typed handles above; 65 696 (single-company 61 227) with them.
+    //     Ceiling unchanged.
+    //   * One document read (2026-10-15): gnubok_get_document_content gains
+    //     include (text, reading, links, arrivals), from_page and max_chars,
+    //     so a client that cannot open the signed URL still reads the
+    //     document. Paid for inside the tool: document_id lost its restating
+    //     note, the output its required list and the description its worked
+    //     use; what the parts carry travels in the response (text.hint,
+    //     reading.note, notice) and is declared in no outputSchema. The tool's
+    //     projection is 6 characters shorter than before. Measured 66 081
+    //     (single-company 61 072). Ceiling unchanged.
+    //   * Connector feeds for agents (crm#1385, 2026-10-23): gnubok_backfill_feed
+    //     (Stripe, Shopify, WooCommerce, Zettle: the panel's "Hämta äldre") joins
+    //     the default catalog because it writes directly and no bridge carries a
+    //     direct write; its status read gnubok_list_feed_connections is
+    //     search-only. One-sentence description, bare property types and a bare
+    //     outputSchema (the answer's instructions say what it holds), about +175.
+    //     Measured 66 062. Ceiling unchanged. With the rest of that batch
+    //     (landing branch): measured 66 055.
+    //   * Märkning on the customer card (crm#1477, 2026-10-26):
+    //     gnubok_create_customer and gnubok_update_customer gain
+    //     invoice_marking as a bare type, as invoice_reference before it. Paid
+    //     for on the same two tools: country loses "a name is normalised"
+    //     (both) and update's personal_number its "encrypted at staging,
+    //     masked on read". Measured 66 084 (single-company 61 594). Ceiling
+    //     unchanged.
+    //   * Booking-time voucher warnings (2026-10-27): gnubok_create_voucher
+    //     gains acknowledge_warnings, the codes of a VOUCHER_NEEDS_CONFIRMATION
+    //     refusal the person confirmed. Paid for inside the tool:
+    //     fiscal_period_id and notes lose their restating notes and
+    //     is_opening_balance its reconciliation aside. Measured 66 076
+    //     (single-company 61 586). Ceiling unchanged.
+    //   * MCP session autopsy, inputs (2026-10-26): from_date/to_date on
+    //     gnubok_get_general_ledger and search on gnubok_list_accounts, paid
+    //     for on the same two tools (see the single-company case). Measured
+    //     64 810 (single-company 60 381) on the main of 2026-10-28. Ceiling
+    //     unchanged.
+    //   * 66 100 → 67 600 with the agent's reason on staged writes
+    //     (2026-10-28): every listed staging tool (53) gains the optional
+    //     `reason` (lib/pending-operations/agent-reason.ts), one shared
+    //     property whose one-line description is the instruction the agent
+    //     needs to write it, so it is wire data, not trimmable prose; a bare
+    //     type would cost about 600 and say nothing. +1 431, measured 66 241
+    //     (single-company 61 812). The ceiling moves by that cost, rounded
+    //     up, so the headroom other branches count on stays where it was.
+    //     A product call, as the 61 600 bump was.
+    //   * Fee rows on gnubok_match_batch_allocate (issue #131, 2026-10-28):
+    //     fees (account, amount, description; at most five) as bare
+    //     properties, the rule in the tool description, which lost
+    //     "samlingsbetalning" and two "the"s to stay under 280. +81, measured
+    //     66 322 (single-company 61 892). Ceiling unchanged.
+    //   * FROZEN at 67 600 on 2026-11-06: see FULL_CATALOG_CEILING.
+    expect(approxTokens).toBeLessThan(FULL_CATALOG_CEILING)
   })
 
   it('serves a single-company key a smaller catalog than the multi-company one', () => {
@@ -655,7 +817,163 @@ describe('tools/list payload size guard', () => {
     // Re-measured 59 785 on 2026-09-23 after merging main (Arkiv phases 5
     // to 9 added ~1 540 to both catalogs); ceiling 58 800 to 60 100, ~315
     // headroom. The saving against the full catalog is unchanged.
+    // 60 100 to 60 200 on 2026-10-02: gnubok_create_invoice and
+    // gnubok_update_invoice gain qr_mode (one payment QR per invoice), an
+    // enum with the shortest descriptions that still say what null means.
+    // Measured 60 094 with them, ~106 headroom.
+    // 60 200 to 60 300 on 2026-10-06 (agent-feedback batch): gnubok_create_employee
+    // and gnubok_update_employee gain address_line1, postal_code and city (bare
+    // types), and gnubok_get_vat_report / gnubok_vat_review_widget declare every
+    // SKV 4700 ruta the filing carries (no descriptions; the rutor `required`
+    // list was dropped to pay for most of it). Measured about 60 256 with both
+    // plus the batch's other changes, ~44 headroom.
+    // 60 300 to 60 400 on 2026-10-10 (crm#1096): gnubok_create_voucher lines
+    // gain vat_code (omvänd moms the server expands; kind and rate as enums
+    // agents can validate against, and that its lines carry no dimensions)
+    // and the description names it, ~99 tokens. tax_code's long note now
+    // points at vat_code and paid 22 of them. Measured 60 362, ~38 headroom.
+    // 60 400 to 60 500 on 2026-10-11 (ticket batch, nine fixes landing
+    // together): gnubok_reconcile_match pairs gain allow_remainder (crm#1043),
+    // gnubok_categorize_transaction says that money out on income_* is a
+    // refund (crm#1136) and gnubok_update_employee's is_active says it works
+    // both ways (crm#1133). Each fitted alone; together they measured exactly
+    // 60 400. Measured 60 400 with all three, ~100 headroom.
+    // 2026-10-11, the four tools generated from their operations (see the
+    // case above): measured 60 483. Ceiling unchanged.
+    // 60 500 to 60 600 on 2026-10-11, for the same tools as the 65 600 note
+    // in the case above: together they measured 60 587.
+    // 2026-10-12, link and batch allocation generated from their operations
+    // (see the case above): measured 60 581. Ceiling unchanged.
+    // 2026-10-12, bulk booking generated from its operation (see the case
+    // above): measured 60 542. Ceiling unchanged.
+    // 2026-10-12, the shared staging arguments (see the case above): measured
+    // 60 563. Ceiling unchanged.
+    // 60 800 to 60 900 on 2026-10-14, for the extra tax fields in the 65 900
+    // note above: measured 60 862.
+    // 2026-10-14, personnel_category on the employee tools (see the case
+    // above): measured 60 890. Ceiling unchanged.
+    // 2026-10-15, the customer card on the agent tools (crm#1198, see the
+    // case above): measured 60 881. Ceiling unchanged.
+    // 2026-10-15, copy on gnubok_link_document_to_voucher (crm#1171 item 9,
+    // see the case above): measured 60 886. Ceiling unchanged.
+    // 2026-10-15, invoice_reference on the customer tools (crm#1200, see the
+    // case above): measured 60 886. Ceiling unchanged.
+    // 60 900 to 61 100 on 2026-10-15, idempotency_key on the six direct
+    // writes (see the case above): measured 61 078.
+    // 61 100 to 61 300 on 2026-10-16, typed id fields admitting their handle
+    // (see the case above): the default-catalog id fields that declared
+    // format uuid (team_id on gnubok_create_company included) carry the
+    // handle-or-UUID pattern, +150, and this catalog has no company_id to
+    // pay for it. Dropping the format with no pattern would measure about
+    // 61 006 but tell an agent nothing about the id's shape (the ten
+    // fiscal-period tools traded a "UUID of" note for that format).
+    // Measured 61 224.
+    // 2026-10-15, include on gnubok_get_document_content (see the case
+    // above): measured 61 072. Ceiling unchanged.
+    // 61 300 to 61 400 on 2026-10-18, the support-queue landings: gnubok_agi_submit
+    // says approval rebuilds an unfiled underlag (#69), the kontantmetod payment
+    // notes name the year-end carry (#3440) and gnubok_mark_invoice_as_sent gains
+    // paid_at_issue_account (crm#1281). Each fitted alone; together they measured
+    // 61 317 on main. The prose was trimmed first (to 61 301); what remains is the
+    // new argument and the two payment rules an agent needs.
+    // 2026-10-19 (crm#1323): gnubok_create_supplier_invoice_from_inbox gains
+    // reverse_charge_kind (EU goods, ruta 20) with a one-line description.
+    // Measured 61 369 (full catalog 65 838). Ceiling unchanged.
+    // 2026-10-22 (crm#1364): gnubok_match_transaction_to_invoice gains
+    // fee_account (a payout net of the payment provider's fee) as a bare
+    // enum, paid for by dropping expected_journal_entry_id's description (the
+    // duplicate refusal's remediation names the id). Measured 61 396 (full
+    // catalog 65 865). Ceiling unchanged.
+    // 2026-10-22 (#31): gnubok_update_employee gains
+    // sammaloneregeln_kollektivavtal_confirmed, bare (no description: the
+    // EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED refusal says when to send it),
+    // about +15. Landed with the rest of the batch (main 61 397, every
+    // component together 61 406): the "the XML holds personnummer" clause
+    // the same run added to gnubok_generate_rot_rut_file (#58) was dropped
+    // to pay for it. Measured 61 399 (full catalog 65 868). Ceiling unchanged.
+    // 61 400 to 61 600 on 2026-10-23 (crm#1385): gnubok_backfill_feed, a
+    // direct WRITE, so it must ride the default catalog (see the case above),
+    // with one token of headroom left. Same deliberate skip of the
+    // read-demotion rule as the ROT/RUT payout write: the 60-day
+    // mcp.tool_called counts leave no zero-call read outside the seasonal
+    // bokslut/NE tools and the pinned list_sales_orders, so the demotion is
+    // its own change. PRODUCT CALL: keep this bump, or demote
+    // gnubok_preview_ef_declaration (about 410 tokens, 8 calls in 60 days,
+    // NE-bilaga season is spring) and ratchet back to 61 400. Measured 61 572.
+    // 2026-10-23 (crm#1397): gnubok_correct_entry gains sides_swapped, bare
+    // (the negates_original refusal says when to send it), paid for by
+    // shortening its lines description to what the lines are (the verifikat
+    // as it should be): one character less in all. Ceiling unchanged.
+    // Batch landing (every component together): measured 61 565 (full
+    // catalog 66 055). The 61 600 bump stays the product call above: the
+    // run's own additions hold no 166 tokens to trim back under 61 400
+    // (gnubok_backfill_feed alone projects to about 173).
+    // Batch landing (2026-10-26): gnubok_mark_salary_run_paid and
+    // gnubok_book_salary_run gain confirm_payment_date_ahead, bare (the
+    // SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED refusal says when to send it).
+    // The kreditfaktura refund through gnubok_mark_invoice_as_paid is told by
+    // the kreditfaktura-process skill, not the description, to stay under
+    // the ceiling. Ceiling unchanged.
+    // 2026-10-26 (crm#1477): invoice_marking on the two customer tools, paid
+    // for on the same tools (see the case above). Measured 61 594. Ceiling
+    // unchanged.
+    // 2026-10-26 (MCP session autopsy): gnubok_approve_pending_operation gains
+    // operation_ids (several of one company in one call), paid for on the
+    // same tool: the web-UI sentence in confirmed's description and the risk
+    // note batch_id repeated from the tool description went. Measured 61 597
+    // (full catalog 66 087). Ceiling unchanged.
+    // 2026-10-26 (MCP session autopsy, inputs): gnubok_get_general_ledger
+    // gains from_date/to_date and gnubok_list_accounts gains search, all
+    // three bare (the range refusals say what a bad date is). Paid for on the
+    // same two tools: account_from and account_to lost the notes that
+    // restated their names, and the ledger's "Optional account range +
+    // dimensions filters" became "Filters: account and date range,
+    // dimensions". Every other name agents sent is an alias
+    // (report-arg-aliases.ts), which costs tools/list nothing, and the
+    // upper bound on gnubok_list_verifikat_without_documents is on a
+    // search-only tool. Measured 61 581 (full catalog 66 074; main 61 583
+    // and 66 075), then 60 381 (full 64 810) rebased on the main of
+    // 2026-10-28. Ceiling unchanged.
+    // 2026-10-28, the agent's reason on staged writes: 61 600 → 63 100, the
+    // same +1 431 as the full catalog (see the case above). Measured 61 812.
+    // 2026-10-28, fee rows on gnubok_match_batch_allocate (issue #131): +80,
+    // measured 61 892. Ceiling unchanged.
+    // 2026-11-11 (crm#1742, crm#1747): mismatch_reason listed on the attach
+    // tool and the Swedish-supplier line on reverse_charge_kind, paid for on
+    // the same two tools (shorter field notes, the attach tool's "approver
+    // sees both sides" went). Measured 63 096 on the main of 2026-11-11.
+    // Ceiling unchanged.
+    // 2026-11-12 (crm#1823): payment_account on gnubok_mark_invoice_as_paid,
+    // paid for on the same tool (invoice_id bare, shorter notes on
+    // payment_date and allow_duplicate). Measured 63 077 (full catalog
+    // 67 528). Ceiling unchanged.
+    // 2026-11-13 (crm#1848): archive_only on gnubok_complete_document_upload,
+    // paid for on the two upload tools (shorter mime_type, upload_id and
+    // deduplicated notes). Measured 63 092 (full catalog 67 542; main 63 096
+    // and 67 547). Ceiling unchanged.
+    // 2026-11-12 (crm#1765): confirm_foreign_seller_vat on
+    // gnubok_categorize_transaction, paid for on the same tool (shorter
+    // vat_treatment, notes and allow_duplicate notes; the refusal that names
+    // the flag says what it means). Measured 63 094 on its own base; after
+    // merging the main of 2026-11-14 the allow_duplicate note lost its
+    // example to stay under.
+    // Ceiling unchanged.
+    // 2026-11-18 (crm#2016): doc_type on the two upload tools, bare (the
+    // refusal lists the types; gnubok_set_document_type, search-only, has
+    // the enum), named in complete's description; paid for on the same two
+    // tools (shorter upload_document description, base64 and mime_type
+    // notes). Measured 63 098 (full catalog 67 549; main 63 088 and
+    // 67 539). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
+  })
+
+  it('keeps the number of listed tools frozen', () => {
+    const listed = tools.filter(isDefaultCatalogTool).map((t) => t.name)
+    expect(
+      listed.length,
+      `tools/list is frozen at ${DEFAULT_CATALOG_TOOL_LIMIT} listed tools. A new listed tool merges into ` +
+        `an existing one or takes another's place (catalogVisibility: 'search'); never raise the limit.`,
+    ).toBeLessThanOrEqual(DEFAULT_CATALOG_TOOL_LIMIT)
   })
 
   /**
@@ -669,8 +987,11 @@ describe('tools/list payload size guard', () => {
    * makes the rule hold for every widget tool added later.
    */
   it('never lets a widget tool fall out of the default catalog', () => {
+    // A widget tool names its view (resourceUri). The approval view's own
+    // door carries _meta.ui only for its app-only visibility: it renders
+    // nothing and is listed to a connection with the view (view-approval.ts).
     const hiddenWidgets = tools
-      .filter((t) => (t as { _meta?: { ui?: unknown } })._meta?.ui)
+      .filter((t) => (t as { _meta?: { ui?: { resourceUri?: string } } })._meta?.ui?.resourceUri)
       .filter((t) => !isDefaultCatalogTool(t))
       .map((t) => t.name)
 

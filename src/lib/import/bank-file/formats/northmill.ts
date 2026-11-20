@@ -15,9 +15,10 @@
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
+import { preambleAccountIdentity } from '../account-identity'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
-import { normalizeMinusSign } from './generic-csv'
+import { parseSwedishAmount } from '@/lib/money'
 
 const HEADER_KEYWORDS = ['bokföringsdag', 'beskrivning', 'belopp']
 
@@ -27,11 +28,6 @@ function isNorthmillHeader(line: string): boolean {
   return HEADER_KEYWORDS.every((kw) => lower.includes(kw))
 }
 
-function parseAmount(value: string): number {
-  // Northmill: "−139,00" (Unicode minus) or "400000,00" (no thousand separator on positives)
-  const cleaned = normalizeMinusSign(value).replace(/\s/g, '').replace(',', '.')
-  return parseFloat(cleaned)
-}
 
 export const northmillFormat: BankFileFormat = {
   id: 'northmill',
@@ -119,7 +115,7 @@ export const northmillFormat: BankFileFormat = {
         continue
       }
 
-      const amount = parseAmount(amountStr)
+      const amount = parseSwedishAmount(amountStr) ?? NaN
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Ogiltigt belopp: ${amountStr}`, severity: 'warning' })
         skippedRows++
@@ -128,7 +124,7 @@ export const northmillFormat: BankFileFormat = {
 
       let balance: number | null = null
       if (balanceStr) {
-        const b = parseAmount(balanceStr)
+        const b = parseSwedishAmount(balanceStr) ?? NaN
         balance = isNaN(b) ? null : b
       }
 
@@ -150,6 +146,8 @@ export const northmillFormat: BankFileFormat = {
       format: 'northmill',
       format_name: 'Northmill',
       transactions,
+      // The "Kontonummer" line above the header (crm#1204).
+      account: preambleAccountIdentity(rawLines, headerIdx),
       date_from: dates[0] || null,
       date_to: dates[dates.length - 1] || null,
       issues,

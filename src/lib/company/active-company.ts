@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CompanyRole } from '@/types'
 import { getMultiUserState, isMultiUserEnforced } from '@/lib/entitlements/multi-user'
 import { isMembershipDormant, MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 
@@ -52,10 +53,14 @@ export class CompanyContextError extends Error {
  * Throws CompanyContextError('resolution_failed') when a query fails: a
  * transient failure must never read as "no companies", because callers
  * redirect that state to the onboarding wizard (issue #1053).
+ *
+ * `facts`, when passed, receives what the RPC learned beyond the id (see
+ * ActiveCompanyFacts), so a caller does not read it again.
  */
 export async function getActiveCompanyId(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  facts?: ActiveCompanyFacts
 ): Promise<string | null> {
   // Multi-user seat gate (lib/entitlements/multi-user.ts): when enforced,
   // resolution must skip memberships in companies frozen for this user
@@ -100,7 +105,7 @@ export async function getActiveCompanyId(
   }
 
   const row = (Array.isArray(data) ? data[0] : data) as
-    | { company_id: string | null; locale: string | null; used_fallback: boolean }
+    | { company_id: string | null; locale: string | null; used_fallback: boolean; role?: unknown }
     | undefined
     | null
 
@@ -111,7 +116,29 @@ export async function getActiveCompanyId(
     return getActiveCompanyIdViaQueries(supabase, userId)
   }
 
+  // The role column arrived with 20261012101000. A database without it (a
+  // deploy racing the migration, a self-hosted instance not migrated yet)
+  // returns no role key: facts.role stays unset and the caller reads it.
+  if (facts && row.company_id && isCompanyRole(row.role)) facts.role = row.role
+
   return row.company_id ?? null
+}
+
+/**
+ * What active-company resolution learned beyond the company id. Filled only
+ * when the resolver RPC answered with it; every query fallback path leaves
+ * it empty, so a caller must treat an absent field as "not known", never as
+ * "none".
+ */
+export interface ActiveCompanyFacts {
+  /** The caller's role in the resolved company (same membership row). */
+  role?: CompanyRole
+}
+
+const COMPANY_ROLES: readonly CompanyRole[] = ['owner', 'admin', 'member', 'viewer', 'invoicer']
+
+function isCompanyRole(value: unknown): value is CompanyRole {
+  return typeof value === 'string' && (COMPANY_ROLES as readonly string[]).includes(value)
 }
 
 /**
@@ -200,7 +227,7 @@ async function getActiveCompanyIdViaQueriesGated(
  */
 export async function resolveDormantCompanyIds(
   supabase: SupabaseClient,
-  memberships: readonly { company_id: string; role: string; companies: { team_id: string | null } }[]
+  memberships: readonly { company_id: string; role: string }[]
 ): Promise<Set<string>> {
   const nonOwner = memberships.filter((m) => m.role !== 'owner')
   if (nonOwner.length === 0 || !isMultiUserEnforced()) return new Set()

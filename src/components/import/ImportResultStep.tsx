@@ -1,32 +1,31 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { ImportStatRow } from '@/components/import/ImportStatRow'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import {
-  CheckCircle,
-  XCircle,
-  AlertCircle,
-  ExternalLink,
-  RotateCcw,
-  Info,
-  Undo2,
-} from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { DefList, DefRow } from '@/components/arkiv/DefList'
+import { ArrowTopRightOnSquareIcon, ArrowUturnLeftIcon } from '@/components/icons'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
 import { FiscalYearGapNotice } from '@/components/import/FiscalYearGapNotice'
+import { OpeningBalanceDifferencesTable } from '@/components/import/OpeningBalanceDifferencesTable'
 import type { ImportPreview, ImportResult } from '@/lib/import/types'
 import { resolveNotices } from '@/lib/import/notices'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import type { TheaterModel } from '@/lib/import/theater-model'
+
+/** The lead of a skipped-voucher line: its count and kind, set apart. */
+const strong = (chunks: ReactNode) => <span className="font-medium">{chunks}</span>
 
 interface ImportResultStepProps {
   result: ImportResult
@@ -47,6 +46,7 @@ export default function ImportResultStep({
   theaterModel = null,
 }: ImportResultStepProps) {
   const t = useTranslations('import')
+  const tStep = useTranslations('import.sie_result')
   const { dialogProps, confirm } = useDestructiveConfirm()
   const { isSandbox } = useCompany()
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -69,13 +69,22 @@ export default function ImportResultStep({
   const hasErrors = result.errors.length > 0
   const skipped = result.details?.skippedVouchers
   const untransferred = result.details?.untransferredResults
+  const ibDifferences = result.details?.openingBalanceDifferences ?? []
+  // The books open on the file's own previous year on every account: the
+  // file's #IB is the side that is off (booksMatchFilePreviousYear).
+  const ibFileOff = (result.notices ?? []).some((n) => n.code === 'sie_ib_file_differs_from_previous_year')
+  // Outcome rows that show beside the reveal too (the reveal carries the counts).
+  const hasOutcomeRows =
+    !!result.nextPeriodIBResync || !!result.dimensionsImported || (!!skipped && skipped.total > 0)
 
-  // The skipped-voucher, untransferred-result and IB-resync cards below
-  // render those facts with their own explanations, so their notice codes
-  // are excluded here by code, never by matching Swedish sentences.
+  // The skipped-voucher, untransferred-result, IB-difference and IB-resync
+  // rows and lines below render those facts with their own explanations, so their
+  // notice codes are excluded here by code, never by matching Swedish sentences.
   const notices = resolveNotices(result, [
     'sie_vouchers_skipped',
     'sie_untransferred_result',
+    'sie_ib_differs_from_file',
+    'sie_ib_file_differs_from_previous_year',
     'sie_next_ib_resynced',
     'sie_next_period_locked',
   ])
@@ -85,13 +94,13 @@ export default function ImportResultStep({
       {/* "Din historia" reveal (theater ran) or the plain success/failure header */}
       {showReveal && theaterModel && preview ? (
         <Card>
-          <CardContent className="pt-6">
+          <CardContent>
             <div className="grid items-center gap-6 md:grid-cols-[minmax(280px,380px)_1fr]">
               <div>
-                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <p className="text-xs font-medium text-muted-foreground">
                   {t('reveal_eyebrow')}
                 </p>
-                <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
+                <h2 className="mt-2 text-xl text-balance">
                   {t('reveal_title', { years: Math.max(theaterModel.years.length, 1) })}
                 </h2>
                 <p className="mt-3 text-[13px] text-muted-foreground tabular-nums">
@@ -111,10 +120,10 @@ export default function ImportResultStep({
                     {t('reveal_skipped', { count: skipped.total })}
                   </p>
                 )}
-                <div className="mt-6 border-t border-border pt-4">
+                <div className="mt-6 border-t-hairline pt-4">
                   {/* Sandbox strips live bank connections from /import, so the
                       bridge quiets down to the plain way onward there. */}
-                  {!isSandbox && <p className="font-display text-base">{t('reveal_bridge')}</p>}
+                  {!isSandbox && <p className="text-[15px] font-medium leading-[22px] text-strong">{t('reveal_bridge')}</p>}
                   <div className="mt-3 flex flex-wrap items-center gap-3">
                     {/* Both migrator paths: PSD2 covers recent history (banks
                         cap the window around 90 days), CSV upload reaches the
@@ -123,20 +132,19 @@ export default function ImportResultStep({
                         Sandbox hides only the live bank connection; file-based
                         import works there and its CTA stays. */}
                     {!isSandbox && hasBanking && (
-                      <Button asChild size="sm">
+                      <Button asChild>
                         <Link href="/import?mode=psd2">{t('reveal_cta_bank')}</Link>
                       </Button>
                     )}
                     <Button
                       asChild
-                      size="sm"
                       variant={!isSandbox && hasBanking ? 'outline' : 'default'}
                     >
                       <Link href="/import?mode=bank">{t('reveal_cta_csv')}</Link>
                     </Button>
                     <Link
                       href="/"
-                      className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                      className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                     >
                       {t('reveal_cta_open')}
                     </Link>
@@ -150,252 +158,241 @@ export default function ImportResultStep({
           </CardContent>
         </Card>
       ) : (
-        <Card className={result.success ? 'border-border' : 'border-destructive/50'}>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              {result.success ? (
-                <>
-                  <CheckCircle className="h-6 w-6 text-success" />
-                  Import genomförd
-                </>
-              ) : (
-                <>
-                  <XCircle className="h-6 w-6 text-destructive" />
-                  Import misslyckades
-                </>
-              )}
-            </CardTitle>
-            <CardDescription>
-              {result.success
-                ? skipped && skipped.total > 0
-                  ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över: se detaljer nedan.`
-                  : 'Din bokföring har importerats framgångsrikt.'
-                : 'Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.'}
-            </CardDescription>
-          </CardHeader>
-        </Card>
+        <div>
+          <h2
+            className={cn(
+              'text-xl',
+              !result.success && 'text-destructive',
+            )}
+          >
+            {result.success ? tStep('success_title') : tStep('failed_title')}
+          </h2>
+          {!result.success && (
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              {tStep('failed_description')}
+            </p>
+          )}
+        </div>
       )}
+
+      {/* What the import did, as one definition list. Normal outcomes read
+          as plain values; their explanations sit behind the row's "?". */}
+      {result.success && (!showReveal || hasOutcomeRows) && (
+        <DefList>
+          {!showReveal && (
+            <>
+              <DefRow label={tStep('vouchers_created')} labelWidth={180}>
+                {result.journalEntriesCreated}
+              </DefRow>
+              <DefRow label={t('result_accounts_created')} labelWidth={180}>
+                {result.accountsCreated ?? 0}
+                {result.accountsRenamed !== undefined && result.accountsRenamed > 0 && (
+                  <span className="block text-xs text-muted-foreground">
+                    {tStep('accounts_renamed', { count: result.accountsRenamed })}
+                  </span>
+                )}
+              </DefRow>
+              <DefRow label={tStep('fiscal_year')} labelWidth={180}>
+                {result.fiscalPeriodId ? tStep('fiscal_year_created') : tStep('fiscal_year_existing')}
+              </DefRow>
+              <DefRow label={tStep('opening_balances')} labelWidth={180}>
+                {result.openingBalanceEntryId
+                  ? tStep('opening_balances_imported')
+                  : result.details?.openingBalanceSkipped === 'prior_activity'
+                    ? tStep('opening_balances_derived')
+                    : tStep('opening_balances_none')}
+                {/* The file's #IB was deliberately not booked: the company
+                    already has posted entries, so this year's IB is the prior
+                    year's UB. Said here, not as a warning (#2462). */}
+                {!result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity' && (
+                  <span className="block text-xs text-muted-foreground">
+                    {tStep('opening_balances_derived_hint')}
+                  </span>
+                )}
+              </DefRow>
+            </>
+          )}
+
+          {/* IB resync (prior-year backfill): a normal outcome. */}
+          {result.nextPeriodIBResync && (
+            <DefRow
+              labelWidth={180}
+              label={
+                <span className="inline-flex items-center gap-2">
+                  {t('result_ib_resync_label', { name: result.nextPeriodIBResync.nextPeriodName })}
+                  <HelpPopover className="shrink-0">
+                    {tStep('ib_resync_help', { name: result.nextPeriodIBResync.nextPeriodName })}
+                  </HelpPopover>
+                </span>
+              }
+            >
+              {t('result_ib_resync_value')}
+            </DefRow>
+          )}
+
+          {/* Dimensions detected (lossless SIE round-trip, dimensions plan PR5) */}
+          {result.dimensionsImported && (
+            <DefRow
+              labelWidth={180}
+              label={
+                <span className="inline-flex items-center gap-2">
+                  {t('result_dimensions_label')}
+                  <HelpPopover className="shrink-0">
+                    {tStep('dimensions_help', {
+                      lines: result.dimensionsImported.taggedLines,
+                      values: result.dimensionsImported.values,
+                    })}
+                    {result.dimensionsImported.toggleEnabled && (
+                      <>
+                        {' '}
+                        {tStep.rich('dimensions_enabled', {
+                          link: (chunks) => (
+                            <Link href="/dimensions" className="underline underline-offset-4">
+                              {chunks}
+                            </Link>
+                          ),
+                        })}
+                      </>
+                    )}
+                  </HelpPopover>
+                </span>
+              }
+            >
+              {t('result_dimensions_value', { count: result.dimensionsImported.taggedLines })}
+            </DefRow>
+          )}
+
+          {/* Skipped vouchers: the count stays, the breakdown sits behind the "?". */}
+          {skipped && skipped.total > 0 && (
+            <DefRow
+              labelWidth={180}
+              label={
+                <span className="inline-flex items-center gap-2">
+                  {t('result_skipped_label')}
+                  <HelpPopover className="shrink-0">
+                    <div className="space-y-2">
+                      {skipped.empty > 0 && (
+                        <p>{tStep.rich('skipped_empty', { count: skipped.empty, b: strong })}</p>
+                      )}
+                      {skipped.unbalanced > 0 && (
+                        <p>{tStep.rich('skipped_unbalanced', { count: skipped.unbalanced, b: strong })}</p>
+                      )}
+                      {skipped.singleLine > 0 && (
+                        <p>{tStep.rich('skipped_single_line', { count: skipped.singleLine, b: strong })}</p>
+                      )}
+                      {skipped.unmapped > 0 && (
+                        <p>{tStep.rich('skipped_unmapped', { count: skipped.unmapped, b: strong })}</p>
+                      )}
+                    </div>
+                  </HelpPopover>
+                </span>
+              }
+            >
+              {t('result_skipped_value', { count: skipped.total })}
+            </DefRow>
+          )}
+        </DefList>
+      )}
+
+      {/* Deviations: one line each, the explanation behind the "?". */}
 
       {/* A year missing between the imported ones: say so here, where the next file is one click away. */}
       {result.success && <FiscalYearGapNotice />}
 
-      {result.success && result.nextPeriodOpeningBalanceReview && (
-        <p className="text-sm text-warning" role="status">
-          {t('next_year_review', { name: result.nextPeriodOpeningBalanceReview.nextPeriodName })}{' '}
-          <Link href="/settings/bookkeeping" className="underline underline-offset-2">{t('next_year_review_action')}</Link>
-        </p>
+      {/* The year opened on the carried-forward balance, which differs from the file's #IB (crm#1099) */}
+      {result.success && ibDifferences.length > 0 && (
+        <div className="space-y-3">
+          <AttnLine
+            trailing={
+              <HelpPopover className="ml-2 inline-flex align-middle">
+                <div className="space-y-2">
+                  <p>{t(ibFileOff ? 'ib_file_off_result_body' : 'ib_differs_result_body', { count: ibDifferences.length })}</p>
+                  <p>{t(ibFileOff ? 'ib_file_off_advice' : 'ib_continuity_advice')}</p>
+                </div>
+              </HelpPopover>
+            }
+          >
+            {t(ibFileOff ? 'ib_file_off_result_title' : 'ib_differs_result_title')}
+          </AttnLine>
+          <OpeningBalanceDifferencesTable
+            rows={ibDifferences.map((row) => ({
+              account: row.account,
+              left: row.file,
+              right: row.books,
+              difference: row.difference,
+            }))}
+            leftLabel={t('ib_continuity_col_file')}
+            rightLabel={t('ib_continuity_col_books')}
+          />
+        </div>
       )}
 
-      {/* IB resync notice (prior-year backfill) */}
-      {result.success && result.nextPeriodIBResync && (
-        <Card className="border-success/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <CheckCircle className="h-5 w-5 text-success" />
-              Ingående balanser synkades om
-            </CardTitle>
-            <CardDescription>
-              Eftersom du importerade ett tidigare räkenskapsår uppdaterades ingående balanser för{' '}
-              <span className="font-medium">{result.nextPeriodIBResync.nextPeriodName}</span>{' '}
-              automatiskt (gammal IB makulerad, ny IB skapad från utgående balans).
-            </CardDescription>
-          </CardHeader>
-        </Card>
+      {result.success && result.nextPeriodOpeningBalanceReview && (
+        <div role="status">
+          <AttnLine action={{ label: t('next_year_review_action'), href: '/settings/fiscal-years' }}>
+            {t('next_year_review', { name: result.nextPeriodOpeningBalanceReview.nextPeriodName })}
+          </AttnLine>
+        </div>
       )}
 
       {result.success && result.nextPeriodIBResyncSkipped && (
-        <Card className="border-border">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base text-warning">
-              <AlertCircle className="h-5 w-5" />
-              Ingående balanser för {result.nextPeriodIBResyncSkipped.nextPeriodName} kunde inte synkas
-            </CardTitle>
-            <CardDescription>
-              Nästa räkenskapsår är låst eller stängt. Lås upp perioden och kör importen igen om du
-              vill att ingående balanser ska uppdateras automatiskt.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+        <AttnLine
+          trailing={
+            <HelpPopover className="ml-2 inline-flex align-middle">
+              {tStep('ib_resync_skipped_help')}
+            </HelpPopover>
+          }
+        >
+          {t('result_ib_resync_skipped', { name: result.nextPeriodIBResyncSkipped.nextPeriodName })}
+        </AttnLine>
       )}
 
-      {/* Dimensions detected (lossless SIE round-trip, dimensions plan PR5) */}
-      {result.success && result.dimensionsImported && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Info className="h-5 w-5 text-muted-foreground" />
-              Dimensioner följde med importen
-            </CardTitle>
-            <CardDescription>
-              Filen innehöll kostnadsställen/projekt: {result.dimensionsImported.taggedLines}{' '}
-              taggade rader importerades
-              {result.dimensionsImported.values > 0 && (
-                <> och {result.dimensionsImported.values} nya värden lades till i registret</>
-              )}
-              .{' '}
-              {result.dimensionsImported.toggleEnabled && (
-                <>Dimensioner aktiverades automatiskt för företaget: du hittar registret under{' '}
-                <Link href="/dimensions" className="underline underline-offset-4">
-                  Kostnadsställen &amp; projekt
-                </Link>
-                .</>
-              )}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      )}
-
-      {/* Statistics: flat label/value pairs. Fiscal year and IB outcomes
-          are normal states, so they read as plain text, not chips. */}
-      {result.success && !showReveal && (
-        <ImportStatRow
-          stats={[
-            { key: 'vouchers', label: 'Verifikationer skapade', value: result.journalEntriesCreated },
-            {
-              key: 'accounts',
-              label: t('result_accounts_created'),
-              value: result.accountsCreated ?? 0,
-              note:
-                result.accountsRenamed !== undefined && result.accountsRenamed > 0
-                  ? result.accountsRenamed === 1
-                    ? '1 konto fick sitt namn från källsystemet'
-                    : `${result.accountsRenamed} konton fick sina namn från källsystemet`
-                  : undefined,
-            },
-            {
-              key: 'fiscal_year',
-              label: 'Räkenskapsår',
-              value: result.fiscalPeriodId ? 'Skapat' : 'Befintligt',
-              plain: true,
-            },
-            {
-              key: 'opening_balances',
-              label: 'Ingående balanser',
-              value: result.openingBalanceEntryId
-                ? 'Importerade'
-                : result.details?.openingBalanceSkipped === 'prior_activity'
-                  ? 'Härledda'
-                  : 'Inga',
-              plain: true,
-              // The file's #IB was deliberately not booked: the company already
-              // has posted entries, so this year's IB is the prior year's UB.
-              // Said here, not as a warning (#2462).
-              note:
-                !result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity'
-                  ? 'Från föregående års utgående balans, eftersom bolaget redan har bokförda verifikationer.'
-                  : undefined,
-            },
-          ]}
-        />
-      )}
-
-      {/* Errors */}
+      {/* Errors: the list stays in view, what to do sits behind the "?". */}
       {hasErrors && (
-        <Card className="border-destructive/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <XCircle className="h-5 w-5" />
-              Fel ({result.errors.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {result.errors.map((error, i) => (
-                <div key={i} className="text-sm flex gap-2">
-                  <XCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
-                  <span>{error}</span>
-                </div>
-              ))}
-            </div>
+        <div className="space-y-2">
+          <p className="flex items-center gap-2 text-[13px] font-medium text-destructive">
+            {tStep('errors', { count: result.errors.length })}
             {!result.success && (
-              <div className="text-sm text-muted-foreground border-t pt-3 space-y-1">
-                <p className="font-medium">Vad kan du göra?</p>
-                <ul className="list-disc list-inside space-y-0.5 text-muted-foreground">
-                  <li>Kontrollera att SIE-filen exporterades korrekt från källsystemet</li>
-                  <li>Prova att exportera filen igen och ladda upp på nytt</li>
-                  <li>Om felet kvarstår, kontakta support med felmeddelandet ovan</li>
-                </ul>
-              </div>
+              <HelpPopover className="shrink-0">
+                <div className="space-y-1">
+                  <p className="font-medium">{tStep('what_to_do')}</p>
+                  <ul className="list-disc list-inside space-y-1">
+                    <li>{tStep('what_to_do_check_export')}</li>
+                    <li>{tStep('what_to_do_export_again')}</li>
+                    <li>{tStep('what_to_do_contact_support')}</li>
+                  </ul>
+                </div>
+              </HelpPopover>
             )}
-          </CardContent>
-        </Card>
+          </p>
+          <ul className="max-h-48 space-y-1 overflow-y-auto text-[13px]">
+            {result.errors.map((error, i) => (
+              <li key={i}>{error}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
-      {/* Skipped vouchers: structured breakdown */}
-      {skipped && skipped.total > 0 && (
-        <Card className="border-muted-foreground/20">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-muted-foreground">
-              <Info className="h-5 w-5" />
-              Hoppade över {skipped.total} verifikationer
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {skipped.empty > 0 && (
-                <div className="text-sm">
-                  <p className="font-medium">{skipped.empty} tomma verifikationer</p>
-                  <p className="text-muted-foreground">
-                    Platshållare utan bokföringsrader: vanligt i Fortnox och Visma. Påverkar inte din bokföring.
-                  </p>
-                </div>
-              )}
-              {skipped.unbalanced > 0 && (
-                <div className="text-sm">
-                  <p className="font-medium">{skipped.unbalanced} obalanserade verifikationer</p>
-                  <p className="text-muted-foreground">
-                    Debet och kredit stämmer inte överens i källsystemet. Saldon har justerats automatiskt.
-                  </p>
-                </div>
-              )}
-              {skipped.singleLine > 0 && (
-                <div className="text-sm">
-                  <p className="font-medium">{skipped.singleLine} enradsverifikationer</p>
-                  <p className="text-muted-foreground">
-                    Verifikationer med bara en rad (t.ex. periodiseringar). Kräver minst två rader för dubbelbokning.
-                  </p>
-                </div>
-              )}
-              {skipped.unmapped > 0 && (
-                <div className="text-sm">
-                  <p className="font-medium">{skipped.unmapped} verifikationer med ej kopplade konton</p>
-                  <p className="text-muted-foreground">
-                    Innehåller konton som inte kunde kopplas till din kontoplan.
-                  </p>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Untransferred prior-year results — the year-end omföring is missing */}
+      {/* Untransferred prior-year results: the year-end omföring is missing */}
       {untransferred && untransferred.length > 0 && (
-        <Card className="border-border">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-warning">
-              <AlertCircle className="h-5 w-5" />
-              Årets resultat är inte omfört
-            </CardTitle>
-            <CardDescription>
-              Följande räkenskapsår saknar omföring av årets resultat till eget kapital.
-              Senare års balansräkning visar en differens på beloppet tills omföringen
-              bokförs (konto 8999 mot eget kapital, t.ex. 2099) i respektive år.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {untransferred.map((u) => (
-                <div key={u.fiscal_period_id} className="text-sm flex justify-between gap-4">
-                  <span className="font-medium">{u.period_name}</span>
-                  <span className="tabular-nums">
-                    {formatCurrency(u.pl_net, 'SEK', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <div className="space-y-2">
+          <AttnLine
+            trailing={
+              <HelpPopover className="ml-2 inline-flex align-middle">
+                {tStep('untransferred_help')}
+              </HelpPopover>
+            }
+          >
+            {tStep('untransferred_title')}
+          </AttnLine>
+          <DefList>
+            {untransferred.map((u) => (
+              <DefRow key={u.fiscal_period_id} label={u.period_name} labelWidth={180}>
+                {formatCurrency(u.pl_net, 'SEK', { minimumFractionDigits: 2 })}
+              </DefRow>
+            ))}
+          </DefList>
+        </div>
       )}
 
       {/* Everything else the import noticed: one sentence, the rest folded. */}
@@ -404,46 +401,47 @@ export default function ImportResultStep({
       {/* Next steps: the migrator bridge. Not instructions to read, an action
           to take: fetch the bank history so it can be matched against the
           verifikat that were just imported, instead of landing as anonymous
-          "Att bokföra" rows. */}
+          "Att bokföra" rows. Why and how far back sit behind the "?". */}
       {result.success && !showReveal && (
-        <Card className="bg-muted/50">
-          <CardHeader>
-            <CardTitle className="text-base">{t('next_steps_title')}</CardTitle>
-            <CardDescription>{t('next_steps_match_copy')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-3">
-              {/* Sandbox hides only the live bank connection; file-based
-                  import works there and its CTA stays. */}
-              {!isSandbox && hasBanking && (
-                <Button asChild size="sm">
-                  <Link href="/import?mode=psd2">{t('next_steps_cta_bank')}</Link>
-                </Button>
-              )}
-              <Button
-                asChild
-                size="sm"
-                variant={!isSandbox && hasBanking ? 'outline' : 'default'}
-              >
-                <Link href="/import?mode=bank">{t('next_steps_cta_csv')}</Link>
+        <div className="space-y-3 border-t-hairline pt-4">
+          <p className="flex items-center gap-2 text-[13px] font-medium">
+            {t('next_steps_title')}
+            <HelpPopover className="shrink-0">
+              <div className="space-y-2">
+                <p>{t('next_steps_match_copy')}</p>
+                <p>{t('next_steps_window_hint')}</p>
+              </div>
+            </HelpPopover>
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Sandbox hides only the live bank connection; file-based
+                import works there and its CTA stays. */}
+            {!isSandbox && hasBanking && (
+              <Button asChild>
+                <Link href="/import?mode=psd2">{t('next_steps_cta_bank')}</Link>
               </Button>
-            </div>
-            <p className="text-sm text-muted-foreground">{t('next_steps_window_hint')}</p>
-          </CardContent>
-        </Card>
+            )}
+            <Button
+              asChild
+              variant={!isSandbox && hasBanking ? 'outline' : 'default'}
+            >
+              <Link href="/import?mode=bank">{t('next_steps_cta_csv')}</Link>
+            </Button>
+          </div>
+        </div>
       )}
 
       {/* Actions */}
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:flex-wrap sm:justify-between">
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={onNewImport}>
-            <RotateCcw className="mr-2 h-4 w-4" />
-            Ny import
+            <ArrowUturnLeftIcon className="h-4 w-4" />
+            {tStep('new_import')}
           </Button>
           {result.success && result.importId && onUndo && (
             <Button variant="outline" className="text-destructive hover:text-destructive" onClick={handleUndoClick}>
-              <Undo2 className="mr-2 h-4 w-4" />
-              Ångra import
+              <ArrowUturnLeftIcon className="h-4 w-4" />
+              {tStep('undo_import')}
             </Button>
           )}
         </div>
@@ -452,14 +450,14 @@ export default function ImportResultStep({
             <>
               <Button variant="outline" asChild>
                 <Link href="/bookkeeping">
-                  Visa bokföring
-                  <ExternalLink className="ml-2 h-4 w-4" />
+                  {tStep('view_bookkeeping')}
+                  <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
               <Button asChild>
                 <Link href="/reports">
-                  Visa rapporter
-                  <ExternalLink className="ml-2 h-4 w-4" />
+                  {tStep('view_reports')}
+                  <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
             </>

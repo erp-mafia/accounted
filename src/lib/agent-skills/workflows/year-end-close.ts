@@ -1,4 +1,15 @@
 import type { Skill } from '../types'
+// Kontantmetoden year-end cut-off (#3440): årsomföring, one linked verifikat
+// per invoice unpaid at balansdagen, no vändning.
+const CUTOFF_STEP = `\`gnubok_post_kontantmetod_cutoff({ fiscal_period_id })\` stages årsomföring: one verifikat per customer or supplier invoice unpaid at balansdagen, dated balansdagen and booked as the invoice's registration would be under faktureringsmetoden (revenue or cost, the moms on the ordinary moms accounts, the kundfordran on 1510 or the leverantörsskuld on 2440, and for ROT/RUT the Skatteverket share on 1513). Each verifikat is linked to its invoice, so the payment next year only clears 1510 or 2440 and books no moms again. There is no vändning, and the next period does not have to exist. If an invoice unpaid at balansdagen was already paid after it and booked as a cash verifikat with revenue or cost and moms, the same operation corrects that verifikat with storno and rättelse on its own date. It is search-only: if your client does not list it, stage it through \`gnubok_stage_tool({ tool: "gnubok_post_kontantmetod_cutoff", arguments: { fiscal_period_id } })\`.
+
+Read the preview with the user before approval:
+- \`carries\` and \`corrections\`: show every proposed line.
+- \`manual\`: invoices the rule does not handle (a ROT/RUT invoice with a payment in the year, a payment booked in a shared or manual verifikat, an invoice already covered by an older cut-off with vändning). They are not staged and readiness stays blocked until the user or their accountant handles each. For a ROT/RUT invoice the accountant writes the carry of the open part (exactly the open customer share on 151x, exactly Skatteverket's share of the open part on 1513, and the revenue and moms behind both) and you stage it with \`manual_carries: [{ invoice_id, lines }]\`: it posts on balansdagen and is linked like every carry. Never book it as a separate manual verifikat, which cannot be linked. A payment verifikat that booked revenue or cost and moms is corrected by hand (\`gnubok_correct_entry\`), and any filed VAT period it falls in is listed in \`amended_vat_periods_required\`. Pass \`acknowledge_legacy_invoice_ids\` only for legacy-covered invoices the accountant decided to carry.
+- \`KONTANTMETOD_CUTOFF_VAT_PERIOD_FILED\`: the cut-off writes into a VAT period that is already filed. Stage again with \`acknowledge_filed_vat_periods\` only after the user agreed to file a corrected momsdeklaration for each listed period; \`amended_vat_periods_required\` names them.
+- \`KONTANTMETOD_CUTOFF_PERIOD_LOCKED\`: a write date is locked. Tell the user; do not unlock on your own.
+
+Get approval (high-risk, \`confirmed: true\`), then re-run readiness. Never book the cut-off by hand with \`gnubok_create_voucher\`: a hand-booked receivable is not linked to its invoice, so the payment next year would book the moms a second time. To undo one invoice's carry, storno it dated balansdagen (a rättelse of a carry is refused) and stage the cut-off again.`
 
 const body = `# Årsbokslut (Year-End Close): Accounted
 
@@ -21,7 +32,7 @@ Load a sibling with \`gnubok_load_skill\` when you reach its part.
 Answer each of these with a tool, not an assumption:
 
 1. **Which company.** \`gnubok_list_companies\`. Several: ask which one, then pass that \`company_id\` on every call, including approval. Never let the connection default decide.
-2. **Legal form, accounting method, framework.** \`gnubok_get_agent_briefing\` gives identity and \`accounting_method\` (kontantmetoden or faktureringsmetoden). This skill is for AB; if the company is an enskild firma, jump to "If the company is an enskild firma" below. K2 or K3: \`gnubok_preview_arsredovisning\` returns \`report.accounting_framework\`. K3 changes many bokslut items (deferred tax, component depreciation): see stop conditions.
+2. **Legal form, accounting method, framework.** \`gnubok_get_agent_briefing\` gives identity and \`accounting_method\` (kontantmetoden or faktureringsmetoden). This skill is for AB; if the company is an enskild firma, jump to "If the company is an enskild firma" below. K2 or K3: \`gnubok_preview_arsredovisning\` returns \`report.accounting_framework\`. K3 adds its own steps (the transition, components, nedskrivning, deferred tax): see "If the company reports under K3".
 3. **Which year, and its state.** \`gnubok_list_fiscal_periods\`. Find the period the user means by its \`period_end\` (the räkenskapsår may be brutet, never assume 31 December). Status: open, locked or closed.
 4. **Earlier years.** In the same list, check every period that ends before this one. See "If a prior year is not closed".
 5. **Bank.** \`gnubok_get_reconciliation_status\` with \`date_from\`/\`date_to\` = the period. No connected bank or a difference at balansdagen means the books are not complete yet.
@@ -43,13 +54,16 @@ The opening balances of this year are the closing balances of the last one. Clos
 | Blocker \`kind\` | Meaning | What you do |
 |---|---|---|
 | \`unbooked_transactions\` | Bank rows in the year are neither booked nor ignored | Load \`bookkeep\`. Book or ignore each one with the user; a private one is handled per that skill, never guessed. |
-| \`draft_entries\` | Unposted drafts in the period | Ask the user to finish or discard each draft in Accounted. You cannot delete. |
+| \`draft_entries\` | Unposted drafts in the period; readiness lists them under \`drafts\` | Show the user each draft. One they say will never be booked: stage \`gnubok_cancel_draft_entry({ journal_entry_id })\` (not in tools/list: through \`gnubok_stage_tool\`). It keeps the row as cancelled and burns no voucher number. A draft with underlag is refused (\`DRAFT_HAS_DOCUMENTS\`): the user books it instead. The rest the user finishes in Accounted. Never cancel a draft on your own judgement. |
 | \`unexplained_voucher_gap\` | A gap in voucher numbering with no explanation (BFNAR 2013:2) | \`gnubok_list_voucher_gaps\`, ask the user why each gap exists, then \`gnubok_explain_voucher_gap\` with their answer in Swedish. Never invent a reason. |
 | \`kontantmetod_cutoff_required\` | Kontantmetoden: open receivables and payables must be booked at balansdagen (BFL 5 kap 2 §) | Step 3 below. |
 | \`period_locked\` | The period was locked beforehand | \`gnubok_unlock_period\` (staged, high-risk), after telling the user why: the close posts into the period and locks it itself. |
+| \`company_lock_date\` | The company lock date ("Bokföring låst t.o.m.") covers the year's last day, where the close posts | Tell the user why, then stage \`gnubok_update_bookkeeping_lock\` (not in tools/list: through \`gnubok_stage_tool\`) with \`bookkeeping_locked_through\` before the year's last day, or null. When \`auto_lock_period_days\` is set, send \`auto_lock_period_days: null\` in the same call: the automatic lock can move the date forward again the next night. The user can turn it back on after the close. If the message says the lock could not be checked, change nothing: run readiness again. |
 | \`period_not_ended\` | Balansdagen has not passed | Stop. You can read proposals and prepare questions, but the close waits. |
 | \`period_already_closed\`, \`closing_entry_exists\` | Already done | Verify with \`gnubok_list_fiscal_periods\` and go to Step 7. |
 | \`next_period_ib_posted\` | The next year already has opening balances (often from an import) | Stop and hand over. Removing them means reversing a posted entry: not yours to decide. |
+| \`next_period_not_calendar_year\` | An enskild firma whose year does not end on 31 December: the next year cannot be created | Stop and hand over. The year's dates need a person: never re-date or create a year to get past it. |
+| \`next_period_overlaps\` | A later year starts inside the twelve months after this one: the next year cannot be created | Stop and hand over. A person decides the shorter year between them and records it: never re-date or create a year to get past it. |
 | \`opening_balance_continuity\` | IB and last year's UB differ | See "If a prior year is not closed". |
 | \`trial_balance_unbalanced\`, \`sequence_mismatch\` | Integrity faults | Stop. Tell the user to contact Accounted support with the message text. Never try to post a balancing entry. |
 
@@ -67,7 +81,7 @@ Before bokslutstransaktioner, confirm with the user and the tools:
 
 ## Step 3: Kontantmetoden cut-off (only if the method is kontantmetoden)
 
-\`gnubok_post_kontantmetod_cutoff({ fiscal_period_id })\` stages the receivable and payable entries on balansdagen plus their reversals on day one of the next year. It is search-only: if your client does not list it, stage it through \`gnubok_stage_tool({ tool: "gnubok_post_kontantmetod_cutoff", arguments: { fiscal_period_id } })\`. The next period must exist and be open; if the tool says it is missing, tell the user and stop this step. Show every proposed line, get approval (high-risk, \`confirmed: true\`), then re-run readiness.
+${CUTOFF_STEP}
 
 ## Step 4: Periodiseringar and avskrivningar
 
@@ -124,7 +138,24 @@ Do not call \`gnubok_lock_period\`, \`gnubok_close_period\` or \`gnubok_set_open
 
 A revisor is required when the company exceeded at least two of these in each of the last two years: more than 3 employees on average, more than 1.5 MSEK balansomslutning, more than 3 MSEK nettoomsättning. Check against \`gnubok_get_balance_sheet\` and \`gnubok_get_income_statement\`, but ask the user: a company may also have a revisor voluntarily.
 
-When there is a revisor or an accounting firm, or any stop condition below applies: \`gnubok_audit_package({ fiscal_period_id, estimate_only: true })\` for the size, then without \`estimate_only\` for the zip (SIE-4, reports, receipts, audit log, voucher gaps). The \`download_url\` is valid one hour: give it to the user at once. Tell them what is done and what is left for the professional.
+When there is a revisor or an accounting firm, or any stop condition below applies: \`gnubok_audit_package({ fiscal_period_id, estimate_only: true })\` for the size, then without \`estimate_only\` for the zip (SIE-4, reports, receipts, audit log, voucher gaps). Give the user \`app_url\` at once: it builds and downloads the package in their browser when they are signed in to Accounted as owner or admin. The \`download_url\` (valid one hour, sent with \`download_headers\`) is for a client that fetches the zip itself and does not open as a link in a browser. Tell them what is done and what is left for the professional.
+
+## If the company reports under K3
+
+Read \`gnubok_get_k3_transition({ fiscal_period_id })\` first: \`year.framework\` says whether this year is K3. Every K3 tool below is search-only: if your client does not list it, stage it through \`gnubok_stage_tool\`. Each amount, life and judgement comes from the user or their accountant, never from you.
+
+**The first K3 year after K2 (K3 kapitel 35).** Ask: "Were the company's earlier årsredovisningar prepared under K2?" If yes and \`committed\` is false, the transition comes before the year's depreciation:
+1. \`gnubok_start_k3_transition({ fiscal_period_id })\`. The transition date is the first day of this year; comparatives are not restated (the mindre företag route, the only one Accounted supports).
+2. For each tangible asset in \`assets\` with status \`plain\` whose significant parts have materially different useful lives (a building's stomme, tak, installationer): ask for each part's carrying amount at the transition and its total useful life counted from first use, then \`gnubok_split_asset_at_k3_transition\`. The carrying amounts must add up to the asset's. Nothing is booked. A \`later_depreciation_posted\` asset needs this year's depreciation reversed first.
+3. Deferred tax in the opening balance: the default. The 35.27 relief (none) only when the user says the information cannot be produced without unreasonable cost. \`gnubok_update_k3_transition\` records it, the other relief rules applied and the accounting principles changed (the notes 35.31 and 35.33 print them).
+4. Other differences in principle the accountant has computed: each as a balance sheet account and amount in \`adjustments\`. Stage \`gnubok_commit_k3_transition\` (high-risk) and read its preview with the user: every line is booked against balanserat resultat on the transition date.
+
+**Every K3 year.**
+- Buildings and markanläggningar: \`gnubok_set_asset_tax_plan\` with the tax depreciation rate the user or their tax adviser gives (IL 19 kap. 5 §). Without it INK2S 4.9 makes no adjustment and the deferred tax leaves the building out.
+- A replaced part of a component asset: \`gnubok_replace_asset_component\` on the replacement date.
+- After the year's depreciation: ask whether any asset has lost value materially and lastingly (K3 27.4). Only with the user's recoverable amount and their reason: \`gnubok_post_asset_value_adjustment\` on the balansdag (a reversal the same way; never for goodwill).
+- Own development: \`gnubok_set_development_model\` (owners and admins) when the company capitalises it; the fond för utvecklingsutgifter then shows among the dispositions.
+- Deferred tax: \`gnubok_set_deferred_tax_inputs\` for a tax loss the user judges recoverable (with their reason, K3 29.29) and differences the register does not compute. \`gnubok_propose_dispositioner\` then shows \`uppskjuten_skatt_kap29\`. Post it and the fond from the Bokslut page in Accounted, never with \`gnubok_create_voucher\`: the page records what the deferred tax was computed from with the voucher.
 
 ## If the company is an enskild firma
 
@@ -144,7 +175,7 @@ This skill is filtered to AB, but if you reach it for an EF: readiness, accruals
 
 Stop, say "This needs a human: here is what I found", list the facts, and offer the audit package when useful:
 - Eget kapital below half of the registered aktiekapital (kontrollbalansräkning, ABL 25 kap). The board has duties and personal liability.
-- K3 framework, deferred tax, koncernbidrag, or a company whose buildings generate most of its revenue.
+- Under K3: a större företag, a transition that restates the comparatives, or an amount the user cannot give for a split, a nedskrivning or a temporary difference. Also koncernbidrag, or a company whose buildings generate most of its revenue.
 - Any integrity blocker, IB/UB mismatch, IB already posted in the next year, or a prior year closed wrongly.
 - An amount the user cannot back with underlag, or a disposition the user wants that you cannot build from the proposal.
 - Anything touching a closed year.
@@ -174,9 +205,11 @@ In the user's language, short groups:
 - \`gnubok_year_end_readiness\`: blockers, warnings, optional closing-entry preview
 - \`gnubok_get_reconciliation_status\`, \`gnubok_vat_close_check\`, \`gnubok_get_trial_balance\`, \`gnubok_query_journal\`: completeness checks
 - \`gnubok_list_voucher_gaps\`, \`gnubok_explain_voucher_gap\`: BFNAR 2013:2 gaps
-- \`gnubok_post_kontantmetod_cutoff\`: kontantmetoden cut-off (search-only, via \`gnubok_stage_tool\`)
+- \`gnubok_post_kontantmetod_cutoff\`: kontantmetoden cut-off, årsomföring per invoice (search-only, via \`gnubok_stage_tool\`)
 - \`gnubok_propose_accruals\`, \`gnubok_list_accrual_schedules\`: periodiseringar
 - \`gnubok_list_assets\`, \`gnubok_create_asset\`, \`gnubok_dispose_asset\`, \`gnubok_propose_annual_depreciation\`, \`gnubok_post_annual_depreciation\`: avskrivningar
+- \`gnubok_get_k3_transition\`, \`gnubok_start_k3_transition\`, \`gnubok_split_asset_at_k3_transition\`, \`gnubok_update_k3_transition\`, \`gnubok_commit_k3_transition\`, \`gnubok_delete_k3_transition\`: the transition to K3
+- \`gnubok_set_asset_tax_plan\`, \`gnubok_replace_asset_component\`, \`gnubok_post_asset_value_adjustment\`, \`gnubok_set_development_model\`, \`gnubok_set_deferred_tax_inputs\`: K3 years
 - \`gnubok_run_currency_revaluation\`: optional FX review before the close
 - \`gnubok_propose_dispositioner\`, \`gnubok_create_voucher\`: bokslutsdispositioner and tax
 - \`gnubok_run_year_end\`: the close (high-risk, irreversible)

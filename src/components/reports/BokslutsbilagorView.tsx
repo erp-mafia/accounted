@@ -3,10 +3,10 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertCircle, FolderArchive } from 'lucide-react'
+import { FolderIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -28,6 +28,13 @@ export function BokslutsbilagorView({ periodId }: BokslutsbilagorViewProps) {
   const [report, setReport] = useState<BokslutsbilagorReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Bumped by "Försök igen" to ask again for the same period.
+  const [attempt, setAttempt] = useState(0)
+  const retry = () => {
+    setError(null)
+    setLoading(true)
+    setAttempt((n) => n + 1)
+  }
 
   // Keyed on periodId by the caller: a new period is a fresh mount, so the
   // initial loading state is the reset.
@@ -52,28 +59,23 @@ export function BokslutsbilagorView({ periodId }: BokslutsbilagorViewProps) {
     return () => {
       cancelled = true
     }
-  }, [periodId, t])
+  }, [periodId, attempt, t])
 
   if (loading) {
     return (
-      <div className="space-y-3" aria-busy>
+      <LateReveal className="space-y-3">
         <Skeleton className="h-4 w-1/3" />
         <Skeleton className="h-40 w-full" />
-      </div>
+      </LateReveal>
     )
   }
   if (error) {
     return (
-      <Card>
-        <CardContent className="py-8 text-center text-sm text-destructive">
-          <AlertCircle className="mx-auto mb-2 h-6 w-6" />
-          {error}
-        </CardContent>
-      </Card>
+      <LoadError title={error} onRetry={retry} />
     )
   }
   if (!report || report.accounts.length === 0) {
-    return <EmptyState icon={FolderArchive} title={t('empty_title')} description={t('empty_desc')} actionLabel={t('open_reconciliation')} actionHref="/reconciliation" />
+    return <EmptyState icon={FolderIcon} title={t('empty_title')} description={t('empty_desc')} actionLabel={t('open_reconciliation')} actionHref="/reconciliation" />
   }
 
   const money = (n: number | null) => (n == null ? '-' : formatCurrency(n, 'SEK'))
@@ -96,8 +98,8 @@ export function BokslutsbilagorView({ periodId }: BokslutsbilagorViewProps) {
       </div>
 
       <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
+        <CardContent>
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full min-w-[820px] text-[13px]">
               <thead>
                 <tr>
@@ -113,12 +115,12 @@ export function BokslutsbilagorView({ periodId }: BokslutsbilagorViewProps) {
                 {report.accounts.map((a) => {
                   const files = a.attachments.filter((f) => !f.removed_at).length
                   return (
-                    <tr key={a.account_key} className="border-b border-border last:border-b-0 align-top">
+                    <tr key={a.account_key} className="border-b-hairline last:border-b-0 align-top">
                       <td className={cn(TD_CLASS, 'max-w-0')}>
                         <Link href={`/reconciliation?account=${encodeURIComponent(a.account_key)}`} className={QUIET_LINK_CLASS} data-ph-mask>
                           <span className="tabular-nums">{a.account_number}</span> {a.name}
                         </Link>
-                        <div className="truncate text-[11px] text-muted-foreground">{externalLabel(a)}</div>
+                        <div className="truncate text-xs text-muted-foreground">{externalLabel(a)}</div>
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
                         {money(a.closing_balance)}
@@ -136,7 +138,7 @@ export function BokslutsbilagorView({ periodId }: BokslutsbilagorViewProps) {
                       >
                         {money(a.difference)}
                       </td>
-                      <td className={cn(TD_CLASS, 'text-[12.5px]')}>
+                      <td className={cn(TD_CLASS, 'text-xs date-figures')}>
                         {a.signoff ? (
                           <span className={cn(!a.signoff.on_balansdag && 'text-warning')} data-ph-mask>
                             {a.signoff.on_balansdag

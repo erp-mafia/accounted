@@ -31,7 +31,7 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events'
-import { DELETE as deleteInvoice, PATCH as patchInvoice } from '../route'
+import { DELETE as deleteInvoice, GET as getInvoice, PATCH as patchInvoice } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -74,8 +74,14 @@ function makeFlexibleSupabase(
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
+            // The read of the invoice's own payment reference facts
+            // (withPaymentReference) is a second read of `invoices`: it has
+            // its own queue, `invoice_reference_facts`, and answers no rows
+            // when a test names none.
+            const key = table === 'invoices' && columns?.includes('autogiro_payer_number') ? 'invoice_reference_facts' : table
+            const q = queues.get(key)
+            const fallback = key === table ? { data: null, error: null } : { data: [], error: null }
+            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? fallback)
             resolve(table === 'customers' ? { ...next, data: projectRow(next.data, columns) } : next)
           }
         }
@@ -554,10 +560,57 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.due_date).toBe('2026-08-15')
+    // The same shape as GET (crm#1487).
+    expect(body.data.amount_to_pay).toBe(12500)
+    expect(body.data.ore_rounding_amount).toBe(0)
     // No line changed, so there is no rate to explain.
     expect(body.meta.warnings).toBeUndefined()
     // No items were touched.
     expect(captures.filter((c) => c.table === 'invoice_items')).toEqual([])
+  })
+
+  it('sets and clears the invoice QR mode as a header field', async () => {
+    for (const qrMode of ['swish', null] as const) {
+      const captures: Capture[] = []
+      mockServiceClient.mockReturnValue(
+        makeFlexibleSupabase(
+          {
+            company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+            invoices: [
+              { data: DRAFT_INVOICE, error: null },
+              { data: { ...DRAFT_INVOICE, qr_mode: qrMode }, error: null },
+            ],
+          },
+          captures,
+        ),
+      )
+
+      const res = await patchInvoice(
+        makePatchRequest({ qr_mode: qrMode }),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+
+      expect(res.status, String(qrMode)).toBe(200)
+      const update = captures.find((c) => c.table === 'invoices' && c.op === 'update')
+      expect(update?.payload).toMatchObject({ qr_mode: qrMode })
+    }
+  })
+
+  it('returns 400 VALIDATION_ERROR for a QR mode that is not a mode', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ qr_mode: 'all_three' }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
   it('rejects a write without an Idempotency-Key', async () => {
@@ -586,6 +639,105 @@ function makeDeleteRequest(opts: { idempotencyKey?: boolean; auth?: boolean; dry
   const url = `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${id}${opts.dryRun ? '?dry_run=true' : ''}`
   return new Request(url, { method: 'DELETE', headers })
 }
+
+function makeGetRequest() {
+  return new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`, {
+    method: 'GET',
+    headers: { Authorization: 'Bearer test-fixture-not-a-real-key' },
+  })
+}
+
+// crm#1487: total is the exact amount the books carry; an integration had to
+// guess the company setting to know what the invoice asked for.
+describe('GET /api/v1/companies/:companyId/invoices/:id: amount_to_pay', () => {
+  const ISSUED = {
+    ...DRAFT_INVOICE,
+    status: 'sent',
+    invoice_number: '2026-0042',
+    subtotal: 3.5,
+    vat_amount: 0.88,
+    total: 4.38,
+    remaining_amount: 4.38,
+    due_date: '2999-12-31',
+    deduction_total: 0,
+    credited_invoice_id: null,
+  }
+
+  beforeEach(() => {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['invoices:read'],
+      mode: 'live',
+    })
+  })
+
+  it('returns 401 without a bearer token', async () => {
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    const res = await getInvoice(
+      new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 404 for an invoice outside the company', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: null, error: null },
+      }),
+    )
+    const res = await getInvoice(makeGetRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+    expect(res.status).toBe(404)
+  })
+
+  it("reports the invoice's own rounding, whatever the company setting says", async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...ISSUED, ore_rounding: false }, error: null },
+        company_settings: { data: { ore_rounding: true }, error: null },
+      }),
+    )
+    const res = await getInvoice(makeGetRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.total).toBe(4.38)
+    expect(body.data.amount_to_pay).toBe(4.38)
+    expect(body.data.ore_rounding_amount).toBe(0)
+  })
+
+  it('prints the öresavrundning an issued invoice was issued with', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...ISSUED, ore_rounding: true }, error: null },
+        company_settings: { data: { ore_rounding: false }, error: null },
+      }),
+    )
+    const res = await getInvoice(makeGetRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+    const body = await res.json()
+    expect(body.data.amount_to_pay).toBe(4)
+    expect(body.data.ore_rounding_amount).toBe(-0.38)
+  })
+
+  it('computes a draft without its own choice with the company setting', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...ISSUED, status: 'draft', invoice_number: null, ore_rounding: null }, error: null },
+        company_settings: { data: { ore_rounding: false }, error: null },
+      }),
+    )
+    const res = await getInvoice(makeGetRequest(), detailParams(COMPANY_ID, INVOICE_ID))
+    const body = await res.json()
+    expect(body.data.amount_to_pay).toBe(4.38)
+    expect(body.data.ore_rounding_amount).toBe(0)
+  })
+})
 
 describe('DELETE /api/v1/companies/:companyId/invoices/:id', () => {
   it('returns 401 without a bearer token', async () => {

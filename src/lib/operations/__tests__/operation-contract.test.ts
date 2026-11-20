@@ -10,13 +10,12 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { describe, expect, it } from 'vitest'
-import { TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
-import { V1_ENDPOINT_SCOPES } from '@/lib/auth/scopes'
-import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
-import { OPERATION_LABEL_KEYS, singleActionWarnings } from '@/components/pending-operations/vocabulary'
+import { DIRECT_WRITE_SCOPES, STAGING_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
+import { OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
+import { OPERATION_LABEL_KEYS, SINGLE_ACTION_WARNING_KEYS } from '@/components/pending-operations/vocabulary'
 import { listEndpoints } from '@/lib/api/v1/registry'
 import '@/lib/api/v1/load-routes'
-import { OPERATIONS } from '../registry'
+import { ALL_OPERATIONS as OPERATIONS } from '../registry'
 
 const messages = (lang: 'sv' | 'en') =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../../messages/${lang}.json`, import.meta.url)), 'utf8')) as {
@@ -57,7 +56,7 @@ describe('operation registry contract', () => {
       const endpoint = registered.get(op.id)
       expect(endpoint, `${op.id}: route file missing or not imported by load-routes.ts`).toBeDefined()
       expect(endpoint!.path).toBe(op.http!.path)
-      expect(V1_ENDPOINT_SCOPES[`${op.http!.method} ${op.http!.path}`], `${op.id}: V1_ENDPOINT_SCOPES`).toBe(op.scope)
+      expect(endpoint!.scope, `${op.id}: endpoint scope`).toBe(op.scope)
     }
   })
 
@@ -68,12 +67,40 @@ describe('operation registry contract', () => {
   })
 
   it('stages every MCP write, described as staging, within the description budget', () => {
-    for (const op of OPERATIONS.filter((o) => o.mcp && o.kind === 'write')) {
-      expect(op.mcp!.stage, `${op.id}: MCP writes always stage`).toBeDefined()
+    for (const op of OPERATIONS.filter((o) => o.mcp && o.kind === 'write' && !o.mcp.direct)) {
+      expect(op.mcp!.stage, `${op.id}: MCP writes stage unless they are direct`).toBeDefined()
       const description = op.mcp!.description ?? op.docs.summary
       expect(description, op.id).toMatch(/\bstage\b/i)
       expect(description.length, op.id).toBeLessThanOrEqual(280)
     }
+  })
+
+  it('writes directly over MCP only what never reaches the books (DIRECT_WRITE_SCOPES), never described as staging', () => {
+    const direct = OPERATIONS.filter((o) => o.mcp?.direct)
+    for (const op of direct) {
+      expect(op.kind, op.id).toBe('write')
+      expect(op.mcp!.stage, `${op.id}: direct and stage are exclusive`).toBeUndefined()
+      expect(DIRECT_WRITE_SCOPES, `${op.id}: scope ${op.scope}`).toContain(op.scope)
+      expect(STAGING_SCOPES, `${op.id}: a direct scope never stages`).not.toContain(op.scope)
+      const description = op.mcp!.description ?? op.docs.summary
+      expect(description, op.id).not.toMatch(/\bstage/i)
+      expect(description.length, op.id).toBeLessThanOrEqual(280)
+    }
+    // Every operation under a direct scope is a read or a direct write: none of them stages.
+    for (const op of OPERATIONS.filter((o) => DIRECT_WRITE_SCOPES.includes(o.scope))) {
+      expect(op.mcp?.stage, op.id).toBeUndefined()
+    }
+    expect(direct.map((o) => o.id).sort()).toEqual(['cash-forecast-rows.cancel', 'cash-forecast-rows.upsert-batch'])
+  })
+
+  it('labels every pending operation type in both languages, so none shows its raw name', () => {
+    const sv = messages('sv').pending
+    const en = messages('en').pending
+    const missing = PENDING_OPERATION_TYPES.filter((type) => {
+      const key = OPERATION_LABEL_KEYS[type]
+      return !key || !sv[key] || !en[key]
+    })
+    expect(missing).toEqual([])
   })
 
   it('declares every pending type in the risk tiers, the vocabulary and both languages', () => {
@@ -87,7 +114,11 @@ describe('operation registry contract', () => {
       expect(sv[labelKey], `${type}: messages/sv.json pending.${labelKey}`).toBeTruthy()
       expect(en[labelKey], `${type}: messages/en.json pending.${labelKey}`).toBeTruthy()
       if (op.risk !== 'low') {
-        expect(singleActionWarnings[type], `${type}: singleActionWarnings (risk ${op.risk})`).toBeTruthy()
+        // A consequence sentence: a message key in both languages.
+        const warningKey = SINGLE_ACTION_WARNING_KEYS[type]
+        expect(warningKey, `${type}: SINGLE_ACTION_WARNING_KEYS (risk ${op.risk})`).toBeDefined()
+        expect(sv[warningKey], `${type}: messages/sv.json pending.${warningKey}`).toBeTruthy()
+        expect(en[warningKey], `${type}: messages/en.json pending.${warningKey}`).toBeTruthy()
       }
     }
   })

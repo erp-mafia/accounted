@@ -1,6 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+// The error level is recorded and passed on to the real logger: the sweep's
+// one error line per run is asserted here, other tests read the console.
+const logError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => {
+      const real = actual.createLogger(module, base)
+      return {
+        ...real,
+        error: (message: string, ...args: unknown[]) => {
+          logError(message, ...args)
+          real.error(message, ...args)
+        },
+      }
+    },
+  }
+})
+
 import {
   anchorSupplierInvoiceDocument,
   reanchorOrphanedSupplierInvoiceDocuments,
@@ -229,7 +250,7 @@ describe('anchorSupplierInvoiceDocument', () => {
   })
 
   it('reports a zero-row update as null: a write that never happened is not an anchor', async () => {
-    // Prod case 2026-08-28 (faktura 118776): every static condition passed yet
+    // A case seen 2026-08-28: every static condition passed yet
     // the document stayed floating. The guarded update can match nothing (a
     // concurrent writer, or RLS filtering the row); claiming success then hides
     // the miss from both callers and the reconcile cron.
@@ -377,7 +398,41 @@ describe('sweepFloatingSupplierInvoiceDocuments', () => {
     const result = await sweepFloatingSupplierInvoiceDocuments(
       supabase as unknown as SupabaseClient,
     )
-    expect(result).toEqual({ candidates: 2, anchored: 1 })
+    // The locked one is not a failure: nothing can take it until the period opens.
+    expect(result).toEqual({ candidates: 2, anchored: 1, failed: 0 })
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('reads the newest invoices first, in a fixed order', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+    await sweepFloatingSupplierInvoiceDocuments(supabase as unknown as SupabaseClient)
+    expect(findCalls('supplier_invoices', 'order')).toEqual([
+      ['created_at', { ascending: false }],
+      ['id', { ascending: true }],
+    ])
+  })
+
+  it('counts an anchor write that failed and reports the run as one error', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [{ id: 'si-1', company_id: 'company-1', document: { id: 'doc-1', journal_entry_id: null, is_current_version: true } }] },
+      { data: { id: 'si-1', document_id: 'doc-1', registration_journal_entry_id: null, payment_journal_entry_id: 'je-1' } },
+      { data: { id: 'doc-1', journal_entry_id: null, is_current_version: true } },
+      { data: [] },
+      { data: [{ id: 'je-1', status: 'posted', fiscal_period: openPeriod }] },
+      { error: { message: 'connection reset' } },
+    ])
+
+    const result = await sweepFloatingSupplierInvoiceDocuments(supabase as unknown as SupabaseClient)
+
+    expect(result).toEqual({ candidates: 1, anchored: 0, failed: 1 })
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('floating-document sweep could not anchor some documents', {
+      candidates: 1,
+      anchored: 0,
+      failed: 1,
+    })
   })
 
   it('returns zeros and touches nothing when no document is floating', async () => {
@@ -387,17 +442,17 @@ describe('sweepFloatingSupplierInvoiceDocuments', () => {
     const result = await sweepFloatingSupplierInvoiceDocuments(
       supabase as unknown as SupabaseClient,
     )
-    expect(result).toEqual({ candidates: 0, anchored: 0 })
+    expect(result).toEqual({ candidates: 0, anchored: 0, failed: 0 })
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
-  it('survives a failed candidate scan without throwing', async () => {
+  it('throws when the candidate scan fails: a broken scan is not a clean night', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([{ error: { message: 'relation walk failed' } }])
 
     await expect(
       sweepFloatingSupplierInvoiceDocuments(supabase as unknown as SupabaseClient),
-    ).resolves.toEqual({ candidates: 0, anchored: 0 })
+    ).rejects.toThrow('floating-document sweep query failed: relation walk failed')
   })
 })
 

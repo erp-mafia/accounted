@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { mapTrialBalancesToK2, type TrialBalanceRowLike } from '../k2-mapper'
+import {
+  mapTrialBalancesToK2,
+  type TrialBalancePair,
+  type TrialBalanceRowLike,
+} from '../k2-mapper'
 import { CURRENT, PREVIOUS } from './fixtures'
 
 const row = (
@@ -471,5 +475,274 @@ describe('mapTrialBalancesToK2: årets resultat on 8999 (feedback seq 345150)', 
     expect(res.warnings.filter((w) => w.startsWith('Konto 8999'))).toHaveLength(1)
     expect(res.unmappedAccounts.map((u) => u.account)).toEqual(['9999'])
     expect(res.warnings.some((w) => w.includes('9999') && w.includes('täcks inte av K2-mappningen'))).toBe(true)
+  })
+})
+
+// crm#1080. The comparison year in every shape the books can leave it in.
+// The fixture year (PREVIOUS) made 40 000 kr: 253 000 kr assets against
+// 25 000 aktiekapital, 60 000 balanserat, the result and 128 000 reserves and
+// liabilities. PREVIOUS.preClosing is that year with the result still on the
+// result accounts and nothing on 2099, which is how a year closed in another
+// system arrives when its closing entry was never booked.
+describe('mapTrialBalancesToK2: comparison year and its closing entry (crm#1080)', () => {
+  const NEVER_CLOSED: TrialBalancePair = {
+    full: PREVIOUS.preClosing,
+    preClosing: PREVIOUS.preClosing,
+  }
+  const CHECK = 'Stäm av jämförelsetalen mot föregående års fastställda årsredovisning.'
+  const DERIVED =
+    'Jämförelseåret avslutades aldrig i bokföringen: årets resultat (40000 kr) står kvar på resultatkontona. Årets resultat i jämförelseårets balansräkning är därför hämtat från resultaträkningen.'
+  const NOT_EXPLAINED =
+    'och skillnaden kan inte förklaras av ett år som aldrig avslutades. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.'
+  const AS_BOOKED =
+    'Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.'
+  const NOTE_8999 =
+    'Konto 8999 (Årets resultat) ingår inte i K2-mappningen: årets resultat beräknas från resultaträkningens summa. Ingen åtgärd behövs.'
+  const closed = mapTrialBalancesToK2(CURRENT, PREVIOUS)
+  const figures = (res: ReturnType<typeof mapTrialBalancesToK2>) => ({
+    rr: res.rr,
+    br: res.br,
+    totals: res.totals,
+  })
+  const currentColumn = (res: ReturnType<typeof mapTrialBalancesToK2>) =>
+    Object.fromEntries(
+      Object.entries({ ...res.rr, ...res.br, ...res.totals }).map(([key, amount]) => [
+        key,
+        amount.current,
+      ]),
+    )
+
+  /** 2099 with a balance that came in with the opening balance and never moved. */
+  const carriedIn = (credit: number): TrialBalanceRowLike => ({
+    ...row('2099', 'Årets resultat', 0, credit),
+    period_debit: 0,
+    period_credit: 0,
+  })
+  const withBalanserat = (rows: TrialBalanceRowLike[], credit: number) =>
+    rows.map((r) => (r.account_number === '2091' ? { ...r, closing_credit: credit } : r))
+
+  it('(a) closed in Accounted: read from 2099, nothing derived, no notice', () => {
+    expect(closed.br['AretsResultatEgetKapital'].previous).toBe(40_000)
+    expect(closed.br['BalanseratResultat'].previous).toBe(60_000)
+    expect(closed.totals.tillgangar.previous).toBe(253_000)
+    expect(closed.totals.egetKapitalSkulder.previous).toBe(253_000)
+    expect(closed.warnings).toEqual([])
+  })
+
+  it('(b) closed in another system with 8999 against 2099: read from 2099, no notice', () => {
+    // exclude-final drops the 8999/2099 voucher from the pre-closing balance.
+    const res = mapTrialBalancesToK2(CURRENT, {
+      full: [
+        ...PREVIOUS.preClosing,
+        row('2099', 'Årets resultat', 0, 40_000),
+        row('8999', 'Årets resultat', 40_000, 0),
+      ],
+      preClosing: PREVIOUS.preClosing,
+    })
+    expect(figures(res)).toEqual(figures(closed))
+    expect(res.warnings).toEqual([NOTE_8999])
+  })
+
+  it('(c) never closed, nothing on 2099: the books as they stand are out by the result', () => {
+    // The ticket, seen without the fix: mapped as a current year the mapper
+    // demands the closing instead of deriving it, so this is what is booked.
+    const asBooked = mapTrialBalancesToK2(NEVER_CLOSED, null)
+    expect(asBooked.br['AretsResultatEgetKapital'].current).toBe(0)
+    expect(asBooked.totals.tillgangar.current).toBe(253_000)
+    expect(asBooked.totals.egetKapitalSkulder.current).toBe(213_000)
+    expect(
+      asBooked.totals.tillgangar.current - asBooked.totals.egetKapitalSkulder.current,
+    ).toBe(asBooked.totals.aretsResultat.current)
+    expect(asBooked.totals.aretsResultat.current).toBe(40_000)
+  })
+
+  it('(c) never closed, nothing on 2099: Årets resultat comes from the income statement and the column balances', () => {
+    const res = mapTrialBalancesToK2(CURRENT, NEVER_CLOSED)
+    expect(res.br['AretsResultatEgetKapital']).toEqual({ current: 120_000, previous: 40_000 })
+    expect(res.br['BalanseratResultat']).toEqual({ current: 100_000, previous: 60_000 })
+    expect(res.totals.aretsResultat.previous).toBe(40_000)
+    expect(res.totals.frittEgetKapital.previous).toBe(100_000)
+    expect(res.totals.egetKapital.previous).toBe(125_000)
+    expect(res.totals.tillgangar.previous).toBe(253_000)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(253_000)
+    // Exactly the column the same year shows when it is closed in the books.
+    expect(figures(res)).toEqual(figures(closed))
+    expect(res.warnings).toEqual([`${DERIVED} ${CHECK}`])
+  })
+
+  it('(d) never closed, an earlier result still on 2099: that balance is Balanserat resultat', () => {
+    // 15 000 kr of the 60 000 kr retained earnings never left 2099.
+    const rows = [...withBalanserat(PREVIOUS.preClosing, 45_000), carriedIn(15_000)]
+    const pair = { full: rows, preClosing: rows }
+
+    // As booked, Årets resultat would read the earlier year's 15 000 kr.
+    expect(mapTrialBalancesToK2(pair, null).br['AretsResultatEgetKapital'].current).toBe(15_000)
+
+    const res = mapTrialBalancesToK2(CURRENT, pair)
+    expect(res.br['AretsResultatEgetKapital'].previous).toBe(40_000)
+    expect(res.br['BalanseratResultat'].previous).toBe(60_000)
+    expect(res.totals.tillgangar.previous).toBe(253_000)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(253_000)
+    expect(figures(res)).toEqual(figures(closed))
+    expect(res.warnings).toEqual([
+      `${DERIVED} Saldot på konto 2099 (15000 kr) fanns redan vid jämförelseårets ingång och visas som Balanserat resultat. ${CHECK}`,
+    ])
+  })
+
+  it.each([
+    ['moved during the year', { period_debit: 0, period_credit: 15_000 }],
+    ['of unknown origin (no period activity on the row)', {}],
+  ])('(d) never closed, a balance on 2099 %s: not derived, warned', (_label, activity) => {
+    const rows = [
+      ...withBalanserat(PREVIOUS.preClosing, 45_000),
+      { ...row('2099', 'Årets resultat', 0, 15_000), ...activity },
+    ]
+    const res = mapTrialBalancesToK2(CURRENT, { full: rows, preClosing: rows })
+    expect(res.br['AretsResultatEgetKapital'].previous).toBe(15_000)
+    expect(res.br['BalanseratResultat'].previous).toBe(45_000)
+    expect(res.totals.tillgangar.previous).toBe(253_000)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(213_000)
+    expect(res.warnings).toEqual([
+      `Jämförelseårets resultat enligt resultaträkningen (40000 kr) stämmer inte med konto 2099 (15000 kr), ${NOT_EXPLAINED}`,
+      `Jämförelseårets balansräkning balanserar inte: Summa tillgångar 253000 kr ≠ Summa eget kapital och skulder 213000 kr. ${AS_BOOKED}`,
+    ])
+  })
+
+  it('(e) closed with 8999 against another account than 2099: figures stay as booked, warned', () => {
+    // The result went straight to 2098. The column balances, but which post
+    // received the result cannot be read from the balances, so nothing moves.
+    const rows = [
+      ...PREVIOUS.preClosing,
+      row('2098', 'Vinst eller förlust från föregående år', 0, 40_000),
+      row('8999', 'Årets resultat', 40_000, 0),
+    ]
+    const res = mapTrialBalancesToK2(CURRENT, { full: rows, preClosing: rows })
+    expect(res.br['AretsResultatEgetKapital'].previous).toBe(0)
+    expect(res.br['BalanseratResultat'].previous).toBe(100_000)
+    expect(res.totals.aretsResultat.previous).toBe(40_000)
+    expect(res.totals.tillgangar.previous).toBe(253_000)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(253_000)
+    expect(res.warnings).toEqual([
+      NOTE_8999,
+      `Jämförelseårets resultat enligt resultaträkningen (40000 kr) stämmer inte med konto 2099 (0 kr), ${NOT_EXPLAINED}`,
+    ])
+  })
+
+  it('(f) first fiscal year: no comparison year, and an unbooked result is still demanded', () => {
+    const res = mapTrialBalancesToK2(NEVER_CLOSED, null)
+    expect(res.br['AretsResultatEgetKapital']).toEqual({ current: 0, previous: null })
+    expect(res.totals.tillgangar).toEqual({ current: 253_000, previous: null })
+    expect(res.totals.egetKapitalSkulder).toEqual({ current: 213_000, previous: null })
+    expect(res.warnings).toEqual([
+      'Årets resultat enligt resultaträkningen (40000 kr) stämmer inte med konto 2099 (0 kr). Kontrollera att bokslutet är genomfört (resultatdisposition bokad).',
+      'Balansräkningen balanserar inte: Summa tillgångar 253000 kr ≠ Summa eget kapital och skulder 213000 kr (kontrollera-kod 3005).',
+    ])
+  })
+
+  describe('(g) comparison year with a zero result', () => {
+    const zeroResult = (equity: TrialBalanceRowLike[]): TrialBalancePair => {
+      const rows = [
+        row('1930', 'Bank', 100_000, 0),
+        row('2081', 'Aktiekapital', 0, 25_000),
+        ...equity,
+        row('3010', 'Försäljning', 0, 50_000),
+        row('5010', 'Lokalhyra', 50_000, 0),
+      ]
+      return { full: rows, preClosing: rows }
+    }
+
+    it('never closed: there is nothing to derive and nothing to say', () => {
+      const res = mapTrialBalancesToK2(
+        CURRENT,
+        zeroResult([row('2091', 'Balanserad vinst', 0, 75_000)]),
+      )
+      expect(res.br['AretsResultatEgetKapital'].previous).toBe(0)
+      expect(res.br['BalanseratResultat'].previous).toBe(75_000)
+      expect(res.totals.tillgangar.previous).toBe(100_000)
+      expect(res.totals.egetKapitalSkulder.previous).toBe(100_000)
+      expect(res.warnings).toEqual([])
+    })
+
+    it('an earlier result still on 2099 is Balanserat resultat, and Årets resultat is 0 kr', () => {
+      const res = mapTrialBalancesToK2(
+        CURRENT,
+        zeroResult([row('2091', 'Balanserad vinst', 0, 45_000), carriedIn(30_000)]),
+      )
+      expect(res.br['AretsResultatEgetKapital'].previous).toBe(0)
+      expect(res.br['BalanseratResultat'].previous).toBe(75_000)
+      expect(res.totals.tillgangar.previous).toBe(100_000)
+      expect(res.totals.egetKapitalSkulder.previous).toBe(100_000)
+      expect(res.warnings).toEqual([
+        `Saldot på konto 2099 (30000 kr) fanns redan vid jämförelseårets ingång och visas som Balanserat resultat. ${CHECK}`,
+      ])
+    })
+  })
+
+  it('a difference that is not the unbooked result is never derived away', () => {
+    // 1 000 kr on the asset side with no counterpart: the column is out by
+    // 41 000 kr, the result is 40 000 kr.
+    const rows = [...PREVIOUS.preClosing, row('1510', 'Kundfordringar', 1_000, 0)]
+    const res = mapTrialBalancesToK2(CURRENT, { full: rows, preClosing: rows })
+    expect(res.br['AretsResultatEgetKapital'].previous).toBe(0)
+    expect(res.totals.tillgangar.previous).toBe(254_000)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(213_000)
+    expect(res.warnings).toEqual([
+      `Jämförelseårets resultat enligt resultaträkningen (40000 kr) stämmer inte med konto 2099 (0 kr), ${NOT_EXPLAINED}`,
+      `Jämförelseårets balansräkning balanserar inte: Summa tillgångar 254000 kr ≠ Summa eget kapital och skulder 213000 kr. ${AS_BOOKED}`,
+    ])
+  })
+
+  it('a result that was partly closed is not guessed at', () => {
+    // 30 000 kr of the 40 000 kr result was closed against 2099, the rest
+    // was booked afterwards and never closed.
+    const full = [
+      ...PREVIOUS.preClosing,
+      { ...row('2099', 'Årets resultat', 0, 30_000), period_debit: 0, period_credit: 30_000 },
+      row('8999', 'Årets resultat', 30_000, 0),
+    ]
+    const res = mapTrialBalancesToK2(CURRENT, { full, preClosing: PREVIOUS.preClosing })
+    expect(res.br['AretsResultatEgetKapital'].previous).toBe(30_000)
+    expect(res.totals.tillgangar.previous).toBe(253_000)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(243_000)
+    expect(res.warnings).toEqual([
+      NOTE_8999,
+      `Jämförelseårets resultat enligt resultaträkningen (40000 kr) stämmer inte med konto 2099 (30000 kr), ${NOT_EXPLAINED}`,
+      `Jämförelseårets balansräkning balanserar inte: Summa tillgångar 253000 kr ≠ Summa eget kapital och skulder 243000 kr. ${AS_BOOKED}`,
+    ])
+  })
+
+  it('leaves the current year column untouched in every shape', () => {
+    const rows = [...withBalanserat(PREVIOUS.preClosing, 45_000), carriedIn(15_000)]
+    for (const previous of [NEVER_CLOSED, { full: rows, preClosing: rows }]) {
+      expect(currentColumn(mapTrialBalancesToK2(CURRENT, previous))).toEqual(currentColumn(closed))
+    }
+  })
+
+  it('rounds and smooths a derived result like a booked one', () => {
+    // Result 500,50 kr on two posts of ,25: 2099 would round to 501 and the
+    // income statement to 300 + 200. The derived post goes through the same
+    // smoothing, so both statements say 501 and the column ties at 1 001.
+    const rows = [
+      row('1930', 'Bank', 1_000.5, 0),
+      row('2081', 'Aktiekapital', 0, 500),
+      row('3010', 'Försäljning', 0, 300.25),
+      row('3990', 'Övriga intäkter', 0, 200.25),
+    ]
+    const res = mapTrialBalancesToK2(CURRENT, { full: rows, preClosing: rows })
+    expect(res.br['AretsResultatEgetKapital'].previous).toBe(501)
+    expect(res.totals.aretsResultat.previous).toBe(501)
+    expect(res.totals.tillgangar.previous).toBe(1_001)
+    expect(res.totals.egetKapitalSkulder.previous).toBe(1_001)
+    expect(res.warnings).toEqual([`${DERIVED.replace('40000', '501')} ${CHECK}`])
+  })
+
+  it('derives a prior year mapped on its own only when the caller says it is one', () => {
+    // The flerårsöversikt maps each earlier year without a comparison year.
+    const history = mapTrialBalancesToK2(NEVER_CLOSED, null, { currentIsPriorYear: true })
+    expect(history.br['AretsResultatEgetKapital'].current).toBe(40_000)
+    expect(history.totals.egetKapital.current).toBe(125_000)
+    expect(history.totals.tillgangar.current).toBe(253_000)
+    expect(history.totals.egetKapitalSkulder.current).toBe(253_000)
+    expect(history.totals.tillgangar.previous).toBeNull()
   })
 })

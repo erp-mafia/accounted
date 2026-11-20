@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { AlertTriangle } from 'lucide-react'
+import { StatusGlyph } from '@/components/ui/status-glyph'
 import { cn } from '@/lib/utils'
 import { getBranding } from '@/lib/branding/service'
 
@@ -60,16 +60,15 @@ export function RetentionNotice({ variant, className }: RetentionNoticeProps) {
   return (
     <div
       className={cn(
-        'rounded-lg border border-destructive/30 bg-destructive/5 p-4',
+        // Stil v3: no box inside a dialog; the red glyph and the title carry it.
+        'flex gap-2',
         className
       )}
     >
-      <div className="flex gap-3">
-        <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
-        <div className="space-y-1 text-sm">
-          <p className="font-medium text-destructive">{copy.title}</p>
-          <p className="text-muted-foreground">{copy.body}</p>
-        </div>
+      <StatusGlyph tone="error" size={16} className="mt-0.5" />
+      <div className="space-y-0.5 text-sm">
+        <p className="font-medium text-destructive">{copy.title}</p>
+        <p className="text-muted-foreground">{copy.body}</p>
       </div>
     </div>
   )

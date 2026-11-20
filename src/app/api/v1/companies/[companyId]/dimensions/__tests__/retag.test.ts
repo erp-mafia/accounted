@@ -3,7 +3,9 @@
  * retag of posted lines (operation dimensions.retag-lines over
  * lib/dimensions/retag-service.ts). Before it, retagging was dashboard and
  * MCP only. merge is the default: the pairs are set and each line keeps its
- * other dimensions; replace is explicit.
+ * other dimensions; replace is explicit. A line behind a period lock is left
+ * untagged and the answer says so: outcome partial, counted per reason, and
+ * the dry run names it before anything is written (crm#1908).
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,6 +26,7 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as retag } from '../retag/route'
+import { routeRpcCalls, isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -84,7 +87,20 @@ function post(body: Record<string, unknown>, query = ''): Request {
 }
 
 const REASON = 'Projektet saknades på fakturan'
-/** The lines' current bags, and the company's entries among their parents. */
+const OPEN_ENTRY = { id: 'entry-1', entry_date: '2026-03-01', fiscal_period_id: 'period-open' }
+const CLOSED_ENTRY = { id: 'entry-0', entry_date: '2025-12-20', fiscal_period_id: 'period-closed' }
+/** The lock state the retag reads: no company lock date, one open and one closed period. */
+const LOCKS = {
+  company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+  fiscal_periods: {
+    data: [
+      { id: 'period-open', is_closed: false, locked_at: null },
+      { id: 'period-closed', is_closed: true, locked_at: '2026-02-01T00:00:00Z' },
+    ],
+    error: null,
+  },
+}
+/** The lines' current bags, the company's entries among their parents, and the locks. */
 const LINES = {
   journal_entry_lines: {
     data: [
@@ -94,8 +110,22 @@ const LINES = {
     ],
     error: null,
   },
-  journal_entries: { data: [{ id: 'entry-1' }], error: null },
+  journal_entries: { data: [OPEN_ENTRY], error: null },
+  ...LOCKS,
 }
+/** LINE_1 in the closed year, LINE_2 in the open one. */
+const LINES_ACROSS_YEAR_END = {
+  journal_entry_lines: {
+    data: [
+      { id: LINE_1, journal_entry_id: CLOSED_ENTRY.id, dimensions: {} },
+      { id: LINE_2, journal_entry_id: OPEN_ENTRY.id, dimensions: {} },
+    ],
+    error: null,
+  },
+  journal_entries: { data: [CLOSED_ENTRY, OPEN_ENTRY], error: null },
+  ...LOCKS,
+}
+const PERIOD_CLOSED = 'Perioden är stängd: använd rättelseverifikat (storno) för att ändra dimensioner.'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -142,7 +172,7 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
       const res = await retag(post(body), params)
       expect(res.status, JSON.stringify(body)).toBe(400)
       expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
-      expect(client.calls.some((c) => c.table === 'journal_entry_lines' || c.table === 'rpc')).toBe(false)
+      expect(client.calls.some((c) => c.table === 'journal_entry_lines' || (c.table === 'rpc' && !isIdempotencyClaim(c)))).toBe(false)
     }
   })
 
@@ -160,13 +190,15 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toEqual({
+      outcome: 'partial',
       retagged: 2,
       unchanged: 0,
       failed_count: 1,
-      failed: [{ line_id: LINE_FOREIGN, error: 'Verifikationsraden hittades inte.' }],
+      failed_by_reason: [{ reason: 'line_not_found', lines: 1, message: 'Verifikationsraden hittades inte.' }],
+      failed: [{ line_id: LINE_FOREIGN, error: 'Verifikationsraden hittades inte.', reason: 'line_not_found' }],
       mode: 'merge',
     })
-    const rpcCalls = client.calls.filter((c) => c.table === 'rpc')
+    const rpcCalls = client.calls.filter((c) => c.table === 'rpc' && !isIdempotencyClaim(c))
     expect(rpcCalls.map((c) => c.method)).toEqual(['retag_line_dimensions', 'retag_line_dimensions'])
     expect(rpcCalls[0].args[0]).toEqual({
       p_company_id: COMPANY_ID,
@@ -178,22 +210,105 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
     expect(rpcCalls[1].args[0]).toMatchObject({ p_line_id: LINE_2, p_dimensions: { '6': 'P001' } })
   })
 
-  it('replace sends exactly the given bag and reads no line first', async () => {
-    const client = makeClient({ company_members: MEMBER, rpc: { data: { changed: true }, error: null } })
+  // crm#1313: an agent could tag a line but never take a tag off it.
+  it('an empty code removes that dimension and keeps the others (merge)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      journal_entry_lines: {
+        data: [{ id: LINE_1, journal_entry_id: 'entry-1', account_number: '1930', dimensions: { '1': 'KS01', '6': 'P001' } }],
+        error: null,
+      },
+      journal_entries: { data: [OPEN_ENTRY], error: null },
+      ...LOCKS,
+      account_dimension_rules: { data: [], error: null },
+      rpc: { data: { changed: true }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await retag(post({ line_ids: [LINE_1], dimensions: { '6': '' }, reason: REASON }), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ retagged: 1, failed_count: 0, mode: 'merge' })
+    expect(client.calls.find((c) => c.table === 'rpc' && !isIdempotencyClaim(c))?.args[0]).toMatchObject({
+      p_line_id: LINE_1,
+      p_dimensions: { '1': 'KS01' },
+    })
+  })
+
+  it('refuses to take off a dimension the line\'s account requires, without calling the RPC', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      journal_entry_lines: {
+        data: [{ id: LINE_1, journal_entry_id: 'entry-1', account_number: '4010', dimensions: { '6': 'P001' } }],
+        error: null,
+      },
+      journal_entries: { data: [OPEN_ENTRY], error: null },
+      ...LOCKS,
+      account_dimension_rules: {
+        data: [{ account_number: '4010', rule_type: 'required', dimensions: { sie_dim_no: 6, name: 'Projekt' }, dimension_values: null }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await retag(post({ line_ids: [LINE_1], dimensions: { '6': '' }, reason: REASON }), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('DIMENSION_RETAG_FAILED')
+    expect(body.error.details.failed).toEqual([
+      {
+        line_id: LINE_1,
+        error: 'Konto 4010 kräver Projekt: dimensionen kan inte tas bort från raden.',
+        reason: 'required_dimension',
+        entry_date: '2026-03-01',
+      },
+    ])
+    expect(client.calls.some((c) => c.table === 'rpc' && !isIdempotencyClaim(c))).toBe(false)
+  })
+
+  it('replace sends exactly the given bag: the line\'s own dimensions are not kept', async () => {
+    const client = makeClient({ company_members: MEMBER, ...LINES, rpc: { data: { changed: true }, error: null } })
     mockServiceClient.mockReturnValue(client)
     const res = await retag(
       post({ line_ids: [LINE_1], dimensions: { '6': 'P001' }, mode: 'replace', reason: REASON }),
       params,
     )
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toMatchObject({ retagged: 1, mode: 'replace' })
-    expect(client.calls.some((c) => c.table === 'journal_entry_lines')).toBe(false)
-    expect(client.calls.find((c) => c.table === 'rpc')?.args[0]).toMatchObject({ p_dimensions: { '6': 'P001' } })
+    expect((await res.json()).data).toMatchObject({ outcome: 'complete', retagged: 1, mode: 'replace' })
+    // LINE_1 carries kostnadsställe KS01: a replace leaves it out.
+    expect(client.calls.find((c) => c.table === 'rpc' && !isIdempotencyClaim(c))?.args[0]).toMatchObject({
+      p_line_id: LINE_1,
+      p_dimensions: { '6': 'P001' },
+    })
+  })
+
+  it('a line in a closed year is left untagged, the open year is tagged, and the 200 says partial (crm#1908)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      ...LINES_ACROSS_YEAR_END,
+      rpc: { data: { changed: true }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await retag(post({ line_ids: [LINE_1, LINE_2], dimensions: { '6': 'P001' }, reason: REASON }), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({
+      outcome: 'partial',
+      retagged: 1,
+      unchanged: 0,
+      failed_count: 1,
+      failed_by_reason: [
+        { reason: 'period_closed', lines: 1, message: PERIOD_CLOSED, date_from: '2025-12-20', date_to: '2025-12-20' },
+      ],
+      failed: [{ line_id: LINE_1, error: PERIOD_CLOSED, reason: 'period_closed', entry_date: '2025-12-20' }],
+      mode: 'merge',
+    })
+    // The line behind the lock never reaches the RPC.
+    const rpcCalls = client.calls.filter((c) => c.table === 'rpc' && !isIdempotencyClaim(c))
+    expect(rpcCalls.map((c) => (c.args[0] as { p_line_id: string }).p_line_id)).toEqual([LINE_2])
   })
 
   it('400 DIMENSION_RETAG_FAILED with every refusal when no line could be retagged', async () => {
     const client = makeClient({
       company_members: MEMBER,
+      ...LINES,
+      // Locked after the lock check: the RPC refuses.
       rpc: { data: null, error: { code: 'P0001', message: 'Perioden är låst: använd rättelseverifikat (storno) för att ändra dimensioner.' } },
     })
     mockServiceClient.mockReturnValue(client)
@@ -208,7 +323,10 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
     expect(body.error.details.failed[0]).toEqual({
       line_id: LINE_1,
       error: 'Perioden är låst: använd rättelseverifikat (storno) för att ändra dimensioner.',
+      reason: 'refused',
+      entry_date: '2026-03-01',
     })
+    expect(body.error.details.failed_by_reason).toMatchObject([{ reason: 'refused', lines: 2 }])
   })
 
   it('a dry run shows each line before and after and retags nothing', async () => {
@@ -224,9 +342,36 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
     expect(data.preview).toEqual({
       mode: 'merge',
       lines: [{ line_id: LINE_1, dimensions_before: { '1': 'KS01' }, dimensions_after: { '1': 'KS01', '6': 'P001' } }],
+      taggable_lines: 1,
       missing_line_ids: [LINE_FOREIGN],
+      refused_lines: [],
+      blocked_lines: [],
+      blocked_by_reason: [],
       unchanged_lines: 0,
     })
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
+  })
+
+  it('a dry run names the lines the commit will leave untagged, and why', async () => {
+    const client = makeClient({ company_members: MEMBER, ...LINES_ACROSS_YEAR_END })
+    mockServiceClient.mockReturnValue(client)
+    const res = await retag(
+      post({ line_ids: [LINE_1, LINE_2], dimensions: { '6': 'P001' }, reason: REASON }, '?dry_run=true'),
+      params,
+    )
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data.preview).toMatchObject({
+      taggable_lines: 1,
+      blocked_lines: [{ line_id: LINE_1, error: PERIOD_CLOSED, reason: 'period_closed', entry_date: '2025-12-20' }],
+      blocked_by_reason: [
+        { reason: 'period_closed', lines: 1, message: PERIOD_CLOSED, date_from: '2025-12-20', date_to: '2025-12-20' },
+      ],
+      lines: [
+        { line_id: LINE_1, dimensions_before: {}, dimensions_after: { '6': 'P001' }, blocked: 'period_closed' },
+        { line_id: LINE_2, dimensions_before: {}, dimensions_after: { '6': 'P001' } },
+      ],
+    })
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 })

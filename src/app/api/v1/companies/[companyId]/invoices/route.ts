@@ -29,10 +29,16 @@ import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
+import { scopeSatisfied } from '@/lib/auth/scope-catalog'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
+import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
+import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
+import { PAYMENT_REFERENCE_PITFALL, withPaymentReference } from '@/lib/invoices/payment-reference-fields'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
+import { effectiveInvoiceStatus, filterInvoicesByReportedStatus } from '@/lib/invoices/overdue'
 import {
   resolveSelfBilledSaleDraft,
   createSelfBilledSaleInvoice,
@@ -43,8 +49,9 @@ import { eventBus } from '@/lib/events'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
-} from '@/lib/invoices/invoice-register-coverage'
+} from '@/lib/reports/invoice-register-coverage'
 import type { Invoice, InvoiceDocumentType } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Map a self-billed-sale service failure onto the v1 invoice error envelope.
 function selfBilledFailureResponse(failure: SelfBilledSaleFailure, ctx: ApiV1Context) {
@@ -83,6 +90,12 @@ function selfBilledFailureResponse(failure: SelfBilledSaleFailure, ctx: ApiV1Con
       })
     case 'items_failed':
       return v1ErrorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctx.log, { ...base, details: { pg_code: failure.pgCode } })
+    case 'vat_breakdown_mismatch':
+      // The service works in fractions; the caller sent percent rates.
+      return v1ErrorResponseFromCode('VAT_BREAKDOWN_MISMATCH', ctx.log, {
+        ...base,
+        details: { ...failure.details, rate: Math.round(failure.details.rate * 100) },
+      })
   }
 }
 
@@ -94,6 +107,7 @@ const InvoiceStatus = z.enum([
   'overdue',
   'cancelled',
   'credited',
+  'written_off',
 ])
 
 const InvoiceDocumentType = z.enum(['invoice', 'proforma', 'delivery_note', 'quote'])
@@ -101,6 +115,10 @@ const InvoiceDocumentType = z.enum(['invoice', 'proforma', 'delivery_note', 'quo
 const InvoiceSummary = z.object({
   id: z.string().uuid(),
   invoice_number: z.string().nullable(),
+  // Self-billed sales (is_self_billed) carry the customer's number here;
+  // invoice_number stays null on them by design.
+  external_invoice_number: z.string().nullable(),
+  is_self_billed: z.boolean(),
   customer_id: z.string().uuid(),
   customer_name: z.string(),
   invoice_date: z.string(),
@@ -115,7 +133,17 @@ const InvoiceSummary = z.object({
   subtotal: z.number(),
   vat_amount: z.number(),
   total: z.number(),
+  // What the invoice asks for after öresavrundning and any ROT/RUT deduction
+  // (crm#1487); fixed once the invoice is issued.
+  amount_to_pay: z.number(),
+  ore_rounding_amount: z.number(),
   remaining_amount: z.number(),
+  // The reference the invoice asks the payer to quote, as its PDF prints it
+  // (crm#1886): ocr = the digits of invoice_number plus a Luhn check digit,
+  // invoice_number = the number as it is. Both null on a document that asks
+  // for no payment under a reference (lib/invoices/payment-reference-fields.ts).
+  payment_reference: z.string().nullable(),
+  payment_reference_type: z.enum(['ocr', 'invoice_number']).nullable(),
   paid_at: z.string().nullable(),
   created_at: z.string(),
 })
@@ -128,7 +156,7 @@ const ALLOWED_EXPAND = ['customer', 'items'] as const
 // fields not in the summary schema. Schema migrations adding columns must
 // update this list before the field becomes visible on the public API.
 const INVOICE_SUMMARY_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, status, document_type, valid_until, quote_status, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
+  'id, invoice_number, external_invoice_number, is_self_billed, customer_id, invoice_date, due_date, status, document_type, valid_until, quote_status, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
 
 // Customer projections: three tiers for different contexts:
 //   - NAME_ONLY: default for the invoice list (inline customer_name only)
@@ -151,7 +179,9 @@ const INVOICE_ITEM_COLUMNS =
 // arbitrary 3-8 char strings would pass through to the DB filter without
 // serving any documented purpose.
 const ListFilters = z.object({
-  status: InvoiceStatus.optional().describe('Only invoices in this status.'),
+  status: InvoiceStatus.optional().describe(
+    'Only invoices in this status. overdue = past due_date with remaining_amount > 0, partially_paid included.',
+  ),
   customer_id: z.string().uuid().optional().describe('Only invoices to this customer (id).'),
   document_type: InvoiceDocumentType.optional().describe(
     'Only this document type. Default: every type.',
@@ -200,12 +230,13 @@ registerEndpoint({
     'Fetching a single invoice you already know the id of: use GET /api/v1/companies/{companyId}/invoices/{id}. Supplier invoices are a different resource (supplier-invoices).',
   pitfalls: [
     'Draft invoices have invoice_number=null until they are sent.',
-    'remaining_amount is the unpaid portion (total − paid_amount); use status=paid or remaining_amount=0 to filter for closed invoices.',
+    PAYMENT_REFERENCE_PITFALL,
+    'remaining_amount is the unpaid portion (total − paid_amount); use status=paid or remaining_amount=0 to filter for closed invoices. Crediting an invoice sets its remaining_amount to 0: the credit note settles it.',
     'Credit notes appear with status=credited and a credited_invoice_id field on the detail endpoint.',
     'Ordering is by created_at (registration time), not invoice_date. Backdated invoices therefore appear where they were created, not where their date falls: filter on ?date_from / ?date_to when you care about the business date.',
     'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
     'Quotes (document_type=quote, offert) carry valid_until and quote_status (open | accepted | declined | expired). "expired" is derived: an open quote past valid_until; filter with ?quote_status=expired. Quotes never book and are never payable: convert an accepted quote to an invoice in the dashboard first.',
-    'The register only contains invoices created in Accounted. A company migrated or backfilled mid-year has real customer invoices that exist only as journal entries and are NOT in this list. Check meta.coverage: when has_pre_register_invoices is true, treat periods before covers_from as not answered by this endpoint (query journal entries instead).',
+    'The register holds invoices issued in Accounted and invoices registered from the books (already booked, linked to their verifikat). A company migrated or backfilled mid-year can still have customer invoices that exist only as journal entries and are NOT in this list. Check meta.coverage: when has_pre_register_invoices is true, treat periods before covers_from as not answered by this endpoint (query journal entries instead).',
   ],
   example: {
     response: {
@@ -223,7 +254,11 @@ registerEndpoint({
           subtotal: 10000,
           vat_amount: 2500,
           total: 12500,
+          amount_to_pay: 12500,
+          ore_rounding_amount: 0,
           remaining_amount: 12500,
+          payment_reference: '202600425',
+          payment_reference_type: 'ocr',
           paid_at: null,
           created_at: '2026-05-01T09:14:33Z',
         },
@@ -287,7 +322,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       ? `customer:customers(${CUSTOMER_LIST_CONTEXT_COLUMNS})`
       : `customer:customers(${CUSTOMER_NAME_ONLY_COLUMNS})`
     const itemsSelect = expand.has('items') ? `, items:invoice_items(${INVOICE_ITEM_COLUMNS})` : ''
-    const selectClause = `${INVOICE_SUMMARY_COLUMNS}, ${customerSelect}${itemsSelect}`
+    // credited_invoice_id is read by the overdue rule, and with ore_rounding
+    // and deduction_total by amount_to_pay; none of the three is returned.
+    const selectClause = `${INVOICE_SUMMARY_COLUMNS}, credited_invoice_id, ore_rounding, deduction_total, ${customerSelect}${itemsSelect}`
 
     // Sort by (created_at DESC, id ASC). created_at is the stable cursor
     // anchor: it's a real timestamp (passes ISO-8601 validation in
@@ -306,13 +343,17 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .order('id', { ascending: true })
       .limit(limit + 1)
 
-    if (filters.status) query = query.eq('status', filters.status)
+    // Overdue is derived from the due date and the open remainder
+    // (lib/invoices/overdue.ts), never the stored status: 'sent' and
+    // 'overdue' filter and report as the date says.
+    const today = todayIsoStockholm()
+    if (filters.status) query = filterInvoicesByReportedStatus(query, filters.status, today)
     if (filters.customer_id) query = query.eq('customer_id', filters.customer_id)
     if (filters.document_type) query = query.eq('document_type', filters.document_type)
     if (filters.quote_status) {
       query = query.eq('document_type', 'quote')
       if (filters.quote_status === 'expired') {
-        query = query.eq('quote_status', 'open').lt('valid_until', new Date().toISOString().split('T')[0])
+        query = query.eq('quote_status', 'open').lt('valid_until', todayIsoStockholm())
       } else {
         query = query.eq('quote_status', filters.quote_status)
       }
@@ -341,6 +382,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     type InvoiceRow = {
       id: string
       invoice_number: string | null
+      external_invoice_number: string | null
+      is_self_billed: boolean | null
       customer_id: string
       invoice_date: string
       due_date: string
@@ -357,10 +400,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       created_at: string
       customer: CustomerObj | CustomerObj[] | null
       items?: unknown
-    } & Record<string, unknown>
+    } & AmountToPayRow & Record<string, unknown>
 
     const rows = ((data ?? []) as unknown) as InvoiceRow[]
-    const trimmed = rows.slice(0, limit)
+    const priced = await withAmountToPay(ctx.supabase, ctx.companyId!, rows.slice(0, limit))
+    const trimmed = await withPaymentReference(ctx.supabase, ctx.companyId!, priced)
     const hasMore = rows.length > limit
 
     const pickCustomer = (c: InvoiceRow['customer']): CustomerObj | null => {
@@ -373,11 +417,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       const base = {
         id: r.id,
         invoice_number: r.invoice_number,
+        external_invoice_number: r.external_invoice_number ?? null,
+        is_self_billed: r.is_self_billed === true,
         customer_id: r.customer_id,
         customer_name: c?.name ?? '',
         invoice_date: r.invoice_date,
         due_date: r.due_date,
-        status: r.status,
+        status: effectiveInvoiceStatus(r, today) as z.infer<typeof InvoiceStatus>,
         document_type: r.document_type,
         valid_until: r.valid_until ?? null,
         quote_status: effectiveQuoteStatus(r),
@@ -385,7 +431,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         subtotal: r.subtotal,
         vat_amount: r.vat_amount,
         total: r.total,
+        amount_to_pay: r.amount_to_pay,
+        ore_rounding_amount: r.ore_rounding_amount,
         remaining_amount: r.remaining_amount,
+        payment_reference: r.payment_reference,
+        payment_reference_type: r.payment_reference_type,
         paid_at: r.paid_at,
         created_at: r.created_at,
       }
@@ -433,6 +483,8 @@ const INVOICE_ITEMS_RESPONSE_COLUMNS = INVOICE_ITEM_FULL_COLUMNS
 const InvoiceCreated = z.object({
   id: z.string().uuid(),
   invoice_number: z.string().nullable(),
+  external_invoice_number: z.string().nullable().optional(),
+  is_self_billed: z.boolean().optional(),
   customer_id: z.string().uuid(),
   invoice_date: z.string(),
   due_date: z.string(),
@@ -446,6 +498,11 @@ const InvoiceCreated = z.object({
   subtotal: z.number(),
   vat_amount: z.number(),
   total: z.number(),
+  // What the invoice asks for after öresavrundning and any ROT/RUT deduction,
+  // as GET /invoices/{id} returns it (crm#1487). A draft follows the company
+  // setting until it is issued.
+  amount_to_pay: z.number(),
+  ore_rounding_amount: z.number(),
   remaining_amount: z.number(),
   created_at: z.string(),
 })
@@ -456,7 +513,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices',
   summary: 'Create a draft invoice, proforma, or delivery note.',
   description:
-    'Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer\'s allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. An invoice can state its own VAT treatment (vat_treatment, delivery_country for goods shipped abroad: export ruta 36, intra-EU supply ruta 35) instead of the customer\'s, validated against the legal preconditions. Supports ROT/RUT deduction lines (items[].deduction_type = "rot"|"rut" with invoice-level deduction_personnummer + deduction_housing_designation, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt), article linkage (items[].article_id + optional revenue_account override from the artikelregister), and project/cost-centre tagging (default_dimensions / items[].dimensions). Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send). Set is_self_billed=true (with external_invoice_number + received_date) to instead register a received self-billing invoice (mottagen självfaktura, ML 17 kap 15§): a sale booked immediately with the counterparty\'s number, not a draft.',
+    'Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer\'s allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. An invoice can state its own VAT treatment (vat_treatment, delivery_country for goods shipped abroad: export ruta 36, intra-EU supply ruta 35; reverse_charge_domestic for construction services, ruta 41) instead of the customer\'s, validated against the legal preconditions. Supports skattereduktion lines (items[].deduction_type = "rot"|"rut"|"gron_teknik" with invoice-level deduction_personnummer + deduction_housing_designation, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt), article linkage (items[].article_id + optional revenue_account override from the artikelregister), and project/cost-centre tagging (default_dimensions / items[].dimensions). Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send). Set is_self_billed=true (with external_invoice_number + received_date) to instead register a received self-billing invoice (mottagen självfaktura, ML 17 kap 15§): a sale booked immediately with the counterparty\'s number, not a draft.',
   useWhen:
     'You need to issue a new invoice, proforma, or delivery note. Use dry-run first to confirm VAT calculations and currency conversion before committing.',
   doNotUseFor:
@@ -469,10 +526,12 @@ registerEndpoint({
     'document_type=\'delivery_note\' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type=\'invoice\'.',
     'document_type=\'quote\' (offert) requires valid_until (YYYY-MM-DD, the expiry; due_date mirrors it). A quote is numbered OF-nnn from its own series at create, starts as quote_status=\'open\', never posts a journal entry, never emits invoice.created and cannot be sent-and-booked or paid: record the customer decision with POST /invoices/{id}/quote-status and convert an accepted quote to an invoice in the dashboard.',
     'is_self_billed=true registers a self-billing invoice your CUSTOMER issued on your behalf (a sale for you). It is booked immediately (not a draft, no F-number), so external_invoice_number and received_date are required and it is NOT dry-run-free of side effects on the live call. Do NOT set it for a normal invoice you issue yourself.',
+    'A self-billed sale books VAT per rate as the customer\'s document does: on the summed base of each rate, or the figure in vat_breakdown (percent rates, [{ vat_rate: 25, vat_amount: 1967.2 }]) when it lies within half an öre per line of that; else 400 VAT_BREAKDOWN_MISMATCH. vat_breakdown without is_self_billed returns 400 VALIDATION_ERROR.',
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
     'ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.',
+    'Grön teknik: items[].deduction_type "gron_teknik" on the labor AND material lines of the installation, work_type INSTALLATION_SOLCELLER (15 %), INSTALLATION_LAGRING or INSTALLATION_LADDPUNKT (50 %) of the line total incl. VAT. Put labor and material on lines of their own (the invoice must show the cost of labor and of material); travel, freight, machinery, projektering and rented material stay on lines without a deduction. At a fixed price (totalentreprenad) Skatteverket counts labor and material as 97 % of the price: flag a line with 97 % of it and leave 3 % on an unflagged line. Selling material only gives no reduction. labor_hours (the hours actually worked, also at a fixed price) are required on at least one line per installation type, not on every line. Personnummer and housing info are required as for ROT. The yearly ceiling is 50 000 kr per person, separate from ROT/RUT (a warning, never an error). A grön teknik line cannot share an invoice with ROT/RUT lines (400 INVOICE_CREATE_ROT_RUT_VALIDATION). The payout is requested in Skatteverket\'s e-tjänst for grön teknik; no begäran file is generated for it yet.',
     'Articles: pass items[].article_id (from the artikelregister, GET /articles) to link a line to a catalog article; price/description are still taken from the request body (the API never auto-fills from the article: send the values you want on the invoice). items[].revenue_account is the legacy wire name for an optional BAS class 1-3 posting-account override and is validated against the chart of accounts.',
-    'Per-invoice VAT treatment (vat_treatment + delivery_country): the customer decides by default; an invoice can state its own supply instead. delivery_country is the ISO code of the country the GOODS are transported to, and setting it makes the invoice a supply of goods. vat_treatment export + delivery_country outside the EU (e.g. a Swedish buyer, goods shipped to NO) = export of goods: 0 %, revenue 3105, moms_ruta 36, notice "Omsättning utanför EU, ML 10 kap.". vat_treatment reverse_charge + delivery_country in another EU member state = intra-EU supply of goods: 0 %, revenue 3108, moms_ruta 35, periodisk sammanställning, notice citing Article 138 / ML 10 kap. 42 §; it needs the customer\'s vat_number to be its VIES-validated number from a member state other than Sweden (a Swedish buyer qualifies when its card carries its number from that state; its SE number does not, and a per-invoice buyer VAT number is not supported yet). vat_treatment standard = Swedish VAT at the line rates, always allowed (e.g. no export evidence, or a consumer in another member state under the distance-sales threshold). Without delivery_country, export / reverse_charge are the services treatments (3305 ruta 40 / 3308 ruta 39) and only accepted where the customer already gets them. delivery_country alone implies the treatment (SE = standard, EU = reverse_charge, elsewhere = export). Use XI for Northern Ireland. A goods treatment allows only 0 % on its priced lines (omit vat_rate); invoice a Swedish-VAT supply separately. Refusals are 400 INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_REQUIRED, _DELIVERY_COUNTRY_MISMATCH, _BUYER_VAT_NUMBER_REQUIRED (details.reason) and _NOT_VAT_REGISTERED: the invoice never gets 0 % without the facts. The dry run returns vat_treatment, moms_ruta, reverse_charge_text, vat_treatment_override and delivery_country: check them before sending. Domestic reverse charge (construction) is not available per invoice. Not accepted by POST /invoices/bulk-create.',
+    'Per-invoice VAT treatment (vat_treatment + delivery_country): the customer decides by default; an invoice can state its own supply instead. delivery_country is the ISO code of the country the GOODS are transported to, and setting it makes the invoice a supply of goods. vat_treatment export + delivery_country outside the EU (e.g. a Swedish buyer, goods shipped to NO) = export of goods: 0 %, revenue 3105, moms_ruta 36, notice "Omsättning utanför EU, ML 10 kap.". vat_treatment reverse_charge + delivery_country in another EU member state = intra-EU supply of goods: 0 %, revenue 3108, moms_ruta 35, periodisk sammanställning, notice citing Article 138 / ML 10 kap. 42 §; it needs the customer\'s vat_number to be its VIES-validated number from a member state other than Sweden (a Swedish buyer qualifies when its card carries its number from that state; its SE number does not, and a per-invoice buyer VAT number is not supported yet). vat_treatment standard = Swedish VAT at the line rates, always allowed (e.g. no export evidence, or a consumer in another member state under the distance-sales threshold). Without delivery_country, export / reverse_charge are the services treatments (3305 ruta 40 / 3308 ruta 39) and only accepted where the customer already gets them. delivery_country alone implies the treatment (SE = standard, EU = reverse_charge, elsewhere = export). Use XI for Northern Ireland. A goods treatment allows only 0 % on its priced lines (omit vat_rate); invoice a Swedish-VAT supply separately. Refusals are 400 INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_REQUIRED, _DELIVERY_COUNTRY_MISMATCH, _BUYER_VAT_NUMBER_REQUIRED (details.reason) and _NOT_VAT_REGISTERED: the invoice never gets 0 % without the facts. The dry run returns vat_treatment, moms_ruta, reverse_charge_text, vat_treatment_override and delivery_country: check them before sending. vat_treatment reverse_charge_domestic = omvänd betalningsskyldighet for construction services (ML 16 kap. 13 §: the buyer is a construction business and the supply a construction service, which only the seller can state): 0 %, revenue 3231, moms_ruta 41, notice "Omvänd betalningsskyldighet, byggtjänster, ML 16 kap. 13 §", the buyer\'s VAT number printed. It needs customer_type swedish_business and a Swedish vat_number (SE + 12 digits) on the customer, takes no delivery_country and allows only 0 % lines; refusals are 400 INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED (details.reason: private_person, not_swedish_business, missing, not_swedish_vat_number) and _DELIVERY_COUNTRY_MISMATCH.',
     'EU customers: reverse charge (0 %, ruta 39) needs customer_type eu_business, a VIES-validated vat_number and a country other than SE. When any of those is missing the invoice is created WITH Swedish VAT and the 201 carries meta.warnings (codes EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, each with a remediation). A Swedish rate set explicitly on a line to a validated EU or non-EU business is accepted (taxed-where-performed supplies) but flagged as SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER / SWEDISH_VAT_TO_EXPORT_CUSTOMER. Warnings never fail the request; read them before sending. Dry-run returns the same list.',
   ],
   example: {
@@ -497,12 +556,17 @@ registerEndpoint({
         subtotal: 10000,
         vat_amount: 2500,
         total: 12500,
+        amount_to_pay: 12500,
+        ore_rounding_amount: 0,
         remaining_amount: 12500,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'invoices:write',
+  // A draft (or an open quote) books nothing: invoices:draft, which
+  // invoices:write includes. A self-billed sale books at once and needs
+  // invoices:write (checked in the handler).
+  scope: 'invoices:draft',
   risk: 'medium',
   idempotent: true,
   reversible: true,
@@ -533,11 +597,34 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const input = parsed.data
 
+    // vat_breakdown is the VAT a received document states: an invoice we
+    // issue computes its own VAT per line (computeLineVat).
+    if (input.vat_breakdown && !input.is_self_billed) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: [{ field: 'vat_breakdown', message: 'vat_breakdown is only accepted with is_self_billed: true.' }],
+        },
+      })
+    }
+
     // Self-billing (mottagen självfaktura, ML 17 kap 15§): the customer issued
     // the invoice on our behalf, so for our books it is a SALE booked
     // immediately (never a draft). Optional flag; delegated to the shared
     // self-billed-sale service so this and the internal dashboard route agree.
     if (input.is_self_billed) {
+      // Booked at once, never a draft: a key holding only invoices:draft is
+      // refused before anything is read (crm#1548).
+      if (!scopeSatisfied(ctx.scopes, 'invoices:write')) {
+        return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            required_scope: 'invoices:write',
+            granted_scopes: ctx.scopes,
+            message: 'A self-billed sale is booked at once, not drafted: it needs invoices:write.',
+          },
+        })
+      }
       if (!input.external_invoice_number || !input.received_date) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
           requestId: ctx.requestId,
@@ -570,6 +657,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           unit_price: it.unit_price,
           vat_rate: it.vat_rate,
         })),
+        vat_breakdown: input.vat_breakdown ?? null,
       }
 
       if (ctx.dryRun) {
@@ -627,7 +715,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // so dropping a column from this string no longer compiles.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('id, customer_type, vat_number, vat_number_validated, country')
+      .select('id, customer_type, vat_number, vat_number_validated, country, invoice_reference, invoice_marking')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -657,7 +745,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // an omitted key, so the choice is visible and type-checked.
       customer: { ...customer, personal_number: null },
       documentType,
-      input,
+      // Er referens and Märkning: the request's, else the customer card's
+      // Fakturareferens (crm#1200) and Märkning (crm#1477).
+      input: {
+        ...input,
+        your_reference: yourReferenceForNewInvoice(input.your_reference, customer) ?? undefined,
+        invoice_marking: invoiceMarkingForNewInvoice(input.invoice_marking, customer) ?? undefined,
+      },
     })
     if (!build.ok) {
       if ('dbError' in build) {
@@ -721,10 +815,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // on failure to preserve sequence integrity per ML 17 kap 24§).
     let invoiceNumber: string | null = null
     if (documentType === 'delivery_note') {
-      const { data: dnNumber } = await ctx.supabase.rpc('generate_delivery_note_number', {
+      const { data: dnNumber, error: dnNumberError } = await ctx.supabase.rpc('generate_delivery_note_number', {
         p_company_id: ctx.companyId!,
       })
-      invoiceNumber = dnNumber as string | null
+      if (dnNumberError || !dnNumber) {
+        ctx.log.error('delivery note number allocation failed', dnNumberError ?? new Error('no number'))
+        return v1ErrorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
+      invoiceNumber = dnNumber as string
     } else if (documentType === 'quote') {
       // Quotes are numbered at insert from their own OF-series (never the
       // F-series): see generate_quote_number.
@@ -849,7 +949,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // meta.warnings: why an EU customer got Swedish VAT, or a Swedish rate on
     // a reverse-charge invoice (#2749, #2558). Non-blocking; absent when clean.
-    return created(complete ?? invoice, { requestId: ctx.requestId, warnings: build.warnings })
+    const [response] = await withAmountToPay(ctx.supabase, ctx.companyId!, [
+      (complete ?? invoice) as unknown as AmountToPayRow,
+    ])
+    return created(response, { requestId: ctx.requestId, warnings: build.warnings })
   },
   { requireIdempotencyKey: true },
 )

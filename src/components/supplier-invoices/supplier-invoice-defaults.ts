@@ -1,9 +1,12 @@
 import type { CompanySettings, EntityType } from '@/types'
 import { isEntityType } from '@/lib/company/entity-type'
+import { invoiceBookingMoment, type InvoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
 
 export interface SupplierInvoiceDefaults {
   entityType: EntityType
   accountingMethod: 'accrual' | 'cash'
+  /** When the registration verifikat is posted: decides what the review dialog previews. */
+  bookingMoment: InvoiceBookingMoment
   /** Supplier rounding is selected per invoice from the source document. */
   oreRounding: boolean
   /** UI gate for kostnadsställe/projekt affordances (same as JournalEntryForm). */
@@ -35,6 +38,7 @@ export function deriveSupplierInvoiceDefaults(
   return {
     entityType,
     accountingMethod: settings?.accounting_method === 'cash' ? 'cash' : 'accrual',
+    bookingMoment: invoiceBookingMoment(settings),
     // A company preference does not establish the supplier's billed amount.
     oreRounding: false,
     dimensionsEnabled: settings?.dimensions_enabled === true,

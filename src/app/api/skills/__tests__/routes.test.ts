@@ -4,7 +4,8 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
-vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
+const serviceClient = vi.hoisted(() => ({ service: 'role' }))
+vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(), createServiceClient: vi.fn(() => serviceClient) }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn().mockResolvedValue('company-a') }))
@@ -62,11 +63,20 @@ describe('skills HTTP routes', () => {
     expect(result.status).toBe(200)
     expect(result.headers.get('Cache-Control')).toContain('no-store')
     expect(JSON.stringify(await result.json())).not.toContain('Private secret')
-    expect(loadSkillCatalog).toHaveBeenCalledWith(supabase, 'company-a')
+    expect(loadSkillCatalog).toHaveBeenCalledWith(supabase, 'company-a', { creators: serviceClient })
+  })
+  it('lists who saved an own item, read through the service-role client', async () => {
+    vi.mocked(loadSkillCatalog).mockResolvedValue([{ slug: `own/${id}`, body: 'B', name: 'Own', createdBy: { name: 'Anna Andersson', deleted: false } }] as never)
+    const result = await GET(request('GET'), staticParams)
+    expect(result.status).toBe(200)
+    expect((await result.json()).data[0].createdBy).toEqual({ name: 'Anna Andersson', deleted: false })
+    // The RLS client reads the rows; only the profiles read goes through the service role.
+    expect(vi.mocked(loadSkillCatalog).mock.calls[0]?.[0]).toBe(supabase)
+    expect(vi.mocked(loadSkillCatalog).mock.calls[0]?.[2]).toEqual({ creators: serviceClient })
   })
   it('returns 404 for a private slug outside the active catalog', async () => {
     expect((await GET(request('GET', undefined, '?slug=own/other'), staticParams)).status).toBe(404)
-    expect(loadCatalogSkill).toHaveBeenCalledWith(supabase, 'company-a', 'own/other', true)
+    expect(loadCatalogSkill).toHaveBeenCalledWith(supabase, 'company-a', 'own/other', true, { creators: serviceClient })
   })
   it('rejects unknown query parameters', async () => {
     expect((await GET(request('GET', undefined, '?company_id=other'), staticParams)).status).toBe(400)

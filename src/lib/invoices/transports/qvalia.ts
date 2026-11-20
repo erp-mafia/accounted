@@ -32,12 +32,15 @@
  * - Webhooks: since September Qvalia signs deliveries with HMAC-SHA256
  *   (`X-Qvalia-Signature: t=<unix>,v1=<hex>` over `<t>.<raw body>`, plus
  *   `X-Qvalia-Event-Id`; the signing secret is returned once by the first
- *   `PUT .../webhook/configure`). The payload carries `eventId`, which is the
- *   documented dedupe key, and `occurredAt` for ordering. This adapter
- *   predates that: it still authenticates on the outbound auth header the
- *   partner configures (shared secret) and dedupes on eventType +
- *   globalTransactionId + status.status. Moving to signature verification is
- *   a follow-up.
+ *   `PUT .../webhook/configure`). With QVALIA_WEBHOOK_SIGNING_SECRET set,
+ *   verifyWebhook requires that signature (raw body bytes, timing-safe,
+ *   5-minute window on the signed `t`) and ignores the shared-secret header;
+ *   without it the adapter falls back to the outbound auth header the partner
+ *   configures (shared secret, QVALIA_WEBHOOK_SECRET), which is what it did
+ *   before Qvalia signed anything. Dedupe is unchanged: eventType +
+ *   globalTransactionId + status.status, the key the status poll also writes,
+ *   so a webhook and a poll for the same transition stay one event. The
+ *   payload's `eventId` (Qvalia's dedupe key) is not used for that reason.
  * - Webhook delivery is NOT retried by Qvalia: a non-2xx answer, a timeout
  *   (10 s) or an unreachable endpoint loses the event for good, so webhooks
  *   can never be the only source of truth. `pollDeliveryStatus` is the safety
@@ -58,6 +61,8 @@
 
 import { timingSafeEqual } from 'node:crypto'
 import { sha256Hex } from '@/lib/invoices/peppol-delivery'
+import { verifySignatureHeader } from '@/lib/webhooks/signing'
+import { brandError, isBrandedInstance } from '@/lib/errors/brand'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
@@ -81,10 +86,16 @@ import {
   type PeppolVerifiedEvent,
   type PeppolWebhookRequest,
 } from '@/lib/invoices/peppol-transport'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('peppol/qvalia')
 
 export const QVALIA_PROVIDER = 'qvalia'
 export const QVALIA_PRODUCTION_BASE_URL = 'https://api.qvalia.com'
 export const QVALIA_DEFAULT_WEBHOOK_HEADER = 'x-accounted-webhook-key'
+export const QVALIA_SIGNATURE_HEADER = 'x-qvalia-signature'
+/** Qvalia's recommended replay window for the signed timestamp. */
+export const QVALIA_SIGNATURE_TOLERANCE_SECONDS = 300
 
 export type QvaliaAuthScheme = 'apikey' | 'raw'
 
@@ -100,10 +111,20 @@ export interface QvaliaConfig {
   accountRegNo: string
   baseUrl: string
   authScheme: QvaliaAuthScheme
-  /** Shared secret Qvalia sends back on every webhook delivery. */
+  /**
+   * Shared secret Qvalia sends back in `webhookHeader` on every webhook
+   * delivery. The legacy authentication, used only while
+   * `webhookSigningSecret` is unset.
+   */
   webhookSecret: string | null
   /** Header name carrying the shared secret (compared case-insensitively). */
   webhookHeader: string
+  /**
+   * HMAC-SHA256 signing secret Qvalia returned once from the first
+   * `PUT .../webhook/configure`. When set, every webhook must carry a valid
+   * `X-Qvalia-Signature` and the shared-secret header is not consulted.
+   */
+  webhookSigningSecret?: string | null
 }
 
 export interface QvaliaTransportDeps {
@@ -136,6 +157,7 @@ export function readQvaliaConfigFromEnv(
     authScheme,
     webhookSecret: env.QVALIA_WEBHOOK_SECRET?.trim() || null,
     webhookHeader: (env.QVALIA_WEBHOOK_HEADER?.trim() || QVALIA_DEFAULT_WEBHOOK_HEADER).toLowerCase(),
+    webhookSigningSecret: env.QVALIA_WEBHOOK_SIGNING_SECRET?.trim() || null,
   }
 }
 
@@ -155,7 +177,13 @@ export type QvaliaErrorKind =
  * `shape` (an answer this adapter cannot read, code
  * PEPPOL_UPSTREAM_SHAPE_CODE) is permanent until the adapter learns the
  * shape, everything else is operational.
+ *
+ * Branded like its parent (lib/errors/brand.ts): lib/init registers this
+ * adapter, so the class a caller holds may be another copy than the one that
+ * threw.
  */
+const QVALIA_API_ERROR = 'accounted.peppol.qvaliaApiError'
+
 export class QvaliaApiError extends PeppolTransportError {
   readonly kind: QvaliaErrorKind
   readonly httpStatus: number | null
@@ -174,6 +202,11 @@ export class QvaliaApiError extends PeppolTransportError {
     this.name = 'QvaliaApiError'
     this.kind = kind
     this.httpStatus = options.httpStatus ?? null
+    brandError(this, QVALIA_API_ERROR)
+  }
+
+  static [Symbol.hasInstance](value: unknown): value is QvaliaApiError {
+    return isBrandedInstance(this, QvaliaApiError, QVALIA_API_ERROR, value)
   }
 }
 
@@ -315,7 +348,9 @@ function firstRecord(value: unknown): Record<string, unknown> | null {
 function extractIntegrationId(message: unknown): string | null {
   const record = asRecord(message)
   if (!record) return null
-  return asString(record.integrationId) ?? asString(asRecord(record.Invoice)?.integrationId)
+  return asString(record.integrationId)
+    ?? asString(asRecord(record.Invoice)?.integrationId)
+    ?? asString(asRecord(record.CreditNote)?.integrationId)
 }
 
 function participantsEqual(a: PeppolParticipant, b: PeppolParticipant): boolean {
@@ -532,6 +567,23 @@ function capabilityFromDocType(value: string): PeppolRecipientCapability {
   }
 }
 
+/**
+ * How long a read from Qvalia (lookup, status, evidence, inbound XML) or an
+ * idempotent registration write may take, body included. There was no limit,
+ * so a call that hung held its cron until the platform killed the function.
+ * 20 s is what the connector service allows the same calls
+ * (transports/connector.ts). Two calls get no such limit: the send (see
+ * submit) and the inbound listing that marks its page read (see
+ * listInboundDocuments).
+ */
+const QVALIA_REQUEST_TIMEOUT_MS = 20_000
+/**
+ * The inbound listing with includeRead answers up to a page of whole
+ * documents, embedded attachments included, but marks nothing read: it gets
+ * longer than a read, and giving it up loses nothing.
+ */
+const QVALIA_INBOUND_RELIST_TIMEOUT_MS = 60_000
+
 export function createQvaliaTransport(
   config: QvaliaConfig,
   deps: QvaliaTransportDeps = {},
@@ -546,13 +598,20 @@ export function createQvaliaTransport(
   // adapter makes (PeppolTransport.tenantId).
   const tenantId = config.accountRegNo
 
+  /**
+   * One call to Qvalia. `timeoutMs` is QVALIA_REQUEST_TIMEOUT_MS unless the
+   * call names another limit, or null for none: then the call runs until it
+   * answers or the caller's function is stopped, as every call did before
+   * there were limits.
+   */
   async function request(
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     url: string,
-    init: { headers?: Record<string, string>; body?: string } = {},
+    init: { headers?: Record<string, string>; body?: string; timeoutMs?: number | null } = {},
   ): Promise<Response> {
+    const timeoutMs = init.timeoutMs === undefined ? QVALIA_REQUEST_TIMEOUT_MS : init.timeoutMs
     try {
-      return await fetchImpl(url, {
+      const response = await fetchImpl(url, {
         method,
         headers: {
           Authorization: authorizationHeader(config),
@@ -561,6 +620,17 @@ export function createQvaliaTransport(
         },
         body: init.body,
         cache: 'no-store',
+        ...(timeoutMs === null ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
+      })
+      if (timeoutMs === null) return response
+      // The body is read inside the timeout (the connector transport does the
+      // same): headers that arrive before a body that stalls must not hold
+      // the caller, and a body that fails is a network failure like any other.
+      const body = await response.arrayBuffer()
+      return new Response(body.byteLength > 0 ? body : null, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
       })
     } catch (error) {
       throw new QvaliaApiError('network', 'Could not reach Qvalia', { cause: error })
@@ -654,9 +724,15 @@ export function createQvaliaTransport(
     // by adopting an earlier integrationId: that is the failed submission
     // the resend replaces, already recorded on another delivery.
     const overwrite = submission.replacesSubmissionId ? '?overwrite=true' : ''
+    // No time limit of our own on the send. Given up after Qvalia took the
+    // document, the delivery would read as a retryable failure, and a resend
+    // (with ?overwrite=true, which never answers 409) would go out under a new
+    // integrationId: a second e-invoice to the customer. The send route's own
+    // limit bounds the call, as it always did.
     const response = await request('POST', `${transactionBase}/invoices/outgoing${overwrite}`, {
       headers: { 'content-type': 'application/xml' },
       body: submission.document,
+      timeoutMs: null,
     })
     const { text, json } = await readBody(response)
 
@@ -696,10 +772,32 @@ export function createQvaliaTransport(
     return a.length === b.length && timingSafeEqual(a, b)
   }
 
+  /**
+   * ADA CASA 7.2: HMAC-SHA256 over `<t>.<raw body bytes>`, compared
+   * timing-safe, with the signed `t` inside a 5-minute window. Replays inside
+   * the window are absorbed by the event dedupe key.
+   */
+  function webhookSignatureValid(webhook: PeppolWebhookRequest, signingSecret: string): void {
+    const check = verifySignatureHeader({
+      header: webhook.headers.get(QVALIA_SIGNATURE_HEADER),
+      rawBody: webhook.rawBody,
+      secret: signingSecret,
+      toleranceSeconds: QVALIA_SIGNATURE_TOLERANCE_SECONDS,
+      nowSeconds: Math.floor(now().getTime() / 1000),
+    })
+    if (!check.ok) {
+      throw new QvaliaApiError('auth', `Qvalia webhook signature rejected: ${check.reason}`)
+    }
+  }
+
   async function verifyWebhook(webhook: PeppolWebhookRequest): Promise<PeppolVerifiedEvent[]> {
-    if (!webhookAuthorized(webhook.headers)) {
+    const signingSecret = config.webhookSigningSecret ?? null
+    if (signingSecret) {
+      webhookSignatureValid(webhook, signingSecret)
+    } else if (!webhookAuthorized(webhook.headers)) {
       throw new QvaliaApiError('auth', 'Qvalia webhook secret missing or mismatched')
     }
+    const verificationMethod = signingSecret ? 'hmac_sha256_signature' : 'shared_secret_header'
 
     let parsed: unknown
     try {
@@ -740,7 +838,7 @@ export function createQvaliaTransport(
         occurredAt,
         rawPayload: payload as unknown as Record<string, unknown>,
         eventSha256: payloads.length === 1 ? eventSha256 : sha256Hex(`${eventSha256}:${index}`),
-        verificationMethod: 'shared_secret_header',
+        verificationMethod,
       })
     }
 
@@ -838,7 +936,15 @@ export function createQvaliaTransport(
     const url = options.includeRead
       ? `${transactionBase}/${collection}/incoming?includeRead=true&limit=${limit}`
       : `${transactionBase}/${collection}/incoming/${read}?limit=${limit}`
-    const response = await request('GET', url)
+    // The read endpoint marks the page read when it answers, whether or not
+    // the answer reaches us: given up early, the page is handed over and never
+    // received. It runs for as long as the caller says it can wait (timeoutMs),
+    // and without a limit when the caller does not say. The includeRead
+    // listing marks nothing, so it has a limit of its own.
+    const timeoutMs = options.includeRead
+      ? Math.min(options.timeoutMs ?? QVALIA_INBOUND_RELIST_TIMEOUT_MS, QVALIA_INBOUND_RELIST_TIMEOUT_MS)
+      : options.timeoutMs ?? null
+    const response = await request('GET', url, { timeoutMs })
     if (response.status === 204) return []
     const { text, json } = await readBody(response)
     if (!response.ok) throw classifyHttpFailure(response.status, json, text)
@@ -848,7 +954,15 @@ export function createQvaliaTransport(
     for (const item of items) {
       const record = asRecord(item)
       const integrationId = extractIntegrationId(record)
-      if (!record || !integrationId) continue
+      if (!record || !integrationId) {
+        // The read endpoint has already marked it read: skipped silently, it was gone for good.
+        log.error('Qvalia listed an inbound document without an integrationId; it is not archived', {
+          documentType: options.documentType,
+          markedRead: !options.includeRead,
+          keys: record ? Object.keys(record).slice(0, 20) : null,
+        })
+        continue
+      }
       messages.push({
         provider: QVALIA_PROVIDER,
         providerDocumentId: integrationId,
@@ -925,6 +1039,8 @@ export function createQvaliaTransport(
     registerRecipient,
     unregisterRecipient,
     listInboundDocuments,
+    // readinvoices / readcreditnotes mark every listed document read.
+    inboundListingConsumes: true,
     fetchInboundDocumentXml,
     pollDeliveryStatus,
   }

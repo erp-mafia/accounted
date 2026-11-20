@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
+import {
+  loadBuildingTaxAdjustment,
+  loadTaxAdjustmentSnapshot,
+  MEMBERSHIP_FEE_ACCOUNT,
+} from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
@@ -22,7 +26,10 @@ import {
   INK2R_SIGN_TWINS,
 } from './types'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
+import { computePeriodiseringsfondSchablonintakt } from './schablonintakt'
 
+import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
+import { companyIdentityFrom } from '@/lib/company/org-number'
 // Re-exported so existing importers (ne-engine, tests) keep their paths.
 export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
 
@@ -30,7 +37,12 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  * INK2 Declaration Engine
  *
  * Generates INK2 (huvudblankett), INK2R (räkenskapsschema), and INK2S
- * (skattemässiga justeringar) for aktiebolag tax reporting.
+ * (skattemässiga justeringar) for the juridiska personer that file INK2:
+ * aktiebolag and ekonomiska föreningar (usesInk2 in lib/company/entity-type).
+ * Association-specific INK2S items (tax-exempt membership fees on 4.5c and
+ * the matching non-deductible administration cost on 4.3c, Skatteverket
+ * "Deklarera för en ekonomisk förening") are entered through the generic
+ * manual adjustments until dedicated tagging ships.
  *
  * Account mappings follow the official BAS-to-SRU mapping from
  * bas.se/kontoplaner/sru/ and Skatteverket field code spec.
@@ -38,7 +50,8 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  * INK2R contains the full balance sheet + income statement.
  * INK2S auto-derives basic fields (result + tax → taxable result), as well as
  * periodiseringsfond and överavskrivningar when those have been posted via the
- * bokslut-dispositions calculators in lib/bokslut/.
+ * bokslut-dispositions calculators in lib/bokslut/, and the schablonintäkt on
+ * the opening periodiseringsfonder (4.6a) for räkenskapsår of whole months.
  *
  * Balances come from generateTrialBalance, never from a raw journal scan, and
  * the two sides of INK2R read DIFFERENT views of the same period:
@@ -238,31 +251,25 @@ export async function generateINK2Declaration(
     .eq('company_id', companyId)
     .single()
 
-  // Resolve entity_type: prefer company_settings, fall back to companies table (NOT NULL, always reliable)
-  let entityType = settings?.entity_type
-  if (!entityType) {
-    const { data: company, error: companyError } = await supabase
-      .from('companies')
-      .select('entity_type')
-      .eq('id', companyId)
-      .single()
-    if (companyError) throw new Error(`Failed to resolve entity type: ${companyError.message}`)
-    entityType = company?.entity_type
-  }
+  const { orgNumber, entityType } = await companyIdentityFrom(supabase, companyId, settings)
 
-  if (entityType !== 'aktiebolag') {
-    throw new Error('INK2 declaration is only for aktiebolag (limited company)')
+  if (!isEntityType(entityType) || !usesInk2(entityType)) {
+    throw new Error(
+      'INK2 declaration is only for aktiebolag and ekonomisk förening (juridiska personer taxed under IL 65 kap. 10 §)',
+    )
   }
 
   // The balance sheet reads the closed books, the income statement the
   // pre-closing books. See the module docblock for why the two differ.
-  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance] =
+  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, buildingTax] =
     await Promise.all([
-      loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+      loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, entityType),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
         closingEntry: 'exclude-final',
       }),
+      // INK2S 4.9: buildings, markanläggningar and mark on their tax plan.
+      loadBuildingTaxAdjustment(supabase, companyId, period as FiscalPeriod),
     ])
 
   const balanceSheetBalances = toSignedBalances(closedTrialBalance.rows)
@@ -449,9 +456,23 @@ export async function generateINK2Declaration(
   // in full (IL 40 kap. 2 §); whatever the result cannot absorb becomes this
   // year's underskott on 4.16 and rolls forward again.
   const deficitCarryforward = Math.trunc(taxAdjustments.deficitCarryforward ?? 0)
+  // 4.9: the book depreciation and write-downs on fast egendom added back,
+  // the tax plan's deduction taken (IL 19-20 kap.), filed net.
+  const buildingAdjustment = Math.trunc(buildingTax.net)
+  // 4.6a: schablonintäkt on the periodiseringsfonder held at the start of the
+  // year (IL 30 kap. 6 a §). Never booked, so it is read off the opening
+  // balances; left at 0 with a warning when it cannot be settled (see
+  // ./schablonintakt).
+  const schablonintakt = computePeriodiseringsfondSchablonintakt(
+    closedTrialBalance.rows,
+    period.period_start as string,
+    period.period_end as string,
+  )
   const taxableResult =
     aretsResultat + taxAmount
     + nonDeductibleExpenses - nonTaxableIncome
+    + schablonintakt.amount
+    + buildingAdjustment
     - deficitCarryforward
 
   const ink2: INK2Rutor = {
@@ -470,9 +491,42 @@ export async function generateINK2Declaration(
     '7651': taxAmount, // Skatt (ej avdragsgill)
     '7653': nonDeductibleExpenses,
     '7754': nonTaxableIncome,
+    '7654': schablonintakt.amount,
+    '7666': buildingAdjustment > 0 ? buildingAdjustment : 0,
+    '7765': buildingAdjustment < 0 ? -buildingAdjustment : 0,
     '7763': deficitCarryforward,
     '7670': taxableResult >= 0 ? taxableResult : 0,
     '7770': taxableResult < 0 ? Math.abs(taxableResult) : 0,
+  }
+
+  // An ekonomisk förening that deducts its membership fees (4.5c) must also
+  // add back the administration cost those fees cover (4.3c); the ledger
+  // cannot split that cost out, so it stays a manual figure.
+  const adjustmentItems = taxAdjustments.items ?? []
+  const membershipFees = adjustmentItems.find(
+    (item) => item.sourceKey === `account:${MEMBERSHIP_FEE_ACCOUNT}` && item.included && item.amount > 0,
+  )
+  const manualNonDeductible = adjustmentItems.find(
+    (item) => item.sourceKey === 'manual:non_deductible_expenses',
+  )
+  if (membershipFees && !(manualNonDeductible && manualNonDeductible.amount > 0)) {
+    warnings.push(
+      `Medlemsavgifter ${Math.trunc(membershipFees.amount)} kr har tagits upp som ej skattepliktiga (INK2S 4.5c). De administrationskostnader som avgifterna täcker är inte avdragsgilla och ska anges som ytterligare ej avdragsgilla kostnader (INK2S 4.3c) i bokslutets skattemässiga justeringar.`,
+    )
+  }
+
+  warnings.push(...schablonintakt.warnings)
+  warnings.push(...buildingTax.warnings)
+
+  // The underskottsregister's spärrar are netted into the 4.14 a deducted
+  // above: the taxable result is right, but Skatteverket's form takes the
+  // whole deficit on 4.14 a with the reductions on 4.14 b and 4.14 c (4.14 c
+  // also on 1.2), which this form does not carry yet.
+  const lossRegisterRow = taxAdjustments.lossRegister?.overridden ? null : taxAdjustments.lossRegister?.row
+  if (lossRegisterRow && (lossRegisterRow.amountBlockReduction > 0 || lossRegisterRow.groupBlockReduction > 0)) {
+    warnings.push(
+      `Underskottsregistret har spärrade belopp, så punkt 4.14 a visar underskottet netto (${deficitCarryforward} kr). I deklarationen ska 4.14 a vara ${Math.trunc(lossRegisterRow.broughtForward)} kr, 4.14 b ${Math.trunc(lossRegisterRow.amountBlockReduction)} kr och 4.14 c ${Math.trunc(lossRegisterRow.groupBlockReduction)} kr (4.14 c även i punkt 1.2). Ange dem i Skatteverkets e-tjänst.`,
+    )
   }
 
   // Add warnings
@@ -535,7 +589,8 @@ export async function generateINK2Declaration(
     },
     companyInfo: {
       companyName: settings?.company_name || 'Okänt företag',
-      orgNumber: settings?.org_number || null,
+      orgNumber,
+      entityType,
       addressLine1: settings?.address_line1 || null,
       postalCode: settings?.postal_code || null,
       city: settings?.city || null,

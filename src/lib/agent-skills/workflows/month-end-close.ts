@@ -76,7 +76,7 @@ The lock date is one date that covers everything before it. You cannot lock June
 2. Pending operations dated in the month from Step 0: remind the user they still need approval.
 3. Load \`bookkeep\` and work the rows in batches. Sort each row into one of four piles:
    - **Bookable now**: facts and underlag are clear. Book via \`bookkeep\`.
-   - **Not a business event** (duplicate, PSD2 ghost row, a transfer that never executed): \`gnubok_ignore_transaction({ transaction_id, dry_run: true })\`, then without \`dry_run\`. Say why for each.
+   - **Not a business event** (duplicate, PSD2 ghost row, a transfer that never executed; on the skattekonto a row from before the firm existed): \`gnubok_ignore_transaction({ transaction_id, dry_run: true })\` (a skattekonto row's \`item_id\` goes in \`transaction_id\`), then without \`dry_run\`. Say why for each.
    - **Private** (enskild firma only): an eget uttag, booked through \`bookkeep\` with category \`private\`. In an aktiebolag there is no "private": a private purchase on the company account is a decision about the owner's debt or salary, so it is a stop condition.
    - **Cannot book yet**: see Step 2.
 4. Also check the month's invoices, depending on method. Faktureringsmetoden: customer invoices dated in the month should be booked (\`gnubok_list_invoices\`) and supplier invoices dated in the month registered (\`gnubok_list_supplier_invoices({ date_from, date_to })\`). Kontantmetoden: they are booked at payment, so an unpaid invoice does not block the month.

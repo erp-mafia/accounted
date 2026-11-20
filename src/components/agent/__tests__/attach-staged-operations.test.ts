@@ -23,6 +23,16 @@ const op = (overrides: Partial<StoredStagedOperation> = {}): StoredStagedOperati
 })
 
 describe('attachStagedOperations', () => {
+  it('carries the proposal\'s number onto the card, and none for a row read before the column existed', () => {
+    const messages = [{ role: 'assistant' as const, text: 'Klart att godkänna.' }]
+
+    const [numbered] = attachStagedOperations(messages, [op({ operation_number: 128 })])
+    expect(numbered!.staged![0]).toMatchObject({ operation_id: 'op-1', operation_number: 128 })
+
+    const [bare] = attachStagedOperations(messages, [op()])
+    expect(bare!.staged![0]!.operation_number).toBeUndefined()
+  })
+
   it('returns the thread untouched when nothing is pending', () => {
     const messages = [
       { role: 'user' as const, text: 'boka om' },

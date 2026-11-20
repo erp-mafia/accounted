@@ -1,5 +1,16 @@
-import type { CreateJournalEntryLineInput, VatTreatment } from '@/types'
-import { isAccountVatTreatment, resolveVatTreatmentRuta } from '@/lib/vat/account-vat-treatment'
+import type { CreateJournalEntryLineInput, VatJournalLine, VatTreatment } from '@/types'
+import {
+  defaultRateForVatTreatment,
+  isAccountVatTreatment,
+  resolveVatTreatmentRuta,
+} from '@/lib/vat/account-vat-treatment'
+import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
+import { roundOre } from '@/lib/money'
+import { bookingVatRole, reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
+import { grossVat, netVat } from '@/lib/bookkeeping/gross-split'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { getOutputVatAccount } from '@/lib/bookkeeping/invoice-accounts'
+import { isRateBearing } from '@/lib/bookkeeping/vat-registration'
 
 /**
  * Generate VAT journal entry lines based on VAT treatment
@@ -13,12 +24,6 @@ import { isAccountVatTreatment, resolveVatTreatmentRuta } from '@/lib/vat/accoun
  * - Export (non-EU): No VAT lines
  */
 
-interface VatEntryConfig {
-  vatTreatment: VatTreatment
-  baseAmount: number // Amount before VAT
-  direction: 'sales' | 'purchase'
-}
-
 /**
  * Get VAT rate from treatment
  */
@@ -31,6 +36,7 @@ export function getVatRate(treatment: VatTreatment): number {
     case 'reduced_6':
       return 0.06
     case 'reverse_charge':
+    case 'reverse_charge_domestic':
     case 'export':
     case 'exempt':
       return 0
@@ -50,14 +56,10 @@ export function getVatRate(treatment: VatTreatment): number {
  *   ruta 22  non-EU services      4531/4532/4533
  *   ruta 23  domestic goods RC    4415/4416/4417
  *   ruta 24  domestic services RC 4425/4426/4427
+ *
+ * Derived from VAT_ACCOUNT_TABLE (lib/vat/moms-box-mapping.ts).
  */
-export const RC_BASIS_ACCOUNTS: ReadonlySet<string> = new Set([
-  '4515', '4516', '4517',
-  '4535', '4536', '4537',
-  '4531', '4532', '4533',
-  '4415', '4416', '4417',
-  '4425', '4426', '4427',
-])
+export const RC_BASIS_ACCOUNTS: ReadonlySet<string> = new Set(reverseChargeBasisAccounts())
 
 export function isReverseChargeBasisAccount(account: string): boolean {
   return RC_BASIS_ACCOUNTS.has(account)
@@ -140,46 +142,6 @@ export function resolveReverseChargeRate(
 }
 
 /**
- * Generate output VAT lines for sales invoices
- * Debit 1510 Kundfordringar [total incl VAT]
- * Credit 30xx Försäljning [subtotal]
- * Credit 26xx Utgående moms [vat_amount]
- */
-export function generateSalesVatLines(config: VatEntryConfig): CreateJournalEntryLineInput[] {
-  const lines: CreateJournalEntryLineInput[] = []
-  const vatRate = getVatRate(config.vatTreatment)
-
-  if (vatRate === 0) return lines
-
-  const vatAmount = Math.round(config.baseAmount * vatRate * 100) / 100
-
-  // Determine the output VAT account
-  let vatAccount: string
-  switch (config.vatTreatment) {
-    case 'standard_25':
-      vatAccount = '2611' // Utgående moms försäljning 25%
-      break
-    case 'reduced_12':
-      vatAccount = '2621' // Utgående moms försäljning 12%
-      break
-    case 'reduced_6':
-      vatAccount = '2631' // Utgående moms försäljning 6%
-      break
-    default:
-      return lines
-  }
-
-  lines.push({
-    account_number: vatAccount,
-    debit_amount: 0,
-    credit_amount: vatAmount,
-    line_description: `Utgående moms ${vatRate * 100}%`,
-  })
-
-  return lines
-}
-
-/**
  * The supplier classification the reverse-charge producers already carry
  * (booking templates, suppliers, kontantmetod groups).
  */
@@ -234,6 +196,21 @@ export function reverseChargeKindForSupplierType(supplierType: ReverseChargeSupp
   return 'eu_services'
 }
 
+/**
+ * The kind a supplier invoice's reverse charge books. An EU supplier's
+ * invoice says goods (ruta 20) in reverse_charge_kind (crm#1323); NULL, and
+ * every other supplier type, books what the type books. Every builder of a
+ * supplier invoice's reverse-charge lines reads it here, so the registration,
+ * the cash and cut-off entries and the credit note can never disagree.
+ */
+export function supplierInvoiceReverseChargeKind(
+  supplierType: ReverseChargeSupplierType,
+  invoiceKind: string | null | undefined,
+): ReverseChargeKind {
+  if (supplierType === 'eu_business' && invoiceKind === 'eu_goods') return 'eu_goods'
+  return reverseChargeKindForSupplierType(supplierType)
+}
+
 /** The momsdeklaration box the basis pair of a kind lands in. */
 export function reverseChargeKindRuta(kind: ReverseChargeKind): 'ruta20' | 'ruta21' | 'ruta22' | 'ruta24' {
   if (kind === 'eu_goods') return 'ruta20'
@@ -242,32 +219,181 @@ export function reverseChargeKindRuta(kind: ReverseChargeKind): 'ruta20' | 'ruta
   return 'ruta21'
 }
 
-const RC_BASIS_BOXES: ReadonlySet<string> = new Set(['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'])
+/**
+ * The kind and rate a basis account stands for: the inverse of the account
+ * generateReverseChargePurchaseLines picks (4531 is non-EU services at 25 %).
+ * Null for any other account, and for domestic goods (4415-4417), which have
+ * no kind.
+ */
+export function reverseChargeKindForBasisAccount(account: string): { kind: ReverseChargeKind; rate: number } | null {
+  for (const kind of REVERSE_CHARGE_KINDS) {
+    for (const rate of [0.25, 0.12, 0.06]) {
+      if (pickBasisAccount(rate, kind)?.account === account) return { kind, rate }
+    }
+  }
+  return null
+}
+
+/** The momsdeklaration boxes of a reverse-charge purchase's basis (ruta 20-24). */
+export const RC_BASIS_BOXES: ReadonlySet<string> = new Set(['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'])
 
 /**
- * Whether a debit on `account` already reports the reverse-charge basis in
- * ruta 20-24 by itself, so a producer must not add the 44xx/45xx / 4598 pair
- * on top of it (the pair would count the purchase twice).
- *
- * With the account's chart row (`accountVatTreatment` is its
- * default_vat_treatment, null when unset) this is the declaration's own rule
- * (fetchDynamicVatAccounts + rutorFromTotals): a configured treatment decides,
- * so a class 4-6 account set to a reverse_charge_* purchase treatment reports
- * its own box whatever its number, and an unconfigured account reports only
- * when it is one of the static BAS basis accounts (RC_BASIS_ACCOUNTS).
- *
- * Without the row (`undefined`) the 44xx/45xx range stands in, as it always
- * has for the pure producers (mapping rules, booking templates): it covers the
- * static accounts and the company-numbered basis accounts (4518, 4534, 4538)
- * that carry a configured treatment in practice.
+ * An account's momskod and momssats in the company's kontoplan, as the
+ * momsdeklaration reads them: chart_of_accounts.default_vat_treatment and
+ * .default_vat_rate (fetchDynamicVatAccounts).
  */
-export function costAccountReportsRcBasis(account: string, accountVatTreatment?: string | null): boolean {
-  if (accountVatTreatment === undefined) return /^4[45]\d{2}$/.test(account)
-  if (isAccountVatTreatment(accountVatTreatment)) {
-    const mapping = resolveVatTreatmentRuta(accountVatTreatment, Number(account.charAt(0)), account)
-    return mapping !== null && RC_BASIS_BOXES.has(mapping.box)
+export interface ChartVatCode {
+  default_vat_treatment: string | null
+  default_vat_rate: number | null
+}
+
+/**
+ * The company's own momskoder and momssatser by account number, as the caller
+ * loaded them (fetchChartVatTreatments on the server, the reference-data
+ * accounts in the browser). An account the map does not hold has neither
+ * configured.
+ */
+export type ChartVatTreatments = ReadonlyMap<string, ChartVatCode>
+
+/** A ChartVatTreatments from chart rows (a query result, the reference-data accounts). */
+export function chartVatTreatmentsOf(
+  rows: ReadonlyArray<{
+    account_number: string
+    default_vat_treatment?: string | null
+    default_vat_rate?: number | string | null
+  }>,
+): ChartVatTreatments {
+  return new Map(rows.map((row) => {
+    // PostgREST can serialise the numeric column as a string.
+    const rate = row.default_vat_rate == null ? null : Number(row.default_vat_rate)
+    return [row.account_number, {
+      default_vat_treatment: row.default_vat_treatment ?? null,
+      default_vat_rate: rate !== null && Number.isFinite(rate) ? rate : null,
+    }]
+  }))
+}
+
+/** The momssatser the declaration buckets a reverse-charge basis at (ruta 30, 31, 32). */
+const RC_BASIS_RATES: readonly number[] = [0.25, 0.12, 0.06]
+
+/**
+ * The momssats at which a debit on `account` reports a reverse-charge
+ * purchase's basis in ruta 20-24 by itself, or null when it reports none, so a
+ * producer books the 44xx/45xx / 4598 pair beside it. A pair on top of an
+ * account that reports would count the purchase twice (crm#1096).
+ *
+ * This is the declaration's own rule, the one the filing gate buckets the
+ * basis by (fetchDynamicVatAccounts' rcBasisRateByAccount, the static rates of
+ * rcBasisTotalsByRate):
+ *  - a configured momskod decides: a class 4-6 account whose momskod is a
+ *    reverse-charge purchase reports its own box (resolveVatTreatmentRuta) at
+ *    its momssats, the configured one or else the momskod's default (25 %).
+ *    Only 25, 12 and 6 % count: the gate buckets a basis at no other sats,
+ *    so an account at 0 % gets the pair like any other account. Its box
+ *    still counts in the declaration, so that configuration double-counts
+ *    ruta 20-24 whatever is booked; it is a configuration error the gate
+ *    flags (RC_OUTPUT_MISSING), and the fix is to set the account's momssats;
+ *  - an unconfigured account reports only when it is one of the static BAS
+ *    basis accounts, at that account's sats (4536 is 12 %).
+ *
+ * `code` is the account's entry in the company's ChartVatTreatments
+ * (`chart.get(account)`, undefined when it has none). It is required on
+ * purpose: there is no answer without reading the chart. A 44xx/45xx stand-in
+ * used to answer for callers that had no row, and it gave every configured
+ * cost account outside that range (4056, 5420, 6540) a second basis pair.
+ */
+export function costAccountRcBasisRate(account: string, code: ChartVatCode | undefined): number | null {
+  const treatment = code?.default_vat_treatment ?? null
+  if (isAccountVatTreatment(treatment)) {
+    const accountClass = Number(account.charAt(0))
+    const mapping = resolveVatTreatmentRuta(treatment, accountClass, account)
+    if (!mapping || !RC_BASIS_BOXES.has(mapping.box)) return null
+    const rate = code?.default_vat_rate ?? defaultRateForVatTreatment(treatment, accountClass)
+    return rate !== null && RC_BASIS_RATES.includes(rate) ? rate : null
   }
-  return isReverseChargeBasisAccount(account)
+  return rcBasisAccountRate(account)
+}
+
+/**
+ * How a reverse-charge purchase booked on `account` is self-assessed, by
+ * costAccountRcBasisRate. On an account that reports ruta 20-24 itself: at
+ * that account's momssats and without a basis pair, since the account carries
+ * the basis and the per-rate identity the filing gate checks needs the fiktiv
+ * moms at the sats the basis is bucketed at (the manual verifikat's fixed
+ * momskod, vatCodeRuleForAccount, does the same). On any other account: at
+ * the purchase's own rate, with the pair.
+ */
+export function reverseChargeOnAccount(
+  account: string,
+  purchaseRate: number,
+  chart: ChartVatTreatments,
+): { rate: number; basisPair: boolean } {
+  const own = costAccountRcBasisRate(account, chart.get(account))
+  return own === null ? { rate: purchaseRate, basisPair: true } : { rate: own, basisPair: false }
+}
+
+const KIND_BY_ACCOUNT_TREATMENT: Partial<Record<string, ReverseChargeKind>> = {
+  reverse_charge_eu_goods: 'eu_goods',
+  reverse_charge_eu_services: 'eu_services',
+  reverse_charge_non_eu_services: 'non_eu_services',
+  reverse_charge_domestic: 'domestic_services',
+}
+
+/**
+ * The kind and box of a reverse-charge purchase booked on `account` when the
+ * account reports ruta 20-24 itself (costAccountRcBasisRate), or null when it
+ * does not and the basis pair books the box (crm#1454). A configured momskod
+ * decides, otherwise the BAS basis account's number (4531 is non-EU services,
+ * ruta 22). Domestic goods (4415-4417, ruta 23) answer domestic_services, the
+ * kind whose input leg (2647) they take.
+ */
+export function reverseChargeKindOnOwnAccount(
+  account: string,
+  code: ChartVatCode | undefined,
+): { kind: ReverseChargeKind; ruta: string } | null {
+  if (costAccountRcBasisRate(account, code) === null) return null
+  const treatment = code?.default_vat_treatment ?? null
+  if (isAccountVatTreatment(treatment)) {
+    const kind = KIND_BY_ACCOUNT_TREATMENT[treatment]
+    const box = resolveVatTreatmentRuta(treatment, Number(account.charAt(0)), account)?.box
+    return kind && box ? { kind, ruta: box } : null
+  }
+  const basis = reverseChargeKindForBasisAccount(account)
+  if (basis) return { kind: basis.kind, ruta: reverseChargeKindRuta(basis.kind) }
+  return { kind: 'domestic_services', ruta: 'ruta23' }
+}
+
+/**
+ * A reverse-charge purchase settled against the cost lines it is booked on
+ * (crm#1096), as the purchases generateReverseChargePurchaseLines books. Each
+ * cost line is assessed by reverseChargeOnAccount: a line on an account that
+ * reports ruta 20-24 itself takes its share out of the basis pair and is
+ * self-assessed at that account's momssats; the rest stays at the purchase's
+ * rate with the pair. With no such line it is the purchase itself, pair whole.
+ */
+export function reverseChargePurchasesOn(
+  purchase: { base: number; rate: number; kind: ReverseChargeKind },
+  costLines: ReadonlyArray<{ account: string; amount: number }>,
+  chart: ChartVatTreatments,
+): ReverseChargePurchase[] {
+  let reported = 0
+  const reRated = new Map<number, number>()
+  for (const line of costLines) {
+    const { rate, basisPair } = reverseChargeOnAccount(line.account, purchase.rate, chart)
+    if (basisPair) continue
+    reported = roundOre(reported + line.amount)
+    if (rate !== purchase.rate) reRated.set(rate, roundOre((reRated.get(rate) ?? 0) + line.amount))
+  }
+  const reRatedBase = roundOre([...reRated.values()].reduce((sum, base) => sum + base, 0))
+  const ownRateBase = reRatedBase === 0 ? purchase.base : Math.max(0, roundOre(purchase.base - reRatedBase))
+  const purchases: ReverseChargePurchase[] = []
+  if (ownRateBase > 0) {
+    purchases.push({ ...purchase, base: ownRateBase, basisBase: Math.max(0, roundOre(purchase.base - reported)) })
+  }
+  for (const [rate, base] of reRated) {
+    if (base > 0) purchases.push({ base, rate, kind: purchase.kind, basisBase: 0 })
+  }
+  return purchases
 }
 
 /** One reverse-charge purchase (or one rate group of one). */
@@ -280,7 +406,7 @@ export interface ReverseChargePurchase {
   /**
    * The part of `base` that still needs the basis pair. Defaults to all of
    * it. Pass 0, or the share booked elsewhere, when the cost line already sits
-   * on an account that reports ruta 20-24 itself (costAccountReportsRcBasis).
+   * on an account that reports ruta 20-24 itself (reverseChargeOnAccount).
    */
   basisBase?: number
 }
@@ -311,19 +437,6 @@ export function generateReverseChargePurchaseLines(purchase: ReverseChargePurcha
   ]
 }
 
-/**
- * The basis pair alone, for a supplier credit note that mirrors the pair its
- * registration posted next to hand-built reversed fiktiv lines. Producers that
- * book a purchase use generateReverseChargePurchaseLines.
- */
-export function generateReverseChargeBasisLines(
-  baseAmount: number,
-  vatRate: number = 0.25,
-  supplierType: ReverseChargeSupplierType,
-): CreateJournalEntryLineInput[] {
-  return basisPairLines(baseAmount, vatRate, reverseChargeKindForSupplierType(supplierType))
-}
-
 function basisPairLines(
   baseAmount: number,
   vatRate: number,
@@ -334,7 +447,7 @@ function basisPairLines(
   const basisAccount = pickBasisAccount(vatRate, kind)
   if (!basisAccount) return []
 
-  const amount = Math.round(baseAmount * 100) / 100
+  const amount = roundOre(baseAmount)
   const rateLabel = `${Math.round(vatRate * 100)}%`
 
   return [
@@ -353,36 +466,21 @@ function basisPairLines(
   ]
 }
 
+const BASIS_LABEL: Record<ReverseChargeKind, string> = {
+  eu_goods: 'Inköp varor från annat EU-land',
+  eu_services: 'Inköp tjänster annat EU-land',
+  non_eu_services: 'Inköp tjänster land utanför EU',
+  // domestic_services: domestic RC (byggtjänster m.m.)
+  domestic_services: 'Inköp tjänster i Sverige omvänd skattskyldighet',
+}
+
+/** The basis account for a kind at a sats, from VAT_ACCOUNT_TABLE; null for any other sats. */
 function pickBasisAccount(
   vatRate: number,
   kind: ReverseChargeKind,
 ): { account: string; label: string } | null {
-  const rateIdx = vatRate === 0.25 ? 0 : vatRate === 0.12 ? 1 : vatRate === 0.06 ? 2 : -1
-  if (rateIdx < 0) return null
-
-  if (kind === 'eu_goods') {
-    return {
-      account: ['4515', '4516', '4517'][rateIdx],
-      label: 'Inköp varor från annat EU-land',
-    }
-  }
-  if (kind === 'eu_services') {
-    return {
-      account: ['4535', '4536', '4537'][rateIdx],
-      label: 'Inköp tjänster annat EU-land',
-    }
-  }
-  if (kind === 'non_eu_services') {
-    return {
-      account: ['4531', '4532', '4533'][rateIdx],
-      label: 'Inköp tjänster land utanför EU',
-    }
-  }
-  // domestic_services: domestic RC (byggtjänster m.m.)
-  return {
-    account: ['4425', '4426', '4427'][rateIdx],
-    label: 'Inköp tjänster i Sverige omvänd skattskyldighet',
-  }
+  const account = vatBasisAccount(kind, vatRate)
+  return account ? { account, label: BASIS_LABEL[kind] } : null
 }
 
 /**
@@ -396,7 +494,7 @@ function fiktivMomsLines(
   vatRate: number,
   isDomestic: boolean,
 ): CreateJournalEntryLineInput[] {
-  const vatAmount = Math.round(baseAmount * vatRate * 100) / 100
+  const vatAmount = netVat(baseAmount, vatRate)
 
   // Determine output account based on rate
   let outputAccount: string
@@ -434,6 +532,93 @@ function fiktivMomsLines(
   ]
 }
 
+/** What a bank row's business line is: a purchase or a sale. */
+export type BankRowNature = 'expense' | 'income'
+
+/**
+ * The treatment of an utgående moms account (2611 is 25 %, 2621 12 %, 2631
+ * 6 %, and their siblings), read off bookingVatRole, the declaration's own
+ * classification. Null for any other account, reverse-charge legs included.
+ */
+export function outputVatTreatmentOfAccount(account: string): 'standard_25' | 'reduced_12' | 'reduced_6' | null {
+  const role = bookingVatRole(account)
+  return role === 'standard_25' || role === 'reduced_12' || role === 'reduced_6' ? role : null
+}
+
+/**
+ * Which kind of booking a moms account belongs to: utgående moms is a sale's,
+ * ingående moms (264x) and the reverse-charge legs a purchase's. Null for no
+ * account or any other account.
+ */
+export function vatAccountNature(account: string | null | undefined): BankRowNature | null {
+  if (!account) return null
+  if (outputVatTreatmentOfAccount(account)) return 'income'
+  const role = bookingVatRole(account)
+  return role === 'input' || role === 'reverse_charge' ? 'expense' : null
+}
+
+/**
+ * The moms lines of a bank row booked by a category or a catalog template, so
+ * the same row books the same moms whichever of the two decided it:
+ *
+ *                     purchase        refund of it      sale     refund of it
+ *   25, 12, 6 %       D 2641          K 2641            K 26x1   D 26x1
+ *   reverse charge    the whole set   the set reversed  none     none
+ *   any other, none   none            none              none     none
+ *
+ * Rate-based moms sits inside the gross. A reversal takes it back on the
+ * account it was booked on (swedish-daily-bookkeeping, payment-providers.md
+ * §10: a refund of a sale reverses the original entry, debit 30xx and 26xx;
+ * swedish-invoice-compliance, invoice-rules.md §5). Reverse charge is the
+ * buyer's self-assessment, so the whole set (generateReverseChargePurchaseLines)
+ * is added on top and a sale carries no Swedish moms in either direction.
+ *
+ * `nature` is what the booking is, which the row's sign alone does not say;
+ * `reversal` is money running against it. `treatment` is the one the booking
+ * resolved (vatTreatmentForRegistration has already run). `vatAmount` is the
+ * underlag's moms in SEK, in place of the rate's. `reverseChargeKind` picks
+ * the basis box of a reverse-charge purchase.
+ */
+export function bankRowVatLines({ treatment, absSek, nature, reversal, vatAmount, reverseChargeKind }: {
+  treatment: string | null | undefined
+  /** The row's gross in SEK: journal lines are always SEK. */
+  absSek: number
+  nature: BankRowNature
+  reversal: boolean
+  vatAmount?: number
+  reverseChargeKind?: ReverseChargeKind | null
+}): VatJournalLine[] {
+  if (treatment === 'reverse_charge') {
+    if (nature === 'income') return []
+    return generateReverseChargePurchaseLines({
+      base: absSek,
+      kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND,
+    }).map((line) => ({
+      account_number: line.account_number,
+      debit_amount: reversal ? line.credit_amount : line.debit_amount,
+      credit_amount: reversal ? line.debit_amount : line.credit_amount,
+      description: line.line_description || '',
+    }))
+  }
+  if (!isRateBearing(treatment)) return []
+
+  const rate = getVatRate(treatment)
+  const amount = vatAmount ?? grossVat(absSek, rate)
+  if (!(amount > 0)) return []
+
+  const purchase = nature === 'expense'
+  const onDebit = purchase !== reversal
+  const label = purchase
+    ? (reversal ? 'Återföring ingående moms' : 'Ingående moms')
+    : (reversal ? 'Återföring utgående moms' : 'Utgående moms')
+  return [{
+    account_number: purchase ? resolveAccountRole(PINNED_JURISDICTION, 'input_vat') : getOutputVatAccount(treatment),
+    debit_amount: onDebit ? amount : 0,
+    credit_amount: onDebit ? 0 : amount,
+    description: vatAmount === undefined ? `${label} ${rate * 100}%` : `${label} (enligt underlag)`,
+  }]
+}
+
 /**
  * Generate input VAT deduction line for domestic purchases
  * Debit 2641 Ingående moms
@@ -445,7 +630,7 @@ export function generateInputVatLine(
   if (vatRate === 0) return null
 
   // Extract VAT from total amount (VAT-inclusive)
-  const vatAmount = Math.round((totalAmount * vatRate) / (1 + vatRate) * 100) / 100
+  const vatAmount = grossVat(totalAmount, vatRate)
 
   return {
     account_number: '2641', // Debiterad ingående moms
@@ -453,20 +638,4 @@ export function generateInputVatLine(
     credit_amount: 0,
     line_description: `Ingående moms ${vatRate * 100}%`,
   }
-}
-
-/**
- * Calculate the net amount (excl VAT) from a total amount
- */
-export function extractNetAmount(totalAmount: number, vatRate: number): number {
-  if (vatRate === 0) return totalAmount
-  return Math.round((totalAmount / (1 + vatRate)) * 100) / 100
-}
-
-/**
- * Calculate VAT amount from a total amount (VAT-inclusive)
- */
-export function extractVatAmount(totalAmount: number, vatRate: number): number {
-  if (vatRate === 0) return 0
-  return Math.round((totalAmount - totalAmount / (1 + vatRate)) * 100) / 100
 }

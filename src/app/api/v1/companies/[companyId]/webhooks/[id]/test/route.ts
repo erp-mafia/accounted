@@ -14,6 +14,7 @@ import { kickWebhookDispatch } from '@/lib/webhooks/dispatch-kick'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { verificationAllowsDelivery, webhookVerificationStatus } from '@/lib/webhooks/verification'
 
 // Scope catalogue: this verb shares webhooks:manage with the parent
 // resource. Add the entry to lib/auth/scopes.ts in the same commit when
@@ -34,6 +35,7 @@ registerEndpoint({
     'Smoke-testing the dispatcher itself (use a real event). Replaying a failed delivery (use POST /webhook-deliveries/{id}/retry).',
   pitfalls: [
     'Test deliveries follow the same retry policy as real events: a 500 from your receiver will retry 7 times over ~87h (about 3.6 days). Use a 2xx ack-only handler if you want a clean signal.',
+    "A test event is an event: an endpoint whose verification_status is 'pending' or 'paused' answers 409 WEBHOOK_NOT_VERIFIED. Verify it first with POST /webhooks/{id}/verify.",
   ],
   example: {
     response: {
@@ -64,7 +66,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const { data: webhook, error: lookupErr } = await ctx.supabase
       .from('webhooks')
-      .select('id, api_version_pinned, active, disabled_at')
+      .select('id, api_version_pinned, active, disabled_at, verified_at, verification_grace_ends_at')
       .eq('company_id', ctx.companyId!)
       .eq('id', id)
       .maybeSingle()
@@ -72,13 +74,29 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (lookupErr) return v1ErrorResponse(lookupErr, ctx.log, { requestId: ctx.requestId })
     if (!webhook) return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
 
-    type W = { id: string; api_version_pinned: string; active: boolean; disabled_at: string | null }
+    type W = {
+      id: string
+      api_version_pinned: string
+      active: boolean
+      disabled_at: string | null
+      verified_at: string | null
+      verification_grace_ends_at: string | null
+    }
     const w = webhook as W
 
     if (!w.active || w.disabled_at) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'active', message: 'Webhook is disabled: re-enable before sending a test event.' },
+      })
+    }
+
+    // Ownership gate (ADA CASA 7.1.2): no event, synthetic or not, goes to a
+    // URL that has not passed the verification handshake.
+    if (!verificationAllowsDelivery(w)) {
+      return v1ErrorResponseFromCode('WEBHOOK_NOT_VERIFIED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { verification_status: webhookVerificationStatus(w) },
       })
     }
 

@@ -32,6 +32,8 @@ const KPI_CONTEXT_KEYS = [
   'period_end',
   'range',
   'receivables_as_of',
+  // Trust in the figures travels with any subset of them.
+  'data_status',
 ] as const
 
 /**

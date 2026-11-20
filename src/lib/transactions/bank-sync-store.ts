@@ -2,14 +2,14 @@
  * Module-level store for on-demand bank sync state, shared by every
  * `useBankSync()` instance via `useSyncExternalStore`.
  *
- * Two surfaces on the transactions page trigger syncs independently: the
- * "Synka bank nu" row in the Importera split button (TransactionStatusBar)
- * and the footer "Synka nu" button (BankSyncNowButton). With hook-local
- * state, a sync started from one surface left the other enabled and
- * spinner-less, so a second concurrent sync of the same connection could be
- * started (#1162). Hoisting the state here makes busy/connections identical
- * across all instances, and lets the first mounted instance's fetch serve
- * the rest (no duplicate `bank_connections` query per surface).
+ * Several surfaces trigger syncs independently: the "Synka bank nu" row in
+ * the Importera split button (TransactionStatusBar) and the collections bank
+ * check (BankCheckResult). With hook-local state, a sync started from one
+ * surface left the other enabled and spinner-less, so a second concurrent
+ * sync of the same connection could be started (#1162). Hoisting the state
+ * here makes busy/connections identical across all instances, and lets the
+ * first mounted instance's fetch serve the rest (no duplicate
+ * `bank_connections` query per surface).
  *
  * Pure state + pub/sub only: the Supabase fetch stays in the hook so this
  * module is trivially unit-testable.
@@ -21,6 +21,8 @@ export interface BankConn {
   status: string
   provider: string
   last_synced_at: string | null
+  /** 'enable_banking' | 'open_payments': which routes sync, renew and finish it. */
+  aggregator?: string | null
 }
 
 export interface BankSyncState {

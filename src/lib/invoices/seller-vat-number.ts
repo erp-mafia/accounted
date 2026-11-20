@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { CompanySettings, Invoice } from '@/types'
 
 /**
@@ -15,9 +16,9 @@ import type { CompanySettings, Invoice } from '@/types'
  * its settings.
  */
 export function invoiceRequiresSellerVatNumber(
-  invoice: Pick<Invoice, 'credited_invoice_id' | 'document_type'>,
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'document_type'> & Partial<Pick<Invoice, 'total'>>,
 ): boolean {
-  return !invoice.credited_invoice_id
+  return !isCreditNoteDocument(invoice)
     && invoice.document_type !== 'delivery_note'
     && invoice.document_type !== 'proforma'
     // A quote is not a faktura under ML 17 kap.: no mandatory-content list applies.
@@ -26,7 +27,7 @@ export function invoiceRequiresSellerVatNumber(
 
 export function hasRequiredSellerVatNumber(
   company: Pick<CompanySettings, 'vat_registered' | 'vat_number'>,
-  invoice: Pick<Invoice, 'credited_invoice_id' | 'document_type'>,
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'document_type'> & Partial<Pick<Invoice, 'total'>>,
 ): boolean {
   if (!invoiceRequiresSellerVatNumber(invoice)) return true
   if (!company.vat_registered) return true

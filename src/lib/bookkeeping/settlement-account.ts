@@ -8,6 +8,67 @@ import { primaryIneligibleReason } from '@/lib/cash-accounts/primary'
 const FALLBACK_ACCOUNT = '1930'
 
 /**
+ * The cash account a payment settles on: its cash_accounts id and BAS ledger
+ * account. id is null when no row answers (the historical 1930 fallback).
+ */
+export interface SettlementAccountRow {
+  id: string | null
+  ledger_account: string
+}
+
+/**
+ * The unbound-row answer of resolveSettlementAccount, with the row's id: the
+ * company's only enabled bank account in `currency`, else 1930 with no row.
+ */
+async function resolveUnboundSettlementRow(
+  supabase: SupabaseClient,
+  companyId: string,
+  currency: string,
+  log: Logger,
+): Promise<SettlementAccountRow> {
+  const fallback: SettlementAccountRow = { id: null, ledger_account: FALLBACK_ACCOUNT }
+  // Banks only: a company card (kind 'card') is never where an unbound row's
+  // money moved, and counting one would flip the company's only bank
+  // account to 1930 for every NULL row. bank_anchor_settlement_account,
+  // capture_bank_booking_context and guard_bank_booking_context count the
+  // same set (20261028090000).
+  const { data: candidates, error: listError } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account')
+    .eq('company_id', companyId)
+    .eq('enabled', true)
+    .eq('kind', 'bank')
+    .eq('currency', currency)
+    .limit(2)
+
+  if (listError) {
+    // Unlike the explicit-cashAccountId branch below (which throws, #842),
+    // this path historically never queried at all and always returned 1930,
+    // so failing the whole request on a lookup error here would regress
+    // every unbound transaction, including ambiguous companies whose answer
+    // is 1930 anyway. Degrade to the historical fallback and warn.
+    log.warn('settlement-account currency fallback lookup failed; defaulting to 1930', {
+      companyId,
+      currency,
+      error: listError.message,
+    })
+    return fallback
+  }
+
+  if (candidates?.length === 1) {
+    const only = candidates[0] as { id?: string | null; ledger_account?: string | null } | undefined
+    if (only?.ledger_account) return { id: only.id ?? null, ledger_account: only.ledger_account }
+    // ledger_account is NOT NULL in the schema; a hole here is a
+    // data-integrity gap that must not hide behind a plausible 1930 leg.
+    log.warn('settlement-account currency fallback row has no ledger_account; defaulting to 1930', {
+      companyId,
+      currency,
+    })
+  }
+  return fallback
+}
+
+/**
  * Resolve the BAS ledger account a transaction actually settles from/to.
  *
  * Never fall back to a company-wide "last used" setting (e.g.
@@ -19,8 +80,9 @@ const FALLBACK_ACCOUNT = '1930'
  *
  * When the transaction has NO cash_account_id (legacy/unresolved rows),
  * mirror the client-side resolveAccount (lib/cash-accounts/resolve-account.ts):
- * if the company has EXACTLY ONE enabled cash account in the transaction's
- * currency, that account is unambiguous and the bank leg belongs there.
+ * if the company has EXACTLY ONE enabled bank account (kind 'bank', never a
+ * company card) in the transaction's currency, that account is unambiguous
+ * and the bank leg belongs there.
  * Without this, a company whose only bank account is e.g. 1920 got its
  * booking dialogs previewing 1920 while the posted verifikat silently hit
  * the hardcoded 1930 template leg (issue #1722). Zero or several candidate
@@ -42,39 +104,7 @@ export async function resolveSettlementAccount(
 ): Promise<string> {
   const transactionCurrency = currency ?? 'SEK'
   if (!cashAccountId) {
-    const { data: candidates, error: listError } = await supabase
-      .from('cash_accounts')
-      .select('ledger_account')
-      .eq('company_id', companyId)
-      .eq('enabled', true)
-      .eq('currency', transactionCurrency)
-      .limit(2)
-
-    if (listError) {
-      // Unlike the explicit-cashAccountId branch below (which throws, #842),
-      // this path historically never queried at all and always returned 1930,
-      // so failing the whole request on a lookup error here would regress
-      // every unbound transaction, including ambiguous companies whose answer
-      // is 1930 anyway. Degrade to the historical fallback and warn.
-      log.warn('settlement-account currency fallback lookup failed; defaulting to 1930', {
-        companyId,
-        currency: transactionCurrency,
-        error: listError.message,
-      })
-      return FALLBACK_ACCOUNT
-    }
-
-    if (candidates?.length === 1) {
-      const ledgerAccount = candidates[0]?.ledger_account as string | null
-      if (ledgerAccount) return ledgerAccount
-      // ledger_account is NOT NULL in the schema; a hole here is a
-      // data-integrity gap that must not hide behind a plausible 1930 leg.
-      log.warn('settlement-account currency fallback row has no ledger_account; defaulting to 1930', {
-        companyId,
-        currency: transactionCurrency,
-      })
-    }
-    return FALLBACK_ACCOUNT
+    return (await resolveUnboundSettlementRow(supabase, companyId, transactionCurrency, log)).ledger_account
   }
 
   const { data, error } = await supabase
@@ -123,9 +153,13 @@ export async function resolveSettlementAccount(
 }
 
 /**
- * Resolve the BAS ledger account a SEK payment with NO bank row of its own
- * settles on: the net pay of a salary run, booked on the payment date before
- * any bank transaction exists (issue #3097).
+ * Resolve the cash account a payment with NO bank row of its own settles on,
+ * when nothing else names one: a manual "mark as paid" on either ledger, a
+ * recovered customer loss, a disposal's proceeds, a dividend or a ROT/RUT
+ * payout, and the net pay of a salary run booked before any bank transaction
+ * exists (issue #3097), with the account a payment file pays it from
+ * (crm#1483). resolvePrimaryBankAccount is this row's ledger account, so the
+ * verifikat and the file can never name different accounts.
  *
  * The company's primary cash account is the answer the product already gives
  * for "which bank account, when nothing else says" (lib/cash-accounts/primary.ts):
@@ -136,21 +170,23 @@ export async function resolveSettlementAccount(
  * disabled or foreign-currency account. Without a usable primary this is the
  * unbound-SEK-row answer above (the only enabled SEK account, else 1930), so a
  * company with no cash accounts at all (legacy) keeps booking on 1930.
+ * The dialogs read the same rule from the list they hold: paymentBankRow in
+ * lib/cash-accounts/primary.ts, a mirror a test holds to this one.
  *
  * A failed primary lookup throws instead of degrading to 1930: a verifikat
  * booked on the wrong bank account needs a storno to correct (BFL 5 kap), a
  * retry does not. For that reason this does not go through cash-accounts
  * getPrimary(), which logs a failed lookup and returns null.
  */
-export async function resolvePrimaryBankAccount(
+export async function resolvePrimaryBankAccountRow(
   supabase: SupabaseClient,
   companyId: string,
   log: Logger,
-): Promise<string> {
+): Promise<SettlementAccountRow> {
   // At most one row: a partial unique index keeps one primary per company.
   const { data, error } = await supabase
     .from('cash_accounts')
-    .select('ledger_account, enabled, currency')
+    .select('id, ledger_account, enabled, currency')
     .eq('company_id', companyId)
     .eq('is_primary', true)
     .maybeSingle()
@@ -159,10 +195,10 @@ export async function resolvePrimaryBankAccount(
     throw new BookkeepingDatabaseError('resolve_settlement_account', error.message)
   }
 
-  const primary = data as Pick<CashAccount, 'ledger_account' | 'enabled' | 'currency'> | null
+  const primary = data as Pick<CashAccount, 'id' | 'ledger_account' | 'enabled' | 'currency'> | null
   if (primary?.ledger_account) {
     const reason = primaryIneligibleReason(primary)
-    if (reason === null) return primary.ledger_account
+    if (reason === null) return { id: primary.id ?? null, ledger_account: primary.ledger_account }
     log.warn('primary cash account cannot carry a payment; resolving without it', {
       companyId,
       ledgerAccount: primary.ledger_account,
@@ -170,5 +206,14 @@ export async function resolvePrimaryBankAccount(
     })
   }
 
-  return resolveSettlementAccount(supabase, companyId, null, log, 'SEK')
+  return resolveUnboundSettlementRow(supabase, companyId, 'SEK', log)
+}
+
+/** The ledger account of resolvePrimaryBankAccountRow: what a salary verifikat credits the net pay on. */
+export async function resolvePrimaryBankAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  log: Logger,
+): Promise<string> {
+  return (await resolvePrimaryBankAccountRow(supabase, companyId, log)).ledger_account
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PERSONAL_NUMBER_PLAINTEXT_RE,
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+  agentCustomerIdentifiers,
   customerListIdentifier,
 } from '@/lib/customers/mask-personal-number'
 
@@ -29,10 +30,17 @@ describe('customerListIdentifier', () => {
     )
   })
 
-  it('leaves a foreign business org_number alone even at ten digits', () => {
+  it('masks a legacy foreign-business row that carries a personnummer in org_number (#95)', () => {
     expect(customerListIdentifier({ customer_type: 'eu_business', org_number: '19900101-1234' })).toBe(
-      '19900101-1234',
+      '********-1234',
     )
+    expect(customerListIdentifier({ customer_type: 'non_eu_business', org_number: '199001011234' })).toBe(
+      '********-1234',
+    )
+  })
+
+  it('leaves a foreign business registration number alone', () => {
+    expect(customerListIdentifier({ customer_type: 'eu_business', org_number: '923609016' })).toBe('923609016')
   })
 
   it('masks a legacy individual row that still carries its personnummer in org_number', () => {
@@ -58,5 +66,31 @@ describe('PERSONAL_NUMBER_PLAINTEXT_RE', () => {
     for (const value of ['********-1234', '********-????', '19900101 1234', 'abc', '1234']) {
       expect(PERSONAL_NUMBER_PLAINTEXT_RE.test(value)).toBe(false)
     }
+  })
+})
+
+describe('agentCustomerIdentifiers', () => {
+  it("masks an enskild firma's org number and nulls the VAT number built on it (#95)", () => {
+    expect(agentCustomerIdentifiers({ org_number: '900101-1234', vat_number: 'SE900101123401' }, null)).toEqual({
+      org_number: null,
+      vat_number: null,
+      personal_number_masked: '********-1234',
+    })
+  })
+
+  it("keeps a company's org and VAT numbers", () => {
+    expect(agentCustomerIdentifiers({ org_number: '556677-8899', vat_number: 'SE556677889901' }, null)).toEqual({
+      org_number: '556677-8899',
+      vat_number: 'SE556677889901',
+      personal_number_masked: null,
+    })
+  })
+
+  it("passes an individual's already-masked personal_number through", () => {
+    expect(agentCustomerIdentifiers({ org_number: null, vat_number: null }, '********-1234')).toEqual({
+      org_number: null,
+      vat_number: null,
+      personal_number_masked: '********-1234',
+    })
   })
 })

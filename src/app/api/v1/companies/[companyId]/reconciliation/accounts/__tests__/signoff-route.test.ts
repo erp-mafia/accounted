@@ -40,31 +40,10 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { ReconciliationSignoffError } from '@/lib/reconciliation/signoff'
 import { GET as listGET, POST as signPOST } from '../[accountKey]/signoff/route'
 import { POST as reopenPOST } from '../[accountKey]/signoff/[signoffId]/reopen/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const SIGNOFF_ID = '77777777-7777-4777-8777-777777777777'
@@ -102,10 +81,10 @@ describe('v1 reconciliation sign-off', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { role: 'owner' } },
         idempotency_keys: { data: null },
-      }),
+      }).supabase,
     )
     listMock.mockResolvedValue([{ id: SIGNOFF_ID, account_key: 'skattekonto', through_date: '2026-07-31' }])
     signMock.mockResolvedValue({ dry_run: false, signoff: { id: SIGNOFF_ID, account_key: 'skattekonto', through_date: '2026-07-31' } })
@@ -186,7 +165,7 @@ describe('v1 reconciliation sign-off', () => {
     expect(missing.status).toBe(404)
   })
 
-  it('POST reopen needs reconciliation:signoff, accepts an empty body, previews on dry run, 404s a bad id', async () => {
+  it('POST reopen needs reconciliation:signoff, accepts an empty body, previews on dry run, 400s a malformed id', async () => {
     authOk(['reconciliation:write'])
     const forbidden = await reopenPOST(req(`${BASE}/skattekonto/signoff/${SIGNOFF_ID}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: SIGNOFF_ID }))
     expect(forbidden.status).toBe(403)
@@ -200,11 +179,35 @@ describe('v1 reconciliation sign-off', () => {
     expect(dry.status).toBe(200)
     expect(reopenMock).toHaveBeenCalledTimes(1)
 
+    // A malformed id is refused by withApiV1 before the route runs (B08).
     const bad = await reopenPOST(req(`${BASE}/skattekonto/signoff/nope/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: 'nope' }))
-    expect(bad.status).toBe(404)
+    expect(bad.status).toBe(400)
+    expect((await bad.json()).error).toMatchObject({ code: 'VALIDATION_ERROR', details: { field: 'signoffId' } })
 
     reopenMock.mockRejectedValueOnce(new ReconciliationSignoffError('redan', 'ALREADY_REOPENED'))
     const already = await reopenPOST(req(`${BASE}/skattekonto/signoff/${SIGNOFF_ID}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: SIGNOFF_ID }))
     expect(already.status).toBe(409)
+  })
+
+  it('takes an rso_ handle as the sign-off id and answers handle beside every sign-off id', async () => {
+    const RSO = 'rso_77777777777747778777777777777777'
+    authOk(['reconciliation:read', 'reconciliation:signoff'])
+
+    const reopened = await reopenPOST(req(`${BASE}/skattekonto/signoff/${RSO}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: RSO }))
+    expect(reopened.status).toBe(200)
+    expect(reopenMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'user-1', 'skattekonto', SIGNOFF_ID, { reason: null })
+    expect((await reopened.json()).data.signoff).toMatchObject({ id: SIGNOFF_ID, handle: RSO })
+
+    const history = await listGET(req(`${BASE}/skattekonto/signoff`), params({ accountKey: 'skattekonto' }))
+    expect((await history.json()).data.signoffs[0]).toMatchObject({ id: SIGNOFF_ID, handle: RSO })
+
+    const signed = await signPOST(req(`${BASE}/skattekonto/signoff`, { method: 'POST', body: { through_date: '2026-07-31' } }), params({ accountKey: 'skattekonto' }))
+    expect((await signed.json()).data.signoff).toMatchObject({ id: SIGNOFF_ID, handle: RSO })
+
+    // Another type's handle where the sign-off id goes is refused at the door.
+    const JE = 'je_77777777777747778777777777777777'
+    const wrong = await reopenPOST(req(`${BASE}/skattekonto/signoff/${JE}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: JE }))
+    expect(wrong.status).toBe(400)
+    expect((await wrong.json()).error.code).toBe('HANDLE_TYPE_MISMATCH')
   })
 })

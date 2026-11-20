@@ -1,13 +1,16 @@
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { CreateInvoiceSchema, CreateCreditNoteSchema } from '@/lib/api/schemas'
-import type { Invoice, InvoiceDocumentType, InvoiceItem } from '@/types'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import type { Invoice, InvoiceDocumentType } from '@/types'
+import {
+  ensureInvoiceNumber,
+  invoiceNumberingFailure,
+  InvoiceNumberSeriesBehindError,
+} from '@/lib/invoices/ensure-invoice-number'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
-import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
+import { createCreditNoteDraft, creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Logger } from '@/lib/logger'
@@ -16,9 +19,7 @@ import { maskEmbeddedCustomer } from '@/lib/customers/protect-personal-number'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
-} from '@/lib/invoices/invoice-register-coverage'
-
-ensureInitialized()
+} from '@/lib/reports/invoice-register-coverage'
 
 export const GET = withRouteContext(
   'invoice.list',
@@ -53,10 +54,11 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    // Coverage disclosure: the register only holds invoices created in
-    // Accounted, so for a migrated/backfilled company this list is silently
-    // incomplete before its first invoice. Non-fatal: a failed lookup
-    // degrades to "no marker", never to a failed list.
+    // Coverage disclosure: the register is complete only from covers_from
+    // (invoices registered from the books before it are included), so for a
+    // migrated/backfilled company this list is silently incomplete before
+    // that date. Non-fatal: a failed lookup degrades to "no marker", never to
+    // a failed list.
     let coverage = NO_INVOICE_REGISTER_COVERAGE
     try {
       coverage = await fetchInvoiceRegisterCoverage(supabase, companyId)
@@ -173,9 +175,13 @@ export const POST = withRouteContext(
     // at stake. Invoices/proformas get their F-number below or at finalize.
     let invoiceNumber: string | null = null
     if (documentType === 'delivery_note') {
-      const { data: dnNumber } = await supabase.rpc('generate_delivery_note_number', {
+      const { data: dnNumber, error: dnNumberError } = await supabase.rpc('generate_delivery_note_number', {
         p_company_id: companyId,
       })
+      if (dnNumberError || !dnNumber) {
+        log.error('delivery note number allocation failed', dnNumberError ?? new Error('no number'))
+        return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
+      }
       invoiceNumber = dnNumber
     } else if (documentType === 'quote') {
       const { data: quoteNumber, error: quoteNumberError } = await supabase.rpc('generate_quote_number', {
@@ -236,6 +242,31 @@ export const POST = withRouteContext(
       try {
         await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
       } catch (err) {
+        // The series refusal uses up nothing (generate_invoice_number rolls back
+        // before any write), so the unnumbered row can go: no number, no gap.
+        // The editor keeps the form, and the create after the company set
+        // where its series continues starts clean.
+        if (err instanceof InvoiceNumberSeriesBehindError) {
+          const { error: deleteErr } = await supabase
+            .from('invoices')
+            .delete()
+            .eq('id', invoice.id)
+            .eq('company_id', companyId!)
+            .eq('status', 'draft')
+            .is('invoice_number', null)
+          if (deleteErr) {
+            log.error('invoice series refusal: unnumbered draft could not be removed', deleteErr, {
+              invoiceId: invoice.id,
+            })
+          }
+          const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+          return errorResponseFromCode(failure.code, log, {
+            requestId,
+            messageSv: failure.messageSv,
+            messageEn: failure.messageEn,
+            details: failure.details,
+          })
+        }
         // Soft-cancel rather than hard-delete: if generate_invoice_number bumped
         // the sequence before failing to write the number back, hard-deleting
         // would leave a permanent gap in the F-series in violation of ML 17 kap
@@ -324,245 +355,31 @@ async function createCreditNote(
     return errorResponseFromCode('INVOICE_CREDIT_ORIGINAL_NOT_FOUND', log, { requestId })
   }
 
-  if (originalInvoice.document_type && originalInvoice.document_type !== 'invoice') {
-    return errorResponseFromCode('INVOICE_CREDIT_NOT_INVOICE', log, {
+  // The guard list every credit door runs (lib/invoices/credit-invoice.ts),
+  // a credit note as the original included.
+  const refusal = creditNoteRefusal(originalInvoice)
+  if (refusal) {
+    return errorResponseFromCode(refusal.code, log, {
       requestId,
-      details: { documentType: originalInvoice.document_type },
+      ...(refusal.details ? { details: refusal.details } : {}),
     })
-  }
-
-  if (originalInvoice.status === 'credited') {
-    return errorResponseFromCode('INVOICE_CREDIT_ALREADY_CREDITED', log, { requestId })
-  }
-
-  // 'partially_paid' is missing from this list and that is a real gap, not a
-  // rule: an aendringsfaktura per ML (2023:200) 17 kap 22-23 SS references the
-  // original's loepnummer, and whether the customer has paid nothing, part or
-  // all of it has no bearing on the right to issue one. It is NOT added here
-  // alone, because this door is not where the flow ends: issueCreditNote()
-  // (lib/invoices/issue-credit-note.ts) flips the original to 'credited' with
-  // the same three-status compare-and-set, and it runs AFTER the reversing
-  // verifikat is posted. Widening only this check would post an immutable
-  // voucher and then fail on the status flip, leaving a fully credited invoice
-  // sitting at 'partially_paid': open in the AR ledger and still chased by
-  // reminders. Widening it is a coordinated change across the six sites listed
-  // in DECISIONS.md, with issue-credit-note.ts first.
-  //
-  // Genuinely refused either way: 'draft' (never issued, so there is no
-  // loepnummer for ML 17 kap 22 to reference) and 'cancelled'. 'credited' is
-  // refused above.
-  if (!['sent', 'paid', 'overdue'].includes(originalInvoice.status)) {
-    return errorResponseFromCode('INVOICE_CREDIT_NOT_SENT', log, {
-      requestId,
-      details: { currentStatus: originalInvoice.status },
-    })
-  }
-
-  // A refused ROT/RUT share booked onto the customer (rot_rut_reclaim) moved
-  // kronor from 1513 to 1510 after issue; the credit note reverses the
-  // issue-time split (1510 total minus deduction, 1513 deduction) and would
-  // leave a phantom fordran on 1510 and a phantom liability on 1513. Reverse
-  // the reclaim voucher first; the storno sync closes the invoice again.
-  if (Number((originalInvoice as { deduction_reclaimed_total?: number | null }).deduction_reclaimed_total ?? 0) > 0) {
-    return errorResponseFromCode('INVOICE_CREDIT_ROT_RUT_RECLAIMED', log, {
-      requestId,
-      details: { deduction_reclaimed_total: originalInvoice.deduction_reclaimed_total },
-    })
-  }
-
-  // Self-billed originals have invoice_number null by design (the DB
-  // constraint invoices_self_billed_numbering enforces it); their number
-  // lives in external_invoice_number. Without this fallback the credit note
-  // would be numbered the literal string 'KR-null' (issue #1820). Both null
-  // is impossible for an issued invoice, but refuse defensively rather than
-  // mint a garbage number.
-  const originalRef = originalInvoice.invoice_number ?? originalInvoice.external_invoice_number
-  if (!originalRef) {
-    return errorResponseFromCode('INVOICE_CREDIT_NO_NUMBER', log, { requestId })
-  }
-
-  // Returning the existing credit note makes the action idempotent. A
-  // cancelled, unissued draft is reopened so the deterministic KR number can
-  // be reused without colliding with the company-wide invoice-number key.
-  const { data: existingCreditNote, error: existingCreditNoteError } = await supabase
-    .from('invoices')
-    .select('*, customer:customers(*), items:invoice_items(*)')
-    .eq('credited_invoice_id', input.credited_invoice_id)
-    .eq('company_id', companyId)
-    .eq('creation_complete', true)
-    .maybeSingle()
-
-  if (existingCreditNoteError) {
-    log.error('failed to check for an existing credit note', existingCreditNoteError)
-    return errorResponse(existingCreditNoteError, log, { requestId })
-  }
-  if (existingCreditNote) {
-    if (existingCreditNote.status === 'cancelled' && !existingCreditNote.journal_entry_id) {
-      const today = new Date().toISOString().split('T')[0]
-      const { error: reopenError } = await supabase
-        .from('invoices')
-        .update({
-          status: 'draft',
-          invoice_date: today,
-          due_date: today,
-          notes: input.reason || `Krediterar faktura ${originalRef}`,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingCreditNote.id)
-        .eq('company_id', companyId)
-        .eq('status', 'cancelled')
-
-      if (reopenError) {
-        log.error('failed to reopen cancelled credit note draft', reopenError)
-        return errorResponse(reopenError, log, { requestId })
-      }
-
-      const { data: reopenedCreditNote, error: reopenedError } = await supabase
-        .from('invoices')
-        .select('*, customer:customers(*), items:invoice_items(*)')
-        .eq('id', existingCreditNote.id)
-        .eq('company_id', companyId)
-        .single()
-
-      if (reopenedError || !reopenedCreditNote) {
-        return errorResponse(reopenedError ?? new Error('Credit note draft not found'), log, {
-          requestId,
-        })
-      }
-      return NextResponse.json({ data: maskEmbeddedCustomer(reopenedCreditNote) })
-    }
-    return NextResponse.json({ data: maskEmbeddedCustomer(existingCreditNote) })
-  }
-
-  const creditNoteNumber = `KR-${originalRef}`
-
-  const { data: creditNote, error: creditNoteError } = await supabase
-    .from('invoices')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      customer_id: originalInvoice.customer_id,
-      invoice_number: creditNoteNumber,
-      invoice_date: new Date().toISOString().split('T')[0],
-      due_date: new Date().toISOString().split('T')[0],
-      delivery_date: originalInvoice.delivery_date ?? null,
-      currency: originalInvoice.currency,
-      exchange_rate: originalInvoice.exchange_rate,
-      exchange_rate_date: originalInvoice.exchange_rate_date,
-      subtotal: -Math.abs(originalInvoice.subtotal),
-      subtotal_sek: originalInvoice.subtotal_sek ? -Math.abs(originalInvoice.subtotal_sek) : null,
-      vat_amount: -Math.abs(originalInvoice.vat_amount),
-      vat_amount_sek: originalInvoice.vat_amount_sek ? -Math.abs(originalInvoice.vat_amount_sek) : null,
-      total: -Math.abs(originalInvoice.total),
-      total_sek: originalInvoice.total_sek ? -Math.abs(originalInvoice.total_sek) : null,
-      vat_treatment: originalInvoice.vat_treatment,
-      vat_rate: originalInvoice.vat_rate,
-      moms_ruta: originalInvoice.moms_ruta,
-      reverse_charge_text: originalInvoice.reverse_charge_text,
-      // The same supply (#2906): goods delivered abroad reverse on 3105 / 3108.
-      vat_treatment_override: originalInvoice.vat_treatment_override ?? null,
-      delivery_country: originalInvoice.delivery_country ?? null,
-      your_reference: originalInvoice.your_reference,
-      our_reference: originalInvoice.our_reference,
-      // Same buyer routing on the kreditfaktura as the original.
-      invoice_marking: originalInvoice.invoice_marking ?? null,
-      // Same payee as the original: the credit note refers to the account
-      // the customer paid (or was asked to pay) to.
-      payment_cash_account_id: originalInvoice.payment_cash_account_id ?? null,
-      payment_details: originalInvoice.payment_details ?? null,
-      // Positive magnitude, unlike the negated amounts above: the DB has
-      // CHECK (deduction_total >= 0), and every reader either recomputes the
-      // ROT/RUT amount from the items or skips credit notes entirely.
-      deduction_total: originalInvoice.deduction_total
-        ? Math.abs(originalInvoice.deduction_total)
-        : 0,
-      deduction_personnummer_encrypted: originalInvoice.deduction_personnummer_encrypted ?? null,
-      deduction_personnummer_last4: originalInvoice.deduction_personnummer_last4 ?? null,
-      notes: input.reason || `Krediterar faktura ${originalRef}`,
-      credited_invoice_id: input.credited_invoice_id,
-      // Copy the original's dimension bag so the credit-note verifikat nets
-      // against the same dimension cells in reports (dimensions PR7).
-      default_dimensions: originalInvoice.default_dimensions ?? {},
-      status: 'draft',
-      creation_complete: false,
-    })
-    .select()
-    .single()
-
-  if (creditNoteError) {
-    if (creditNoteError.code === '23505') {
-      const { data: racedCreditNote } = await supabase
-        .from('invoices')
-        .select('*, customer:customers(*), items:invoice_items(*)')
-        .eq('credited_invoice_id', input.credited_invoice_id)
-        .eq('company_id', companyId)
-        .eq('creation_complete', true)
-        .maybeSingle()
-      if (racedCreditNote) return NextResponse.json({ data: maskEmbeddedCustomer(racedCreditNote) })
-    }
-    log.error('credit note insert failed', creditNoteError)
-    return errorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', log, {
-      requestId,
-      details: { pgCode: creditNoteError.code, pgMessage: getUserErrorMessage(creditNoteError) },
-    })
-  }
-
-  const creditNoteItems = (originalInvoice.items || []).map((item: InvoiceItem) =>
-    buildCreditNoteItem(creditNote.id, item)
-  )
-
-  const { error: itemsError } = await supabase.from('invoice_items').insert(creditNoteItems)
-
-  if (itemsError) {
-    const { error: cleanupError } = await supabase
-      .from('invoices')
-      .delete()
-      .eq('id', creditNote.id)
-      .eq('company_id', companyId)
-      .eq('creation_complete', false)
-    if (cleanupError) {
-      log.error('failed to clean up incomplete credit note', cleanupError, {
-        creditNoteId: creditNote.id,
-      })
-    }
-    log.error('credit note items insert failed; rolled back', itemsError, {
-      creditNoteId: creditNote.id,
-    })
-    return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', log, {
-      requestId,
-      details: { pgCode: itemsError.code, pgMessage: getUserErrorMessage(itemsError) },
-    })
-  }
-
-  const { error: completionError } = await supabase
-    .from('invoices')
-    .update({ creation_complete: true, updated_at: new Date().toISOString() })
-    .eq('id', creditNote.id)
-    .eq('company_id', companyId)
-    .eq('creation_complete', false)
-
-  if (completionError) {
-    log.error('failed to mark credit note creation complete', completionError, {
-      creditNoteId: creditNote.id,
-    })
-    return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', log, { requestId })
-  }
-
-  const { data: completeCreditNote, error: completeCreditNoteError } = await supabase
-    .from('invoices')
-    .select('*, customer:customers(*), items:invoice_items(*)')
-    .eq('id', creditNote.id)
-    .eq('company_id', companyId)
-    .eq('creation_complete', true)
-    .single()
-
-  if (completeCreditNoteError || !completeCreditNote) {
-    log.error('failed to read completed credit note', completeCreditNoteError)
-    return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', log, { requestId })
   }
 
   // A credit note is only issued when the user sends it or marks it as sent.
   // Until then it is a non-editable draft: no journal entry is created and
-  // the original invoice remains in its current state.
-  return NextResponse.json({ data: maskEmbeddedCustomer(completeCreditNote) })
+  // the original invoice remains in its current state. An existing credit
+  // note is returned (idempotent) and a cancelled, unissued one reopened.
+  const draft = await createCreditNoteDraft(supabase, companyId, userId, originalInvoice, input, log)
+  if (!draft.ok) {
+    if (draft.code === 'DB_ERROR') {
+      return errorResponse(draft.dbError ?? new Error('Credit note draft failed'), log, { requestId })
+    }
+    return errorResponseFromCode(draft.code, log, {
+      requestId,
+      ...(draft.dbError
+        ? { details: { pgCode: draft.dbError.code, pgMessage: getUserErrorMessage(draft.dbError) } }
+        : {}),
+    })
+  }
+  return NextResponse.json({ data: maskEmbeddedCustomer(draft.creditNote) })
 }

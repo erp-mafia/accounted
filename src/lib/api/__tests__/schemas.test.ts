@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { HouseworkTypeSchema } from '../schemas'
 import { STANDARD_VOUCHER_SERIES_MAP } from '@/lib/bookkeeping/voucher-series-resolver'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
@@ -27,6 +28,9 @@ import {
   CreateInvoiceSchema,
   UpdateInvoiceSchema,
   CreateCreditNoteSchema,
+  InvoicePreviewSchema,
+  InvoiceEmailPreviewSchema,
+  SendInvoiceSchema,
   MarkInvoicePaidSchema,
   CreateRecurringScheduleSchema,
   // Customer schemas
@@ -51,6 +55,7 @@ import {
   BookTransactionSchema,
   MatchInvoiceSchema,
   MatchSupplierInvoiceSchema,
+  MatchBatchSchema,
   // Settings schemas
   UpdateSettingsSchema,
   // Fiscal period schemas
@@ -76,6 +81,7 @@ import {
   CreateEmployeeSchema,
   UpdateEmployeeSchema,
 } from '../schemas'
+import { MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 
 // ============================================================
 // Helpers: minimal valid objects for composition
@@ -176,7 +182,7 @@ describe('Enum schemas', () => {
   })
 
   it('CurrencySchema accepts supported currencies', () => {
-    for (const c of ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF']) {
+    for (const c of ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF', 'CAD']) {
       expect(CurrencySchema.safeParse(c).success).toBe(true)
     }
     expect(CurrencySchema.safeParse('JPY').success).toBe(false)
@@ -307,6 +313,96 @@ describe('CreateInvoiceSchema: ROT/RUT line completeness', () => {
     const { save_as_draft: _s, ...body } = validInvoice({ items: [rutLine({})] }) as Record<string, unknown>
     expect(UpdateInvoiceSchema.safeParse(body).success).toBe(false)
     expect(UpdateInvoiceSchema.safeParse({ ...body, items: [rutLine({ work_type: 'STAD', labor_hours: 1 })] }).success).toBe(true)
+  })
+})
+
+describe('invoice QR mode (one QR code per invoice)', () => {
+  it('lets an invoice choose its QR code, or inherit the company default with null', () => {
+    for (const qr_mode of ['auto', 'bank_app', 'swish', 'payment_link', 'none', null]) {
+      const created = CreateInvoiceSchema.safeParse(validInvoice({ qr_mode }))
+      expect(created.success, String(qr_mode)).toBe(true)
+      expect(created.data?.qr_mode).toBe(qr_mode)
+      expect(UpdateInvoiceSchema.safeParse(validInvoice({ qr_mode })).success, String(qr_mode)).toBe(true)
+    }
+    // Omitted stays omitted: a draft edit without it keeps the stored choice.
+    expect(CreateInvoiceSchema.safeParse(validInvoice()).data).not.toHaveProperty('qr_mode')
+  })
+
+  it('refuses a value that is not a mode', () => {
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ qr_mode: 'all' })).success).toBe(false)
+    expect(UpdateInvoiceSchema.safeParse(validInvoice({ qr_mode: '' })).success).toBe(false)
+  })
+
+  it('lets the company settings choose the default, and keeps accepting the superseded switch', () => {
+    expect(UpdateSettingsSchema.safeParse({ invoice_qr_mode: 'payment_link' }).success).toBe(true)
+    expect(UpdateSettingsSchema.safeParse({ invoice_qr_mode: null }).success).toBe(false)
+    expect(UpdateSettingsSchema.safeParse({ invoice_qr_mode: 'qr' }).success).toBe(false)
+    expect(UpdateSettingsSchema.safeParse({ invoice_show_payment_qr: true }).success).toBe(true)
+  })
+})
+
+// The editor's live preview renders a form that is still being filled in.
+describe('InvoicePreviewSchema', () => {
+  it('accepts a draft with no customer, no rows and empty dates yet', () => {
+    const parsed = InvoicePreviewSchema.safeParse({ customer_id: '', invoice_date: '', qr_mode: '', payment_cash_account_id: '' })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data).toMatchObject({
+      customer_id: null,
+      invoice_date: null,
+      qr_mode: null,
+      payment_cash_account_id: null,
+      items: [],
+    })
+  })
+
+  it('accepts a row being typed: empty description, cleared number fields', () => {
+    const parsed = InvoicePreviewSchema.safeParse({
+      items: [{ description: '', quantity: null, unit: null, unit_price: null, vat_rate: null }],
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data?.items[0]).toMatchObject({ description: '', quantity: 0, unit: '', unit_price: 0 })
+  })
+
+  it('takes every field the write path uses', () => {
+    const parsed = InvoicePreviewSchema.safeParse({
+      delivery_date: '2026-07-01',
+      ore_rounding: false,
+      vat_treatment: 'export',
+      delivery_country: 'no',
+      deduction_apartment_number: '1102',
+      deduction_brf_org_number: '769600-1234',
+      qr_mode: 'swish',
+      payment_cash_account_id: '6f1c2a3e-0000-4000-8000-000000000003',
+      credited_invoice_id: '6f1c2a3e-0000-4000-8000-000000000002',
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data).toMatchObject({ delivery_country: 'NO', vat_treatment: 'export', ore_rounding: false })
+  })
+
+  it.each([
+    ['a string quantity', { items: [{ description: 'x', quantity: '1', unit: 'st', unit_price: 1 }] }],
+    ['an impossible date', { invoice_date: '2026-02-30' }],
+    ['an unknown QR mode', { qr_mode: 'all' }],
+    ['a customer id that is not a uuid', { customer_id: 'customer-1' }],
+    ['a delivery country that is no country', { delivery_country: 'XX' }],
+  ])('refuses %s', (_label, input) => {
+    expect(InvoicePreviewSchema.safeParse(input).success).toBe(false)
+  })
+})
+
+describe('per-send email texts', () => {
+  it('lets a send replace the subject and the message, within limits', () => {
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'Faktura {fakturanummer}', email_body: 'Hej!' }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: null, email_body: null }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'x'.repeat(200) }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'x'.repeat(201) }).success).toBe(false)
+    expect(SendInvoiceSchema.safeParse({ email_body: 'x'.repeat(5000) }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_body: 'x'.repeat(5001) }).success).toBe(false)
+  })
+
+  it('previews the same texts with the draft', () => {
+    expect(InvoiceEmailPreviewSchema.safeParse({ email_subject: 'Hej', items: [] }).success).toBe(true)
+    expect(InvoiceEmailPreviewSchema.safeParse({ email_subject: 'x'.repeat(201) }).success).toBe(false)
   })
 })
 
@@ -637,6 +733,31 @@ describe('MarkInvoicePaidSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  // crm#1823: the account the payment landed on.
+  it('accepts a 19xx payment_account', () => {
+    const result = MarkInvoicePaidSchema.safeParse({ payment_account: '1931' })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.payment_account).toBe('1931')
+  })
+
+  it('rejects a payment_account outside 19xx, or sent as a number', () => {
+    expect(MarkInvoicePaidSchema.safeParse({ payment_account: '1686' }).success).toBe(false)
+    expect(MarkInvoicePaidSchema.safeParse({ payment_account: '2440' }).success).toBe(false)
+    expect(MarkInvoicePaidSchema.safeParse({ payment_account: 1931 }).success).toBe(false)
+  })
+
+  it('rejects payment_account together with custom lines', () => {
+    const result = MarkInvoicePaidSchema.safeParse({
+      payment_account: '1931',
+      lines: [
+        { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+        { account_number: '1510', debit_amount: 0, credit_amount: 100 },
+      ],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues[0].path).toEqual(['payment_account'])
+  })
+
   it('rejects invalid payment_date format', () => {
     const result = MarkInvoicePaidSchema.safeParse({ payment_date: '15/07/2024' })
     expect(result.success).toBe(false)
@@ -702,6 +823,14 @@ describe('CreateCustomerSchema', () => {
   it('accepts valid email', () => {
     const result = CreateCustomerSchema.safeParse(validCustomer({ email: 'test@example.com' }))
     expect(result.success).toBe(true)
+  })
+
+  it('reads an empty or whitespace-only email as no email', () => {
+    for (const email of ['', '   ']) {
+      const result = CreateCustomerSchema.safeParse(validCustomer({ email }))
+      expect(result.success).toBe(true)
+      expect(result.data?.email).toBeUndefined()
+    }
   })
 
   it('rejects negative payment terms', () => {
@@ -820,15 +949,26 @@ describe('CreateCustomerSchema: personnummer placement', () => {
     }
   })
 
-  it('leaves a legal-entity organisationsnummer alone on every customer_type', () => {
-    for (const customer_type of ['individual', 'swedish_business'] as const) {
-      const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type, org_number: '556677-8899' })
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data.org_number).toBe('556677-8899')
-        expect(result.data.personal_number).toBeUndefined()
-      }
+  it('leaves a legal-entity organisationsnummer alone on a business', () => {
+    const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type: 'swedish_business', org_number: '556677-8899' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.org_number).toBe('556677-8899')
+      expect(result.data.personal_number).toBeUndefined()
     }
+  })
+
+  it('refuses a legal-entity organisationsnummer on an individual, which has no org number', () => {
+    const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type: 'individual', org_number: '556677-8899' })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].path).toEqual(['org_number'])
+    }
+  })
+
+  it('accepts an empty org_number on an individual', () => {
+    const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type: 'individual', org_number: '' })
+    expect(result.success).toBe(true)
   })
 })
 
@@ -844,7 +984,7 @@ describe('CreateSupplierSchema', () => {
 
   it('accepts supplier with payment details', () => {
     const result = CreateSupplierSchema.safeParse(validSupplier({
-      bankgiro: '123-4567',
+      bankgiro: '5050-1055',
       plusgiro: '12345-6',
       iban: 'SE1234567890123456789',
       bic: 'ESSESESS',
@@ -957,6 +1097,28 @@ describe('CreateSupplierInvoiceSchema', () => {
       validSupplierInvoice({ supplier_invoice_number: '' })
     )
     expect(result.success).toBe(false)
+  })
+
+  // crm#1039: the column refuses a value with no visible character
+  // (supplier_invoices_number_not_blank); registering by hand still needs a
+  // number, so a blank one is a 400 here, not a database error later.
+  it('rejects a whitespace-only supplier invoice number with the required message', () => {
+    for (const number of ['   ', '\t\n']) {
+      const result = CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({ supplier_invoice_number: number }))
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0]?.message).toBe('Supplier invoice number is required')
+    }
+  })
+
+  it('keeps a real number exactly as typed', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({ supplier_invoice_number: ' 4711 ' }))
+    expect(result.success && result.data.supplier_invoice_number).toBe(' 4711 ')
+  })
+
+  it('UpdateSupplierInvoiceSchema refuses a blank number and accepts an omitted one', () => {
+    expect(UpdateSupplierInvoiceSchema.safeParse({ supplier_invoice_number: '  ' }).success).toBe(false)
+    expect(UpdateSupplierInvoiceSchema.safeParse({ notes: 'x' }).success).toBe(true)
+    expect(UpdateSupplierInvoiceSchema.safeParse({ supplier_invoice_number: 'LF-2' }).success).toBe(true)
   })
 
   it('rejects empty items array', () => {
@@ -1088,6 +1250,49 @@ describe('CreateSupplierInvoiceSchema', () => {
       )
       expect(result.success).toBe(true)
     })
+  })
+})
+
+// crm#1367: a received document's VAT, per rate and per line.
+describe('CreateSupplierInvoiceSchema: the document\'s VAT', () => {
+  it('accepts a vat_breakdown with one entry per rate', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      validSupplierInvoice({ vat_breakdown: [{ vat_rate: 0.25, vat_amount: 1250 }] }),
+    )
+    expect(result.success).toBe(true)
+  })
+
+  it('refuses a rate stated twice, and a percent rate', () => {
+    expect(CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({
+      vat_breakdown: [{ vat_rate: 0.25, vat_amount: 1250 }, { vat_rate: 0.25, vat_amount: 1 }],
+    })).success).toBe(false)
+    expect(CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({
+      vat_breakdown: [{ vat_rate: 25, vat_amount: 1250 }],
+    })).success).toBe(false)
+  })
+
+  it.each([
+    ['reverse charge', { reverse_charge: true }],
+    ['exempt', { vat_treatment: 'exempt' }],
+    ['export', { vat_treatment: 'export' }],
+  ])('refuses a vat_breakdown under %s', (_label, overrides) => {
+    const result = CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({
+      ...overrides,
+      items: [validSupplierInvoiceItem({ vat_rate: 0 })],
+      vat_breakdown: [{ vat_rate: 0.25, vat_amount: 1250 }],
+    }))
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.some((i) => i.path.join('.') === 'vat_breakdown')).toBe(true)
+  })
+
+  it('lets a negative line carry its negative VAT, never the opposite sign', () => {
+    const negative = validSupplierInvoiceItem({ amount: -2107.7, vat_rate: 0.25 })
+    // -2 107,70 x 25 % = -526,925, -526,92 rounded; an öre of rounding either way.
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...negative, vat_amount: -526.93 }).success).toBe(true)
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...negative, vat_amount: -526.94 }).success).toBe(false)
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...negative, vat_amount: 526.92 }).success).toBe(false)
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...validSupplierInvoiceItem(), vat_amount: -1 }).success).toBe(false)
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...validSupplierInvoiceItem(), vat_amount: 0 }).success).toBe(true)
   })
 })
 
@@ -1602,6 +1807,16 @@ describe('CategorizeTransactionSchema', () => {
       account_override: '1250',
     })
     expect(result.success).toBe(true)
+  })
+
+  it('accepts the basis box of a reverse charge, and only on a reverse charge', () => {
+    const base = { is_business: true, category: 'expense_software' }
+    for (const reverse_charge_kind of ['eu_goods', 'eu_services', 'non_eu_services']) {
+      expect(CategorizeTransactionSchema.safeParse({ ...base, vat_treatment: 'reverse_charge', reverse_charge_kind }).success).toBe(true)
+    }
+    expect(CategorizeTransactionSchema.safeParse({ ...base, vat_treatment: 'standard_25', reverse_charge_kind: 'non_eu_services' }).success).toBe(false)
+    expect(CategorizeTransactionSchema.safeParse({ ...base, reverse_charge_kind: 'non_eu_services' }).success).toBe(false)
+    expect(CategorizeTransactionSchema.safeParse({ ...base, vat_treatment: 'reverse_charge', reverse_charge_kind: 'usa' }).success).toBe(false)
   })
 
   it('rejects missing is_business', () => {
@@ -2303,6 +2518,123 @@ describe('UpdateSettingsSchema', () => {
       expect(result.success).toBe(false)
     })
   })
+
+  // Swedbank's own ids for payment files (crm#1117, lib/payments/swedbank.ts).
+  describe('Swedbank payment-file ids', () => {
+    it('accepts both ids in Swedbank format', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        swedbank_signer_id: '123456789ORI0001',
+        swedbank_corporate_pay_id: '123456789CPO0001',
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.swedbank_signer_id).toBe('123456789ORI0001')
+        expect(result.data.swedbank_corporate_pay_id).toBe('123456789CPO0001')
+      }
+    })
+
+    it('normalises what was typed: spaces, hyphens, lower case', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        swedbank_signer_id: '123456789-ori-0001',
+        swedbank_corporate_pay_id: ' 123456789 cpo 0001 ',
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.swedbank_signer_id).toBe('123456789ORI0001')
+        expect(result.data.swedbank_corporate_pay_id).toBe('123456789CPO0001')
+      }
+    })
+
+    it('clears an id with an empty string or null', () => {
+      const result = UpdateSettingsSchema.safeParse({ swedbank_signer_id: '', swedbank_corporate_pay_id: null })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.swedbank_signer_id).toBeNull()
+        expect(result.data.swedbank_corporate_pay_id).toBeNull()
+      }
+    })
+
+    it('refuses an org number, a swapped id or a short id, naming the format', () => {
+      for (const [field, value, format] of [
+        ['swedbank_signer_id', '5566778899', '123456789ORI0001'],
+        ['swedbank_signer_id', '123456789CPO0001', '123456789ORI0001'],
+        ['swedbank_corporate_pay_id', '123456789ORI0001', '123456789CPO0001'],
+        ['swedbank_corporate_pay_id', '12345678CPO0001', '123456789CPO0001'],
+      ] as const) {
+        const result = UpdateSettingsSchema.safeParse({ [field]: value })
+        expect(result.success, `${field}=${value}`).toBe(false)
+        if (!result.success) expect(result.error.issues[0].message).toContain(format)
+      }
+    })
+
+    // Swedbank gives a new company 06 + organisationsnummer + B001 (payments)
+    // and R001 (reporting) for its ISO 20022 1.0 file service and tells it to
+    // enter them in the business system (agent feedback seq 2321961). The
+    // files here follow ISO 2.0, so the number is refused by name.
+    it('refuses Swedbank\'s ISO 1.0 agreement number by name in both fields, as typed', () => {
+      for (const field of ['swedbank_signer_id', 'swedbank_corporate_pay_id'] as const) {
+        for (const typed of ['065566778899B001', '06 556677-8899 b001', '065566778899R001']) {
+          const result = UpdateSettingsSchema.safeParse({ [field]: typed })
+          expect(result.success, `${field}=${typed}`).toBe(false)
+          if (result.success) continue
+          expect(result.error.issues).toHaveLength(1)
+          const [issue] = result.error.issues
+          expect(issue.path).toEqual([field])
+          expect(issue.message).toContain('avtalsnummer för ISO 20022 1.0')
+          expect(issue.message).toContain('Betala via banken behövs inget filavtal')
+          expect(issue.message).toContain('123456789ORI0001')
+          expect(issue.message).toContain('123456789CPO0001')
+          expect((issue as { params?: { en?: string } }).params?.en).toContain('ISO 20022 1.0 agreement number')
+        }
+      }
+    })
+
+    it('keeps the format refusal for a 16-character id that is not the ISO 1.0 shape', () => {
+      for (const typed of ['075566778899B001', '065566778899C001', '0655667788B001']) {
+        const result = UpdateSettingsSchema.safeParse({ swedbank_signer_id: typed })
+        expect(result.success, typed).toBe(false)
+        if (!result.success) expect(result.error.issues[0].message).toBe('SignerID ska ha formatet 123456789ORI0001 (9 siffror, ORI, 4 siffror)')
+      }
+    })
+
+    it('answers the ISO 1.0 refusal to an agent in English and Swedish', () => {
+      const result = UpdateSettingsSchema.safeParse({ swedbank_signer_id: '065566778899B001' })
+      expect(result.success).toBe(false)
+      if (result.success) return
+      const error = getStructuredError(result.error)
+      expect(error.code).toBe('VALIDATION_ERROR')
+      expect(error.message_en).toContain('swedbank_signer_id: This is Swedbank\'s ISO 20022 1.0 agreement number')
+      expect(error.message_en).toContain('Pay through the bank needs no file agreement')
+      expect(error.message_sv).toContain('Det här är Swedbanks avtalsnummer för ISO 20022 1.0')
+    })
+  })
+
+  // Nordea's Signer ID for payment files (crm#1530, lib/payments/nordea.ts).
+  describe('Nordea Signer ID', () => {
+    it('stores what was typed normalised: spaces, hyphens, lower case', () => {
+      for (const typed of ['NB10000123456', 'nb 1000 0123 456', 'NB-10000-123456']) {
+        const result = UpdateSettingsSchema.safeParse({ nordea_signer_id: typed })
+        expect(result.success, typed).toBe(true)
+        if (result.success) expect(result.data.nordea_signer_id).toBe('NB10000123456')
+      }
+    })
+
+    it('clears it with an empty string or null', () => {
+      for (const value of ['', '  ', null]) {
+        const result = UpdateSettingsSchema.safeParse({ nordea_signer_id: value })
+        expect(result.success).toBe(true)
+        if (result.success) expect(result.data.nordea_signer_id).toBeNull()
+      }
+    })
+
+    it('refuses other characters and more than 35, naming the rule', () => {
+      for (const value of ['NB1000/0123', 'Å1234', 'N'.repeat(36)]) {
+        const result = UpdateSettingsSchema.safeParse({ nordea_signer_id: value })
+        expect(result.success, value).toBe(false)
+        if (!result.success) expect(result.error.issues[0].message).toContain('bokstäver och siffror')
+      }
+    })
+  })
 })
 
 // ============================================================
@@ -2539,6 +2871,57 @@ describe('BankLinkSchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  it('accepts a split over MAX_BANK_ROW_SPLIT verifikat and refuses one more', () => {
+    const slices = (n: number) =>
+      Array.from({ length: n }, () => ({ journal_entry_id: crypto.randomUUID(), amount: 100 }))
+    expect(BankLinkSchema.safeParse({ transaction_id: validUuid, allocations: slices(MAX_BANK_ROW_SPLIT) }).success).toBe(true)
+    expect(BankLinkSchema.safeParse({ transaction_id: validUuid, allocations: slices(MAX_BANK_ROW_SPLIT + 1) }).success).toBe(false)
+  })
+})
+
+describe('MatchBatchSchema', () => {
+  const allocations = (n: number) =>
+    Array.from({ length: n }, () => ({ kind: 'customer_invoice' as const, invoice_id: crypto.randomUUID(), amount: 100 }))
+
+  it('accepts a batch over MAX_BANK_ROW_SPLIT invoices (a ROT/RUT payout pays one per buyer)', () => {
+    expect(MatchBatchSchema.safeParse({ allocations: allocations(MAX_BANK_ROW_SPLIT) }).success).toBe(true)
+  })
+
+  it('refuses one allocation more, naming the cap', () => {
+    const result = MatchBatchSchema.safeParse({ allocations: allocations(MAX_BANK_ROW_SPLIT + 1) })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0].message).toBe(`At most ${MAX_BANK_ROW_SPLIT} allocations per batch`)
+  })
+
+  // Issue #131: a payment service's fee on the row.
+  describe('fees', () => {
+    const fee = (account: string, amount: number, description?: string) => ({ account, amount, ...(description ? { description } : {}) })
+
+    it('takes up to five class 6 rows with an optional text', () => {
+      const fees = [fee('6570', 15, 'Stripe'), fee('6040', 1), fee('6064', 1), fee('6570', 1), fee('6590', 1)]
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees }).success).toBe(true)
+    })
+
+    it('refuses a sixth row, an account outside class 6, a number account and a zero amount', () => {
+      const six = Array.from({ length: 6 }, () => fee('6570', 1))
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: six }).success).toBe(false)
+      for (const account of ['4535', '1930', '657']) {
+        const result = MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee(account, 1)] })
+        expect(result.success).toBe(false)
+      }
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [{ account: 6570, amount: 1 }] }).success).toBe(false)
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee('6570', 0)] }).success).toBe(false)
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [{ account: '6570', amount: 1, description: 'x'.repeat(101) }] }).success).toBe(false)
+    })
+
+    it('refuses fees as large as the invoices they settle', () => {
+      const result = MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee('6570', 200)] })
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].path).toEqual(['fees'])
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee('6570', 199.99)] }).success).toBe(true)
+    })
+  })
 })
 
 // ============================================================
@@ -2712,9 +3095,15 @@ describe('UpdateSupplierSchema', () => {
   it('accepts partial update', () => {
     const result = UpdateSupplierSchema.safeParse({
       name: 'New Supplier',
-      bankgiro: '999-8888',
+      bankgiro: '5050-1055',
     })
     expect(result.success).toBe(true)
+  })
+
+  // The register's one rule set: an update that sends a bankgiro sends one a
+  // payment file can route, as a create must.
+  it('refuses a bankgiro whose check digit is wrong', () => {
+    expect(UpdateSupplierSchema.safeParse({ bankgiro: '999-8888' }).success).toBe(false)
   })
 
   // Update routes pass fields straight into .update(), where undefined keys
@@ -3224,6 +3613,35 @@ describe('CreateEmployeeSchema bank details', () => {
 // Employee update contract (#3008): null clears, an absent key is unchanged
 // ============================================================
 
+describe('employee semestertillagg_rate bound (crm#1529)', () => {
+  // The employee forms send the percentage field as a fraction; a
+  // kollektivavtal tillägg such as 0,8 % (0.008) must fit the 0..0.05 bound.
+  it('accepts 0,8 % on create and update, and defaults to the statutory 0,43 %', () => {
+    const create = {
+      first_name: 'Anna',
+      last_name: 'Andersson',
+      personnummer: '199001011234',
+      employment_start: '2026-01-01',
+      salary_type: 'monthly' as const,
+      monthly_salary: 30000,
+      f_skatt_status: 'a_skatt' as const,
+      tax_table_number: 33,
+      tax_municipality: 'Stockholm',
+      vacation_rule: 'sammaloneregeln' as const,
+    }
+    const created = CreateEmployeeSchema.safeParse({ ...create, semestertillagg_rate: 0.008 })
+    expect(created.success && created.data.semestertillagg_rate).toBe(0.008)
+    const defaulted = CreateEmployeeSchema.safeParse(create)
+    expect(defaulted.success && defaulted.data.semestertillagg_rate).toBe(0.0043)
+    expect(UpdateEmployeeSchema.safeParse({ semestertillagg_rate: 0.008 }).success).toBe(true)
+  })
+
+  it('refuses a percentage typed as a fraction above 5 %', () => {
+    expect(UpdateEmployeeSchema.safeParse({ semestertillagg_rate: 0.8 }).success).toBe(false)
+    expect(UpdateEmployeeSchema.safeParse({ semestertillagg_rate: -0.001 }).success).toBe(false)
+  })
+})
+
 describe('UpdateEmployeeSchema clearing optional fields', () => {
   // Every column that is nullable in the database (and in types Employee).
   const CLEARABLE = [
@@ -3240,11 +3658,15 @@ describe('UpdateEmployeeSchema clearing optional fields', () => {
     'address_line1',
     'postal_code',
     'city',
+    'fora_fok_id',
+    'fora_fok_start_date',
     'vaxa_stod_start',
     'vaxa_stod_end',
     'jamkning_percentage',
     'jamkning_valid_from',
     'jamkning_valid_to',
+    'extra_tax_amount',
+    'extra_tax_percentage',
   ]
 
   it.each(CLEARABLE)('accepts null for %s and keeps it in the parsed patch', (field) => {
@@ -3438,6 +3860,7 @@ describe('salary calculation policy and engångsskatt shapes', () => {
         leave_context: 'all_registered',
         net_rounding: 'up',
         one_off_tax_rounding: 'truncate',
+        vacation_day_value: 'daily_divisor',
       })
     }
     expect(Schema.safeParse({ salary_calculation_policy: { sick_rate: 'hourly' } }).success).toBe(false)
@@ -3480,5 +3903,55 @@ describe('CreateJournalEntryLineSchema: cost_center/project aliases follow the b
       const result = CreateJournalEntryLineSchema.safeParse(line(bad))
       expect(result.success).toBe(false)
     }
+  })
+})
+
+describe('vacation_days_per_year: 25-day minimum except with vacation_rule none (agent feedback seq 828138)', () => {
+  const owner = {
+    first_name: 'Test',
+    last_name: 'Testsson',
+    personnummer: '199001011234',
+    employment_type: 'company_owner' as const,
+    employment_start: '2026-01-01',
+    salary_type: 'monthly' as const,
+    monthly_salary: 30000,
+    f_skatt_status: 'a_skatt' as const,
+    is_sidoinkomst: false,
+    tax_table_number: 33,
+    tax_municipality: 'Stockholm',
+  }
+
+  it('accepts 0 days for a company owner with vacation_rule none', () => {
+    const result = CreateEmployeeSchema.safeParse({ ...owner, vacation_rule: 'none', vacation_days_per_year: 0 })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.vacation_days_per_year).toBe(0)
+  })
+
+  it('refuses 20 days under any other rule', () => {
+    for (const rule of ['procentregeln', 'sammaloneregeln', 'semesterersattning']) {
+      const result = CreateEmployeeSchema.safeParse({ ...owner, vacation_rule: rule, vacation_days_per_year: 20 })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues.map((i) => i.path.join('.'))).toContain('vacation_days_per_year')
+      }
+    }
+  })
+
+  it('refuses fewer than 25 days with the default rule (procentregeln)', () => {
+    expect(CreateEmployeeSchema.safeParse({ ...owner, vacation_days_per_year: 24 }).success).toBe(false)
+  })
+
+  it('keeps the 0-40 bounds and the 25 default', () => {
+    expect(CreateEmployeeSchema.safeParse({ ...owner, vacation_rule: 'none', vacation_days_per_year: -1 }).success).toBe(false)
+    expect(CreateEmployeeSchema.safeParse({ ...owner, vacation_days_per_year: 41 }).success).toBe(false)
+    const parsed = CreateEmployeeSchema.safeParse(owner)
+    expect(parsed.success && parsed.data.vacation_days_per_year).toBe(25)
+  })
+
+  it('update: checks the pair when the body carries both keys', () => {
+    expect(UpdateEmployeeSchema.safeParse({ vacation_rule: 'none', vacation_days_per_year: 0 }).success).toBe(true)
+    expect(UpdateEmployeeSchema.safeParse({ vacation_rule: 'procentregeln', vacation_days_per_year: 20 }).success).toBe(false)
+    // One key alone is left to the merged-row rule (employee-update-rules).
+    expect(UpdateEmployeeSchema.safeParse({ vacation_days_per_year: 0 }).success).toBe(true)
   })
 })

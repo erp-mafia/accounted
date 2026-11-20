@@ -1,26 +1,50 @@
 import { after } from 'next/server'
+import type { ReactNode } from 'react'
+import Link from 'next/link'
+import { getTranslations } from 'next-intl/server'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
+import { formatDate } from '@/lib/utils'
+import type { HemView } from '@/components/dashboard/att-gora-views'
+import { dueStateOf } from '@/components/dashboard/need-model'
 import { countCompletedSieImports, countInboxItems, countTransactions, readActiveBankConnections } from './hem-reads'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
+import {
+  getSkatteverketOmbudAppointment,
+  hasSkatteverketOmbudReadAccess,
+  isSkatteverketOmbudEnabled,
+} from '@/lib/skatteverket/ombud-access'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
-import type { AiClient } from '@/lib/onboarding/ai-clients'
+import type { AiClient, AiConnection } from '@/lib/onboarding/ai-clients'
 import ResumePane from '@/components/dashboard/ResumePane'
 import { HemNotices } from '@/components/dashboard/HemNotices'
 import {
   getWorklistCounts,
+  listAttestedToPayDue,
+  listBankSwitchDue,
+  listDocumentsToSign,
   listExpensePayoutsDue,
+  listPaymentsFailedDue,
+  listPaymentsToSignDue,
+  listPaymentsVerificationDue,
   listSkattekontoPaymentDue,
   listSuggestedMatches,
+  listSupplierInvoiceAttestsDue,
+  listSupplierPayeeChangesDue,
   SUGGESTED_MATCH_SCAN_CAP,
 } from '@/lib/worklist'
 import { listResumeItems } from '@/lib/worklist/resume'
 import { listMissingUnderlagSample } from '@/lib/worklist/missing-underlag'
+import { listOpenSuggestions } from '@/lib/suggestions/list'
+import { loadGrantReview } from '@/lib/grants/review'
 import { getCompanyNotices } from '@/lib/notices'
+import type { Notice } from '@/lib/notices/types'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
-import { vatDeadlineLine } from '@/lib/onboarding/checklist'
+import { RECEIPT_UPLOAD_SOURCES, hasBankFeed, skippedSetupSteps, vatDeadlineLine } from '@/lib/onboarding/checklist'
 import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createServiceClient } from '@/lib/supabase/server'
-import type { InitialSetupState, MomsPeriod, OnboardingProgress } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { InitialSetupState, MomsPeriod, OnboardingProgress, UserUiState } from '@/types'
 import { getDashboardAuthContext } from './request-context'
 
 /**
@@ -66,11 +90,24 @@ export async function HemNoticesSection({
     now,
     deferReap: (task) => after(task),
   })
-  // The Skatteverket reconnect has its own places (the Konton row and the
-  // Skattekonto page); a line about it over every visit to Att göra was
-  // noise (founder feedback 2026-09-09).
-  return <HemNotices notices={notices.filter((n) => n.category !== 'skv_disconnected')} />
+  return <HemNotices notices={notices.filter((n) => !HEM_NOTICE_SLOT_SKIPS.has(n.category))} />
 }
+
+/**
+ * Notice categories Hem leaves out of its notice slot. The Skatteverket
+ * reconnect has its own places (the Konton row and the Skattekonto page); a
+ * line about it over every visit to Att göra was noise (feedback
+ * 2026-09-09). The bank switch and the expiring consent are Att göra rows
+ * (the switch rows and the Bevaka consent row in AttGoraSection), fed by the
+ * same computations as the notices (switchStateFor, expiringBankConnectionsFrom),
+ * so the row shows in every case the notice would and saying it twice on one
+ * page is clutter (convention 6).
+ */
+const HEM_NOTICE_SLOT_SKIPS: ReadonlySet<Notice['category']> = new Set([
+  'skv_disconnected',
+  'bank_switch_needed',
+  'bank_connection_expiring',
+])
 
 export async function HemChecklistSection({
   companyId,
@@ -85,7 +122,7 @@ export async function HemChecklistSection({
   userId: string
   now: Date
   initialSetup: InitialSetupState
-  /** Live OAuth-minted MCP key exists for this user: see claudeStepDone(). */
+  /** An agent is connected: AiConnection.connected (lib/onboarding/ai-clients). */
   hasMcpKey: boolean
   vatRegistered: boolean
   momsPeriod: MomsPeriod | null
@@ -102,6 +139,11 @@ export async function HemChecklistSection({
     { data: nextVatDeadline },
     { data: latestFileSweep },
     unfinishedConnect,
+    skvOmbudReadAccess,
+    { data: receiptDocuments },
+    { data: userPreferences },
+    skvOmbudEnabled,
+    skvOmbudAppointment,
   ] = await Promise.all([
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -127,7 +169,7 @@ export async function HemChecklistSection({
       .in('tax_deadline_type', ['moms_monthly', 'moms_quarterly', 'moms_yearly'])
       .eq('is_completed', false)
       .is('dismissed_at', null)
-      .gte('due_date', now.toISOString().slice(0, 10))
+      .gte('due_date', todayIsoStockholm(now))
       .order('due_date', { ascending: true })
       .limit(1)
       .maybeSingle(),
@@ -148,16 +190,33 @@ export async function HemChecklistSection({
     ENABLED_EXTENSION_IDS.has('arcim-migration')
       ? findUnfinishedConnect(createServiceClient(), companyId, now)
       : Promise.resolve(null),
+    // Accounted as ombud also counts as connected: its reads need no
+    // personal BankID session (lib/skatteverket/ombud-access.ts).
+    hasSkatteverketOmbudReadAccess(companyId),
+    // A document a person put in another way (photo or upload onto a
+    // transaction, mail, WhatsApp) also means receipts are flowing: the step
+    // used to stay open for them while only an inbox item counted.
+    supabase
+      .from('document_attachments')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('upload_source', [...RECEIPT_UPLOAD_SOURCES])
+      .limit(1),
+    // The Kom igång steps this user skipped for this company.
+    supabase.from('user_preferences').select('ui_state').eq('user_id', userId).maybeSingle(),
+    isSkatteverketOmbudEnabled(),
+    // Appointed but not yet in Skatteverket's register: the step says it waits.
+    getSkatteverketOmbudAppointment(companyId),
   ])
 
   const connections = (bankConnections ?? []) as BankConnectionRow[]
   const onboardingProgress: OnboardingProgress = {
     hasCustomers: (customerCount || 0) > 0,
     hasInvoices: (invoiceCount || 0) > 0,
-    hasBankConnected: connections.length > 0 || (transactionCount || 0) > 0,
+    hasBankConnected: hasBankFeed({ activeBankConnections: connections.length, transactionCount: transactionCount || 0 }),
     hasSIEImport: (sieImportCount || 0) > 0,
-    hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0,
-    hasInboxItems: (inboxItemCount || 0) > 0,
+    hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess,
+    hasInboxItems: (inboxItemCount || 0) > 0 || (receiptDocuments ?? []).length > 0,
   }
 
   const vatLine = vatDeadlineLine({
@@ -183,8 +242,11 @@ export async function HemChecklistSection({
       hasBookkeepingImported={onboardingProgress.hasSIEImport}
       hasBankConnected={onboardingProgress.hasBankConnected}
       hasSkatteverketConnected={onboardingProgress.hasSkatteverketConnected}
+      skvOmbudEnabled={skvOmbudEnabled}
+      skvOmbudWaiting={skvOmbudAppointment.state === 'waiting'}
       hasInboxItems={onboardingProgress.hasInboxItems}
       hasMcpKey={hasMcpKey}
+      skippedSteps={skippedSetupSteps(userPreferences?.ui_state as UserUiState | null, companyId)}
       vatLine={vatLine}
       unfinishedConnect={unfinishedConnect ? { provider: unfinishedConnect.provider } : null}
       sieSweep={
@@ -206,19 +268,31 @@ export async function HemPanesSection({
   now,
   setupOpen,
   hasSkatteverketConnected,
-  aiClients,
+  aiConnection,
+  firstTaskClient,
+  view = 'hem',
+  initialStep = null,
+  afterHeadline,
 }: {
+  /** Which face of Att göra to draw (AttGoraSection.view). */
+  view?: HemView
+  /** Börja: the step to open on. */
+  initialStep?: string | null
+  /** Hem: Kom igång and the assistant prompt, drawn under the headline. */
+  afterHeadline?: ReactNode
   companyId: string
   now: Date
   setupOpen: boolean
   hasSkatteverketConnected: boolean
-  /** See AttGoraSection.aiClients. */
-  aiClients: AiClient[]
+  /** See AttGoraSection.aiConnection. */
+  aiConnection: AiConnection
+  /** See AttGoraSection.firstTaskClient. */
+  firstTaskClient: AiClient | null
 }) {
-  const { supabase } = await getDashboardAuthContext()
-  // Fetched once at the scan cap: the Att göra pane shows the first five and
-  // the worklist count is the list's length (it used to scan the same rows
-  // twice). Everything else runs in the same wave.
+  const { supabase, user } = await getDashboardAuthContext()
+  // Fetched once at the scan cap: the worklist count is the list's length,
+  // which the Att göra suggested-matches row shows. Everything else runs in
+  // the same wave.
   const suggestedMatchesPromise = listSuggestedMatches(supabase, companyId, SUGGESTED_MATCH_SCAN_CAP)
   // Same pattern for people owed for utlägg: Hem renders one row per person
   // and the worklist count is the list's length.
@@ -230,15 +304,64 @@ export async function HemPanesSection({
   // need fetching from as the row's detail line, and the worklist count is the
   // total from the same RPC call rather than a second one at p_limit 1.
   const missingUnderlagPromise = listMissingUnderlagSample(supabase, companyId)
+  // And for the bank connections still to switch to Open Payments: Hem
+  // renders one row per connection with its deep link; the count is the
+  // list's length.
+  const bankSwitchPromise = listBankSwitchDue(supabase, companyId, now)
+  // And for the payments verification to renew: Hem renders it as one row
+  // with the days left; the count is 1 or 0 from the same read.
+  const paymentsVerificationPromise = listPaymentsVerificationDue(supabase, companyId, now)
+  // And the invoices waiting for this person's attest under the attest
+  // policy: one row each, a per-person view of the company's attest count.
+  const attestsDuePromise = user ? listSupplierInvoiceAttestsDue(supabase, companyId, user.id) : Promise.resolve([])
+  // And the documents waiting for this person's BankID signature: one row
+  // each, the count is the list's length.
+  const documentsToSignPromise = user ? listDocumentsToSign(supabase, companyId, user.id, now) : Promise.resolve([])
+  // And for supplier invoices with bank details nobody approved: one row per
+  // invoice, the count is the list's length.
+  const supplierPayeeChangesPromise = listSupplierPayeeChangesDue(supabase, companyId)
+  // And for supplier invoices whose bank payment did not go through: one row
+  // per invoice, the count is the list's length.
+  const paymentsFailedPromise = listPaymentsFailedDue(supabase, companyId)
+  // And the supplier invoices that wait to be paid: one Betala row, without
+  // the ones the failed-payment rows above already show.
+  const attestedToPayPromise = listAttestedToPayDue(supabase, companyId, { paymentsFailed: paymentsFailedPromise })
+  // And the bank payments that wait for a person's approval or BankID
+  // signature: one Signera row, the count comes from the same read.
+  const paymentsToSignPromise = listPaymentsToSignDue(supabase, companyId)
+  // And the open suggestions: one Förslag card each (at most three); the
+  // count is the list's length.
+  const openSuggestionsPromise = listOpenSuggestions(supabase, companyId)
+  // And what the company's rules for automatic booking let through since the
+  // last review (one indexed probe for a company that never had a rule), with
+  // the agent that booked each posting.
+  const grantReviewPromise = loadGrantReview(supabase, companyId, { withAgents: true })
+  // Whether the company has one posted entry: asked as "is there one", never
+  // "how many" (the exact count walked every verifikat of the company on each
+  // Hem load: 154 000 for the largest, 230 ms). Two places read it, each only
+  // in the one state it matters in.
+  const firstPostedEntry = () =>
+    supabase.from('journal_entries').select('id').eq('company_id', companyId).in('status', ['posted', 'reversed']).limit(1)
   const [
     worklist,
-    suggestedMatches,
     expensePayouts,
     skattekontoPayment,
     missingUnderlag,
+    bankSwitches,
+    paymentsVerification,
+    supplierPayeeChanges,
+    openSuggestions,
+    grantReview,
     resumeItems,
     bankConnectionsRes,
     postedEntries,
+    attestsDue,
+    suggestedMatches,
+    documentsToSign,
+    paymentsFailed,
+    attestedToPay,
+    paymentsToSign,
+    nextDeadlineRes,
   ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
@@ -248,29 +371,76 @@ export async function HemPanesSection({
         expensePayoutsDue: expensePayoutsPromise,
         skattekontoPaymentDue: skattekontoPaymentPromise,
         missingUnderlag: missingUnderlagPromise,
+        bankSwitchDue: bankSwitchPromise,
+        paymentsVerificationDue: paymentsVerificationPromise,
+        supplierPayeeChangesDue: supplierPayeeChangesPromise,
+        paymentsFailedDue: paymentsFailedPromise,
+        openSuggestions: openSuggestionsPromise,
+        documentsToSign: documentsToSignPromise,
+        attestedToPayDue: attestedToPayPromise,
+        paymentsToSignDue: paymentsToSignPromise,
       }),
-      suggestedMatchesPromise,
       expensePayoutsPromise,
       skattekontoPaymentPromise,
       missingUnderlagPromise,
+      bankSwitchPromise,
+      paymentsVerificationPromise,
+      supplierPayeeChangesPromise,
+      openSuggestionsPromise,
+      grantReviewPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
-      // Posted entries distinguish "brand-new empty ledger" from "all caught
-      // up" in the Att göra empty state (hits the partial posted/reversed index).
-      supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).in('status', ['posted', 'reversed']),
+      // One posted entry distinguishes "brand-new empty ledger" from "all
+      // caught up" in the Att göra empty state, read only while the setup
+      // checklist is open.
+      setupOpen ? firstPostedEntry() : null,
+      attestsDuePromise,
+      // The several-invoice payments among them get rows of their own.
+      suggestedMatchesPromise,
+      documentsToSignPromise,
+      paymentsFailedPromise,
+      attestedToPayPromise,
+      paymentsToSignPromise,
+      // Hem's glance line: the next open deadline from today on (the same
+      // rows /deadlines lists; its stored title is shown as it is there).
+      view === 'hem'
+        ? filterOpenDeadlines(
+            supabase.from('deadlines').select('title, due_date').eq('company_id', companyId),
+          )
+            .gte('due_date', todayIsoStockholm(now))
+            .order('due_date', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+        : null,
     ])
 
   // "Empty ledger" only matters while the setup checklist is still open; once
   // it is completed or dismissed the ordinary all-clear copy applies. A failed
   // count must NOT read as empty: that would tell a company with real
   // bookkeeping that its ledger is blank, so errors degrade to the normal copy.
-  const emptyLedger = setupOpen && !postedEntries.error && (postedEntries.count || 0) === 0
+  const emptyLedger = !!postedEntries && !postedEntries.error && (postedEntries.data ?? []).length === 0
 
   const bankConnections = bankConnectionsRes.data
   // Same degrade-on-error rule as emptyLedger: a failed fetch must NOT tell a
   // connected company that no bank is connected, so errors read as connected.
   const hasActiveBankConnection = !!bankConnectionsRes.error || (bankConnections ?? []).length > 0
+
+  // Once the getting-started steps are closed, an empty list on an empty
+  // ledger with no bank row on its way is not "all done": finishing the books
+  // act without a bank lands exactly here. Asked only for that company (no
+  // posted entry, no active connection), so nobody else pays for the count,
+  // and a failed read keeps the ordinary copy, as above. The list above asks
+  // for a posted entry only while the checklist is open, so a company with a
+  // closed checklist and no active connection asks for it here (one row).
+  let noBankFeed = false
+  if (!setupOpen && !hasActiveBankConnection) {
+    const posted = await firstPostedEntry()
+    if (!posted.error && (posted.data ?? []).length === 0) {
+      const { count: transactionCount, error: transactionCountError } = await countTransactions(companyId)
+      noBankFeed = !transactionCountError && !hasBankFeed({ activeBankConnections: 0, transactionCount: transactionCount || 0 })
+    }
+  }
 
   // Same day-math as the bank_connection_expiring notice predicate
   // (lib/notices/categories.ts): the Bevaka row and the notice can never
@@ -280,27 +450,75 @@ export async function HemPanesSection({
     now,
   )
 
+  // The Skatteverket chip only shows for a company that is not connected, and
+  // says "väntar på Skatteverket" while the register has not listed its grant.
+  const skvOmbudEnabled = await isSkatteverketOmbudEnabled()
+  const skvOmbudWaiting =
+    skvOmbudEnabled &&
+    !setupOpen &&
+    !hasSkatteverketConnected &&
+    (await getSkatteverketOmbudAppointment(companyId)).state === 'waiting'
+
+  const tHem = await getTranslations('hem')
+  // A failed read leaves the line out: no deadline is not the same as none found.
+  const nextDeadline = nextDeadlineRes && !nextDeadlineRes.error ? nextDeadlineRes.data : null
+  // Due today or tomorrow is said in words (the row's own state); any other day is its date.
+  const nextDeadlineState = nextDeadline ? dueStateOf(nextDeadline.due_date, todayIsoStockholm(now)) : null
+  const facts = nextDeadline ? (
+    <p className="mt-1.5 text-[13px] text-muted-foreground">
+      {/* The label never breaks in two; on a narrow screen the deadline wraps under it as one piece. */}
+      <Link href="/deadlines" className="group inline-flex min-h-7 flex-wrap items-baseline gap-x-1.5 py-1">
+        <span className="whitespace-nowrap">{tHem('next_deadline')}</span>
+        <span className="font-medium text-strong group-hover:underline group-hover:underline-offset-[3px]">
+          {nextDeadlineState === 'today' ? (
+            tHem('next_deadline_today')
+          ) : nextDeadlineState === 'tomorrow' ? (
+            tHem('next_deadline_tomorrow')
+          ) : (
+            <span className="date-figures">{formatDate(nextDeadline.due_date)}</span>
+          )}
+          , {nextDeadline.title}
+        </span>
+      </Link>
+    </p>
+  ) : null
+
   return (
-    <>
-      <div className={resumeItems.length > 0 ? 'grid items-start gap-x-6 gap-y-8 md:grid-cols-2' : undefined}>
-        <AttGoraSection
-          worklist={worklist}
-          suggestedMatches={suggestedMatches.slice(0, 5)}
-          expensePayouts={expensePayouts}
-          skattekontoPayment={skattekontoPayment}
-          missingUnderlag={missingUnderlag}
-          expiringBankConnections={expiringBankConnections}
-          emptyLedger={emptyLedger}
-          hasActiveBankConnection={hasActiveBankConnection}
-          hasSkatteverketConnection={hasSkatteverketConnected}
-          aiClients={aiClients}
-          // While the getting-started checklist is open it carries the bank
-          // and Skatteverket steps itself; afterwards the kopplingar row keeps
-          // the connections visible for whoever declined them in the books act.
-          showKopplingar={!setupOpen}
-        />
-        <ResumePane items={resumeItems} />
-      </div>
-    </>
+    <AttGoraSection
+      view={view}
+      initialStep={initialStep}
+      todayIso={todayIsoStockholm(now)}
+      afterHeadline={afterHeadline}
+      facts={facts}
+      resume={view === 'borja' ? null : <ResumePane items={resumeItems} />}
+      worklist={worklist}
+      expensePayouts={expensePayouts}
+      attestsDue={attestsDue}
+      documentsToSign={documentsToSign}
+      skattekontoPayment={skattekontoPayment}
+      attestedToPay={attestedToPay}
+      paymentsToSign={paymentsToSign}
+      missingUnderlag={missingUnderlag}
+      bankSwitches={bankSwitches}
+      paymentsVerification={paymentsVerification}
+      supplierPayeeChanges={supplierPayeeChanges}
+      paymentsFailed={paymentsFailed}
+      invoiceSets={suggestedMatches.filter((m) => (m.allocations?.length ?? 0) > 0)}
+      suggestions={openSuggestions}
+      grantReview={grantReview}
+      expiringBankConnections={expiringBankConnections}
+      emptyLedger={emptyLedger}
+      noBankFeed={noBankFeed}
+      hasActiveBankConnection={hasActiveBankConnection}
+      hasSkatteverketConnection={hasSkatteverketConnected}
+      skvOmbudEnabled={skvOmbudEnabled}
+      skvOmbudWaiting={skvOmbudWaiting}
+      aiConnection={aiConnection}
+      firstTaskClient={firstTaskClient}
+      // While the getting-started checklist is open it carries the bank
+      // and Skatteverket steps itself; afterwards the kopplingar row keeps
+      // the connections visible for whoever declined them in the books act.
+      showKopplingar={!setupOpen}
+    />
   )
 }

@@ -3,7 +3,7 @@
  * own sentence. Wrapped as SIE_IMPORT_UNEXPECTED (500) it reached the wizard
  * as "Importens resultat kunde inte bekräftas" with the reason buried in
  * details.reason, and three imports of one file failed without a word about
- * the voucher that refused it (Easy Online Stores, 2026-09-16).
+ * the voucher that refused it (reported 2026-09-16).
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
@@ -19,6 +19,7 @@ vi.mock('@/lib/import/sie-job-worker', () => ({ runSIEWorker: vi.fn() }))
 
 import { arcimMigrationExtension } from '../index'
 import { submitSIEJob, SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { memoryIntakeStorage, intakePath } from './intake-storage'
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
 const handler = (arcimMigrationExtension.apiRoutes ?? []).find(
@@ -35,8 +36,13 @@ const MAPPINGS = [
   { sourceAccount: '3001', sourceName: 'Försäljning', targetAccount: '3001' },
 ]
 
+const PATH = intakePath('company-1')
+
 function buildCtx() {
-  const supabase = { auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) } }
+  const supabase = {
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+    storage: memoryIntakeStorage({ [PATH]: SIE }).storage,
+  }
   return { supabase, companyId: 'company-1', requestId: 'req-7', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
 
@@ -50,7 +56,7 @@ describe('POST /import-sie: validation reason', () => {
     ;(submitSIEJob as Mock).mockRejectedValueOnce(
       new SIEJobValidationError('SIE-verifikation LESSLIE3 (2025-01-02) ligger utanför räkenskapsåret.'),
     )
-    const response = await handler(request({ rawContent: SIE, mappings: MAPPINGS, options: {} }), buildCtx())
+    const response = await handler(request({ storagePath: PATH, mappings: MAPPINGS, options: {} }), buildCtx())
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; requestId: string } }>(response)
     expect(status).toBe(400)
     expect(body.error).toMatchObject({
@@ -66,7 +72,7 @@ describe('POST /import-sie: validation reason', () => {
       'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS',
       { account_numbers: ['9999'] },
     ))
-    const response = await handler(request({ rawContent: SIE, mappings: MAPPINGS, options: {} }), buildCtx())
+    const response = await handler(request({ storagePath: PATH, mappings: MAPPINGS, options: {} }), buildCtx())
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string; details: unknown } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS')
@@ -77,7 +83,7 @@ describe('POST /import-sie: validation reason', () => {
 
   it('names the unmapped accounts in a structured envelope instead of the legacy tag', async () => {
     const response = await handler(
-      request({ rawContent: SIE, mappings: [MAPPINGS[0], { ...MAPPINGS[1], targetAccount: '' }], options: {} }),
+      request({ storagePath: PATH, mappings: [MAPPINGS[0], { ...MAPPINGS[1], targetAccount: '' }], options: {} }),
       buildCtx(),
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string; details: { unmappedAccounts: unknown[] } } }>(response)

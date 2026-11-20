@@ -16,19 +16,16 @@
  * Response: 200 { created: number } (count of dimension_values created).
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { importExistingDimensionCodes } from '@/lib/dimensions/import-existing'
 import { sessionFailureResponse } from '@/lib/operations/session'
 
-ensureInitialized()
-
 export const POST = withRouteContext(
   'dimension.import_existing',
   async (_request, ctx) => {
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
 
-    const outcome = await importExistingDimensionCodes({ supabase, companyId, log })
+    const outcome = await importExistingDimensionCodes({ supabase, companyId, userId: user.id, log })
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json(outcome.preview)
     return NextResponse.json({ created: outcome.data.created })

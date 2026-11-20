@@ -63,7 +63,7 @@ async function insertEntryAtStatus(params: {
   })
   await insertBalancedLines(entryId)
   if (params.correctionOfId) {
-    // Drafts are mutable — set the correction link before posting; the
+    // Drafts are mutable - set the correction link before posting; the
     // immutability trigger blocks changing it afterwards.
     await getPool().query(
       `UPDATE public.journal_entries SET correction_of_id = $2 WHERE id = $1`,
@@ -112,7 +112,7 @@ describe('correction-document-relink.pg — relink_documents_to_correction RPC',
       journalEntryId: originalId,
     })
 
-    // This is exactly what relinkDocumentsToEntry used to run — and why it
+    // This is exactly what relinkDocumentsToEntry used to run - and why it
     // failed 100% of the time in production.
     await expect(
       getPool().query(
@@ -180,7 +180,7 @@ describe('correction-document-relink.pg — relink_documents_to_correction RPC',
     const client = await getPool().connect()
     try {
       await client.query('BEGIN')
-      // Service-role shape: role claim without a sub — auth.uid() is NULL.
+      // Service-role shape: role claim without a sub - auth.uid() is NULL.
       await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
         JSON.stringify({ role: 'service_role' }),
       ])
@@ -292,7 +292,7 @@ describe('correction-document-relink.pg — relink_documents_to_correction RPC',
     try {
       await client.query('BEGIN')
       await client.query(`SELECT set_config('gnubok.allow_correction_relink', 'true', true)`)
-      // Clearing to NULL would be a soft-delete bypass of BFL 7 kap 2§ —
+      // Clearing to NULL would be a soft-delete bypass of BFL 7 kap 2§:
       // must raise even under the GUC.
       await expect(
         client.query(

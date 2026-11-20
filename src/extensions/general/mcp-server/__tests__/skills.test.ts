@@ -5,7 +5,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
-import { workflowSkills, findSkill, SKILL_URI_PREFIX, skillUri, __resetAtomCache } from '../skills'
+import { workflowSkills, findSkill, closestSkillSlugs, SKILL_URI_PREFIX, skillUri, __resetAtomCache } from '../skills'
+import { toToolError } from '../tool-result'
+import { createQueuedMockSupabase } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -17,23 +19,28 @@ vi.mock('@/lib/supabase/server', () => ({
  *   - company_settings (entity_type + vat_registered, used by applicability filter)
  *   - employees (active count, used by applicability filter)
  *
- *  All test queries resolve to the same defaults: entity_type='AB',
- *  vat_registered=true, 1 active employee: so every applicability-filtered
- *  skill is included by default. Individual tests can override via the
- *  optional overrides parameter.
+ *  All test queries resolve to the same defaults: entity_type='aktiebolag'
+ *  (the stored form, never the skill tag 'AB'), vat_registered=true, 1 active
+ *  employee: so every applicability-filtered skill is included by default.
+ *  Individual tests can override via the optional overrides parameter.
  */
 function makeSupabaseWithEmptyAtomRegistry(
   rows: unknown[] = [],
   overrides: { entityType?: string | null; vatRegistered?: boolean; employeeCount?: number } = {},
   refRow: unknown = null,
   companySkillRows: unknown[] = [],
+  profileRows: unknown[] = [],
 ) {
-  const entityType = overrides.entityType ?? 'AB'
+  const entityType = overrides.entityType ?? 'aktiebolag'
   const vatRegistered = overrides.vatRegistered ?? true
   const employeeCount = overrides.employeeCount ?? 1
 
   return {
     from: vi.fn((table: string) => {
+      // The own items' creators (resolveCreators).
+      if (table === 'profiles') {
+        return { select: vi.fn(() => ({ in: vi.fn().mockResolvedValue({ data: profileRows, error: null }) })) }
+      }
       if (['company_skills', 'companies', 'agent_profiles'].includes(table)) {
         const chain: Record<string, ReturnType<typeof vi.fn>> = {
           select: vi.fn(() => chain), eq: vi.fn(() => chain), order: vi.fn(() => chain),
@@ -122,7 +129,7 @@ describe('private skill discovery through the dispatcher', () => {
     const row = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Private workflow', description: 'Company-specific instructions', body: 'Private instructions.', share_status: 'private', atom_id: null, company_id: 'company-1', team_id: null }
     const db = makeSupabaseWithEmptyAtomRegistry([], {}, null, [row])
     vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(db as never)
-    vi.mocked(validateApiKey).mockResolvedValueOnce({ userId: 'user-1', companyId: 'company-1', scopes: allowed ? ['agent:read'] : [], mode: 'live', unattendedCommitLimit: null, allowedCompanyIds: null, readOnlyCompanyIds: null })
+    vi.mocked(validateApiKey).mockResolvedValueOnce({ userId: 'user-1', companyId: 'company-1', scopes: allowed ? ['agent:read'] : [], mode: 'live', unattendedCommitLimit: null, allowedCompanyIds: null, readOnlyCompanyIds: null, serviceAccount: null })
     const result = await parseResult(await handleMcpRequest(mcpRequest('tools/call', { name: 'accounted_list_skills', arguments: {} })))
     expect(result.isError).not.toBe(true)
     const skills = JSON.parse(result.content[0].text).skills as { slug: string }[]
@@ -176,7 +183,7 @@ describe('Skills registry', () => {
     // so no text may claim Accounted validates against it.
     expect(allBodies).not.toMatch(/Accounted\s+(?:renders|generates|produces|validates)[^.\n]*EN\s*16931/i)
     // Peppol send is live behind a per-company access grant (app/api/invoices/[id]/peppol/send).
-    // A text that claims the capability is absent sends users to a competitor; say gated instead.
+    // A text must not claim a gated capability is absent; say gated instead.
     // The patterns take the capability as subject (active, passive and adjective forms) so that
     // the true statement "a v1 or MCP Peppol send action is not yet available" stays legal.
     const capabilityAbsentPatterns = [
@@ -217,11 +224,11 @@ describe('Skills registry', () => {
       // Where it lives, and that it is gated per company (with the English label for en-locale users).
       expect(text).toMatch(/invoice page in the dashboard/i)
       expect(text).toMatch(/(?:gated|access)[^.\n]*per company|per[- ]company[^.\n]*(?:access|gated)/i)
-      expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
+      expect(text).toContain('Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol)')
       expect(text).toMatch(/send cap/i)
       // The restrictions agents must not over-promise past (lib/invoices/peppol-bis-billing.ts).
       // Every legal form with an organisationsnummer sends; only enskild firma, whose org number
-      // is the owner's personnummer, waits for GLN (founder decision 2026-09-29).
+      // is the owner's personnummer, waits for GLN (product decision 2026-09-29).
       expect(text).toMatch(/organisationsnummer/i)
       expect(text).toMatch(/enskild firma/i)
       expect(text).not.toMatch(/aktiebolag senders|must be an aktiebolag/i)
@@ -269,11 +276,34 @@ describe('Skills registry', () => {
       expect(text).not.toMatch(/\(Peppol, postal/)
       expect(text).toMatch(/send-peppol/)
       expect(text).toMatch(/per-company access grant/)
-      expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
+      expect(text).toContain('Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol)')
       expect(text).toMatch(/senders whose org number is not a personnummer \(every legal form except enskild firma\), standard invoices only/)
       expect(text).toMatch(/buyers whose org number is not a personnummer/)
       expect(text).toMatch(/could not be marked as sent/)
     }
+  })
+
+  it('limits the kreditfaktura offset by link to invoices in SEK (crm#1059)', () => {
+    const body = skills.find((s) => s.slug === 'kreditfaktura-process')!.body
+    const offsetStep = body.split('\n').find((line) => line.startsWith('5. **Offset instead of refund**'))
+    expect(offsetStep).toBeDefined()
+
+    // On a foreign-currency invoice the link falls back to kronor, settles the whole remaining
+    // amount and books a real amount difference as kursdifferens, so the step stops at SEK.
+    expect(offsetStep).toMatch(/invoices in SEK only/)
+    expect(offsetStep).toMatch(/When the kreditfaktura and the new invoice are both in SEK[^.]*, stage `gnubok_link_invoice_to_voucher\(/)
+    expect(offsetStep).toMatch(/If either is in another currency, do not offset by link: hand the offset over to the user\./)
+    expect(offsetStep).toMatch(/kursdifferens \(7960\/3960\)/)
+
+    // Both refusals are hand-over signals, never something to retry around.
+    const handOver = offsetStep!.slice(offsetStep!.indexOf('Hand the offset over too'))
+    expect(handOver).toContain('`LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING`')
+    expect(handOver).toContain('`LINK_VOUCHER_CURRENCY_MISMATCH`')
+
+    // The stop conditions and the tool list repeat the limit.
+    const stopConditions = body.slice(body.indexOf('## Stop conditions'), body.indexOf('## Rules'))
+    expect(stopConditions).toMatch(/an offset the link cannot record \([^)]*in another currency than SEK\)/)
+    expect(body).toContain('`gnubok_link_invoice_to_voucher` (offset a kreditfaktura against a new invoice, both in SEK, staged)')
   })
 
   it('findSkill resolves the workflow skill or null (sync workflow lookup)', async () => {
@@ -374,7 +404,7 @@ describe('gnubok_list_skills tool', () => {
 
   it('applicability filter hides AB-only skills for EF companies', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
-    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'EF', employeeCount: 0, vatRegistered: true })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'enskild_firma', employeeCount: 0, vatRegistered: true })
     const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
       skills: Array<{ slug: string }>
       hidden_count: number
@@ -387,12 +417,33 @@ describe('gnubok_list_skills tool', () => {
     expect(slugs).toContain('invoicing-rules')
     expect(slugs).toContain('quarterly-vat-review') // vat_registered=true
     expect(result.hidden_count).toBeGreaterThan(0)
-    expect(result.company_context).toEqual({ entity_type: 'EF', has_employees: false, vat_registered: true })
+    expect(result.company_context).toEqual({ entity_type: 'enskild_firma', has_employees: false, vat_registered: true })
+  })
+
+  it.each([
+    ['aktiebolag', true],
+    ['enskild_firma', false],
+    ['ideell_forening', false],
+  ] as const)('shows the AB-only year-end close to %s: %s', async (entityType, shown) => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string }>
+      hidden_count: number
+      company_context: { entity_type: string | null }
+    }
+    const slugs = result.skills.map((s) => s.slug)
+    expect(slugs.includes('year-end-close')).toBe(shown)
+    // Skills tagged 'both' show for every form, a förening included.
+    expect(slugs).toContain('month-end-close')
+    expect(slugs).toContain('payroll-monthly')
+    expect(result.hidden_count).toBe(shown ? 0 : 1)
+    expect(result.company_context.entity_type).toBe(entityType)
   })
 
   it('include_all=true bypasses applicability filter', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
-    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'EF', employeeCount: 0, vatRegistered: false })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'enskild_firma', employeeCount: 0, vatRegistered: false })
     const filtered = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
       count: number
       hidden_count: number
@@ -441,6 +492,30 @@ describe('gnubok_list_skills tool', () => {
     // A curated workflow has no kind to tell apart, so it carries none.
     expect(result.skills.find((s) => s.slug === 'month-end-close')).not.toHaveProperty('item_kind')
   })
+
+  it('says who saved each own item, by name only', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const own = (n: number, createdBy: string) => ({
+      id: `bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb${n}`, name: `Own ${n}`, description: 'd', body: 'Steps.', share_status: 'private',
+      atom_id: null, company_id: 'company-1', team_id: null, created_by: createdBy,
+    })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], {}, null, [own(1, 'u-anna'), own(2, 'u-gone'), own(3, 'u-noname')], [
+      { id: 'u-anna', full_name: 'Anna Andersson', deleted_at: null, anonymized_at: null },
+      { id: 'u-gone', full_name: null, deleted_at: '2026-10-01T00:00:00Z', anonymized_at: '2026-10-01T00:00:00Z' },
+      { id: 'u-noname', full_name: null, deleted_at: null, anonymized_at: null },
+    ])
+    const result = (await tool.execute({ include_all: true, __keyScopes: ['agent:read'] }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<Record<string, unknown> & { slug: string }>
+    }
+    const item = (n: number) => result.skills.find((s) => s.slug === `own/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb${n}`)
+    expect(item(1)).toMatchObject({ created_by: 'Anna Andersson' })
+    expect(item(2)).toMatchObject({ created_by_deleted: true })
+    expect(item(2)).not.toHaveProperty('created_by')
+    expect(item(3)).not.toHaveProperty('created_by')
+    expect(item(3)).not.toHaveProperty('created_by_deleted')
+    // A curated workflow has no creator.
+    expect(result.skills.find((s) => s.slug === 'month-end-close')).not.toHaveProperty('created_by')
+  })
 })
 
 describe('gnubok_load_skill tool', () => {
@@ -476,12 +551,46 @@ describe('gnubok_load_skill tool', () => {
     ).rejects.toThrow(/Skill not found.*Available skills/)
   })
 
+  // A plain Error answered UNKNOWN_ERROR, "Något gick fel. Försök igen.",
+  // for a slug no retry finds (18 calls in 30 days).
+  it('answers NOT_FOUND with the closest slugs first and the full list kept', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const err = await tool
+      .execute({ slug: 'payroll' }, 'company-1', 'user-1', makeSupabaseWithEmptyAtomRegistry() as never, { type: 'api_key' })
+      .then(() => null, (e: unknown) => e)
+    const { error } = toToolError(err)
+    expect(error).toMatchObject({ code: 'NOT_FOUND', retryable: false, remediation: { tool: 'gnubok_list_skills' } })
+    expect(error.message_en).toMatch(/^Skill not found: "payroll"\. Closest: payroll-monthly\. Available skills: .*month-end-close/)
+    expect(error.message_sv).toBe('Resursen kunde inte hittas.')
+  })
+
+  it('says an own/ draft waits for a person to add it, instead of not found', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const id = '00000000-0000-4000-8000-0000000000aa'
+    const draft = { id, company_id: 'company-1', team_id: null, atom_id: null, name: 'Momsrutiner', description: '', body: '# Momsrutiner', share_status: 'private', created_by: 'user-1', updated_at: '2026-11-01T00:00:00Z', reviewed_at: null, published_atom_id: null, draft: true, kind: 'rules' }
+    const err = await tool
+      .execute({ slug: `own/${id}` }, 'company-1', 'user-1', makeSupabaseWithEmptyAtomRegistry([], {}, null, [draft]) as never, { type: 'api_key' })
+      .then(() => null, (e: unknown) => e)
+    const { error } = toToolError(err)
+    expect(error).toMatchObject({ code: 'NOT_FOUND', remediation: { description: expect.stringContaining('Instruktioner (/skills)') } })
+    expect(error.message_en).toContain('is a draft')
+  })
+
   it('throws when slug is missing or empty', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
     const supabase = makeSupabaseWithEmptyAtomRegistry()
     await expect(
       tool.execute({ slug: '' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
     ).rejects.toThrow(/slug is required/)
+  })
+
+  it('refuses an own/ slug to a key without agent:read, however the dispatcher read it', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
+    await expect(
+      tool.execute({ slug: ' own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', __keyScopes: ['reports:read'] }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+    ).rejects.toMatchObject({ code: 'INSUFFICIENT_SCOPE', message: expect.stringContaining('agent:read') })
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('resolves an atom slug from the registry and returns its DB body', async () => {
@@ -644,6 +753,89 @@ describe('gnubok_create_skill tool', () => {
     expect(body).toContain('gnubok_create_skill')
     expect(body).toContain('`kind`')
   })
+
+  // crm#1506: an agent could save an own item but never change or remove it.
+  describe('replace and delete an own item', () => {
+    const ID = '7c5314a6-ec58-4439-8dea-da98fc3ca4dd'
+    const ownRow = { id: ID, atom_id: null, share_status: 'private' }
+    const run = (input: Record<string, unknown>, supabase: unknown) =>
+      tool().execute(input, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+
+    it('declares the id and delete flag, and that it can delete', () => {
+      const properties = tool().inputSchema.properties as Record<string, unknown>
+      expect(properties.company_skill_id).toEqual({ type: 'string' })
+      expect(properties.delete).toEqual({ type: 'boolean' })
+      expect(tool().annotations.destructiveHint).toBe(true)
+      expect(tool().keywords).toEqual(expect.arrayContaining(['update', 'delete']))
+    })
+
+    it('replaces the content under the same id and returns it to draft', async () => {
+      const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+      enqueueMany([{ data: ownRow }, { data: { id: ID } }])
+      const result = await run({ ...args, company_skill_id: `own/${ID}`, steps: ['Hämta fakturorna.', 'Kolla momsen.', 'Kolla förfallodatum.'] }, supabase)
+      expect(result).toEqual({ company_skill_id: ID, slug: `own/${ID}` })
+      const row = findCall('company_skills', 'update')![0] as Record<string, unknown>
+      expect(row).toMatchObject({ kind: 'workflow', name: 'Månadens fakturor', draft: true })
+      expect(row.body).toContain('3. Kolla förfallodatum.')
+      // Never an insert, and only this company's own private row.
+      expect(findCall('company_skills', 'insert')).toBeUndefined()
+      expect(findCalls('company_skills', 'eq')).toEqual(expect.arrayContaining([['id', ID], ['company_id', 'company-1'], ['share_status', 'private']]))
+      expect(findCall('company_skills', 'is')).toEqual(['atom_id', null])
+    })
+
+    it('deletes an own item and the knowledge chosen for it', async () => {
+      const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+      enqueueMany([{ data: ownRow }, { data: { id: ID } }, { data: null }])
+      const result = await run({ company_skill_id: ID, delete: true }, supabase)
+      expect(result).toEqual({ company_skill_id: ID, slug: `own/${ID}`, deleted: true })
+      expect(findCall('company_skills', 'delete')).toEqual([])
+      expect(findCalls('company_skills', 'eq')).toEqual(expect.arrayContaining([['id', ID], ['company_id', 'company-1'], ['share_status', 'private']]))
+      expect(findCall('company_skills', 'is')).toEqual(['atom_id', null])
+      expect(findCalls('company_agent_knowledge', 'eq')).toEqual([['company_id', 'company-1'], ['agent_id', `own/${ID}`]])
+    })
+
+    it('refuses a catalog row, another company\'s item and a missing one as NOT_FOUND, and writes nothing', async () => {
+      for (const found of [{ ...ownRow, atom_id: 'workflow/month-end-close' }, null]) {
+        for (const input of [{ ...args, company_skill_id: ID }, { company_skill_id: ID, delete: true }]) {
+          const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+          enqueue({ data: found })
+          await expect(run(input, supabase)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+          expect(findCall('company_skills', 'update')).toBeUndefined()
+          expect(findCall('company_skills', 'delete')).toBeUndefined()
+        }
+      }
+    })
+
+    it('refuses an item shared with the community as CONFLICT, and writes nothing', async () => {
+      for (const input of [{ ...args, company_skill_id: ID }, { company_skill_id: ID, delete: true }]) {
+        const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+        enqueue({ data: { ...ownRow, share_status: 'submitted' } })
+        await expect(run(input, supabase)).rejects.toMatchObject({ code: 'CONFLICT' })
+        expect(findCall('company_skills', 'update')).toBeUndefined()
+        expect(findCall('company_skills', 'delete')).toBeUndefined()
+      }
+    })
+
+    it('refuses a delete with content or without an id, and a malformed id, before any read', async () => {
+      for (const input of [{ ...args, company_skill_id: ID, delete: true }, { delete: true }, { ...args, company_skill_id: 'own/not-a-uuid' }]) {
+        const { supabase } = createQueuedMockSupabase()
+        await expect(run(input, supabase)).rejects.toThrow()
+        expect(supabase.from).not.toHaveBeenCalled()
+      }
+    })
+
+    it('treats delete: false as an ordinary save', async () => {
+      const { supabase, insert } = insertMock()
+      await run({ ...args, delete: false }, supabase)
+      expect(insert).toHaveBeenCalledTimes(1)
+    })
+
+    it('tells the agent in the workflow how to change and remove a saved item', async () => {
+      const body = (await findSkill('create-skill'))?.body ?? ''
+      expect(body).toContain('`company_skill_id`')
+      expect(body).toContain('`delete: true`')
+    })
+  })
 })
 
 describe('Skills via MCP protocol', () => {
@@ -702,5 +894,36 @@ describe('Skills via MCP protocol', () => {
     const names = result.tools.map((t: { name: string }) => t.name)
     expect(names).toContain('gnubok_list_skills')
     expect(names).toContain('gnubok_load_skill')
+  })
+})
+
+describe('closestSkillSlugs', () => {
+  const SLUGS = [
+    'bookkeep', 'month-end-close', 'quarterly-vat-review', 'year-end-close', 'invoicing-rules', 'payroll-monthly',
+    'bank-reconciliation', 'reconcile-month', 'kvittojakten', 'kvittojakten-claude', 'horizontal/swedish-vat',
+    'horizontal/swedish-payroll', 'horizontal/swedish-accounting-compliance', 'horizontal/swedish-year-end-closing',
+    'horizontal/swedish-daily-bookkeeping',
+  ]
+
+  // The slugs agents sent in 30 days to 2026-11-08, and the skill each meant.
+  it.each([
+    ['payroll', 'payroll-monthly'],
+    ['month-close', 'month-end-close'],
+    ['year-end-closing', 'year-end-close'],
+    ['invoicing', 'invoicing-rules'],
+    ['agent/kvittojakten', 'kvittojakten'],
+    ['horizontal/bank-reconciliation', 'bank-reconciliation'],
+    ['swedish-vat', 'horizontal/swedish-vat'],
+    ['swedish-accounting-compliance', 'horizontal/swedish-accounting-compliance'],
+    ['horizontal/swedish-daily-bookkeeping/references/cost-types-and-underlag.md', 'horizontal/swedish-daily-bookkeeping'],
+  ])('%s leads with %s', (wanted, first) => {
+    expect(closestSkillSlugs(wanted, SLUGS)[0]).toBe(first)
+  })
+
+  it('names at most three and nothing for a slug that shares no word', () => {
+    expect(closestSkillSlugs('vat-rules', SLUGS)).toHaveLength(3)
+    expect(closestSkillSlugs('vat-rules', SLUGS)).toEqual(expect.arrayContaining(['horizontal/swedish-vat', 'quarterly-vat-review']))
+    expect(closestSkillSlugs('stripe', SLUGS)).toEqual([])
+    expect(closestSkillSlugs('own/00000000-0000-4000-8000-0000000000aa', SLUGS)).toEqual([])
   })
 })

@@ -1,16 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetGlobalSingletons } from '@/lib/global-singleton'
 
 /**
  * registerConfiguredPeppolTransports() wires the connector transport only on
  * a self-hosted instance in connector mode (connector key, no own Qvalia
  * keys). Hosted keeps its own keys, so nothing changes there. The registry is
- * module state, so every case gets a fresh module graph.
+ * process state (lib/global-singleton.ts), so every case gets a fresh module
+ * graph and fresh process-wide state.
  */
 
 const ENV = ['GNUBOK_CONNECTOR_KEY', 'GNUBOK_CONNECT_URL', 'QVALIA_API_KEY', 'QVALIA_PARTNER_REG_NO', 'QVALIA_BASE_URL', 'PEPPOL_TRANSPORT_PROVIDER'] as const
 
 beforeEach(() => {
   vi.resetModules()
+  resetGlobalSingletons()
   for (const key of ENV) vi.stubEnv(key, '')
 })
 afterEach(() => vi.unstubAllEnvs())
@@ -25,14 +28,14 @@ describe('registerConfiguredPeppolTransports in connector mode', () => {
   it('registers nothing without keys of any kind', async () => {
     const m = await load()
     expect(m.registerConfiguredPeppolTransports({}).map((t) => t.provider)).toEqual([])
-    expect(m.getPeppolTransportAvailability().available).toBe(false)
+    expect((await m.getPeppolTransportAvailability()).available).toBe(false)
   })
 
   it('registers the connector transport when a connector key is set and no Qvalia keys are', async () => {
     vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_test')
     const m = await load()
     expect(m.registerConfiguredPeppolTransports({}).map((t) => t.provider)).toEqual(['connector'])
-    expect(m.getPeppolTransportAvailability()).toEqual({ available: true, provider: 'connector' })
+    expect(await m.getPeppolTransportAvailability()).toEqual({ available: true, provider: 'connector' })
     // Idempotent: a second call registers nothing new.
     expect(m.registerConfiguredPeppolTransports({})).toEqual([])
   })
@@ -44,8 +47,8 @@ describe('registerConfiguredPeppolTransports in connector mode', () => {
     vi.stubEnv('QVALIA_PARTNER_REG_NO', env.QVALIA_PARTNER_REG_NO)
     const m = await load()
     expect(m.registerConfiguredPeppolTransports(env).map((t) => t.provider)).toEqual(['qvalia'])
-    expect(m.getPeppolTransport('connector')).toBeNull()
+    expect(await m.getPeppolTransport('connector')).toBeNull()
     // Own keys still need the explicit provider selection, exactly as before.
-    expect(m.getPeppolTransportAvailability()).toEqual({ available: false, provider: null, reason: 'provider_selection_required' })
+    expect(await m.getPeppolTransportAvailability()).toEqual({ available: false, provider: null, reason: 'provider_selection_required' })
   })
 })

@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Brain } from 'lucide-react'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import type { LedgerContext } from '@/lib/agent-context/ledger-context'
 import type { DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
 import type { AgentCompetence } from '@/lib/agent-context/agent-competence'
@@ -26,10 +25,12 @@ interface KnowledgePayload {
  * the full-page rail and the routed settings modal, so a server fetch wouldn't
  * reach the modal.
  */
-export function AgentKnowledgePanel() {
+export function AgentKnowledgePanel({ heading = true }: { heading?: boolean } = {}) {
   const t = useTranslations('agentKnowledge')
   const [payload, setPayload] = useState<KnowledgePayload | null>(null)
   const [error, setError] = useState(false)
+  // Bumped by "Försök igen" to run the fetch again.
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -47,14 +48,16 @@ export function AgentKnowledgePanel() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [attempt])
 
   if (error) {
     return (
-      <EmptyState
-        icon={Brain}
+      <LoadError
         title={t('load_error_title')}
-        description={t('load_error_description')}
+        onRetry={() => {
+          setError(false)
+          setAttempt((n) => n + 1)
+        }}
       />
     )
   }
@@ -62,7 +65,7 @@ export function AgentKnowledgePanel() {
   if (!payload) {
     // Mirrors the loaded layout: graph hero, section header, two profile cards.
     return (
-      <div className="space-y-8">
+      <LateReveal className="space-y-8">
         <Skeleton className="h-96 w-full rounded-lg" />
         <div className="space-y-4">
           <Skeleton className="h-4 w-40" />
@@ -71,7 +74,7 @@ export function AgentKnowledgePanel() {
             <Skeleton className="h-48 w-full rounded-lg" />
           </div>
         </div>
-      </div>
+      </LateReveal>
     )
   }
 
@@ -81,6 +84,7 @@ export function AgentKnowledgePanel() {
       deep={payload.deep}
       competence={payload.competence}
       companyName={payload.companyName}
+      heading={heading}
     />
   )
 }

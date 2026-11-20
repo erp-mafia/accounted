@@ -14,6 +14,12 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'
@@ -51,6 +57,7 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { GET as listClaims, POST as createClaim } from '../route'
 import { GET as getClaim, DELETE as deleteClaim } from '../[id]/route'
 import { POST as recordPayout } from '../payouts/route'
+import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -103,7 +110,7 @@ const BOOKS = new Set([
   'transactions',
 ])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CLAIM_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -152,6 +159,18 @@ function claimRow(overrides: Record<string, unknown> = {}) {
     payout_batch_id: null,
     created_at: '2026-09-01T09:12:00.000Z',
     ...overrides,
+  }
+}
+
+const RUN_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+/** The payslip line that repays a claim, as the payout-state reader embeds its salary run. */
+function payslipLine(claimId: string, runStatus = 'draft') {
+  return {
+    id: 'line-1',
+    source_expense_claim_id: claimId,
+    salary_run_employee: {
+      salary_run: { id: RUN_ID, status: runStatus, period_year: 2026, period_month: 9, payment_date: '2026-09-25' },
+    },
   }
 }
 
@@ -222,6 +241,40 @@ describe('GET /api/v1/companies/:companyId/expense-claims', () => {
     expect(client.calls).toContainEqual({ table: 'expense_claims', method: 'limit', args: [2] })
   })
 
+  it('names the salary run of a registered claim that is on a payslip, and null for one that waits for a payout (crm#1942)', async () => {
+    const waiting = claimRow({ id: CLAIM_B, created_at: '2026-08-01T09:00:00.000Z' })
+    const client = makeClient({
+      company_members: MEMBER,
+      expense_claims: { data: [claimRow({ employee_id: EMPLOYEE_ID, liability_account: '2820' }), waiting], error: null },
+      salary_line_items: { data: [payslipLine(CLAIM_ID)], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await list('?status=registered')
+    expect(res.status).toBe(200)
+    const claims = (await res.json()).data.expense_claims
+    expect(claims.map((c: { expense_claim_id: string; status: string; salary_run_id: string | null }) => [c.expense_claim_id, c.status, c.salary_run_id])).toEqual([
+      [CLAIM_ID, 'registered', RUN_ID],
+      [CLAIM_B, 'registered', null],
+    ])
+    expect(client.calls).toContainEqual({ table: 'salary_line_items', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(client.calls).toContainEqual({
+      table: 'salary_line_items',
+      method: 'in',
+      args: ['source_expense_claim_id', [CLAIM_ID, CLAIM_B]],
+    })
+  })
+
+  it('500 when the payslip lines cannot be read: never an answer that reads as "waits for a payout"', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        expense_claims: { data: [claimRow()], error: null },
+        salary_line_items: { data: null, error: { message: 'boom' } },
+      }),
+    )
+    expect((await list()).status).toBe(500)
+  })
+
   it('a cursor continues strictly after the last row of the previous page', async () => {
     const client = makeClient({ company_members: MEMBER, expense_claims: { data: [], error: null } })
     mockServiceClient.mockReturnValue(client)
@@ -256,8 +309,23 @@ describe('GET /api/v1/companies/:companyId/expense-claims/:id', () => {
     mockServiceClient.mockReturnValue(client)
     const res = await getClaim(request(`${BASE}/${CLAIM_ID}`), claimParams)
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toMatchObject({ expense_claim_id: CLAIM_ID, status: 'paid', payout_batch_id: CLAIM_B })
+    expect((await res.json()).data).toMatchObject({ expense_claim_id: CLAIM_ID, status: 'paid', payout_batch_id: CLAIM_B, salary_run_id: null })
     expect(client.calls).toContainEqual({ table: 'expense_claims', method: 'eq', args: ['company_id', COMPANY_ID] })
+    // A paid claim waits for nothing: its payslip is not looked up.
+    expect(client.calls.filter((c) => c.table === 'salary_line_items')).toEqual([])
+  })
+
+  it('answers the salary run that repays a registered claim on a payslip', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        expense_claims: { data: claimRow({ employee_id: EMPLOYEE_ID, liability_account: '2820' }), error: null },
+        salary_line_items: { data: [payslipLine(CLAIM_ID, 'approved')], error: null },
+      }),
+    )
+    const res = await getClaim(request(`${BASE}/${CLAIM_ID}`), claimParams)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ expense_claim_id: CLAIM_ID, status: 'registered', salary_run_id: RUN_ID })
   })
 })
 
@@ -414,6 +482,30 @@ describe('POST /api/v1/companies/:companyId/expense-claims', () => {
     expect(wrote(client)).toBe(false)
   })
 
+  it('409 INBOX_ITEM_PAIR_ALREADY_BOOKED for an underlag whose other half of the purchase is booked, writing nothing', async () => {
+    const ITEM_ID = '6f1c2a40-0000-4000-8000-00000000ab01'
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: ITEM_ID, sibling_item_id: 'receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'x',
+    })
+    const client = makeClient({
+      company_members: MEMBER,
+      fiscal_periods: OPEN_YEAR,
+      invoice_inbox_items: { data: { created_journal_entry_id: null, created_supplier_invoice_id: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ ...validClaim, inbox_item_id: ITEM_ID })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INBOX_ITEM_PAIR_ALREADY_BOOKED')
+    expect(JSON.stringify(body)).toContain('A66')
+    expect(wrote(client)).toBe(false)
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
   it('404 EXPENSE_CLAIM_DOCUMENT_NOT_FOUND for a receipt of another company, writing nothing', async () => {
     const client = makeClient({
       company_members: MEMBER,
@@ -480,6 +572,94 @@ describe('POST /api/v1/companies/:companyId/expense-claims', () => {
     expect(body.data.preview.verifikat.lines).toContainEqual({ account_number: '2018', debit_amount: 0, credit_amount: 500 })
     expect(wrote(client)).toBe(false)
     expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('a dry run names the cost account and checks every line account against the active chart (crm#1536)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [OPEN_YEAR, OPEN_YEAR_LIST],
+      chart_of_accounts: {
+        data: [{ account_number: '5410' }, { account_number: '2641' }, { account_number: '2893' }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(validClaim, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const preview = (await res.json()).data.preview
+    expect(preview).toMatchObject({ expense_account: '5410', liability_account: '2893' })
+    expect(preview.verifikat.lines.map((l: { account_number: string }) => l.account_number)).toEqual(['5410', '2641', '2893'])
+    const chartRead = client.calls.find((c) => c.table === 'chart_of_accounts' && c.method === 'in')
+    expect(chartRead?.args).toEqual(['account_number', ['5410', '2641', '2893']])
+    expect(client.calls).toContainEqual({ table: 'chart_of_accounts', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(client.calls).toContainEqual({ table: 'chart_of_accounts', method: 'eq', args: ['is_active', true] })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run refuses a deactivated cost account with the commit\'s 400 ACCOUNTS_NOT_IN_CHART, writing nothing (crm#1536)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [OPEN_YEAR, OPEN_YEAR_LIST],
+      chart_of_accounts: [
+        // Active rows: 5410 is not among them.
+        { data: [{ account_number: '2641' }, { account_number: '2893' }], error: null },
+        // Every row, active or not: 5410 exists, so the engine would not seed it.
+        { data: [{ account_number: '5410' }], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(validClaim, '?dry_run=true')
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(JSON.stringify(body.error)).toContain('5410')
+    expect(wrote(client)).toBe(false)
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('a dry run lets a BAS account missing from the chart pass: the commit seeds it', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [OPEN_YEAR, OPEN_YEAR_LIST],
+      chart_of_accounts: [
+        { data: [{ account_number: '2641' }, { account_number: '2893' }], error: null },
+        // No row at all for 5410.
+        { data: [], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(validClaim, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run refuses a custom line on an account outside BAS 2026 (crm#1536)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [OPEN_YEAR, OPEN_YEAR_LIST],
+      chart_of_accounts: { data: [{ account_number: '2893' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(
+      {
+        ...validClaim,
+        vat_amount: 0,
+        lines: [
+          { account_number: '5419', debit_amount: 500, credit_amount: 0 },
+          { account_number: '2893', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+      '?dry_run=true',
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(JSON.stringify(body.error)).toContain('5419')
+    expect(wrote(client)).toBe(false)
   })
 
   it('a dry run shows the approver the dimensions the cost line will carry', async () => {
@@ -645,6 +825,9 @@ describe('POST /api/v1/companies/:companyId/expense-claims/payouts', () => {
       p_notes: null,
       p_user_id: 'user-1',
       p_transaction_id: null,
+      // The payout verifikat records the API key that booked it (20261016005100).
+      p_actor_type: 'api_key',
+      p_actor_label: 'CI key',
     })
   })
 
@@ -674,7 +857,7 @@ describe('POST /api/v1/companies/:companyId/expense-claims/payouts', () => {
       { account_number: '2893', debit_amount: 500, credit_amount: 0 },
       { account_number: '1930', debit_amount: 0, credit_amount: 500 },
     ])
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(wrote(client)).toBe(false)
   })
 
@@ -710,6 +893,21 @@ describe('POST /api/v1/companies/:companyId/expense-claims/payouts', () => {
     expect(res.status).toBe(status)
     expect((await res.json()).error.code).toBe(code)
     expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run that refuses a claim on a payslip names the salary run', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        expense_claims: { data: [claimRow()], error: null },
+        salary_line_items: { data: [payslipLine(CLAIM_ID)], error: null },
+      }),
+    )
+    const res = await post(payout, '?dry_run=true')
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('EXPENSE_PAYOUT_ON_PAYSLIP')
+    expect(body.error.details).toMatchObject({ claim_id: CLAIM_ID, salary_run_id: RUN_ID, salary_run_status: 'draft' })
   })
 
   it('a dry run refuses a cash account missing from the chart', async () => {

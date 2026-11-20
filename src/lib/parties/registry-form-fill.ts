@@ -8,9 +8,7 @@
  * fills. Pure: form values in, patch out. The hook in
  * components/parties/use-registry-autofill.ts decides when to call.
  */
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
-import { normalizeOrgNumber } from '@/lib/invariants/org-number'
-import { isLegalPersonOrgNumber } from './scb/org-number'
+import { isLegalPersonOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { contactFill, fromRegistry, type RegistrySummary } from './registry-summary'
 
 export interface RegistryLookupFound {
@@ -34,14 +32,12 @@ export type RegistryLookup = RegistryLookupFound | RegistryLookupMissing
  * of a Swedish legal person with a valid check digit; null for anything
  * else. A personnummer (a private person's, or a sole trader's org number)
  * is never a key: it must not reach the register, and the server refuses
- * it too (SCB_NOT_A_LEGAL_PERSON). Both checks are kept although a legal
- * person's number can never have personnummer shape: they guard different
- * things and each is cheap.
+ * it too (SCB_NOT_A_LEGAL_PERSON).
  */
 export function registryLookupKey(orgNumber: string | null | undefined): string | null {
   const canonical = normalizeOrgNumber(orgNumber)
   if (!canonical) return null
-  if (!isLegalPersonOrgNumber(canonical) || looksLikeSwedishPersonalNumber(canonical)) return null
+  if (!isLegalPersonOrgNumber(canonical)) return null
   return canonical
 }
 

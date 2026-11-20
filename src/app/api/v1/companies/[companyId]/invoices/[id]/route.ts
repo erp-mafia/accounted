@@ -32,13 +32,21 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
-import { CreateInvoiceItemSchema, InvoiceVatOverrideShape } from '@/lib/api/schemas'
+import { CreateInvoiceItemSchema, InvoiceQrModeSchema, InvoiceVatOverrideShape } from '@/lib/api/schemas'
+import { InvoiceDeliveryAddressSchema } from '@/lib/invoices/delivery-address'
 import { buildInvoiceWriteData, type InvoiceWriteItemInput } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
+import { effectiveInvoiceStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
+import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
+import {
+  PAYMENT_REFERENCE_PITFALL,
+  withPaymentReference,
+  type PaymentReferenceRow,
+} from '@/lib/invoices/payment-reference-fields'
 import type { Currency, InvoiceDocumentType } from '@/types'
 
 // Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
@@ -55,6 +63,8 @@ const V1PatchDraftInvoiceSchema = z.object({
   your_reference: z.union([z.string(), z.null()]).optional(),
   our_reference: z.union([z.string(), z.null()]).optional(),
   notes: z.union([z.string(), z.null()]).optional(),
+  // Leveransadress (crm#1547); null or {} clears it.
+  delivery_address: InvoiceDeliveryAddressSchema.nullable().optional(),
   // Project/cost-centre tagging ({"6":"P001"}): replaces the whole bag.
   // Send {} to clear all tags. Codes are validated against the dimension
   // registry when the invoice posts at :send, not here.
@@ -63,6 +73,9 @@ const V1PatchDraftInvoiceSchema = z.object({
   // pay to. null = back to the per-currency default. Must be one of the
   // company's payee accounts, usable for the invoice currency.
   payment_cash_account_id: z.union([z.string().uuid(), z.null()]).optional(),
+  // The one payment QR code this invoice prints, overriding the company's
+  // invoice_qr_mode; null = back to the company default.
+  qr_mode: InvoiceQrModeSchema.nullable().optional(),
   // Per-invoice VAT treatment (#2906), same fields and rules as POST
   // /invoices. A pair: sending either replaces both; omitting both keeps the
   // draft's. Changing it re-decides the VAT of the current lines (rebuilt
@@ -79,6 +92,9 @@ const V1PatchDraftInvoiceSchema = z.object({
 const InvoiceDetail = z.object({
   id: z.string().uuid(),
   invoice_number: z.string().nullable(),
+  // Self-billed sales: the customer's number; invoice_number stays null.
+  external_invoice_number: z.string().nullable().optional(),
+  is_self_billed: z.boolean().optional(),
   customer_id: z.string().uuid(),
   invoice_date: z.string(),
   due_date: z.string(),
@@ -92,7 +108,22 @@ const InvoiceDetail = z.object({
   quote_decided_at: z.string().nullable().optional(),
   currency: z.string(),
   total: z.number(),
+  // The invoice's own "Att betala" (crm#1487): total after öresavrundning and
+  // any ROT/RUT deduction, as its PDF prints it. Negative on a credit note.
+  amount_to_pay: z.number(),
+  // The öresavrundning row the PDF prints, 0 when none (SEK only).
+  ore_rounding_amount: z.number(),
+  // The invoice's rounding choice. Frozen when it is issued; null only on a
+  // draft (it follows the company setting until issued).
+  ore_rounding: z.boolean().nullable().optional(),
   remaining_amount: z.number(),
+  // The reference the invoice asks the payer to quote, as its PDF prints it
+  // (crm#1886): ocr = the digits of invoice_number plus a Luhn check digit,
+  // invoice_number = the number as it is. Both null on a document that asks
+  // for no payment under a reference. On GET; the draft update leaves them
+  // out (a draft has no number to build one from).
+  payment_reference: z.string().nullable().optional(),
+  payment_reference_type: z.enum(['ocr', 'invoice_number']).nullable().optional(),
   paid_at: z.string().nullable(),
   created_at: z.string(),
 })
@@ -104,7 +135,7 @@ const ALLOWED_EXPAND = ['items', 'payments'] as const
 const INVOICE_DETAIL_COLUMNS = INVOICE_FULL_COLUMNS
 
 const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, address_state, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const INVOICE_ITEM_COLUMNS = INVOICE_ITEM_FULL_COLUMNS
 
@@ -127,6 +158,8 @@ registerEndpoint({
   pitfalls: [
     'Returns 404 if the invoice does not belong to the company in the URL: does not leak existence across companies.',
     'paid_at and remaining_amount can lag behind the latest payment by a few seconds during high-volume reconciliation.',
+    'total is the exact invoice total the books carry; amount_to_pay is what the invoice asks the customer for: total after öresavrundning (ore_rounding_amount), minus any ROT/RUT deduction. Reconcile payments against amount_to_pay. A credit note carries the credited invoice\'s rounding choice, so a whole credit has the same ore_rounding_amount with the opposite sign. An issued invoice keeps the rounding it was issued with: a later change of the company setting changes neither field.',
+    PAYMENT_REFERENCE_PITFALL,
   ],
   example: {
     response: {
@@ -139,7 +172,11 @@ registerEndpoint({
         due_date: '2026-05-31',
         status: 'sent',
         total: 12500,
+        amount_to_pay: 12500,
+        ore_rounding_amount: 0,
         remaining_amount: 12500,
+        payment_reference: '202600425',
+        payment_reference_type: 'ocr',
         paid_at: null,
         created_at: '2026-05-01T09:14:33Z',
       },
@@ -214,11 +251,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     // Quotes: report the effective decision (expired is derived from
     // valid_until, never stored). Null for every other document type.
+    // Overdue is derived the same way (lib/invoices/overdue.ts): a sent
+    // invoice past its due date with an open remainder reports 'overdue',
+    // as the list endpoint does.
     const row = data as unknown as Record<string, unknown> & {
       quote_status?: string | null
       valid_until?: string | null
-    }
-    return ok({ ...row, quote_status: effectiveQuoteStatus(row) }, { requestId: ctx.requestId })
+    } & OverdueInvoiceInput & AmountToPayRow & PaymentReferenceRow
+    const [withAmounts] = await withAmountToPay(ctx.supabase, ctx.companyId!, [row])
+    // crm#1886: the reference its PDF prints, from the projection the list
+    // and the MCP reads use.
+    const [withReference] = await withPaymentReference(ctx.supabase, ctx.companyId!, [withAmounts])
+    return ok(
+      { ...withReference, status: effectiveInvoiceStatus(row), quote_status: effectiveQuoteStatus(row) },
+      { requestId: ctx.requestId },
+    )
   },
 )
 
@@ -258,7 +305,9 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'invoices:write',
+  // Drafts only (isEditableInvoiceDraft below, and the update's status
+  // guard): invoices:draft, which invoices:write includes.
+  scope: 'invoices:draft',
   risk: 'low',
   idempotent: true,
   reversible: true,
@@ -299,7 +348,9 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'your_reference',
       'our_reference',
       'notes',
+      'delivery_address',
       'default_dimensions',
+      'qr_mode',
     ] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]
     }
@@ -593,10 +644,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           invoiceId,
           pgCode: (refetchErr as { code?: string } | null)?.code,
         })
-        return ok(updatedRow, { requestId: ctx.requestId, warnings: build.warnings })
+        const [header] = await withAmountToPay(ctx.supabase, ctx.companyId!, [updatedRow as unknown as AmountToPayRow])
+        return ok(header, { requestId: ctx.requestId, warnings: build.warnings })
       }
 
-      return ok(complete, { requestId: ctx.requestId, warnings: build.warnings })
+      const [withItems] = await withAmountToPay(ctx.supabase, ctx.companyId!, [complete as unknown as AmountToPayRow])
+      return ok(withItems, { requestId: ctx.requestId, warnings: build.warnings })
     }
 
     if (ctx.dryRun) {
@@ -625,7 +678,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     }
 
     // Metadata-only update: no line changed, so no rate to explain.
-    return ok(data, { requestId: ctx.requestId })
+    const [updated] = await withAmountToPay(ctx.supabase, ctx.companyId!, [data as unknown as AmountToPayRow])
+    return ok(updated, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )
@@ -669,7 +723,7 @@ registerEndpoint({
   // 'high', matching the delete_draft_invoice pending-op tier: both outcomes
   // are irreversible (row gone, or the F-series number permanently consumed).
   risk: 'high',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: true,
   response: { success: dataEnvelope(InvoiceDeleteResult) },

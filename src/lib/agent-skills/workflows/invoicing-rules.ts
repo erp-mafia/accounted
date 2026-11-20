@@ -16,6 +16,7 @@ Not here (load the sibling skill instead):
 - New customer setup and the customer_type decision tree: \`customer-onboarding\`
 - Credit notes, or a sent invoice that is wrong: \`kreditfaktura-process\`
 - Matching a month of incoming payments against the bank feed: \`bank-reconciliation\`
+- An open invoice from a previous system whose verifikat came in by SIE: \`gnubok_register_booked_invoice\`, never \`gnubok_create_invoice\` (a new number, and the revenue and moms booked a second time)
 
 ## Step 0: Orient before acting
 
@@ -29,17 +30,18 @@ Answer each of these with a tool, not with an assumption:
 | Payment details on the invoice | \`gnubok_get_company_settings\` | Bankgiro, plusgiro, Swish or bank account for SEK, IBAN for other currencies. Missing means no PDF and no send. |
 | Is the invoice date's period open? | \`gnubok_list_fiscal_periods\` | active = open, locked = no new entries, closed = year-end done. Under faktureringsmetoden, sending books a verifikat on the invoice date. |
 | Existing drafts or quotes for this customer | \`gnubok_list_invoices\` (\`status\`, \`document_type\`) | Avoid a duplicate; an open offert may be the thing to convert. |
+| The customer's own requirements | \`gnubok_get_customer({ customer_id })\` (search-only read: call it through \`gnubok_call_tool\` if it is not in your tool list) | \`notes\` holds what the customer asked for (e-invoice only, fakturamärkning, reverse charge on construction work, no fees); also \`customer_number\`, \`language\`, \`vat_number_validated\`, the address. Follow the notes on every invoice. |
 
 ## Questions to ask before creating an invoice
 
 Ask them together, in one short message, with what you already found filled in. Only ask what the tools could not tell you.
 
-1. **Customer**: who exactly (legal name, org number or VAT number)? Look them up first with \`gnubok_list_customers\`.
+1. **Customer**: who exactly (legal name, org number or VAT number)? Look them up first with \`gnubok_list_customers\`, then read the full record with \`gnubok_get_customer\`.
 2. **What was delivered**: goods or services, quantity, unit (st, tim, dag, mån), price excl. moms. If the company has an artikelregister, try \`gnubok_list_articles({ query })\` first.
 3. **Dates**: invoice date (default today), and the delivery date when it differs from the invoice date (a mandatory field then). Payment terms if the customer's default does not apply.
 4. **VAT treatment**: only when it is not obvious from the customer type (see the table below). Never ask "which VAT code"; ask the fact: "Was the work done in Sweden or at the customer's site abroad?", "Is this food, hotel, transport or books?".
 5. **ROT/RUT**: only for a private person buying household services or construction work at their home: "Should the customer get ROT or RUT deduction on this?".
-6. **Reference**: Er referens (the buyer's contact or order reference), Vår referens, and fakturamärkning if the buyer requires a PO label. Public-sector buyers always require Er referens.
+6. **Reference**: Er referens (the buyer's contact or order reference), Vår referens, and fakturamärkning if the buyer requires a PO label. Public-sector buyers always require Er referens. A customer whose card holds an \`invoice_reference\` (Fakturareferens, e.g. a cost centre) gets it as Er referens on every invoice that leaves \`your_reference\` out; set it once with \`gnubok_update_customer\` instead of asking each time. Likewise a card \`invoice_marking\` (Märkning, e.g. a framework purchase order number) becomes the Märkning of every invoice that leaves \`invoice_marking\` out.
 7. **Send now or keep as draft?** Ask before staging the send.
 
 Good question: "Last time Acme AB was invoiced 1 250 kr per hour + moms for consulting. Same price, 8 hours, delivered 1-15 September?" Bad question: "What should the invoice contain?".
@@ -51,7 +53,7 @@ Good question: "Last time Acme AB was invoiced 1 250 kr per hour + moms for cons
 - **No email on the customer**: \`gnubok_send_invoice\` refuses. Ask for the invoicing email and update the customer, or let the user deliver the PDF another way and use \`gnubok_mark_invoice_as_sent\`.
 - **EU company without a VAT number**: ask for it. Without a validated number the invoice gets Swedish moms (the customer is treated as a consumer). Never invent a number or copy one from elsewhere.
 - **The company's own VAT number is missing** (\`INVOICE_SEND_VAT_NUMBER_MISSING\`): a VAT-registered seller must show it (ML 17 kap. 24 §). The user adds it under Inställningar > Skatt; you cannot fix it.
-- **Payment details missing** (\`INVOICE_SEND_PAYMENT_ACCOUNT_MISSING\`): the user adds bankgiro, Swish, bank account or IBAN under Inställningar > Fakturering.
+- **Payment details missing** (\`INVOICE_SEND_PAYMENT_ACCOUNT_MISSING\`): on a SEK invoice the user adds bankgiro, Swish, bank account or IBAN under Inställningar > Fakturering. On another currency the gap is usually that no account is chosen for that currency: any bank account that prints an IBAN can be the payee, a SEK account too. Find it with \`gnubok_list_cash_accounts\` and stage \`gnubok_set_invoice_payee_default\` with the invoice's \`currency\`; if no account prints an IBAN, the user fills it in under Inställningar > Fakturering first. Never create a second account with the same IBAN: it is refused.
 
 ## VAT treatment
 
@@ -104,13 +106,14 @@ Approval creates a **draft**: no number and no verifikat yet. The F-number is al
 1. \`gnubok_call_tool({ tool: "gnubok_get_invoice", arguments: { invoice_id } })\` (a search-only read, reached through \`gnubok_call_tool\`). Check \`editable_draft\`.
 2. \`gnubok_update_invoice({ invoice_id, delivery_date?, your_reference?, items? })\`. \`items\` is a FULL REPLACE: pass every line back verbatim, with its \`article_id\`, account and ROT/RUT fields, or they are lost.
 
-**ROT/RUT (fakturamodellen)**: the customer pays the reduced amount and the company claims the rest from Skatteverket. Required before staging:
+**ROT/RUT and grön teknik (fakturamodellen)**: the customer pays the reduced amount and the company claims the rest from Skatteverket. Required before staging:
 
 - F-skatt on the company; the customer is a private person (\`individual\`) with \`personal_number\` on file (add it via \`gnubok_update_customer\`).
-- Labour on its own line(s) with \`deduction_type: 'rot' | 'rut'\`, \`labor_hours\` and \`work_type\` (Skatteverket arbetstypskod); material on separate lines without a deduction.
+- ROT/RUT: labour on its own line(s) with \`deduction_type: 'rot' | 'rut'\`, \`labor_hours\` and \`work_type\` (Skatteverket arbetstypskod); material on separate lines without a deduction.
 - ROT: \`housing_designation\` (fastighetsbeteckning), or \`apartment_number\` + \`brf_org_number\` for a bostadsrätt, on the first deduction line.
 - Rates per the rule pack: RUT 50 % of labour incl. moms; ROT 30 % standard (50 % May-Dec 2025); ceilings ROT 50 000, RUT 75 000, combined 75 000 kr per person and year. Accounted computes the deduction; do not calculate it yourself. If you cannot verify the rate for the invoice date, ask the user to confirm it with Skatteverket before sending.
-- The Skatteverket share sits on 1513 until paid out; the claim file comes from \`gnubok_generate_rot_rut_file\`. Whether the customer already used their yearly ceiling elsewhere only the customer knows: ask.
+- **Grön teknik** (skattereduktion för installation of solceller, batterilager, laddpunkt): \`deduction_type: 'gron_teknik'\` on the labour AND material lines, \`work_type\` \`INSTALLATION_SOLCELLER\` (15 %), \`INSTALLATION_LAGRING\` or \`INSTALLATION_LADDPUNKT\` (50 %) of arbete och material incl. moms. Labour and material on lines of their own (the invoice must show both costs); travel, freight, machinery, projektering and rented material on unflagged lines. Fixed price (totalentreprenad): Skatteverket counts arbete och material as 97 % of the price, so flag a line with 97 % and leave 3 % unflagged. Material sold on its own gives no reduction. Actual \`labor_hours\` on at least one line per installation type, also at a fixed price (material lines may leave them empty). Property is required as for ROT. Own ceiling 50 000 kr per person and year, outside the ROT/RUT one. Never on the same invoice as ROT/RUT lines.
+- The Skatteverket share sits on 1513 until paid out; the ROT/RUT claim file comes from \`gnubok_generate_rot_rut_file\`. Grön teknik has no file yet: the user requests it in Skatteverket's e-tjänst for grön teknik. Whether the customer already used their yearly ceiling elsewhere only the customer knows: ask.
 
 ### A draft that should not be sent yet
 
@@ -129,22 +132,22 @@ If the customer requires an e-invoice (public sector, or a buyer asking for Pepp
 ### What happens after sending
 
 - **Faktureringsmetoden** (\`accrual\`): the verifikat is posted on the invoice date (1510 kundfordran against revenue and utgående moms). The moms belongs to the period of the invoice date, paid or not. If the company has deferred invoice booking switched on, the invoice is booked later from the invoice page instead.
-- **Kontantmetoden** (\`cash\`): nothing is booked at send. Revenue and moms are booked when the payment is registered.
+- **Kontantmetoden** (\`cash\`): nothing is booked at send. Revenue and moms are booked when the payment is registered, except for an invoice still unpaid at the year end: the bokslut carries it into that year (årsomföring), and its later payment clears 1510 with no moms.
 - Either way the invoice is now locked: corrections go through a kreditfaktura only.
 
 ### Step 5: Record payment
 
 - Money in the bank feed: \`gnubok_match_transaction_to_invoice({ transaction_id, invoice_id })\`. Partial payments are supported. For a whole month, use \`bank-reconciliation\`.
-- Paid but not in the feed yet: \`gnubok_mark_invoice_as_paid({ invoice_id, payment_date })\`. Status must be sent or overdue. If it refuses because a bank transaction already looks like the payment, match that transaction instead; set \`allow_duplicate\` only after the user confirms it is a different payment.
+- Paid but not in the feed yet: \`gnubok_mark_invoice_as_paid({ invoice_id, payment_date })\`. Status must be sent, overdue or partially paid (the remaining amount is booked). If it refuses because a bank transaction already looks like the payment, match that transaction instead; set \`allow_duplicate\` only after the user confirms it is a different payment.
 - Kontantmetoden: a partial payment on an invoice not yet booked is refused (\`INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED\`). Stop and tell the user; do not split the invoice.
 
 ## E-invoicing via Peppol (including B2G)
 
-Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the dashboard. Peppol sending is gated per company: the user requests access under Inställningar > Fakturering (Settings > Invoicing) and Accounted's operators enable it; a grant may carry a send cap, and when it is used up the dashboard says so and support raises it. Restrictions: the sending company must have an organisationsnummer, which every legal form has except enskild firma (its org number is the owner's personnummer, so it is refused until GLN identifiers are supported), standard invoices only (no credit notes, no self-billed invoices), the customer must be a Swedish business or organization whose org number is not a personnummer (an enskild firma customer is refused until GLN identifiers are supported), and the invoice must be in SEK with taxable Swedish VAT at 6, 12 or 25 % (no reverse charge, no VAT-exempt sales, no ROT/RUT deductions) and carry Er referens. An agent can send it too: check \`gnubok_get_invoice_peppol_readiness\` first, then stage \`gnubok_send_invoice_peppol\` (a person approves; v1: POST /invoices/{id}/send-peppol). The same access grant, send cap and restrictions apply. Never tell a user that Accounted lacks Peppol sending; say it is gated per company. A successful dashboard Peppol send issues the invoice itself (number, status, and the verifikat under faktureringsmetoden), so do not mark it as sent afterwards. If the dashboard reports that the invoice was sent via Peppol but could not be marked as sent, call \`gnubok_mark_invoice_as_sent\` on the still-draft invoice to complete the issuance; a number already allocated is reused, never consumed twice. If that invoice already shows as sent, the number and the verifikat exist and only the invoice's link to the verifikat needs repair: do not mark it as sent again (it returns 409), leave the repair to support. If the company has no Peppol access, or is an enskild firma, and the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
+Accounted sends Peppol BIS Billing 3 e-invoices from the invoice page in the dashboard. Peppol sending is gated per company: the user requests access under Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol) and Accounted's operators enable it; a grant may carry a send cap, and when it is used up the dashboard says so and support raises it. Restrictions: the sending company must have an organisationsnummer, which every legal form has except enskild firma (its org number is the owner's personnummer, so it is refused until GLN identifiers are supported), standard invoices only (no credit notes, no self-billed invoices), the customer must be a Swedish business or organization whose org number is not a personnummer (an enskild firma customer is refused until GLN identifiers are supported), and the invoice must be in SEK with taxable Swedish VAT at 6, 12 or 25 % (no reverse charge, no VAT-exempt sales, no ROT/RUT deductions) and carry Er referens. An agent can send it too: check \`gnubok_get_invoice_peppol_readiness\` first, then stage \`gnubok_send_invoice_peppol\` (a person approves; v1: POST /invoices/{id}/send-peppol). The same access grant, send cap and restrictions apply. Never tell a user that Accounted lacks Peppol sending; say it is gated per company. A successful dashboard Peppol send issues the invoice itself (number, status, and the verifikat under faktureringsmetoden), so do not mark it as sent afterwards. If the dashboard reports that the invoice was sent via Peppol but could not be marked as sent, call \`gnubok_mark_invoice_as_sent\` on the still-draft invoice to complete the issuance; a number already allocated is reused, never consumed twice. If that invoice already shows as sent, the number and the verifikat exist and only the invoice's link to the verifikat needs repair: do not mark it as sent again (it returns 409), leave the repair to support. If the company has no Peppol access, or is an enskild firma, and the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
 
 ## Offert (quotes)
 
-An offert is \`document_type: 'quote'\` on \`gnubok_create_invoice\` with a required \`valid_until\`. It is numbered in its own OF-series at approval, never touches the F-series and never books anything; it reads as expired after \`valid_until\` (derived). Record the customer's answer with \`gnubok_set_quote_status({ invoice_id, status: 'open' | 'accepted' | 'declined', valid_until? })\`, a direct write, so confirm with the user first. \`gnubok_convert_invoice({ invoice_id })\` stages the faktura from an open or accepted quote and leaves the quote as accepted; a declined quote must be re-accepted first, and a quote can be invoiced only once. \`target: 'order'\` creates a draft kundorder instead.
+An offert is \`document_type: 'quote'\` on \`gnubok_create_invoice\` with a required \`valid_until\`. It is numbered in its own OF-series at approval, never touches the F-series and never books anything; it reads as expired after \`valid_until\` (derived). Record the customer's answer with \`gnubok_set_quote_status({ invoice_id, status: 'open' | 'accepted' | 'declined', valid_until? })\`, a direct write, so confirm with the user first. \`gnubok_convert_invoice({ invoice_id })\` stages the faktura from an open or accepted quote and leaves the quote as accepted; a declined quote must be re-accepted first. A quote can be invoiced in parts (a fixed price billed 50 % at acceptance and 50 % at delivery): pass \`percent\` (of the quote's net) or \`amount\` (net, excl. moms), and each quote line bills its share with its own moms; without either, the conversion bills everything not yet invoiced, so the last part is always exact. \`gnubok_get_invoice\` on the quote shows \`quote_invoicing\` (invoiced, remaining, the invoices); the quote is done once fully invoiced. \`target: 'order'\` creates a draft kundorder instead (only from a quote with no invoice yet).
 
 ## When a tool call fails
 
@@ -186,6 +189,7 @@ End with short groups, in the user's language:
 
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`, \`gnubok_list_skills\`, \`gnubok_get_company_settings\`, \`gnubok_list_fiscal_periods\`: orientation (read)
 - \`gnubok_list_customers\`, \`gnubok_lookup_company\`: find the customer (read)
+- \`gnubok_get_customer\` (via \`gnubok_call_tool\`): one customer's full record, notes included; read it before invoicing
 - \`gnubok_create_customer\` / \`gnubok_update_customer\`: customer setup and missing fields (staged)
 - \`gnubok_list_articles\` (read) / \`gnubok_create_article\` (staged): artikelregister
 - \`gnubok_create_invoice\`: stage new invoice, or a quote with \`document_type: 'quote'\` + \`valid_until\`

@@ -1,25 +1,25 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
-import { verifyCronSecret } from '@/lib/auth/cron'
-import { loadExtensions } from '@/lib/extensions/loader'
-import { extensionRegistry } from '@/lib/extensions/registry'
+import { withCronContext } from '@/lib/api/with-cron-context'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import {
-  findContestedOrgNumbers,
+  findCompaniesWithOwnershipProof,
+  getOmbudClaimStandings,
   listConnections,
   recordProbeResult,
   type GrantStatus,
   type SkvCompanyConnection,
 } from '@/extensions/general/skatteverket/lib/connection-store'
 import {
-  isoDate,
+  grantCountsFor,
+  grantPredatesOptIn,
   listOmbudGrants,
   summarizeGrants,
   type HuvudmanGrantSummary,
 } from '@/extensions/general/skatteverket/lib/ombud-client'
-
-ensureInitialized()
+import type { SkvBehorighet } from '@/extensions/general/skatteverket/lib/connection-store'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const maxDuration = 60
 
@@ -27,8 +27,8 @@ const TIME_BUDGET_MS = 50_000
 
 /**
  * Downgrade guard: a single run may not turn more than this share of the
- * currently granted rows into fully denied ones. A mistyped pinned role code,
- * a renamed rollbeskrivning, or a partial register response would otherwise
+ * currently granted rows into fully denied ones. A mistyped role code
+ * override, a renamed role code, or a partial register response would otherwise
  * deny every company in one night and silently push their background reads
  * back onto 65-minute personal tokens. Below MIN_ROWS the share test is
  * meaningless (one of two rows is 50%), so small fleets are guarded by the
@@ -40,8 +40,14 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
 /**
  * GET /api/extensions/skatteverket/ombud/sync/cron
  *
- * Daily ombudsregister sync (cron 30 3 * * *, half an hour before the
- * skattekonto sync so a grant signed yesterday is used this morning).
+ * Hourly ombudsregister sync (cron 50 * * * *), ten minutes before the
+ * hourly skattekonto sync, which picks a grant recorded here up on its next
+ * run; the appoint button's own register check records one at once. Hourly because
+ * Skatteverket takes from minutes to over an hour to list a fresh grant
+ * (seen 2026-11-08: 3, 18 and 52 minutes, one past the old nightly run), and
+ * the settings card, Hem and Kom igång promise a check every hour while they
+ * say "Väntar på Skatteverket". A run is one register call plus a write per
+ * row that changed, and the guards below hold per run whatever the cadence.
  *
  * Companies appoint Accounted as ombud in Skatteverket's e-service, and
  * nothing calls us back. One call to Ombudshantering v2
@@ -50,16 +56,20 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  * against the company's OWN connection row:
  *
  *   - only rows that already exist are touched. A row exists because a
- *     member of that company pressed Verifiera or minted the deep link: the
+ *     member of that company pressed the appoint button (it checks the
+ *     register, then mints the deep link): the
  *     tenant's explicit opt-in. Rows are never created here,
- *   - an org number claimed by more than one live company is contested:
- *     no row on it is granted or changed (org-number reuse is allowed and
- *     org numbers are public, so a tenant that typed a victim's number must
- *     not inherit the victim's grant; see findContestedOrgNumbers),
+ *   - a row whose company may not hold the connection on its org number
+ *     (ombudClaimStanding: another live company claims it and this one is
+ *     not the single claimant proven with BankID) is never granted, and a
+ *     grant it holds is withdrawn,
  *   - rows marked 'revoked' by the tenant's own "Koppla från" stay revoked
  *     until a member re-verifies; a still-standing grant at Skatteverket is
  *     not permission to switch the row back on,
  *   - a listed huvudman: granted/denied per behörighet from its active roles,
+ *     where a role signed before the row's opt-in day counts only for a
+ *     company that proved that role's data with BankID around its opt-in
+ *     (grantCountsFor: the org-number proof),
  *   - an unlisted huvudman: both behörigheter denied (withdrawn or expired),
  *     subject to the downgrade guards below.
  *
@@ -75,22 +85,8 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  * or partial-response problem surfaces in the logs instead of in every
  * company's settings.
  */
-export async function GET(request: Request) {
-  const authError = verifyCronSecret(request)
-  if (authError) return authError
-
-  // Physical routes under app/api/extensions/<id>/ compile into every build,
-  // including core-with-zero-extensions: the registry is what switches the
-  // extension on, so a disabled extension must refuse visibly (503).
-  loadExtensions()
-  if (!extensionRegistry.get('skatteverket')) {
-    return NextResponse.json(
-      { error: 'Skatteverket extension is not enabled', code: 'EXTENSION_DISABLED' },
-      { status: 503 }
-    )
-  }
-
-  if (process.env.SKATTEVERKET_ENABLED !== 'true') {
+export const GET = withCronContext('cron.skatteverket_ombud_sync', async (_request, ctx) => {
+  if (!isSkatteverketEnabled()) {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
   if (getSystemAuthMode() === 'off' || !isSystemAuthConfigured()) {
@@ -99,21 +95,39 @@ export async function GET(request: Request) {
 
   const startedAt = Date.now()
   const environment = currentSkvEnvironment()
-  const today = isoDate(new Date())
+  const today = todayIsoStockholm()
 
   let grants: Map<string, HuvudmanGrantSummary>
   try {
-    grants = summarizeGrants(await listOmbudGrants({}, { emptyOn404: true }), today)
+    // The whole register: Accounted's own call as ombud, no company to audit
+    // it against (logged by the transport instead).
+    grants = summarizeGrants(await listOmbudGrants({}, 'ombud_register', { emptyOn404: true }), today)
   } catch (error) {
-    console.error('[ombud-sync-cron] ombudsregister lookup failed', {
+    ctx.log.error('ombudsregister lookup failed', {
       message: error instanceof Error ? error.message : String(error),
     })
     return NextResponse.json({ error: 'Ombudsregister lookup failed' }, { status: 502 })
   }
 
   const rows = (await listConnections(environment)).filter((row) => row.status !== 'revoked')
-  const contested = await findContestedOrgNumbers()
-  const decisions = planDecisions(rows, grants, today, contested)
+  const standings = await getOmbudClaimStandings(
+    rows.map((row) => ({ companyId: row.company_id, orgNumber: row.org_number }))
+  )
+  const heldBack = new Set(
+    [...standings].filter(([, standing]) => standing !== 'clear').map(([companyId]) => companyId)
+  )
+  // BankID proof is read per behörighet, only for the rows it can change: a
+  // grant signed before the opt-in. A failed read throws, like the standings
+  // above, so a run never mistakes it for "no proof" and denies a proven grant.
+  const proofFor = (key: SkvBehorighet) =>
+    findCompaniesWithOwnershipProof(
+      rows
+        .filter((row) => !heldBack.has(row.company_id) && predatesWithoutProof(row, grants.get(row.org_number)).includes(key))
+        .map((row) => ({ companyId: row.company_id, orgNumber: row.org_number })),
+      key
+    )
+  const [lasombudProofs, momsProofs] = await Promise.all([proofFor('lasombud'), proofFor('moms_ombud')])
+  const decisions = planDecisions(rows, grants, today, heldBack, { lasombud: lasombudProofs, moms_ombud: momsProofs })
 
   const grantedNow = rows.filter(isAnyGranted).length
   const fullDowngrades = decisions.filter((d) => d.kind === 'downgrade').length
@@ -122,7 +136,7 @@ export async function GET(request: Request) {
     fullDowngrades >= MASS_DOWNGRADE_MIN_ROWS && fullDowngrades > grantedNow * MASS_DOWNGRADE_MAX_SHARE
   const guardTripped = emptyRegisterGuard || massDowngradeGuard
   if (guardTripped) {
-    console.warn('[ombud-sync-cron] downgrade guard tripped; no row is downgraded this run', {
+    ctx.log.warn('downgrade guard tripped; no row is downgraded this run', {
       environment,
       registryHuvudman: grants.size,
       rows: rows.length,
@@ -169,8 +183,8 @@ export async function GET(request: Request) {
       companyId: decision.row.company_id,
       environment,
       orgNumber: decision.row.org_number,
-      lasombud: { status: decision.lasombud, detail: decision.detail },
-      momsOmbud: { status: decision.momsOmbud, detail: decision.detail },
+      lasombud: { status: decision.lasombud, detail: decision.detail, ...reasonFor(decision, 'lasombud') },
+      momsOmbud: { status: decision.momsOmbud, detail: decision.detail, ...reasonFor(decision, 'moms_ombud') },
       error: null,
     })
     if (!recorded) {
@@ -191,6 +205,19 @@ export async function GET(request: Request) {
     guardReason: emptyRegisterGuard ? 'empty_register' : massDowngradeGuard ? 'mass_downgrade' : null,
     durationMs: Date.now() - startedAt,
   })
+}, { requireExtension: 'skatteverket' })
+
+function reasonFor(
+  decision: { predatesOptIn?: SkvBehorighet[] },
+  key: SkvBehorighet
+): { reason?: 'predates_opt_in' } {
+  return decision.predatesOptIn?.includes(key) ? { reason: 'predates_opt_in' } : {}
+}
+
+/** The behörigheter active at Skatteverket that would not count for the row without BankID proof. */
+function predatesWithoutProof(row: SkvCompanyConnection, summary: HuvudmanGrantSummary | undefined): SkvBehorighet[] {
+  const claim = { optInDay: todayIsoStockholm(new Date(row.created_at)), provenOn: { lasombud: null, moms_ombud: null } }
+  return (['lasombud', 'moms_ombud'] as const).filter((key) => grantPredatesOptIn(summary, key, claim))
 }
 
 function isAnyGranted(row: SkvCompanyConnection): boolean {
@@ -200,9 +227,10 @@ function isAnyGranted(row: SkvCompanyConnection): boolean {
 type Decision =
   | { kind: 'unchanged'; row: SkvCompanyConnection }
   /**
-   * More than one live company claims this org number: nobody gets granted
-   * on it, and a row that already holds a grant has it withdrawn (the
-   * denied statuses are present exactly then).
+   * More than one live company claims this org number and this one is not
+   * the single claimant proven with BankID: it is not granted, and a row that
+   * already holds a grant has it withdrawn (the denied statuses are present
+   * exactly then).
    */
   | {
       kind: 'contested'
@@ -211,7 +239,7 @@ type Decision =
       momsOmbud?: GrantStatus
       detail?: string
     }
-  /** The register lists roles we cannot name (codes unpinned/renamed): never a denial. */
+  /** The register lists roles we cannot name (a wrong or renamed role code): never a denial. */
   | { kind: 'unrecognized'; row: SkvCompanyConnection }
   | {
       /** 'record' updates from the register; 'downgrade' is a granted row that would lose every grant. */
@@ -220,6 +248,8 @@ type Decision =
       lasombud: GrantStatus
       momsOmbud: GrantStatus
       detail: string
+      /** Behörigheter active at Skatteverket but signed before the row's opt-in. */
+      predatesOptIn?: SkvBehorighet[]
     }
 
 /**
@@ -230,17 +260,20 @@ export function planDecisions(
   rows: SkvCompanyConnection[],
   grants: Map<string, HuvudmanGrantSummary>,
   today: string,
-  contested: Set<string> = new Set()
+  /** Company ids whose claim on their row's org number is not clear (ombudClaimStanding). */
+  heldBack: Set<string> = new Set(),
+  /** Per behörighet and company id, the latest day it proved that data for its row's org number with BankID (findCompaniesWithOwnershipProof). */
+  proofs: Record<SkvBehorighet, ReadonlyMap<string, string>> = { lasombud: new Map(), moms_ombud: new Map() }
 ): Decision[] {
   const decisions: Decision[] = []
   for (const row of rows) {
-    if (contested.has(row.org_number)) {
-      // A contested number is frozen in both directions: never granted, and
-      // any grant already recorded on it is withdrawn until support settles
-      // which tenant the org number belongs to. Withdrawn outside the
-      // downgrade guards on purpose: this is the guard.
+    if (heldBack.has(row.company_id)) {
+      // A held-back row is frozen in both directions: never granted, and any
+      // grant already recorded on it is withdrawn until it is the one claimant
+      // proven with BankID. Withdrawn outside the downgrade guards on purpose:
+      // this is the guard.
       if (isAnyGranted(row)) {
-        const detail = `ombudsregister ${today}: organisationsnumret används av fler än ett företag`
+        const detail = `ombudsregister ${today}: organisationsnumret används av fler än ett företag och är inte bekräftat med BankID i bara det här`
         decisions.push({ kind: 'contested', row, lasombud: 'denied', momsOmbud: 'denied', detail })
       } else {
         decisions.push({ kind: 'contested', row })
@@ -249,25 +282,43 @@ export function planDecisions(
     }
     const summary = grants.get(row.org_number)
     if (summary && summary.roles.length > 0 && !summary.recognized) {
-      // Same rule as probeViaOmbudsregister: unknown role codes are a
-      // pinning problem on our side, not a company withdrawing anything.
+      // Same rule as probeViaOmbudsregister: unknown role codes may be a
+      // wrong role code on our side, not a company withdrawing anything.
       decisions.push({ kind: 'unrecognized', row })
       continue
     }
-    const lasombud: GrantStatus = summary?.lasombud ? 'granted' : 'denied'
-    const momsOmbud: GrantStatus = summary?.moms_ombud ? 'granted' : 'denied'
+    const claim = {
+      optInDay: todayIsoStockholm(new Date(row.created_at)),
+      provenOn: {
+        lasombud: proofs.lasombud.get(row.company_id) ?? null,
+        moms_ombud: proofs.moms_ombud.get(row.company_id) ?? null,
+      },
+    }
+    const lasombud: GrantStatus = grantCountsFor(summary, 'lasombud', claim) ? 'granted' : 'denied'
+    const momsOmbud: GrantStatus = grantCountsFor(summary, 'moms_ombud', claim) ? 'granted' : 'denied'
+    const predatesOptIn = (['lasombud', 'moms_ombud'] as const).filter((key) =>
+      grantPredatesOptIn(summary, key, claim)
+    )
     const detail = summary
-      ? `ombudsregister ${today}: roller ${summary.roles.join(', ') || 'inga'}`
+      ? `ombudsregister ${today}: roller ${summary.roles.join(', ') || 'inga'}` +
+        (predatesOptIn.length > 0 ? `; signerad före kopplingen ${claim.optInDay}, inget BankID-bevis sedan dess` : '')
       : `ombudsregister ${today}: huvudman saknas`
     // A row already showing exactly this state is left alone, so a never-listed
-    // company is written once (unknown -> denied, "Saknas" in settings) and
-    // then skipped every following night.
+    // company is written once (unknown -> denied, "Väntar på Skatteverket" in
+    // settings) and then skipped every following run.
     if (row.lasombud_status === lasombud && row.moms_ombud_status === momsOmbud) {
       decisions.push({ kind: 'unchanged', row })
       continue
     }
     const losesEverything = isAnyGranted(row) && lasombud === 'denied' && momsOmbud === 'denied'
-    decisions.push({ kind: losesEverything ? 'downgrade' : 'record', row, lasombud, momsOmbud, detail })
+    decisions.push({
+      kind: losesEverything ? 'downgrade' : 'record',
+      row,
+      lasombud,
+      momsOmbud,
+      detail,
+      ...(predatesOptIn.length > 0 ? { predatesOptIn } : {}),
+    })
   }
   return decisions
 }

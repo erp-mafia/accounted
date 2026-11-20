@@ -74,10 +74,11 @@ export const POST = withRouteContext(
       .single()
 
     if (error) {
-      // Unique-index violation on redirect_uri → 409
+      // Unique-index violation on (user_id, redirect_uri): this user already
+      // has it. Other users may register the same URI (crm#1654).
       if (error.code === '23505') {
         return NextResponse.json(
-          { error: 'Den här redirect URI:n är redan registrerad.' },
+          { error: 'Du har redan registrerat den här redirect URI:n.' },
           { status: 409 }
         )
       }

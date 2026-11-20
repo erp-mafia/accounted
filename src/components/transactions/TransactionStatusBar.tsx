@@ -3,11 +3,16 @@
 import { useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { Upload, Plus, RefreshCw } from 'lucide-react'
-import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
+import { ArrowPathIcon, ArrowUpTrayIcon, ChevronDownIcon, PlusIcon } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import { PageHeader } from '@/components/ui/page-header'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useUiState } from '@/lib/hooks/use-ui-state'
-import { resolveInitialMode } from '@/lib/ui-state/client'
 import { useBankSync } from '@/components/transactions/BankSyncNowButton'
 import { useAgeFormatter } from '@/components/transactions/BankSyncStatusChip'
 
@@ -17,9 +22,10 @@ interface TransactionStatusBarProps {
 }
 
 /**
- * Page header (concept scene 10): title + one Importera split button
- * holding the ways transactions arrive (bank sync, import guide for CSV/SIE,
- * manual entry for cash/outlays).
+ * Page header (V7 Pengar, Bankrader): the title, a quiet "Banken" menu with
+ * the ways rows arrive from the bank (sync now, import a bank file) and one
+ * filled primary, "Ny transaktion". The rare utilities never hold the filled
+ * slot (product decision 2026-11-14).
  */
 export default function TransactionStatusBar({
   onOpenCreateDialog,
@@ -28,71 +34,68 @@ export default function TransactionStatusBar({
   const { canWrite } = useCanWrite()
   const t = useTranslations('transactions')
   const router = useRouter()
-  const { uiState, loaded } = useUiState()
   const { connections, hasBankSync, syncAll, lastSyncedAt, isBusy } = useBankSync()
   const formatAge = useAgeFormatter()
 
-  // "Synka bank nu" (concept: first menu row) only renders once a bank is
-  // actually connected and the plan includes PSD2 sync; the footer
-  // BankSyncNowButton stays the gated conversion surface for free users.
+  // "Synka bank nu" only renders once a bank is actually connected and the
+  // plan includes PSD2 sync; for a connected company without the plan the
+  // footer status chip ('paused') carries the upgrade link.
   const showSync = hasBankSync && (connections?.length ?? 0) > 0
 
-  const options: SplitButtonOption[] = [
-    ...(showSync
-      ? [
-          {
-            key: 'synka',
-            label: t('create_synka'),
-            icon: RefreshCw,
-            busy: isBusy,
-            busyLabel: t('bank_sync_button_syncing'),
-            description: lastSyncedAt
-              ? t('create_synka_desc_last', { age: formatAge(lastSyncedAt) })
-              : t('create_synka_desc'),
-            onSelect: () => {
-              void syncAll()
-            },
-          } satisfies SplitButtonOption,
-        ]
-      : []),
-    {
-      key: 'importera',
-      label: t('action_import'),
-      icon: Upload,
-      description: t('create_import_desc'),
-      // Straight to the bank-file step: the option's own description says
-      // "CSV- eller SIE-fil från banken", so the chooser in between is a stop
-      // that asks what the user already answered.
-      onSelect: () => router.push('/import?mode=bank'),
-    },
-    {
-      key: 'manuell',
-      label: t('action_new_transaction'),
-      icon: Plus,
-      description: t('create_manual_desc'),
-      disabled: !canWrite,
-      disabledTitle: t('viewer_disabled_tooltip'),
-      onSelect: () => onOpenCreateDialog(),
-    },
-  ]
-
   return (
-    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
-      <div className="flex flex-wrap items-center gap-2">
-      {children}
-      <SplitButton
-        key={`${loaded ? 'loaded' : 'initial'}-${showSync ? 'sync' : 'nosync'}`}
-        persistKey="transactions"
-        initialModeKey={resolveInitialMode(
-          uiState,
-          'transactions',
-          options.map((o) => o.key),
-          'importera',
-        )}
-        options={options}
-      />
-      </div>
-    </div>
+    <PageHeader title={t('page_title')} action={<>
+        {children}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="toolbar" variant="outline" aria-busy={isBusy || undefined}>
+              {isBusy ? t('bank_sync_button_syncing') : t('bank_menu')}
+              <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-64">
+            {showSync && (
+              <DropdownMenuItem
+                disabled={!canWrite || isBusy}
+                onSelect={() => {
+                  void syncAll()
+                }}
+                className="h-auto items-start py-1.5"
+              >
+                <ArrowPathIcon className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="flex flex-col">
+                  <span>{t('create_synka')}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {lastSyncedAt
+                      ? t('create_synka_desc_last', { age: formatAge(lastSyncedAt) })
+                      : t('create_synka_desc')}
+                  </span>
+                </span>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem
+              // Straight to the bank-file step: the row's own description says
+              // "CSV- eller SIE-fil från banken", so the chooser in between is
+              // a stop that asks what the user already answered.
+              onSelect={() => router.push('/import?mode=bank')}
+              className="h-auto items-start py-1.5"
+            >
+              <ArrowUpTrayIcon className="mt-0.5 h-4 w-4 shrink-0" />
+              <span className="flex flex-col">
+                <span>{t('action_import_bank_file')}</span>
+                <span className="text-xs text-muted-foreground">{t('create_import_desc')}</span>
+              </span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button
+          size="toolbar"
+          disabled={!canWrite}
+          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          onClick={onOpenCreateDialog}
+        >
+          <PlusIcon className="h-4 w-4" />
+          {t('action_new_transaction')}
+        </Button>
+    </>} />
   )
 }

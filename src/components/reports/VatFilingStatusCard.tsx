@@ -1,9 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
-import { CheckCircle2 } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -15,13 +15,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { formatDate } from '@/lib/utils'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { addDaysIso, hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   vatFilingPeriodEnd,
   type VatFilingPeriodType,
   type VatFilingRecord,
 } from '@/lib/vat/filing-record'
+import { VatFiledPeriodLock } from '@/components/reports/VatFiledPeriodLock'
 
 interface VatFilingStatusCardProps {
   periodType: VatFilingPeriodType
@@ -40,12 +41,15 @@ interface VatFilingStatusCardProps {
 }
 
 /**
- * Filing status of the selected period under "Lämna in" (issues #2746,
- * #2786), for every cadence including helårsmoms: shows
- * the recorded filing (through the Skatteverket connection or marked by
- * hand), or offers "Markera som inlämnad" for a declaration filed on
+ * Filing status of the selected period in the "Lämna in" action row (issues
+ * #2746, #2786), for every cadence including helårsmoms: the recorded filing
+ * (through the Skatteverket connection or marked by hand) as one muted line,
+ * or the "Markera som inlämnad" button for a declaration filed on
  * skatteverket.se. Recording the filing is free and sends nothing to
  * Skatteverket; it is what lets the page open the next period by default.
+ * Why it exists is explained behind the step's "?", not here. The filed line
+ * also says how the books stand on the period (VatFiledPeriodLock): locked
+ * through it, or the offer to lock them.
  *
  * Hidden while the period is still running: it cannot have been filed yet.
  */
@@ -61,6 +65,7 @@ export function VatFilingStatusCard({
 }: VatFilingStatusCardProps) {
   const t = useTranslations('reports')
   const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const [open, setOpen] = useState(false)
   const [filedOn, setFiledOn] = useState(() => todayIsoStockholm())
   const [reference, setReference] = useState('')
@@ -69,15 +74,14 @@ export function VatFilingStatusCard({
 
   const today = todayIsoStockholm()
   const periodEnd = vatFilingPeriodEnd(periodType, year, period, fiscalYearEndMonth)
-  if (periodEnd >= today) return null
+  if (!hasEnded(periodEnd, today)) return null
   // A declaration is filed after its period ends: the first selectable day is
   // the day after, matching the server's VAT_FILING_DATE_BEFORE_PERIOD_END rule.
   const earliestFilingDate = addDaysIso(periodEnd, 1)
 
   async function readError(res: Response, fallback: string): Promise<string> {
     const json = await res.json().catch(() => null)
-    const message = json?.error?.message ?? (typeof json?.error === 'string' ? json.error : null)
-    return typeof message === 'string' && message.length > 0 ? message : fallback
+    return getErrorMessage(json, { locale: errorLocale, fallback })
   }
 
   async function mark() {
@@ -103,7 +107,7 @@ export function VatFilingStatusCard({
       setReference('')
       onChanged()
     } catch (err) {
-      setError(getErrorMessage(err) || t('vat_filing_failed'))
+      setError(getErrorMessage(err, { locale: errorLocale, fallback: t('vat_filing_failed') }))
     } finally {
       setBusy(false)
     }
@@ -127,56 +131,45 @@ export function VatFilingStatusCard({
       }
       onChanged()
     } catch (err) {
-      setError(getErrorMessage(err) || t('vat_filing_unmark_failed'))
+      setError(getErrorMessage(err, { locale: errorLocale, fallback: t('vat_filing_unmark_failed') }))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <section>
-      <div className="mb-3 flex items-center gap-3 px-1">
-        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          {t('vat_filing_section')}
-        </h3>
-        <div className="h-px flex-1 bg-border/60" />
-      </div>
-
+    <>
       {record ? (
-        <div className="space-y-1 rounded-lg border border-success/40 bg-success/5 px-4 py-3 text-[13px] leading-6">
-          <p className="flex items-center gap-2 font-medium">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
-            {t('vat_filing_filed_on', { date: formatDate(record.filed_on) })}
-          </p>
-          <p className="text-muted-foreground">
-            {record.source === 'skatteverket'
-              ? t('vat_filing_source_skatteverket')
-              : t('vat_filing_source_manual')}
-          </p>
+        // Filed is a normal state: muted text in the row (convention 12),
+        // never a green box.
+        <p className="text-[13px] leading-5 text-muted-foreground tabular-nums">
+          {t('vat_filing_filed_on', { date: formatDate(record.filed_on) })}
+          {' · '}
+          {record.source === 'skatteverket'
+            ? t('vat_filing_source_skatteverket')
+            : t('vat_filing_source_manual')}
           {record.reference && (
-            <p className="text-muted-foreground">
+            <>
+              {' · '}
               {t('vat_filing_reference', { reference: record.reference })}
-            </p>
+            </>
           )}
+          <VatFiledPeriodLock record={record} periodLabel={periodLabel} />
           {record.source === 'manual' && canWrite && (
-            <div className="pt-1">
-              <Button variant="ghost" size="sm" onClick={unmark} loading={busy}>
+            <>
+              {' · '}
+              <button type="button" className={QUIET_LINK_CLASS} onClick={unmark} disabled={busy}>
                 {t('vat_filing_unmark')}
-              </Button>
-            </div>
+              </button>
+            </>
           )}
-          {error && <p className="text-destructive">{error}</p>}
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <p className="text-[13px] leading-6 text-muted-foreground">{t('vat_filing_prompt')}</p>
-          {canWrite && (
-            <Button variant="outline" onClick={() => setOpen(true)}>
-              {t('vat_filing_mark')}
-            </Button>
-          )}
-        </div>
-      )}
+          {error && <span className="text-destructive">{` ${error}`}</span>}
+        </p>
+      ) : canWrite ? (
+        <Button variant="outline" onClick={() => setOpen(true)}>
+          {t('vat_filing_mark')}
+        </Button>
+      ) : null}
 
       <Dialog
         open={open}
@@ -186,7 +179,7 @@ export function VatFilingStatusCard({
           if (!next) setError(null)
         }}
       >
-        <DialogContent className="sm:max-w-[440px]">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('vat_filing_dialog_title', { period: periodLabel })}</DialogTitle>
             <DialogDescription>{t('vat_filing_dialog_body')}</DialogDescription>
@@ -226,6 +219,6 @@ export function VatFilingStatusCard({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </>
   )
 }

@@ -1,5 +1,6 @@
 import { VAT_RUTA_LABELS, type VatDeclarationRutor } from '@/types'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
+import { formatOrgNumberDisplay, orgNumberKey } from '@/lib/invariants/org-number'
 
 /**
  * Maps each momsdeklaration ruta to its eSKDUpload XML tag, per Skatteverket's
@@ -67,19 +68,18 @@ export interface ESkdFileInput {
  * Formats a Swedish org/person number as `xxxxxx-xxxx` (10 digits with hyphen),
  * as required by the eSKD header. Accepts 12-digit century-prefixed values
  * (16xxxxxxxxxx org numbers, 19/20-prefixed personnummer) by stripping the
- * prefix, mirroring formatRedovisare/formatOrgNumber12; settings rows predating
- * org-number normalization legitimately hold 12 digits. Throws otherwise, since
- * an out-of-format OrgNr is an "avvisande fel" that Skatteverket rejects outright.
+ * prefix (orgNumberKey); settings rows predating org-number normalization
+ * legitimately hold 12 digits. Throws otherwise, since an out-of-format OrgNr
+ * is an "avvisande fel" that Skatteverket rejects outright.
  */
 function formatESkdOrgNumber(orgNumber: string): string {
-  let digits = orgNumber.replace(/\D/g, '')
-  if (digits.length === 12) digits = digits.slice(2)
-  if (digits.length !== 10) {
+  const key = orgNumberKey(orgNumber)
+  if (key === null) {
     throw new Error(
       `Ogiltigt organisationsnummer för momsdeklaration (kräver 10 siffror): ${orgNumber}`,
     )
   }
-  return `${digits.slice(0, 6)}-${digits.slice(6)}`
+  return formatOrgNumberDisplay(key)
 }
 
 /** Derives the eSKD <Period> value (YYYYMM) from the period end date. */

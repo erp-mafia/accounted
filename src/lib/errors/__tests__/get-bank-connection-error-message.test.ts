@@ -120,6 +120,11 @@ describe('getBankConnectionErrorMessage', () => {
       expect(classifyBankConnectionDenial('access_denied', 'ASPSP internal policy 42')).toBe('other')
     })
 
+    it('reads a cancel named in the code itself, with no description, as a cancel', () => {
+      expect(classifyBankConnectionDenial('cancelled')).toBe('cancelled')
+      expect(getBankConnectionErrorMessage('cancelled')).toContain('Anslutningen avbröts hos banken')
+    })
+
     it('returns null for every non-denial code', () => {
       expect(classifyBankConnectionDenial('server_error')).toBeNull()
       expect(classifyBankConnectionDenial('temporarily_unavailable', 'try later')).toBeNull()

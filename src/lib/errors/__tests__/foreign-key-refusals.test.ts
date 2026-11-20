@@ -80,6 +80,15 @@ const CASES: Case[] = [
     sv: 'Lönekörningen kan inte raderas eftersom en betalfil har skapats för den, och betalfilen ska sparas i sju år. Ändra lönekörningen i stället.',
     en: [/payment file/i, /seven years/i],
   },
+  {
+    // crm#230: Arkiv's delete on a receipt that is still a bank transaction's underlag.
+    constraint: 'transactions_document_id_fkey',
+    parent: 'document_attachments',
+    child: 'transactions',
+    options: {},
+    sv: 'Underlaget är kopplat till en banktransaktion och kan inte tas bort. Koppla bort det från transaktionen först.',
+    en: [/bank transaction/i, /detach/i],
+  },
 ]
 
 describe.each(CASES)('getErrorMessage: refused delete on $constraint', (c) => {

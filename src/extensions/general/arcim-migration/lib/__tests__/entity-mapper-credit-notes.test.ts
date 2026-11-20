@@ -264,8 +264,7 @@ describe('mapSalesInvoice: kreditfaktura', () => {
  * #2789: what a provider's own credit note becomes, end to end through the
  * provider mapper and the importer. Before the fix a Fortnox kreditfaktura
  * landed as status 'paid' with paid_amount equal to its negative total, no
- * reference to the invoice it credits and no disclosure: 3 200 such rows
- * across 92 companies in production, none of them ever 'credited'.
+ * reference to the invoice it credits and no disclosure, none of them ever 'credited'.
  */
 describe('mapSalesInvoice: a provider credit note end to end (#2789)', () => {
   // InvoiceFull as Fortnox serialises it: `Credit` is the string "true",
@@ -471,7 +470,7 @@ describe('mapSupplierInvoice: kreditfaktura', () => {
   })
 
   it('keeps the relative sign of the rows on a credit note that also charges something', () => {
-    const line = (id: string, total: number) => ({ id, quantity: total < 0 ? -1 : 1, unitPrice: { value: Math.abs(total), currencyCode: 'SEK' },
+    const line = (id: string, total: number) => ({ id, accountNumber: '4010', quantity: total < 0 ? -1 : 1, unitPrice: { value: Math.abs(total), currencyCode: 'SEK' },
       lineExtensionAmount: { value: total, currencyCode: 'SEK' }, taxPercent: 25, taxAmount: { value: total * 0.25, currencyCode: 'SEK' } })
     const { items, invoice } = mapSupplier({ ...supplierDto({ invoiceTypeCode: '381', signOfAmounts: -1 }), lines: [line('1', -1200), line('2', 200)] })
     expect(items.map((item) => [item.quantity, item.unit_price, item.line_total, item.vat_amount]))

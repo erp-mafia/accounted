@@ -1,0 +1,46 @@
+-- Drop idx_document_attachments_pages_unread: the read cron's backfill takes
+-- the narrower index built for it (2026-11-15).
+--
+-- 20261112214702 added idx_document_attachments_backfill_unread, which
+-- carries document_backfill_candidates' own predicate: the unread documents
+-- a reader could take, none of the bank archives that are never read. The
+-- old index stayed, on the expectation that the function
+-- would stop using it. It did not. document_backfill_candidates is LANGUAGE
+-- sql with a SET clause, so Postgres plans its body with the limit as an
+-- unknown parameter (costed as a tenth of the rows), and that plan is a
+-- parallel scan of the old index (the archives filtered out after each
+-- heap fetch). The new index is smaller than
+-- min_parallel_index_scan_size, so it has no parallel plan to compete
+-- with: after 20261112214702 the cron's call still raised the old index's
+-- idx_scan and not the new one's, while the same body with a literal limit
+-- took the new index.
+-- With the old index gone, the new one is the only index that gives the
+-- function its order on its own predicate (tests/pg/scale-indexes.pg.test.ts
+-- plans it as a generic plan): about 40 % fewer blocks on every run, every
+-- five minutes, and one index less to keep up on every document write.
+--
+-- Nothing else reads by it. It is the only index ordered across companies
+-- on unread rows, and the only statement asking for those is this function:
+-- the old index's idx_scan rose by exactly one per backfill call. The other
+-- reads of unread documents go by company (the MCP unread count, through
+-- idx_document_attachments_company_id) or by id.
+--
+-- Not fixed here, and the larger cost: about 16 800 of the 17 000 rows the
+-- backfill walks can never be stamped (15 700 on a closed or locked period,
+-- 1 100 on a reset company), and the function skips them one by one on
+-- every run. Removing that needs
+-- the fact stored where the scan can see it (a design change in the
+-- background-jobs work that owns this function).
+--
+-- DROP INDEX takes an ACCESS EXCLUSIVE lock on document_attachments; once
+-- held, the drop itself is immediate. While it waits for transactions
+-- already open on the table, every read and write of the table queues
+-- behind it, so lock_timeout caps that wait at 5 s: past it the migration
+-- fails whole instead of holding up document views (precedent
+-- 20261109090000). A failed run leaves migrations-production red, and the
+-- migrations behind it waiting, until the next push to main or a retry of
+-- the job; IF EXISTS makes the rerun safe. Not CONCURRENTLY: that cannot run
+-- inside the migration transaction.
+SELECT set_config('lock_timeout', '5s', true);
+
+DROP INDEX IF EXISTS public.idx_document_attachments_pages_unread;

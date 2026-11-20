@@ -66,8 +66,8 @@ Body sections (suggested, not enforced):
 
 1. Create a new subdirectory under `.claude/skills/industry/<slug>/`.
 2. Write `SKILL.md` with the frontmatter above.
-3. Run `npx tsx scripts/seed-agent-atom-registry.ts` to upsert the atom row
-   into `agent_atom_registry`.
+3. Run `npm run skills:generate` to regenerate the seed migration that
+   upserts the atom row into `agent_atom_registry`; CI applies it on merge.
 4. The composer will start considering the atom on the next signup or
    "Bygg om" rebuild: no code changes required.
 

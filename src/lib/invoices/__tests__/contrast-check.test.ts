@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { getContrastRatio, isWcagAACompliant } from '@/lib/invoices/contrast-check'
+import { getContrastRatio } from '@/lib/invoices/contrast-check'
+
+/** WCAG 2.2 AA for normal text, the threshold lib/branding/resolve.ts applies. */
+const passesAA = (fg: string, bg: string) => getContrastRatio(fg, bg) >= 4.5
 
 describe('getContrastRatio', () => {
   it('returns 21 for black on white (maximum contrast)', () => {
@@ -46,18 +49,18 @@ describe('getContrastRatio', () => {
   })
 })
 
-describe('isWcagAACompliant', () => {
+describe('WCAG AA (4.5:1) on white', () => {
   it('passes for the PDF default primary color (#1a1a1a) on white', () => {
-    expect(isWcagAACompliant('#1a1a1a', '#ffffff')).toBe(true)
+    expect(passesAA('#1a1a1a', '#ffffff')).toBe(true)
   })
 
   it('passes for the PDF default accent color (#666666) on white', () => {
     // 5.74:1: comfortably above AA threshold.
-    expect(isWcagAACompliant('#666666', '#ffffff')).toBe(true)
+    expect(passesAA('#666666', '#ffffff')).toBe(true)
   })
 
   it('fails for pure yellow on white', () => {
-    expect(isWcagAACompliant('#ffff00', '#ffffff')).toBe(false)
+    expect(passesAA('#ffff00', '#ffffff')).toBe(false)
   })
 
   // Accounted brand semantic colors. All three are used as DATA-ONLY indicators
@@ -66,20 +69,20 @@ describe('isWcagAACompliant', () => {
   // the only one that comfortably passes AA on white.
   it('Accounted terracotta (#c2410c equivalent dark red) passes AA on white', () => {
     // 5.91:1: passes AA for normal text.
-    expect(isWcagAACompliant('#c2410c', '#ffffff')).toBe(true)
+    expect(passesAA('#c2410c', '#ffffff')).toBe(true)
   })
 
   it('Accounted sage (#84a98c lighter green) fails AA on white', () => {
     // ~2.4:1: fails AA, as expected for a soft pastel sage.
-    expect(isWcagAACompliant('#84a98c', '#ffffff')).toBe(false)
+    expect(passesAA('#84a98c', '#ffffff')).toBe(false)
   })
 
   it('Accounted ochre (#d4a373 warm yellow) fails AA on white', () => {
     // ~2.3:1: fails AA, as expected for a warm soft ochre.
-    expect(isWcagAACompliant('#d4a373', '#ffffff')).toBe(false)
+    expect(passesAA('#d4a373', '#ffffff')).toBe(false)
   })
 
   it('a very dark sage (#2d5a3e) passes AA on white', () => {
-    expect(isWcagAACompliant('#2d5a3e', '#ffffff')).toBe(true)
+    expect(passesAA('#2d5a3e', '#ffffff')).toBe(true)
   })
 })

@@ -1,17 +1,36 @@
 import { NextResponse } from 'next/server'
 import { parseBankFile, generateFileHash, detectFileFormat } from '@/lib/import/bank-file/parser'
 import { detectSkattekontoFile } from '@/lib/import/skattekonto-file/parser'
-import { decodeFileContent } from '@/lib/import/shared/encoding'
+import { detectBgMax } from '@/lib/import/bgmax/parser'
+import { decodeBankFile } from '@/lib/import/bank-file/workbook'
+import { UnreadableWorkbookError } from '@/lib/import/shared/workbook-reader'
+import { unrecognizedColumnsMessages } from '@/lib/import/bank-file/columns'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { loadFileAccountMatch, type FileAccountMatch } from '@/lib/cash-accounts/file-account'
+import { dominantCurrency } from '@/lib/import/bank-file/currency-summary'
+import { archiveBankFileOriginal } from '@/lib/import/bank-file/arrival'
+
+/**
+ * The step a parse was on when it threw. The error's own message can come out
+ * of the log redaction whole ("Bad compressed size: 693 != 1702240364" reads
+ * like a personnummer), so the step and the error's name are what point to it.
+ */
+type ParseStage = 'decode' | 'detect' | 'parse' | 'preview'
 
 /**
  * POST /api/import/bank-file/parse
  *
- * Accepts a bank file (CSV/XML) via FormData, auto-detects format, and returns
- * a parsed transactions preview with duplicate detection.
+ * Accepts a bank file (CSV/XML, or an Excel workbook: .xls/.xlsx) via
+ * FormData, auto-detects format, and returns a parsed transactions preview
+ * with duplicate detection. A workbook is converted to semicolon text first
+ * and returned as `file_content`, the text the manual column mapping reads.
+ * A workbook the reader cannot open is refused (BANK_FILE_WORKBOOK_UNREADABLE);
+ * a 500 is left for a fault on our side.
+ * The file itself is archived here as the import's original
+ * (lib/import/bank-file/arrival.ts).
  */
 export const POST = withRouteContext(
   'bank_file.parse',
@@ -35,9 +54,22 @@ export const POST = withRouteContext(
 
     const opLog = log.child({ filename: file.name, sizeBytes: file.size })
 
+    let stage: ParseStage = 'decode'
     try {
       const arrayBuffer = await file.arrayBuffer()
-      const content = decodeFileContent(arrayBuffer)
+      const { content, workbook } = await decodeBankFile(arrayBuffer, file.name)
+      stage = 'detect'
+
+      // Bankgirot's deposit specification (BG Max) is not a statement: its
+      // deposits are bank rows that already exist, so it never creates rows.
+      // The wizard sends it to the deposit-specification route, which
+      // attaches each deposit's payments to its row (crm#1170). No format
+      // override reaches past this: parsed as a statement it would only
+      // create rows that double the deposits.
+      if (detectBgMax(content)) {
+        return errorResponseFromCode('BANK_FILE_DEPOSIT_SPEC_DETECTED', opLog, { requestId })
+      }
+
       const fileHash = generateFileHash(content)
 
       const { data: existingImport } = await supabase
@@ -70,7 +102,50 @@ export const POST = withRouteContext(
         ? null
         : detectFileFormat(content, file.name)
 
+      stage = 'parse'
       const parseResult = parseBankFile(content, file.name, formatOverride || undefined)
+      stage = 'preview'
+
+      // The bank's parser found none of its columns (crm#1236): say which
+      // columns the file has and which it needs, not an empty preview.
+      if (parseResult.transactions.length === 0 && parseResult.unrecognized_columns) {
+        const columns = parseResult.unrecognized_columns
+        const messages = unrecognizedColumnsMessages(parseResult.format_name, columns)
+        return errorResponseFromCode('BANK_FILE_COLUMNS_UNRECOGNIZED', opLog, {
+          requestId,
+          messageSv: messages.sv,
+          messageEn: messages.en,
+          details: {
+            format: parseResult.format,
+            found_columns: columns.found,
+            expected_columns: columns.expected,
+          },
+        })
+      }
+
+      // Keep the statement as it came: execute receives only the parsed rows,
+      // so this is the one request that holds the file. Keyed by file_hash,
+      // so previewing the same file again reuses the object; execute records
+      // the arrival when the rows enter. A file with nothing to import is not
+      // kept (generic CSV is mapped in the browser, so it always is).
+      // Best effort: never fails the preview.
+      if (parseResult.transactions.length > 0 || parseResult.format === 'generic_csv') {
+        await archiveBankFileOriginal(supabase, {
+          companyId, fileHash, filename: file.name, bytes: arrayBuffer, mime: file.type,
+        })
+      }
+
+      // The cash account the file's own account already is (crm#1204): the
+      // wizard pre-selects it and execute refuses any other. Advisory here: a
+      // failed read leaves the choice to the user, and execute reads again.
+      let accountMatch: FileAccountMatch | null = null
+      try {
+        accountMatch = await loadFileAccountMatch(
+          supabase, companyId, parseResult.account, dominantCurrency(parseResult.transactions),
+        )
+      } catch (err) {
+        opLog.warn('bank file account match failed', err as Error)
+      }
 
       // Per-row duplicate detection deliberately does NOT live here: the
       // wizard calls POST /api/import/bank-file/check-duplicates after every
@@ -85,13 +160,26 @@ export const POST = withRouteContext(
           detected_format_name: detectedFormat?.name || parseResult.format_name,
           file_hash: fileHash,
           filename: file.name,
+          // The text a workbook was read as, for the client-side column
+          // mapping; null for a text file, which the client decodes itself.
+          file_content: workbook ? content : null,
+          account_match: accountMatch,
           headers: parseResult.format === 'generic_csv'
             ? content.split('\n')[0]?.split(',').map((h) => h.trim()) || []
             : null,
         },
       })
     } catch (err) {
-      opLog.error('bank file parse failed', err as Error)
+      // A workbook the reader cannot open is the file's problem: a refusal
+      // that says what to do, not a server fault.
+      if (err instanceof UnreadableWorkbookError) {
+        // Its message is the reader's reason with the numbers masked.
+        const errorClass = err.cause instanceof Error ? err.cause.name : typeof err.cause
+        opLog.warn('bank file workbook unreadable', err, { errorClass })
+        return errorResponseFromCode('BANK_FILE_WORKBOOK_UNREADABLE', opLog, { requestId })
+      }
+      // The serialized error keeps its name (the class) through the redaction.
+      opLog.error('bank file parse failed', err as Error, { stage })
       return errorResponseFromCode('BANK_FILE_PARSE_FAILED', opLog, {
         requestId,
         details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },

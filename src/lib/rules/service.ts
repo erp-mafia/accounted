@@ -1,15 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { aliasPatterns, postgrestFilterValue, type RuleMode, type RuleRow } from './model'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Regler data access (UI v2 PR 5). The rows are categorization_templates;
  * this keeps the column list and the match query in one place so the list
  * route, the detail route and the MCP surface read the same thing.
  */
-
-/** Column list, repeated literally in every query so the schema guard can read it. */
-export const RULE_COLUMNS =
-  'id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at'
 
 export interface RuleMatch {
   id: string
@@ -36,38 +34,82 @@ function fromLegacyRow(row: Record<string, unknown>): RuleRow {
     mode: is_active === false ? 'paused' : 'propose',
     corrections: 0,
     paused_at: null,
+    always_review: false,
   } as unknown as RuleRow
 }
 
+/**
+ * Before migration 20261030131517 the table has no always_review (the code
+ * is live a few minutes before it runs): no rule asks on its own yet.
+ */
+function withoutAlwaysReview(row: Record<string, unknown>): RuleRow {
+  return { ...row, always_review: false } as unknown as RuleRow
+}
+
+/**
+ * Every rule of the company, paged: one company holds more than PostgREST's
+ * 1,000-row page, and the list ended at an arbitrary 1,000. id breaks the
+ * occurrence_count/updated_at ties so the pages never overlap or skip.
+ */
 export async function listRules(supabase: SupabaseClient, companyId: string): Promise<RuleRow[]> {
-  const { data, error } = await supabase
-    .from('categorization_templates')
-    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
-    .eq('company_id', companyId)
-    .order('occurrence_count', { ascending: false })
-    .order('updated_at', { ascending: false })
-  if (error && error.code === UNDEFINED_COLUMN) {
-    const legacy = await supabase
-      .from('categorization_templates')
-      .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, confidence, last_seen_date, source, is_active, created_at, updated_at')
-      .eq('company_id', companyId)
-      .order('occurrence_count', { ascending: false })
-      .order('updated_at', { ascending: false })
-    if (legacy.error) throw legacy.error
-    return (legacy.data ?? []).map((row) => fromLegacyRow(row as Record<string, unknown>))
+  try {
+    return await fetchAllRows<RuleRow>(({ from, to }) =>
+      supabase
+        .from('categorization_templates')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, always_review, created_at, updated_at')
+        .eq('company_id', companyId)
+        .order('occurrence_count', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .order('id')
+        .range(from, to),
+    )
+  } catch (error) {
+    if ((error as { code?: string }).code !== UNDEFINED_COLUMN) throw error
   }
-  if (error) throw error
-  return (data ?? []) as unknown as RuleRow[]
+  try {
+    const ladder = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+      supabase
+        .from('categorization_templates')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
+        .eq('company_id', companyId)
+        .order('occurrence_count', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .order('id')
+        .range(from, to),
+    )
+    return ladder.map(withoutAlwaysReview)
+  } catch (error) {
+    if ((error as { code?: string }).code !== UNDEFINED_COLUMN) throw error
+    const legacy = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+      supabase
+        .from('categorization_templates')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, confidence, last_seen_date, source, is_active, created_at, updated_at')
+        .eq('company_id', companyId)
+        .order('occurrence_count', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .order('id')
+        .range(from, to),
+    )
+    return legacy.map(fromLegacyRow)
+  }
 }
 
 export async function getRule(supabase: SupabaseClient, companyId: string, id: string): Promise<RuleRow | null> {
   const { data, error } = await supabase
     .from('categorization_templates')
-    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
+    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, always_review, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('id', id)
     .maybeSingle()
   if (error && error.code === UNDEFINED_COLUMN) {
+    const ladder = await supabase
+      .from('categorization_templates')
+      .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
+      .eq('company_id', companyId)
+      .eq('id', id)
+      .maybeSingle()
+    if (!ladder.error) return ladder.data ? withoutAlwaysReview(ladder.data as Record<string, unknown>) : null
+    if (ladder.error.code !== UNDEFINED_COLUMN) throw ladder.error
     const legacy = await supabase
       .from('categorization_templates')
       .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, confidence, last_seen_date, source, is_active, created_at, updated_at')
@@ -95,7 +137,7 @@ export async function listRuleMatches(
 ): Promise<RuleMatch[]> {
   const patterns = aliasPatterns(rule)
   if (patterns.length === 0) return []
-  const yearStart = `${now.getFullYear()}-01-01`
+  const yearStart = `${stockholmYearMonth(now).year}-01-01`
   const orFilter = patterns.map((p) => `description.ilike.${postgrestFilterValue(`%${p}%`)}`).join(',')
   const { data, error } = await supabase
     .from('transactions')
@@ -110,22 +152,31 @@ export async function listRuleMatches(
   return (data ?? []) as RuleMatch[]
 }
 
+/** What a person may change on a rule: its ladder position, and whether it always asks. */
+export interface RuleChange {
+  mode?: RuleMode
+  always_review?: boolean
+}
+
 /**
- * Change the ladder position. The BEFORE trigger on the table keeps
- * is_active in step, so the booking engine sees the change immediately.
+ * Change a rule. The BEFORE trigger on the table keeps is_active in step
+ * with mode, so the booking engine sees the change immediately; the audit
+ * trigger logs both (always_review is a rule change in the
+ * behandlingshistorik, not a learning column).
  */
-export async function setRuleMode(
+export async function updateRule(
   supabase: SupabaseClient,
   companyId: string,
   id: string,
-  mode: RuleMode,
+  change: RuleChange,
 ): Promise<RuleRow | null> {
   const { data, error } = await supabase
     .from('categorization_templates')
-    .update({ mode })
+    // A key left undefined is not sent (the body is JSON), so only what changed is written.
+    .update({ mode: change.mode, always_review: change.always_review })
     .eq('company_id', companyId)
     .eq('id', id)
-    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
+    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, always_review, created_at, updated_at')
     .maybeSingle()
   if (error) throw error
   return (data as unknown as RuleRow) ?? null

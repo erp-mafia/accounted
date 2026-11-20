@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateExpensePayoutSchema } from '@/lib/api/schemas'
 import { listPayoutBatches } from '@/lib/expenses/expense-claims-service'
 import { recordExpensePayout } from '@/lib/expenses/expense-claim-actions'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 export const GET = withRouteContext('expense_claims.payouts.list', async (_request, { supabase, companyId }) => {
   const batches = await listPayoutBatches(supabase, companyId)

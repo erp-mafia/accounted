@@ -7,20 +7,25 @@
  * here: YTD accumulators, vacation balances (incl. sparade dagar per
  * origin year), opening semesterlöneskuld SEK, and the karens adjustment.
  * Locked (read-only) once the employee has a booked salary run; the lock
- * self-releases if that run is corrected.
+ * self-releases if that run is corrected. The lock applies before any
+ * balances exist too: then there is nothing to show and nothing that can be
+ * saved, so the panel explains the lock instead of offering the form.
  */
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { formatDate } from '@/lib/utils'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 interface OpeningBalancesData {
   cutover_date: string
@@ -43,7 +48,7 @@ interface OpeningBalancesData {
   locked_by_run_id: string | null
 }
 
-const currentYear = new Date().getFullYear()
+const currentYear = stockholmYearMonth().year
 /** Sparade dagar origin years: Semesterlagen allows saving max 5 years. */
 const SAVED_YEARS = Array.from({ length: 5 }, (_, i) => String(currentYear - 1 - i))
 
@@ -109,8 +114,13 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   const { appName } = useBranding()
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
+  // The read failed: never show the empty form then, since a save from it
+  // would write over balances that exist but did not load.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [saving, setSaving] = useState(false)
   const [locked, setLocked] = useState(false)
+  const [lockedByRunId, setLockedByRunId] = useState<string | null>(null)
   const [hasRow, setHasRow] = useState(false)
   // Collapsed by default: this is a one-time form for switching payroll
   // system, and 14 empty input rows on every employee is clutter. Opens by
@@ -143,10 +153,23 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   useEffect(() => {
     async function load() {
       setLoading(true)
+      setLoadFailed(false)
       try {
         const res = await fetch(`/api/salary/employees/${employeeId}/opening-balances`)
-        if (!res.ok) return
-        const { data } = (await res.json()) as { data: OpeningBalancesData | null }
+        if (!res.ok) {
+          setLoadFailed(true)
+          return
+        }
+        const body = (await res.json()) as {
+          data: OpeningBalancesData | null
+          locked?: boolean
+          locked_by_run_id?: string | null
+        }
+        const { data } = body
+        // Top-level lock state is reported with or without a stored row: an
+        // employee with a booked run cannot get balances set either way.
+        setLocked(Boolean(body.locked ?? data?.locked))
+        setLockedByRunId(body.locked_by_run_id ?? data?.locked_by_run_id ?? null)
         if (data) {
           const values: PanelValues = {
             cutoverDate: data.cutover_date,
@@ -168,7 +191,6 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
             advanceDebt: poolValue(data.opening_advance_vacation_debt),
           }
           setHasRow(true)
-          setLocked(data.locked)
           setYtdNetUnknown(data.ytd_net === null)
           setCutoverDate(values.cutoverDate)
           setYtdGross(values.ytdGross)
@@ -188,14 +210,13 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
           setBaseline(fingerprint(values))
         }
       } catch {
-        // Network failure: the panel falls back to its empty form rather
-        // than holding the skeleton forever; a retry happens on remount.
+        setLoadFailed(true)
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [employeeId])
+  }, [employeeId, reloadKey])
 
   const currentValues: PanelValues = {
     cutoverDate,
@@ -264,16 +285,50 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   if (loading) {
     return (
       <DetailSection kicker={t('opening_balances_title')}>
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-2/3" />
-        </div>
+        </LateReveal>
+      </DetailSection>
+    )
+  }
+
+  if (loadFailed) {
+    return (
+      <DetailSection kicker={t('opening_balances_title')}>
+        <LoadError onRetry={() => setReloadKey((key) => key + 1)} />
       </DetailSection>
     )
   }
 
   const readOnly = locked || !canWrite
   const open = expanded ?? hasRow
+
+  const lockedRunLink = lockedByRunId ? (
+    <>
+      {' '}
+      <Link
+        href={`/salary/runs/${lockedByRunId}`}
+        className="underline underline-offset-2 hover:text-foreground"
+      >
+        {t('opening_balances_locked_open_run')}
+      </Link>
+    </>
+  ) : null
+
+  if (locked && !hasRow) {
+    return (
+      <DetailSection
+        kicker={t('opening_balances_title')}
+        help={<HelpPopover>{t('opening_balances_description', { appName })}</HelpPopover>}
+      >
+        <p className="text-sm text-muted-foreground">
+          {t('opening_balances_locked_none')}
+          {lockedRunLink}
+        </p>
+      </DetailSection>
+    )
+  }
 
   return (
     /* Own form: this section is its own save scope. It must never be nested
@@ -293,7 +348,6 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
           <Button
             type="button"
             variant="outline"
-            size="sm"
             className="-my-1"
             aria-expanded={open}
             onClick={() => setExpanded(!open)}
@@ -311,7 +365,10 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         ) : (
         <>
         {locked && (
-          <p className="mb-3 text-sm text-muted-foreground">{t('opening_balances_locked_notice')}</p>
+          <p className="mb-3 text-sm text-muted-foreground">
+            {t('opening_balances_locked_notice')}
+            {lockedRunLink}
+          </p>
         )}
 
         <SettingsRow
@@ -468,7 +525,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
 
         {!readOnly && (
           <div className="mt-4 flex justify-end">
-            <Button type="submit" size="sm" disabled={saving || !dirty}>
+            <Button type="submit" disabled={saving || !dirty}>
               {saving
                 ? t('opening_balances_saving')
                 : hasRow

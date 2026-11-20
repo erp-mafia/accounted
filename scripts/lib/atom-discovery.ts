@@ -1,11 +1,9 @@
 /**
  * Shared atom discovery + SKILL.md frontmatter parsing.
  *
- * Used by both:
- *   - scripts/seed-agent-atom-registry.ts  (dev/manual: writes the registry directly)
- *   - scripts/generate-skill-bodies.ts     (production: emits a seed migration)
- *
- * Keeping discovery in one place means the two paths can never drift on which
+ * Used by scripts/generate-skill-bodies.ts (emits the seed migration that is
+ * the only path into agent_atom_registry), the public skills sync and the
+ * tests. Keeping discovery in one place means they can never drift on which
  * skills count as atoms, how titles/tokens are derived, or how frontmatter is read.
  *
  * Tiers discovered (the curated set: swarm-* and other Claude-Code-only skills

@@ -10,6 +10,8 @@ import {
   getInvoiceFontContentType,
 } from '@/lib/invoices/font-files'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { writeCompanySettings } from '@/lib/company/settings-writer'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 const ALLOWED_EXTENSIONS = new Set(['ttf', 'woff'])
 
@@ -21,7 +23,7 @@ function safeDisplayName(fileName: string, extension: string): string {
 
 export const POST = withRouteContext(
   'settings.invoice-font.upload',
-  async (request, { supabase, companyId }) => {
+  async (request, { supabase, companyId, user, log, requestId }) => {
     const formData = await request.formData()
     const file = formData.get('file')
     if (!(file instanceof File)) {
@@ -69,26 +71,17 @@ export const POST = withRouteContext(
     }
 
     const displayName = safeDisplayName(file.name, format)
-    const { error: updateError } = await supabase
-      .from('company_settings')
-      .update({
+    const saved = await writeCompanySettings(
+      { supabase, companyId, userId: user.id, log },
+      {
         invoice_font_family: 'Custom',
         invoice_custom_font_path: storagePath,
         invoice_custom_font_name: displayName,
-      })
-      .eq('company_id', companyId)
-      .select('company_id')
-      .single()
-
-    if (updateError) {
+      },
+    )
+    if (!saved.ok) {
       await bucket.remove([storagePath])
-      if (updateError.code === 'PGRST116') {
-        return NextResponse.json({ error: 'Inställningarna hittades inte.' }, { status: 404 })
-      }
-      return NextResponse.json(
-        { error: getUserErrorMessage(updateError) },
-        { status: 500 },
-      )
+      return sessionFailureResponse(saved, log, requestId)
     }
 
     const { data: existing } = await bucket.list(companyId)
@@ -105,32 +98,21 @@ export const POST = withRouteContext(
       },
     })
   },
-  { requireWrite: true },
+  { requireAdmin: true },
 )
 
 export const DELETE = withRouteContext(
   'settings.invoice-font.delete',
-  async (_request, { supabase, companyId }) => {
-    const { error: updateError } = await supabase
-      .from('company_settings')
-      .update({
+  async (_request, { supabase, companyId, user, log, requestId }) => {
+    const saved = await writeCompanySettings(
+      { supabase, companyId, userId: user.id, log },
+      {
         invoice_font_family: 'Helvetica',
         invoice_custom_font_path: null,
         invoice_custom_font_name: null,
-      })
-      .eq('company_id', companyId)
-      .select('company_id')
-      .single()
-
-    if (updateError) {
-      if (updateError.code === 'PGRST116') {
-        return NextResponse.json({ error: 'Inställningarna hittades inte.' }, { status: 404 })
-      }
-      return NextResponse.json(
-        { error: getUserErrorMessage(updateError) },
-        { status: 500 },
-      )
-    }
+      },
+    )
+    if (!saved.ok) return sessionFailureResponse(saved, log, requestId)
 
     const serviceClient = createServiceClient()
     const bucket = serviceClient.storage.from('invoice-fonts')
@@ -147,5 +129,5 @@ export const DELETE = withRouteContext(
       },
     })
   },
-  { requireWrite: true },
+  { requireAdmin: true },
 )

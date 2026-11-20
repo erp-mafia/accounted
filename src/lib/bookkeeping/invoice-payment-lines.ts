@@ -31,7 +31,10 @@
  *
  *   tx.currency      : currency of the bank tx (almost always SEK)
  *   tx.amount        : amount in tx.currency
- *   tx.exchange_rate : populated at ingest only when tx.currency != SEK
+ *   tx.exchange_rate : the Riksbanken SEK rate when tx.currency != SEK; on a
+ *                      SEK row it may carry the bank's rate of a purchase made
+ *                      in another currency (tx.instructed_currency), which
+ *                      resolveSekAmount never reads (SEK short-circuits first)
  *   tx.amount_sek    : pre-computed SEK at ingest for non-SEK tx
  *   invoice.currency : currency the invoice was issued in
  *   invoice.exchange_rate: the rate at which AR was originally booked on 1510.
@@ -56,11 +59,13 @@
  *                     partially_paid.
  */
 import type { CreateJournalEntryLineInput } from '@/types'
-import { ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
-import { resolveSekAmount } from './currency-utils'
+import { buildCurrencyMetadata, resolveSekAmount } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
-
-const TWO_DP = (n: number): number => Math.round(n * 100) / 100
+import { clearedSek } from './ledger-carried-sek'
+import { bookedOreRounding, fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
+import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
+import { equalOre, roundOre } from '@/lib/money'
 
 /**
  * Structured code for "the foreign-currency invoice carries no usable booking
@@ -139,6 +144,14 @@ export interface PaymentClearingInvoice {
   remaining_amount: number | null
   total: number
   paid_amount: number | null
+  /**
+   * What 1510 carries for this invoice (carriedSekOf): a full settlement clears
+   * exactly that, a part payment its share. Null or absent: the invoice's
+   * booking rate. On a SEK invoice it is set only when the issue verifikat
+   * booked the öresavrundning (bookedOreRounding): a full settlement then
+   * clears that figure and 3740 takes only the rest of the öre.
+   */
+  carried_sek?: number | null
 }
 
 export interface PaymentClearingLines {
@@ -169,9 +182,26 @@ export interface PaymentClearingLines {
    * remainingSek − bankSek: >0 → customer paid a sub-krona short (3740 debit,
    * förlust); <0 → paid a sub-krona over (3740 credit, vinst); 0 → no 3740 line.
    * When non-zero the AR leg (1510) is credited the FULL remaining so the
-   * invoice settles, and the residual balances the verifikat via 3740.
+   * invoice settles, and the residual balances the verifikat via 3740. When
+   * the issue verifikat already booked öre (bookedOreRounding), the AR leg is
+   * what 1510 carries and this is the residual less those öre.
    */
   oreRoundingSek: number
+  /**
+   * Customer overpayment (SEK) booked on the caller's overpayment account:
+   * bankSek − remainingSek when that is a krona or more and the caller named
+   * an account allowed to take it (overpayment.ts), else 0. When non-zero the
+   * AR leg is the FULL remaining and the excess is credited to that account.
+   */
+  overpaymentSek: number
+  /**
+   * A payment provider's fee (SEK) booked on the caller's fee account:
+   * remainingSek − bankSek when that is a krona or more, under the fee cap,
+   * and the caller named an account allowed to take it (payment-fee.ts), else
+   * 0. When non-zero the AR leg is the FULL remaining and the fee is debited
+   * to that account (crm#1364).
+   */
+  feeSek: number
   lines: CreateJournalEntryLineInput[]
 }
 
@@ -185,7 +215,7 @@ export interface PaymentClearingLines {
  *
  * # Same-currency, foreign (EUR invoice settled by a EUR bank tx)
  *   The foreign units paid are known exactly (|tx.amount|), so:
- *     arSek     = |tx.amount| × invoice.exchange_rate (booking rate)
+ *     arSek     = the SEK 1510 carries for those units (clearedSek)
  *     fxDiffSek = arSek − bankSek
  *   1510 is cleared at the SEK value the receivable was booked at and the
  *   difference against the actual SEK bank leg is the REALIZED kursvinst /
@@ -199,7 +229,7 @@ export interface PaymentClearingLines {
  *   payment satisfies (typically computed as `bankSek / today_rate` where
  *   `today_rate` is the Riksbanken spot rate on the payment date: see
  *   `app/api/transactions/[id]/match-invoice/route.ts`). The helper then:
- *     arSek    = paidInInvoiceCurrency × invoice.exchange_rate (booking rate)
+ *     arSek    = the SEK 1510 carries for those units (clearedSek)
  *     fxDiffSek = arSek − bankSek
  *   For a partial cross-currency payment this credits 1510 by the
  *   proportional foreign amount (not the full remaining) and posts the
@@ -224,33 +254,42 @@ export interface PaymentClearingLines {
  *   the SEK branches and never consults invoice.exchange_rate.
  *
  * # paymentAccount
- *   The bank-leg account (the debit line below). Defaults to '1930': callers
- *   that haven't resolved the transaction's actual cash account keep booking
- *   there unchanged. Callers matching a real bank transaction should resolve
- *   it via resolveSettlementAccount (cash_account_id -> cash_accounts.ledger_
- *   account) and pass it here so a receipt into a non-primary bank/cash
- *   account (e.g. a secondary SEK account, or a EUR account on 1940) doesn't
- *   silently get misbooked to the primary account.
+ *   The bank-leg account (the debit line below): the cash account the
+ *   transaction belongs to, from resolveSettlementAccount (cash_account_id ->
+ *   cash_accounts.ledger_account), so a receipt into a non-primary bank or
+ *   cash account (a secondary SEK account, a EUR account on 1940) books there.
+ *
+ * # overpaymentAccount
+ *   Pure SEK only. When the bank moved a krona or more above the remaining
+ *   and this names an account allowed to take the excess (2420, or 3740
+ *   under its cap: see overpayment.ts), 1510 is credited the full remaining
+ *   and the excess goes to that account. Without it the caller must have
+ *   refused the overshoot (planInvoicePayment does) before building.
+ *
+ * # feeAccount
+ *   Pure SEK only, the mirror: when the bank moved a krona or more BELOW the
+ *   remaining (a payment provider's payout net of its fee) and this names an
+ *   account allowed to take the shortfall (6570 under its cap: see
+ *   payment-fee.ts), 1510 is credited the full remaining and the fee is
+ *   debited to that account. Without it the shortfall stays a partial.
  */
 export function buildInvoicePaymentClearingLines(
   tx: PaymentClearingTx,
   invoice: PaymentClearingInvoice,
   description: string,
-  paidInInvoiceCurrency?: number,
+  paidInInvoiceCurrency: number | undefined,
   /**
-   * BAS account for the bank leg (the 1930 debit below). Defaults to '1930'
-   * to preserve existing behaviour for every caller that doesn't pass one.
-   * Callers that know which cash account the underlying bank transaction
-   * actually belongs to (via cash_account_id -> cash_accounts.ledger_account,
-   * see lib/bookkeeping/settlement-account.ts) should resolve it and pass it
-   * here instead of always booking to the primary bank account.
+   * BAS account for the bank leg (the debit below): the cash account the bank
+   * transaction belongs to (lib/bookkeeping/settlement-account.ts).
    */
-  paymentAccount = '1930',
+  paymentAccount: string,
+  overpaymentAccount?: string,
+  feeAccount?: string,
 ): PaymentClearingLines {
   // Bank-leg: actual SEK that hit the bank. resolveSekAmount returns the
   // raw amount for SEK txs and amount * exchange_rate for foreign txs
   // (preferring the pre-computed amount_sek when set).
-  const bankSek = TWO_DP(
+  const bankSek = roundOre(
     resolveSekAmount(
       Math.abs(tx.amount),
       tx.amount_sek != null ? Math.abs(tx.amount_sek) : null,
@@ -263,22 +302,55 @@ export function buildInvoicePaymentClearingLines(
   const invoiceIsForeign = invoice.currency !== 'SEK'
   // Pure SEK both sides: the only place whole-krona öresavrundning applies.
   const pureSek = sameCurrency && invoice.currency === 'SEK'
+  const remainingInInvoiceCurrency = invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0)
+  // What 1510 gives up for `amount` of the invoice's currency.
+  const arSekOf = (amount: number): number =>
+    clearedSek({
+      amount,
+      remaining: remainingInInvoiceCurrency,
+      carried: invoice.carried_sek ?? null,
+      rate: requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency),
+    })
 
   let arSek: number
+  // Units of the invoice's currency the AR leg clears, when the invoice is
+  // foreign and the figure is known: stamped on the 1510 line beside its
+  // kronor, as the registration stamps its debit (crm#1590).
+  let arInInvoiceCurrency: number | undefined
   let fxDiffSek: number
   let oreRoundingSek = 0
+  let overpaymentSek = 0
+  let feeSek = 0
 
   if (pureSek) {
     // A whole-krona bank settlement of an öre-bearing SEK invoice leaves a
     // sub-krona residual. Clear the FULL remaining off 1510 (invoice → paid)
     // and let 3740 absorb the öre; a ≥1 kr short payment stays a real partial.
-    const remainingSek = TWO_DP(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0))
-    const oreDiff = TWO_DP(remainingSek - bankSek)
-    if (oreDiff !== 0 && Math.abs(oreDiff) < ORE_ROUNDING_SETTLEMENT_MAX) {
+    const remainingSek = roundOre(remainingInInvoiceCurrency)
+    const oreDiff = oreSettlementResidual(remainingSek, bankSek)
+    const excess = overpaymentExcess(remainingSek, bankSek)
+    const shortfall = paymentFeeShortfall(remainingSek, bankSek)
+    if (oreDiff !== 0) {
       arSek = remainingSek
       oreRoundingSek = oreDiff
+    } else if (excess !== 0 && overpaymentAccount && overpaymentAllowed(overpaymentAccount, excess)) {
+      arSek = remainingSek
+      overpaymentSek = excess
+    } else if (shortfall !== 0 && feeAccount && paymentFeeAllowed(feeAccount, shortfall, remainingSek)) {
+      arSek = remainingSek
+      feeSek = shortfall
     } else {
       arSek = bankSek
+    }
+    // The issue verifikat may have booked the öresavrundning already (1510 at
+    // the rounded "Att betala", the öre on 3740). A settlement in full then
+    // clears what 1510 carries and 3740 takes only the rest, so the öre are
+    // not booked twice and 1510 ends at zero. A part payment clears its own
+    // kronor; the gap waits for the settlement.
+    const issueOre = bookedOreRounding(remainingSek, invoice.carried_sek)
+    if (issueOre !== 0 && equalOre(arSek, remainingSek)) {
+      arSek = roundOre(remainingSek - issueOre)
+      oreRoundingSek = roundOre(oreRoundingSek - issueOre)
     }
     fxDiffSek = 0
   } else if (!invoiceIsForeign) {
@@ -296,34 +368,35 @@ export function buildInvoicePaymentClearingLines(
     // 1510 at the settlement-date value: a 1 000 EUR invoice booked at 11,30
     // (11 300,00 on 1510) settled by a tx worth 11 496,70 kr over-credited
     // 1510 by 196,70 and the realized kursvinst never reached 3960.
-    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
-    const paidForeign = Math.abs(tx.amount)
-    arSek = TWO_DP(paidForeign * invRate)
-    fxDiffSek = TWO_DP(arSek - bankSek)
+    arInInvoiceCurrency = Math.abs(tx.amount)
+    arSek = arSekOf(arInInvoiceCurrency)
+    fxDiffSek = roundOre(arSek - bankSek)
   } else if (paidInInvoiceCurrency != null && paidInInvoiceCurrency > 0) {
     // Proper FX path: caller computed the invoice-currency equivalent
     // using today's spot rate. AR-leg comes off 1510 at the invoice's
     // BOOKING rate (so the GL credit matches what was originally posted
     // for those units of foreign currency). FX diff balances the verifikat.
-    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
-    arSek = TWO_DP(paidInInvoiceCurrency * invRate)
-    fxDiffSek = TWO_DP(arSek - bankSek)
+    arInInvoiceCurrency = paidInInvoiceCurrency
+    arSek = arSekOf(paidInInvoiceCurrency)
+    fxDiffSek = roundOre(arSek - bankSek)
   } else {
     // Fallback when no paidInInvoiceCurrency is supplied (e.g. legacy
     // callers, Riksbanken lookup failed with no manual override). Same
     // pre-FX-rewrite behaviour: full-clear gets FX diff, partial defers.
-    const invRemainingForeign = invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0)
-    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
-    const arSekFullRemaining = TWO_DP(invRemainingForeign * invRate)
+    const arSekFullRemaining = arSekOf(remainingInInvoiceCurrency)
     if (bankSek >= arSekFullRemaining - 0.005) {
+      arInInvoiceCurrency = remainingInInvoiceCurrency
       arSek = arSekFullRemaining
-      fxDiffSek = TWO_DP(arSek - bankSek)
+      fxDiffSek = roundOre(arSek - bankSek)
     } else {
+      // A deferred partial: the units these kronor clear are not known.
       arSek = bankSek
       fxDiffSek = 0
     }
   }
 
+  // The bank line's own currency figure is stamped by the engine from the
+  // entry's bank_booking_context (withBankLegCurrency), for every door alike.
   const lines: CreateJournalEntryLineInput[] = [
     {
       account_number: paymentAccount,
@@ -336,6 +409,9 @@ export function buildInvoicePaymentClearingLines(
       debit_amount: 0,
       credit_amount: arSek,
       line_description: description,
+      ...(arInInvoiceCurrency !== undefined
+        ? buildCurrencyMetadata(invoice.currency, roundOre(arInInvoiceCurrency), invoice.exchange_rate)
+        : {}),
     },
   ]
 
@@ -343,48 +419,27 @@ export function buildInvoicePaymentClearingLines(
   // rounding allowance per BFL 5 kap 4-5§. Same rationale as the balance
   // pre-check in gnubok_bulk_book_transactions.
   if (Math.abs(fxDiffSek) > 0.005) {
-    if (fxDiffSek > 0) {
-      // arSek > bankSek → bank received fewer SEK than booked. Loss → 7960 debit.
-      lines.push({
-        account_number: '7960',
-        debit_amount: Math.abs(fxDiffSek),
-        credit_amount: 0,
-        line_description: 'Valutakursförlust',
-      })
-    } else {
-      // bankSek > arSek → bank received more SEK than booked. Gain → 3960 credit.
-      lines.push({
-        account_number: '3960',
-        debit_amount: 0,
-        credit_amount: Math.abs(fxDiffSek),
-        line_description: 'Valutakursvinst',
-      })
-    }
+    // arSek > bankSek: the bank received fewer SEK than booked, a loss (Dr
+    // 7960); bankSek > arSek a gain (Cr 3960).
+    lines.push(fxDifferenceLine(-fxDiffSek))
   }
 
   // Öresavrundning (3740): pure-SEK only, mutually exclusive with an FX diff.
-  // The AR leg above is already the full remaining, so 3740 balances the
-  // verifikat: customer paid a sub-krona short → 3740 debit (förlust); over →
-  // credit (vinst). Opposite polarity to the supplier side (AP cleared by a Dr).
-  if (Math.abs(oreRoundingSek) >= ORE_TOLERANCE) {
-    if (oreRoundingSek > 0) {
-      lines.push({
-        account_number: '3740',
-        debit_amount: Math.abs(oreRoundingSek),
-        credit_amount: 0,
-        line_description: 'Öresavrundning',
-      })
-    } else {
-      lines.push({
-        account_number: '3740',
-        debit_amount: 0,
-        credit_amount: Math.abs(oreRoundingSek),
-        line_description: 'Öresavrundning',
-      })
-    }
+  // The AR leg above is already the full remaining (or what 1510 carries), so
+  // 3740 balances the verifikat: customer paid short → 3740 debit (förlust);
+  // over → credit (vinst). Opposite polarity to the supplier side (AP cleared
+  // by a Dr).
+  if (oreRoundingSek !== 0) {
+    lines.push(oreRoundingLine(oreRoundingSek, 'customer'))
+  }
+  if (overpaymentSek !== 0) {
+    lines.push(overpaymentLine(overpaymentSek, overpaymentAccount!))
+  }
+  if (feeSek !== 0) {
+    lines.push(paymentFeeLine(feeSek, feeAccount!))
   }
 
-  return { bankSek, arSek, fxDiffSek, oreRoundingSek, lines }
+  return { bankSek, arSek, fxDiffSek, oreRoundingSek, overpaymentSek, feeSek, lines }
 }
 
 /**
@@ -409,6 +464,31 @@ export interface InvoiceMatchClearingInvoice extends PaymentClearingInvoice {
 }
 
 /**
+ * The invoice half of buildInvoiceMatchClearingLines, read off a stored
+ * invoice row. One reader, so the booking and its preview cannot drift.
+ */
+export function invoiceMatchClearingInvoiceOf(
+  invoice: Pick<InvoiceMatchClearingInvoice, 'currency' | 'total' | 'invoice_number' | 'customer'> & {
+    exchange_rate?: InvoiceMatchClearingInvoice['exchange_rate']
+    remaining_amount?: InvoiceMatchClearingInvoice['remaining_amount']
+    paid_amount?: InvoiceMatchClearingInvoice['paid_amount']
+  },
+  carriedSek: InvoiceMatchClearingInvoice['carried_sek'],
+): InvoiceMatchClearingInvoice {
+  return {
+    currency: invoice.currency,
+    exchange_rate: invoice.exchange_rate ?? null,
+    remaining_amount: invoice.remaining_amount ?? null,
+    total: invoice.total,
+    paid_amount: invoice.paid_amount ?? null,
+    carried_sek: carriedSek,
+    invoice_number: invoice.invoice_number,
+    customer: invoice.customer,
+    default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
+  }
+}
+
+/**
  * The clearing verifikat of a bank-matched customer payment, exactly as the
  * match routes and the agent executor book it and the match preview shows
  * it: buildInvoicePaymentClearingLines under the payment's description, with
@@ -420,6 +500,8 @@ export function buildInvoiceMatchClearingLines(
   invoice: InvoiceMatchClearingInvoice,
   paidInInvoiceCurrency: number | undefined,
   paymentAccount: string,
+  overpaymentAccount?: string,
+  feeAccount?: string,
 ): { description: string; lines: CreateJournalEntryLineInput[] } {
   const description = invoiceMatchPaymentDescription(invoice)
   const { lines } = buildInvoicePaymentClearingLines(
@@ -428,6 +510,8 @@ export function buildInvoiceMatchClearingLines(
     description,
     paidInInvoiceCurrency,
     paymentAccount,
+    overpaymentAccount,
+    feeAccount,
   )
   const bag = coerceDimensionsBag(invoice.default_dimensions)
   if (bag) {

@@ -1,0 +1,176 @@
+[
+  {
+    "name": "card day at 12 % moms",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-30",
+          "description": "Dagskassa 2026-09-30 Restaurang Exempel (Heynow)",
+          "source_type": "pos_daily_sales",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "notes": "Kvitto 1001-1001, 1 st. Underlag: dagsrapport kassa.",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 112,
+              "credit_amount": 0,
+              "line_description": "Kortbetalningar"
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 100,
+              "line_description": "Försäljning 12 % moms"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 12,
+              "line_description": "Utgående moms 12 %"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-0"
+      ]
+    ]
+  },
+  {
+    "name": "mixed tenders, two rates, tips and öresutjämning",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-01",
+          "description": "Dagskassa 2026-10-01 Restaurang Exempel (Heynow)",
+          "source_type": "pos_daily_sales",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "notes": "Kvitto 2001-2012, 12 st. Underlag: dagsrapport kassa.",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 900,
+              "credit_amount": 0,
+              "line_description": "Kortbetalningar"
+            },
+            {
+              "account_number": "1910",
+              "debit_amount": 167.75,
+              "credit_amount": 0,
+              "line_description": "Kontant"
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 750,
+              "line_description": "Försäljning 12 % moms"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 90,
+              "line_description": "Utgående moms 12 %"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 150,
+              "line_description": "Försäljning 25 % moms"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 37.5,
+              "line_description": "Utgående moms 25 %"
+            },
+            {
+              "account_number": "2820",
+              "debit_amount": 0,
+              "credit_amount": 40,
+              "line_description": "Dricks att betala ut till personalen"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0,
+              "credit_amount": 0.25,
+              "line_description": "Öres- och kronutjämning"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ]
+    ]
+  },
+  {
+    "name": "a day with a provider issue the person acknowledged",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-02",
+          "description": "Dagskassa 2026-10-02 Restaurang Exempel (Heynow)",
+          "source_type": "pos_daily_sales",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "notes": "Kvitto 1001-1001, 1 st. Underlag: dagsrapport kassa.",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 112,
+              "credit_amount": 0,
+              "line_description": "Kortbetalningar"
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 100,
+              "line_description": "Försäljning 12 % moms"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 12,
+              "line_description": "Utgående moms 12 %"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2"
+      ]
+    ]
+  }
+]

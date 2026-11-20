@@ -69,8 +69,8 @@ const INTENTIONAL_DIVERGENCES: Record<string, Divergence> = {
       'Seeded version booked the cost on 4010 Varuinköp, which no momsdeklaration ruta reads: ' +
     'the fiktiv moms filled ruta 30/48 while ruta 20 (inköpsvärdet) stayed 0, which Skatteverket ' +
     'rejects (felkod FK004, ML 13 kap kräver både underlag och moms). Now books on 4515 Inköp ' +
-    'varor från annat EU-land 25%, the ACCOUNT_RUTA basis account for ruta 20. User report ' +
-    '(Anders, 2026-08-25).',
+    'varor från annat EU-land 25%, the ACCOUNT_RUTA basis account for ruta 20. User report, ' +
+    '2026-08-25.',
   },
   'inkop-eu-tjanster-omvand-moms-25': {
     seededName: 'Inköp EU-tjänster, omvänd moms 25%',

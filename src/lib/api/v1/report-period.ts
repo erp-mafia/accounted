@@ -204,7 +204,7 @@ export const DIMENSION_FILTER_QUERY_PARAMS: readonly string[] = ['dim_no', 'dim_
  * took an integration down for a week). While off, only a misplaced
  * dimension filter is refused; any other stray parameter is served and
  * named in the X-Ignored-Query-Params response header. Flipping it is a
- * founder call, made after API users have been told.
+ * product call, made after API users have been told.
  */
 export const STRICT_REPORT_QUERY_PARAMS = false
 

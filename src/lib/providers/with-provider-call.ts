@@ -1,28 +1,28 @@
 /**
- * Wraps a single external HTTP call to a third-party provider (Fortnox, Bokio,
- * Visma, Briox, BL/Björn Lundén, Enable Banking, etc.) with structured
- * logging and code-mapped errors.
+ * Code-mapped errors for calls to third-party providers (Fortnox, Bokio,
+ * Visma, Briox, BL/Björn Lundén, Enable Banking, etc.).
  *
- * Translates HTTP failures and network errors into ProviderCallError, which
- * the route wrapper's errorResponse() recognises as a structured code. This
- * keeps the user message + remediation consistent across providers without
- * each call site having to repeat the mapping.
+ * classifyProviderError translates HTTP failures and network errors into a
+ * ProviderCallError code, which the route wrapper's errorResponse()
+ * recognises as a structured code. This keeps the user message + remediation
+ * consistent across providers without each call site having to repeat the
+ * mapping.
  */
 
-import { createLogger, type Logger } from '@/lib/logger'
-// Fortnox is the one provider with a typed predicate for "this account may not
-// read this resource" (403, or 400 with a permission body). classifyProviderError
-// reuses it instead of pattern-matching the Swedish sentence in the body, which
-// changes with the provider's locale and copy; import-documents.ts already
-// treats a Fortnox 403 the same way.
-import { FortnoxApiError, fortnoxApiErrorCode, isFortnoxPermissionError } from './fortnox/client'
+// Fortnox is the one provider with a typed reading of "this account may not
+// read this resource" (fortnoxRefusal: documented codes, a 403, or a 400 with
+// a permission body). Every Fortnox door classifies through it, so the
+// migration job, the SIE preview and the underlag import cannot disagree.
+import { fortnoxRefusal } from './fortnox/client'
 import { FortnoxOAuthError } from './fortnox/oauth-error'
+import { isBokioPricePlanError } from './bokio/client'
 
 export type ProviderCallErrorCode =
   | 'PROVIDER_AUTH_EXPIRED'
   | 'PROVIDER_RESOURCE_FORBIDDEN'
   | 'PROVIDER_LICENSE_MISSING'
   | 'PROVIDER_API_MODULE_INACTIVE'
+  | 'BOKIO_PLAN_NO_API'
   | 'PROVIDER_RATE_LIMITED'
   | 'PROVIDER_UNREACHABLE'
   | 'PROVIDER_UPSTREAM_ERROR'
@@ -51,122 +51,6 @@ export class ProviderCallError extends Error {
     this.providerCode = extras.providerCode
     this.credentialRevision = extras.credentialRevision
   }
-}
-
-interface ProviderCallOptions {
-  /** Provider id ('fortnox', 'bokio', 'visma', etc.). */
-  provider: string
-  /** Short label for what this call does, e.g. 'fetch_invoices'. */
-  operation: string
-  /** Optional logger; if omitted a `provider/<provider>` logger is created. */
-  log?: Logger
-  /** Extra context merged into the log line. */
-  context?: Record<string, unknown>
-}
-
-/**
- * Run an async callable that performs the actual HTTP request and translate
- * its failures. The callable should throw a `Response` (preferred) or a
- * regular Error; ProviderCallError is mapped from the response status.
- *
- * Example:
- *   await withProviderCall(
- *     { provider: 'fortnox', operation: 'fetch_invoices' },
- *     async () => {
- *       const res = await fetch(url, { headers })
- *       if (!res.ok) throw res
- *       return res.json()
- *     },
- *   )
- */
-export async function withProviderCall<T>(
-  options: ProviderCallOptions,
-  call: () => Promise<T>,
-): Promise<T> {
-  const log = (options.log ?? createLogger(`provider/${options.provider}`)).child({
-    provider: options.provider,
-    providerOp: options.operation,
-    ...options.context,
-  })
-
-  const start = Date.now()
-  try {
-    const result = await call()
-    log.info('provider call ok', { latencyMs: Date.now() - start })
-    return result
-  } catch (raw) {
-    const latencyMs = Date.now() - start
-
-    if (raw instanceof Response) {
-      const mapped = mapResponseError(raw, options.provider)
-      log.error('provider call failed (http)', mapped, {
-        latencyMs,
-        status: raw.status,
-      })
-      throw mapped
-    }
-
-    if (raw instanceof ProviderCallError) {
-      log.error('provider call failed', raw, { latencyMs })
-      throw raw
-    }
-
-    if (raw instanceof Error && isNetworkError(raw)) {
-      const wrapped = new ProviderCallError(
-        'PROVIDER_UNREACHABLE',
-        options.provider,
-        raw.message,
-      )
-      log.error('provider call unreachable', wrapped, { latencyMs })
-      throw wrapped
-    }
-
-    // Unknown shape: re-throw so the outer handler can decide. We still log it.
-    log.error('provider call failed (unknown)', raw as Error, { latencyMs })
-    throw raw
-  }
-}
-
-function mapResponseError(res: Response, provider: string): ProviderCallError {
-  if (res.status === 401 || res.status === 403) {
-    return new ProviderCallError(
-      'PROVIDER_AUTH_EXPIRED',
-      provider,
-      `Provider authentication failed: ${res.status} ${res.statusText}`,
-      { status: res.status },
-    )
-  }
-  if (res.status === 429) {
-    const retryAfter = parseRetryAfter(res.headers.get('retry-after'))
-    return new ProviderCallError(
-      'PROVIDER_RATE_LIMITED',
-      provider,
-      `Provider rate limit hit: ${res.status} ${res.statusText}`,
-      { status: res.status, retryAfterSeconds: retryAfter },
-    )
-  }
-  if (res.status >= 500) {
-    return new ProviderCallError(
-      'PROVIDER_UPSTREAM_ERROR',
-      provider,
-      `Provider upstream error: ${res.status} ${res.statusText}`,
-      { status: res.status },
-    )
-  }
-  // 4xx other than 401/403/429 is application-level: surface as upstream so
-  // the user gets a meaningful Swedish message; the actual cause is in logs.
-  return new ProviderCallError(
-    'PROVIDER_UPSTREAM_ERROR',
-    provider,
-    `Provider rejected request: ${res.status} ${res.statusText}`,
-    { status: res.status },
-  )
-}
-
-function parseRetryAfter(value: string | null): number | undefined {
-  if (!value) return undefined
-  const n = parseInt(value, 10)
-  return Number.isFinite(n) ? n : undefined
 }
 
 function isNetworkError(err: Error): boolean {
@@ -202,10 +86,15 @@ export interface ClassifyProviderErrorOptions {
  * (other clients) off the thrown error and maps:
  *
  *   401     → PROVIDER_AUTH_EXPIRED
- *   403     → PROVIDER_RESOURCE_FORBIDDEN when the provider answers 403 only
- *             for the resource (Fortnox, see isFortnoxPermissionError), or
- *             when `options.grantProven` says an earlier call in the same run
- *             already succeeded on this token; otherwise PROVIDER_AUTH_EXPIRED
+ *   Fortnox refusal (fortnoxRefusal: a documented code, a 403, or a 400
+ *           naming a missing right or licence) → PROVIDER_RESOURCE_FORBIDDEN,
+ *           or PROVIDER_LICENSE_MISSING when the whole account lacks the API
+ *           licence (2001103)
+ *   Bokio 403 price_plan_feature_required → BOKIO_PLAN_NO_API: the plan has no
+ *           API access, and the token may be fine
+ *   403     → PROVIDER_RESOURCE_FORBIDDEN when `options.grantProven` says an
+ *             earlier call in the same run already succeeded on this token;
+ *             otherwise PROVIDER_AUTH_EXPIRED
  *   429     → PROVIDER_RATE_LIMITED
  *   5xx     → PROVIDER_UPSTREAM_ERROR
  *   network → PROVIDER_UNREACHABLE
@@ -229,12 +118,12 @@ export function classifyProviderError(
     if (error.operation === 'refresh' && error.providerCode === 'invalid_grant') return 'PROVIDER_AUTH_EXPIRED'
     return 'PROVIDER_UPSTREAM_ERROR'
   }
-  const fortnoxCode = error instanceof FortnoxApiError && error.statusCode < 500 && error.statusCode !== 429 ? fortnoxApiErrorCode(error) : undefined
-  if (fortnoxCode === '2001103') return 'PROVIDER_LICENSE_MISSING'
-  if (fortnoxCode === '2001101' || fortnoxCode === '2000663') return 'PROVIDER_RESOURCE_FORBIDDEN'
+  const refusal = fortnoxRefusal(error)
+  if (refusal) return refusal.reason === 'api_license' ? 'PROVIDER_LICENSE_MISSING' : 'PROVIDER_RESOURCE_FORBIDDEN'
+  if (isBokioPricePlanError(error)) return 'BOKIO_PLAN_NO_API'
   if (error instanceof ProviderCallError) {
-    // mapResponseError() sees one response and cannot know the run's history,
-    // so a 403 it already labelled AUTH_EXPIRED is re-read here with it.
+    // An error labelled from one response cannot know the run's history, so
+    // a 403 already labelled AUTH_EXPIRED is re-read here with it.
     if (error.code === 'PROVIDER_AUTH_EXPIRED' && error.status === 403 && options.grantProven) {
       return 'PROVIDER_RESOURCE_FORBIDDEN'
     }
@@ -261,10 +150,10 @@ export function classifyProviderError(
   if (typeof status === 'number') {
     // A 403 is only a dead grant when nothing else says otherwise: a provider
     // that reserves 403 for the resource and answers 401 for a dead token
-    // (Fortnox), or the same token having already answered earlier in this
-    // run, both mean the grant is alive and one register is closed. 401 is
-    // never downgraded: that IS a dead token.
-    if (status === 403 && (options.grantProven || isFortnoxPermissionError(error))) {
+    // (Fortnox, read above by fortnoxRefusal), or the same token having
+    // already answered earlier in this run, both mean the grant is alive and
+    // one register is closed. 401 is never downgraded: that IS a dead token.
+    if (status === 403 && options.grantProven) {
       return 'PROVIDER_RESOURCE_FORBIDDEN'
     }
     if (status === 401 || status === 403) return 'PROVIDER_AUTH_EXPIRED'
@@ -274,6 +163,73 @@ export function classifyProviderError(
   if (isNetworkError(error)) return 'PROVIDER_UNREACHABLE'
 
   return null
+}
+
+/**
+ * The codes that answer the same until someone acts at the provider or on the
+ * connection: a dead token, a closed register, a missing licence or module.
+ */
+const REFUSAL_CODES: ReadonlySet<ProviderCallErrorCode> = new Set<ProviderCallErrorCode>([
+  'PROVIDER_AUTH_EXPIRED',
+  'PROVIDER_RESOURCE_FORBIDDEN',
+  'PROVIDER_LICENSE_MISSING',
+  'PROVIDER_API_MODULE_INACTIVE',
+  'BOKIO_PLAN_NO_API',
+])
+
+/**
+ * Did the provider refuse, as opposed to fail? The one yes-or-no reading of
+ * classifyProviderError, for a door that stops on a refusal and needs no more
+ * than that: the next call gets the same answer, whatever the status it came
+ * under (Fortnox refuses a register with a 403 or a 400).
+ */
+export function isProviderRefusal(error: unknown): boolean {
+  const code = classifyProviderError(error)
+  return code !== null && REFUSAL_CODES.has(code)
+}
+
+/**
+ * The refusals that are the customer's subscription at the provider: no
+ * licence, no API module, a Bokio plan without API access. Every later call
+ * answers the same until the subscription changes, and each code's registry
+ * sentence says what to change. A door that meets one in a preliminary read
+ * (company information, before the preview or a register fetch) stops with it
+ * instead of carrying on into a vaguer refusal further along.
+ */
+const SUBSCRIPTION_REFUSAL_CODES: ReadonlySet<ProviderCallErrorCode> = new Set<ProviderCallErrorCode>([
+  'PROVIDER_LICENSE_MISSING',
+  'PROVIDER_API_MODULE_INACTIVE',
+  'BOKIO_PLAN_NO_API',
+])
+
+/** The subscription refusal `error` is, or null. */
+export function subscriptionRefusal(error: unknown): ProviderCallErrorCode | null {
+  const code = classifyProviderError(error)
+  return code !== null && SUBSCRIPTION_REFUSAL_CODES.has(code) ? code : null
+}
+
+/** Why the provider refused one register. */
+export type ProviderRefusalReason = 'license' | 'permission'
+
+/**
+ * Why the provider refused a register that classifyProviderError reads as
+ * PROVIDER_RESOURCE_FORBIDDEN. The two causes have different remedies, and
+ * Fortnox tells them apart (fortnoxRefusal):
+ *
+ *   license     2001101 "Det finns ingen aktiv licens för önskat scope": the
+ *               Fortnox company's plan lacks the module the register needs
+ *               (customers and invoices need Kundfaktura or Order). No
+ *               reconnect can change that; activating the module can.
+ *   permission  everything else: 2000663 "Har inte behörighet för scope", or
+ *               a register the user who connected may not see ("Saknar
+ *               behörighet för leverantörsregister.", 403 or 400). Granting
+ *               the right, or connecting as a user who has it, does.
+ *
+ * Other providers do not say, and read as permission.
+ */
+export function providerRefusalReason(error: unknown): ProviderRefusalReason {
+  const reason = fortnoxRefusal(error)?.reason
+  return reason === 'license' || reason === 'api_license' ? 'license' : 'permission'
 }
 
 /**
@@ -299,6 +255,31 @@ export function isMissingLicenseError(message: string): boolean {
     haystack.includes('missing license') ||
     haystack.includes('not have enough licenses')
   )
+}
+
+/**
+ * Which licence a Fortnox login refusal names, read from the `error` the
+ * authorize redirect carries. Fortnox documents two (developer docs, Errors,
+ * "Error cases during Oauth2 authorization flow"):
+ *
+ *   error_missing_license      "Resource owner is not licensed for the
+ *                              requested scope": the Fortnox company lacks the
+ *                              licence one of the requested scopes needs (the
+ *                              Scopes page lists them: Bokföring for supplier
+ *                              and supplierinvoice, Kundfaktura or Order for
+ *                              invoice and customer).
+ *   error_missing_app_license  "Resource owner does not have enough licenses":
+ *                              the licence of the app itself.
+ *
+ * The migration callback read both with its own copy of two substrings
+ * ("missing license", "not have enough licenses"), which the scope code and
+ * its description miss, so that refusal reached the customer as Fortnox's own
+ * English (2026-11-12, two logins in one day).
+ */
+export function fortnoxLoginLicenceRefusal(error: string): 'scope' | 'app' | null {
+  if (error === 'error_missing_license') return 'scope'
+  if (error === 'error_missing_app_license') return 'app'
+  return null
 }
 
 /**

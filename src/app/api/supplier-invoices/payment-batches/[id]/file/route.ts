@@ -1,6 +1,8 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { downloadPaymentBatchFile } from '@/lib/payments/batch-operations'
+import { batchFileBytes } from '@/lib/payments/batch-service'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * Download the payment file for a batch.
@@ -24,12 +26,8 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) throw new Error('unreachable: a read has no dry run')
 
-    return new Response(outcome.data.content, {
-      headers: {
-        'Content-Type': outcome.data.contentType,
-        'Content-Disposition': `attachment; filename="${outcome.data.filename}"`,
-      },
-    })
+    // pain.001 as UTF-8, an LB file as the ISO 8859-1 bytes Bankgirot reads.
+    return fileResponse(batchFileBytes(outcome.data), { filename: outcome.data.filename, contentType: outcome.data.contentType })
   },
   { requireWrite: true },
 )

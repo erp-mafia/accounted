@@ -41,7 +41,7 @@ SIE4 (Standard Import Export) is Sweden's universal accounting data interchange 
 1. **Detect the encoding before parsing.** `#FORMAT PC8` is unreliable: cloud programs declare PC8 and export UTF-8. Detection order in `encoding.md`; skip #KSUMMA unless CP437.
 2. **Check #FLAGGA.** `1` means the file has already been read in: don't import it.
 3. **Validate in order**: structure → encoding → parsing → chart of accounts → balances → verifications → fiscal year boundaries → dimensions → KSUMMA (CP437 only). Checks and severities in `validation-rules.md`.
-4. **Diagnose before adjusting.** Any difference (unbalanced #VER, IB/UB mismatch, non-zero IB on result accounts): keep the file untouched, report the exact difference, compare with the source ledger, fix the cause, re-export. A rättelsepost only when the books themselves are wrong, in the period the error is discovered.
+4. **Diagnose before adjusting.** Any difference (unbalanced #VER, IB/UB mismatch, non-zero IB on result accounts): keep the file untouched, report the exact difference, compare with the source ledger, fix the cause, re-export. Correct the books (a rättelse per `swedish-accounting-compliance`) only when the books themselves are wrong.
 5. **Generating files**: write CP437, every verification balanced and in ascending verno order per series, every account declared, `#FLAGGA 0`.
 
 ## Never guess these

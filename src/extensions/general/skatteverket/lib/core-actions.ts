@@ -13,10 +13,11 @@ import type {
 } from '@/lib/skatteverket/extension-actions'
 import { SkatteverketAuthError } from './api-client'
 import { agiKontrolleraHU, agiKontrolleraIU } from './agi-client'
-import { writeSkatteverketAudit } from './audit'
 import { skvAuthCodeToStructured } from './error-map'
 import { resolveReadAuth } from './resolve-auth'
 import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './skattekonto-sync'
+import { isSkattekontoMissing } from './skattekonto-client'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 /**
  * Registry-resolved services behind the AGI pre-validation and the manual
@@ -24,11 +25,11 @@ import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './skattekonto-s
  * operations and MCP reach them through extensionRegistry services; the
  * extension's own dashboard routes call them directly. One implementation of
  * the gate (SKATTEVERKET_ENABLED, the paid skatteverket capability), the
- * connection resolution, the SKV call and the regulator audit row.
+ * connection resolution and the SKV call (the transport writes its audit row).
  *
  * Membership: every caller has already established a non-viewer member of
  * the company (withApiV1 / the MCP door refuse viewers; the dashboard routes
- * run requireAgiWriteRole), which is exactly the AGI write-role set
+ * run requireSkvWriteRole), which is exactly the AGI write-role set
  * (owner, admin, member), so no second role read happens here.
  */
 
@@ -48,15 +49,11 @@ const CAPABILITY_BLOCKED: SkvActionFailure = {
 
 /** Same sentences the extension's read routes answer (readAuthFailureResponse in index.ts). */
 const NEEDS_RECONSENT_SV =
-  'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning gäller bara ca 1 timme, så detta är normalt. Anslut igen med BankID.'
+  'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning räcker i ungefär tio timmar, så detta är normalt. Anslut igen med BankID.'
 const NOT_CONNECTED_SV = 'Inte ansluten till Skatteverket.'
 
-function enabled(): boolean {
-  return process.env.SKATTEVERKET_ENABLED === 'true'
-}
-
 async function gate(supabase: SupabaseClient, companyId: string): Promise<SkvActionFailure | null> {
-  if (!enabled()) return DISABLED
+  if (!isSkatteverketEnabled()) return DISABLED
   if (!(await hasCapability(supabase, companyId, CAPABILITY.skatteverket))) return CAPABILITY_BLOCKED
   return null
 }
@@ -99,8 +96,8 @@ function statusFailure(status: number, error: string, kod: unknown): SkvActionFa
  * Validate one AGI huvuduppgift or individuppgift at Skatteverket without
  * saving anything there. The payload is re-validated against the v1.7 schema
  * here (a direct service call must not forward an unvalidated body), then
- * sent with the caller's own Skatteverket connection; every SKV outcome
- * writes a regulator audit row.
+ * sent with the caller's own Skatteverket connection; the transport writes
+ * the regulator audit row for the call.
  */
 export async function validateAgiUppgift(
   supabase: SupabaseClient,
@@ -124,7 +121,6 @@ export async function runValidateAgiUppgift(
 ): Promise<AgiValidateResult> {
   const { supabase, userId, companyId } = ctx
   const isHu = input.uppgift === 'huvuduppgift'
-  const endpoint = isHu ? 'agi.kontrollera.hu' : 'agi.kontrollera.iu'
   const parsed = (isHu ? AGIKontrolleraHUSchema : AGIKontrolleraIUSchema).safeParse(input.payload)
   if (!parsed.success) {
     return {
@@ -139,41 +135,15 @@ export async function runValidateAgiUppgift(
       },
     }
   }
-  const payload = parsed.data as Record<string, unknown> & { agRegistreradId: string; redovisningsPeriod: string }
-  const requestSizeBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8')
-  const auditBase = {
-    endpoint,
-    agRegistreradId: payload.agRegistreradId,
-    redovisningsperiod: payload.redovisningsPeriod,
-    requestSizeBytes,
-  }
+  const payload = parsed.data as Record<string, unknown>
 
   try {
     const result = isHu
       ? await agiKontrolleraHU(supabase, userId, companyId, payload)
       : await agiKontrolleraIU(supabase, userId, companyId, payload)
-    if (!result.ok) {
-      await writeSkatteverketAudit(ctx, {
-        ...auditBase,
-        outcome: result.status === 401 || result.status === 403 ? 'auth_error' : 'skv_error',
-        responseStatus: result.status,
-        errorMessage: result.error,
-      })
-      return statusFailure(result.status, result.error, result.body?.kod)
-    }
-    await writeSkatteverketAudit(ctx, {
-      ...auditBase,
-      outcome: 'ok',
-      responseStatus: result.status,
-      skvStatus: result.data?.status ?? null,
-    })
+    if (!result.ok) return statusFailure(result.status, result.error, result.body?.kod)
     return { ok: true, data: { status: result.data.status, fel: result.data.fel ?? [] } }
   } catch (err) {
-    await writeSkatteverketAudit(ctx, {
-      ...auditBase,
-      outcome: 'internal_error',
-      errorMessage: err instanceof Error ? err.message : String(err),
-    })
     if (err instanceof SkatteverketAuthError) return authFailure(err)
     throw err
   }
@@ -245,10 +215,13 @@ export async function runSkattekontoSync(ctx: ExtensionContext): Promise<Skattek
   const resolved = await resolveAuth(ctx.supabase, ctx.userId, ctx.companyId)
   if (!resolved.ok) return resolved
   try {
-    const result = await syncSkattekonto(ctx, resolved.auth)
+    const result = await syncSkattekonto(ctx, resolved.auth, ctx.userId)
     return { ok: true, data: result }
   } catch (err) {
     if (err instanceof SkatteverketAuthError) return authFailure(err)
+    // Skatteverket keeps no skattekonto for the company (yet): its answer,
+    // with its own status, instead of an unhandled 500 (B07).
+    if (isSkattekontoMissing(err)) return statusFailure(err.httpStatus, err.message, err.felkod ?? undefined)
     throw err
   }
 }

@@ -164,3 +164,91 @@ describe('POST /api/webhooks/peppol/qvalia', () => {
     expect(rpcMock.mock.calls.filter((call) => call[0] === 'record_peppol_delivery_evidence')).toHaveLength(0)
   })
 })
+
+// ──────────────────────────────────────────────────────────────────────
+// Signed webhooks (ADA CASA 7.2.1-7.2.3): QVALIA_WEBHOOK_SIGNING_SECRET set.
+// The vector is fixed: HMAC-SHA256('qv_whsec_route_test',
+// '1790000000.' + JSON.stringify(delivered)), cross-checked with openssl.
+// ──────────────────────────────────────────────────────────────────────
+
+const SIGNING_SECRET = 'qv_whsec_route_test'
+const T = 1790000000
+const DELIVERED_V1 = 'd8d11ce5f2c9f3f295a1aa3a8af825e77daccc7440de2d96a96c19ec92799966'
+
+function signedRequest(body: string, signature: string | null, extraHeaders: Record<string, string> = {}): Request {
+  const headers: Record<string, string> = { 'content-type': 'application/json', ...extraHeaders }
+  if (signature) headers['X-Qvalia-Signature'] = signature
+  headers['X-Qvalia-Event-Id'] = 'evt_route_test'
+  return new Request('http://localhost:3000/api/webhooks/peppol/qvalia', { method: 'POST', headers, body })
+}
+
+describe('POST /api/webhooks/peppol/qvalia with signed webhooks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Object.assign(process.env, ENV, { QVALIA_WEBHOOK_SIGNING_SECRET: SIGNING_SECRET })
+    vi.useFakeTimers({ now: T * 1000, toFake: ['Date'] })
+    vi.stubGlobal('fetch', fetchMock)
+    rpcMock.mockResolvedValue({ data: { id: 'delivery-1' }, error: null })
+    fromMock.mockReturnValue(queryChain({
+      data: { company_id: 'company-1', idempotency_key: '33333333-3333-4333-8333-333333333333' },
+      error: null,
+    }))
+    fetchMock.mockResolvedValue(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    for (const key of [...Object.keys(ENV), 'QVALIA_WEBHOOK_SIGNING_SECRET']) delete process.env[key]
+  })
+
+  it('records an event whose signature verifies over the raw body, as hmac_sha256_signature', async () => {
+    const response = await POST(signedRequest(JSON.stringify(delivered), `t=${T},v1=${DELIVERED_V1}`))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ received: true, recorded: 1 })
+    const eventCall = rpcMock.mock.calls.find((call) => call[0] === 'record_peppol_delivery_event')
+    expect(eventCall?.[1]).toMatchObject({
+      // Dedupe key unchanged: the same key the status poll writes.
+      p_provider_event_id: 'document_delivery:int-1:processed',
+      p_verification_method: 'hmac_sha256_signature',
+    })
+  })
+
+  it('answers 503 when neither the signing secret nor the shared secret is configured', async () => {
+    delete process.env.QVALIA_WEBHOOK_SIGNING_SECRET
+    delete process.env.QVALIA_WEBHOOK_SECRET
+    expect((await POST(signedRequest(JSON.stringify(delivered), `t=${T},v1=${DELIVERED_V1}`))).status).toBe(503)
+  })
+
+  it('requires the signature once the signing secret is set: the shared header alone is refused', async () => {
+    const response = await POST(signedRequest(JSON.stringify(delivered), null, { 'X-Accounted-Webhook-Key': SECRET }))
+    expect(response.status).toBe(401)
+    expect(rpcMock).not.toHaveBeenCalled()
+    expect(fromMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a body changed after signing', async () => {
+    const tampered = JSON.stringify({ ...delivered, status: { ...delivered.status, status: 'rejected' } })
+    expect((await POST(signedRequest(tampered, `t=${T},v1=${DELIVERED_V1}`))).status).toBe(401)
+    expect(rpcMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a timestamp changed without re-signing', async () => {
+    vi.setSystemTime((T + 60) * 1000)
+    expect((await POST(signedRequest(JSON.stringify(delivered), `t=${T + 60},v1=${DELIVERED_V1}`))).status).toBe(401)
+    expect(rpcMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses an authentic delivery replayed after the 5-minute window', async () => {
+    vi.setSystemTime((T + 301) * 1000)
+    expect((await POST(signedRequest(JSON.stringify(delivered), `t=${T},v1=${DELIVERED_V1}`))).status).toBe(401)
+    vi.setSystemTime((T + 299) * 1000)
+    expect((await POST(signedRequest(JSON.stringify(delivered), `t=${T},v1=${DELIVERED_V1}`))).status).toBe(200)
+  })
+
+  it('refuses a signature made with another secret', async () => {
+    process.env.QVALIA_WEBHOOK_SIGNING_SECRET = 'a-different-secret'
+    expect((await POST(signedRequest(JSON.stringify(delivered), `t=${T},v1=${DELIVERED_V1}`))).status).toBe(401)
+  })
+})

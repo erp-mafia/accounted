@@ -1,14 +1,22 @@
+import { randomUUID } from 'node:crypto'
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
+import { AgentPromo } from '@/components/dashboard/AgentPromo'
+import { HemDone } from '@/components/dashboard/HemDone'
+import { HEM_ACTION_SLOT_ID } from '@/components/dashboard/hem-slot'
+import { parseHemView } from '@/components/dashboard/need-model'
+import { RefreshWhenRestored } from '@/components/system/RefreshWhenRestored'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
+import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
-import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
-import { claudeStepDone } from '@/lib/onboarding/checklist'
 import { decideHemGate } from '@/lib/onboarding/hem-gate'
-import { loadConnectedAiClients } from '@/lib/onboarding/ai-clients.server'
+import { agentPromoOffered } from '@/lib/onboarding/agent-promo-gate'
+import { assistantChatEnabledFor } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { readAiConnection, readFirstTaskClient } from '@/lib/onboarding/ai-clients.server'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
   getDashboardAuthContext,
@@ -16,6 +24,7 @@ import {
   getDashboardSettings,
   getDashboardTeamMemberships,
   getResolvedDashboardAgentProfile,
+  redirectInvoicerOffPage,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
 import { PageHeader } from '@/components/ui/page-header'
@@ -25,7 +34,7 @@ import { getTranslations } from 'next-intl/server'
 export const dynamic = 'force-dynamic'
 
 // Home route = Hem (concept scene 14): greeting + Att göra + Fortsätt.
-// The KPI/revenue/deadline widgets left the page (founder direction),
+// The KPI/revenue/deadline widgets left the page (product direction),
 // which also pruned their fetches:
 // the journal-line YTD aggregation, unpaid-invoice totals and deadline
 // queries are gone and the page got faster.
@@ -38,7 +47,14 @@ export const dynamic = 'force-dynamic'
 // whole page behind the slowest one. RSC streaming applies to client
 // navigations too, not only hard loads.
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ vy?: string | string[]; steg?: string | string[] }>
+} = {}) {
+  const query = (await searchParams) ?? {}
+  const vy = parseHemView(query.vy)
+  const initialStep = (Array.isArray(query.steg) ? query.steg[0] : query.steg) ?? null
   const [{ supabase, user }, companyId] = await Promise.all([
     getDashboardAuthContext(),
     getDashboardCompanyId(),
@@ -66,6 +82,11 @@ export default async function DashboardPage() {
   const [cookieStore, teamMemberships] = await Promise.all([
     cookies(),
     getDashboardTeamMemberships(),
+    // An invoicer goes to the invoices before any Hem read below: the
+    // database does not count the role as a member, so each of them would be
+    // refused and logged. The layout's own redirect does not stop this page
+    // rendering beside it.
+    redirectInvoicerOffPage(),
   ])
   if (!cookieStore.has(COMPANY_PICKED_COOKIE)) {
     if (
@@ -79,49 +100,43 @@ export default async function DashboardPage() {
 
   const now = new Date()
 
-  // Service role for the OAuth-key count below: api_keys' SELECT policy is
-  // company_id IN user_company_ids() (20260330130000), so through the user
-  // client a key minted companyless (company_id NULL, the connect-before-
-  // signup flow) or bound to a company the user has since archived or left is
-  // invisible, and the step would stay open for exactly the user who just
-  // connected. The query filters on user_id explicitly, so no other user's
-  // rows are reachable.
+  // Service role for the agent-connection read below: api_keys' SELECT
+  // policy is company_id IN user_company_ids() (20260330130000), so through
+  // the user client a key minted companyless (company_id NULL, the connect-
+  // before-signup flow) or bound to a company the user has since archived or
+  // left is invisible, and the agent would read as not connected for exactly
+  // the user who just connected. The query filters on user_id explicitly,
+  // so no other user's rows are reachable.
   const serviceClient = await createServiceClient()
 
   const [
     settingsRes,
-    { data: profile },
     agentProfile,
     { count: skatteverketTokenCount },
-    { count: oauthKeyCount, error: oauthKeyError },
-    aiClients,
+    aiConnection,
+    skvOmbudReadAccess,
   ] =
     await Promise.all([
       getDashboardSettings(),
-      // First name for the greeting.
-      supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
       getResolvedDashboardAgentProfile(),
       // The Skatteverket promo below the panes needs this flag in the shell;
       // the checklist section reads it again for its own step (cheap head count).
       // 'id', never '*': the token columns are withheld from end-user roles.
       supabase.from('skatteverket_tokens').select('id', { count: 'exact', head: true }).eq('user_id', user.id).eq('company_id', companyId).eq('status', 'active'),
-      // The checklist's "Anslut till Claude" step is done when the MCP OAuth
-      // token route has minted a key for this user (claudeStepDone). Keyed on
-      // the user, not the company: the Claude connection follows the person,
-      // and the key's company_id is whatever was active at sign-in (or null
-      // for a companyless signup), so a company filter would miss real
-      // connections. Revoked rows do not count.
-      serviceClient
-        .from('api_keys')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('name', OAUTH_MCP_KEY_NAME)
-        .is('revoked_at', null),
-      // Which of Claude / ChatGPT / Grok completed the OAuth sign-in: the
-      // Att göra footer hands the first row to a connected client. Same
-      // per-user rule as the count above; a failed read answers none.
-      loadConnectedAiClients(serviceClient, user.id),
+      // Is an agent connected (the checklist's connect step and the
+      // kopplingar chip), and which of Claude / ChatGPT / Grok it is when
+      // known (the Att göra row's AI action): one read, one answer for every
+      // surface. Keyed on the user, not the company: the connection follows
+      // the person. Throws on a failed read: guessing "not connected" would
+      // re-open the connect step for a connected user.
+      readAiConnection(serviceClient, user.id),
+      // Accounted as ombud counts as connected too (lib/skatteverket/ombud-access.ts).
+      hasSkatteverketOmbudReadAccess(companyId),
     ])
+
+  // A key only proves the sign-in. Until an agent has worked, Hem asks for a
+  // first task (Kopplingar chip), and that chip is the page's agent prompt.
+  const firstTask = await readFirstTaskClient(serviceClient, user.id, aiConnection)
 
   // A FAILED settings read must not masquerade as "onboarding not done":
   // that sent fully onboarded users back to the wizard on a transient query
@@ -130,12 +145,6 @@ export default async function DashboardPage() {
   const { data: settings, error: settingsError } = settingsRes
   if (settingsError) {
     throw new Error(`company_settings fetch failed: ${settingsError.message}`)
-  }
-  // Same rule for the OAuth-key count: a failed query answers count null,
-  // which claudeStepDone would read as "never connected" and re-open the
-  // Claude step for a connected user. Surface it instead of guessing.
-  if (oauthKeyError) {
-    throw new Error(`api_keys count failed: ${oauthKeyError.message}`)
   }
 
   // The decision lives in lib/onboarding/hem-gate.ts (pure, unit-tested): a
@@ -156,8 +165,6 @@ export default async function DashboardPage() {
   if (hemGate === 'onboarding' || !settings) redirect('/onboarding')
 
   const agentBuilt = Boolean(agentProfile?.verified_at)
-  const hasMcpKey = claudeStepDone({ oauthKeyCount })
-  const userFirstName = profile?.full_name?.trim().split(/\s+/)[0] ?? null
   const initialSetup = {
     path: settings.initial_setup_path ?? null,
     completedAt: settings.initial_setup_completed_at ?? null,
@@ -183,45 +190,84 @@ export default async function DashboardPage() {
         userId={user.id}
         now={now}
         initialSetup={initialSetup}
-        hasMcpKey={hasMcpKey}
+        hasMcpKey={aiConnection.connected}
         vatRegistered={settings.vat_registered}
         momsPeriod={settings.moms_period ?? null}
       />
     </Suspense>
   ) : null
 
-  // Hem: greeting, notice line, setup checklist, then the Att göra and
-  // Fortsätt panes side by side. The content runs under the Att göra top
-  // bar, and MainContainer's full-bleed frame stretches it to the panel. The
-  // three-pane queue of PR 3 was tried and dropped (founder direction
-  // 2026-09-10: "the to-do page should be the old homepage, but stretched").
+  // Hem (Att göra V8): the notice line, then the streamed pane, which opens
+  // with the date and the headline and carries Kom igång and the assistant
+  // prompt right under it. Behöver dig, Börja and Gjort are views of the same
+  // page (?vy=), so every count comes from one read.
+  //
+  // Build-assistant nudge: shown only until the company has a verified
+  // agent_profile, after the checklist is dismissed or completed, and once a
+  // connected agent has worked (until then the Kopplingar agent chip is the
+  // page's agent prompt). Never while the built-in assistant is switched off
+  // (ASSISTANT_CHAT_ENABLED): there is nothing to build then.
+  const agentConnected = aiConnection.connected && !firstTask
+  const promo = agentPromoOffered({
+    assistantChatEnabled: assistantChatEnabledFor(companyId, todayIsoStockholm()),
+    agentBuilt,
+    agentConnected,
+    setupClosed: Boolean(initialSetup.dismissedAt || initialSetup.completedAt),
+  }) ? (
+    <AgentPromo companyId={companyId} />
+  ) : null
+  const tHem = await getTranslations('hem')
   const hem = (
     <DashboardContent
-      companyId={companyId}
-      agentBuilt={agentBuilt}
-      userFirstName={userFirstName}
-      initialSetup={initialSetup}
-      notices={notices}
-      checklist={checklist}
+      notices={vy === 'hem' ? notices : null}
       panes={
-        <Suspense fallback={<PanesSkeleton />}>
-          <HemPanesSection
-            companyId={companyId}
-            now={now}
-            setupOpen={setupOpen}
-            hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
-            aiClients={aiClients}
-          />
-        </Suspense>
+        vy === 'gjort' ? (
+          <HemDone />
+        ) : (
+          <Suspense fallback={<PanesSkeleton view={vy} />}>
+            <HemPanesSection
+              view={vy}
+              initialStep={initialStep}
+              afterHeadline={
+                vy === 'hem' && (checklist || promo) ? (
+                  <>
+                    {checklist}
+                    {promo}
+                  </>
+                ) : null
+              }
+              companyId={companyId}
+              now={now}
+              setupOpen={setupOpen}
+              hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess}
+              aiConnection={aiConnection}
+              firstTaskClient={firstTask}
+            />
+          </Suspense>
+        )
       }
     />
   )
 
-  const tV2 = await getTranslations('att_gora_v2')
-  const header = <PageHeader title={tV2('title')} help={<HelpPopover>{tV2('help')}</HelpPopover>} />
+  // The top bar: the view's title (the menu label), Hem as the parent of the
+  // views under it, and the slot the view puts its one primary in.
+  const title = vy === 'behover' ? tHem('need_title') : vy === 'borja' ? tHem('borja_title') : vy === 'gjort' ? tHem('done_title') : tHem('title')
+  const header = (
+    <PageHeader
+      title={title}
+      parent={vy === 'borja' ? { label: tHem('title'), href: '/' } : undefined}
+      help={vy === 'hem' ? <HelpPopover>{tHem('help')}</HelpPopover> : undefined}
+      action={vy === 'gjort' ? undefined : <div id={HEM_ACTION_SLOT_ID} className="flex items-center justify-end" />}
+    />
+  )
 
+  // Att göra is a live worklist: when the client router shows this render
+  // again from its cache (back/forward, or a link click within
+  // staleTimes.dynamic), it re-renders from the server instead of showing the
+  // counts from the earlier visit.
   return (
     <>
+      <RefreshWhenRestored renderId={randomUUID()} />
       {header}
       {hem}
     </>

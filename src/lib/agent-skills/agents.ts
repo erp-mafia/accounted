@@ -19,7 +19,8 @@ export { AREAS, type Area } from './areas'
  *    tagged with any of the agent's areas are inlined when it starts (areas.ts).
  *  - Kopplingar: where the agent acts. `bank`, `skatteverket` and `peppol` are
  *    Accounted connections the page can check; `mail` and `browser` live in the
- *    customer's own AI client (Gmail connector, Claude in Chrome) and are only named.
+ *    customer's own AI client (Gmail connector, the Claude desktop app's browser or
+ *    Claude in Chrome) and are only named.
  *
  * Each workflow is named for its job (Kvittoagent, Momsagent). Its picture is a
  * folder in its colour (components/skills/Folder.tsx); its page stands it on a
@@ -51,7 +52,7 @@ const YEAR_END = 'horizontal/swedish-year-end-closing'
  * items are reviewed by Accounted and published through the public MIT repo
  * erp-mafia/accounted-skills (community-repo.ts, community-sync.ts).
  *
- * Open since 2026-09-27 (founder): withdrawing returns an item to private and
+ * Open since 2026-09-27: withdrawing returns an item to private and
  * hides a published text from every AI at once (migration 20260926172514);
  * the reviewer is emailed about each share, and the author when the item's
  * page is live on accounted.se (community-notify.ts).
@@ -161,15 +162,10 @@ export function isCheckable(connection: AgentConnection): connection is Checkabl
 export const CONNECTION_SETTINGS: Record<CheckableConnection, string> = {
   bank: '/settings/banking',
   skatteverket: '/settings/tax',
-  peppol: '/settings/invoicing',
+  peppol: '/settings/peppol',
 }
 
 /** Whether a string names a curated agent. */
 export function isAgentId(value: string): value is RegistrySkillId {
   return value in AGENTS
-}
-
-/** `agent:<id>` for get_task. */
-export function agentTaskKind(id: RegistrySkillId): string {
-  return `agent:${id}`
 }

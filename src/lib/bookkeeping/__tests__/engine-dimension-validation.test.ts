@@ -13,7 +13,7 @@
  * the line fetch entirely when no required rule exists.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { commitEntry, createDraftEntry, updateDraftEntry } from '../engine'
+import { commitAccrualInstallment, commitEntry, createDraftEntry, updateDraftEntry } from '../engine'
 import { DimensionValidationError, MandatoryDimensionMissingError } from '../errors'
 import type { CreateJournalEntryInput } from '@/types'
 
@@ -352,6 +352,40 @@ describe('createDraftEntry: accrual dissolution exemption', () => {
   })
 })
 
+/**
+ * Issue #3313: the year-end IB carry copies project bags from posted history
+ * (replayDimensions). A project archived during the year can still hold a
+ * 1470 balance, so the close must not fail on it. Scoped to the caller that
+ * passes the option: source type 'opening_balance' itself stays validated,
+ * because an import IB carries user codes on a first posting.
+ */
+describe('createDraftEntry: replayed bags (year-end IB carry)', () => {
+  const ib = { source_type: 'opening_balance' as const }
+  const archived = {
+    ...BASE_TABLES,
+    ...DIMENSION_TABLES,
+    dimension_values: { data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: false }] },
+  }
+
+  it('posts an IB line tagged with a project archived during the year, keeping the tag', async () => {
+    const { supabase, inserts, queriedTables } = buildSupabase(archived)
+    const entry = await createDraftEntry(supabase as never, 'company-1', 'user-1', makeInput({ '6': 'P001' }, ib), {
+      replayDimensions: true,
+    })
+    expect(entry.id).toBe('entry-1')
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({ '6': 'P001' })
+    expect(queriedTables()).not.toContain('dimension_values')
+  })
+
+  it('still validates an opening-balance entry that does not replay (an import IB)', async () => {
+    const { supabase } = buildSupabase(archived)
+    await expect(
+      createDraftEntry(supabase as never, 'company-1', 'user-1', makeInput({ '6': 'P001' }, ib))
+    ).rejects.toBeInstanceOf(DimensionValidationError)
+  })
+})
+
 describe('updateDraftEntry: dimension validation wiring', () => {
   it('rejects an unknown code before the header or lines are touched', async () => {
     const { supabase, updates, queriedTables } = buildSupabase({
@@ -616,10 +650,18 @@ describe('accrual dissolutions: exempt from account dimension rules', () => {
         ],
       },
     })
+    // A dissolution is posted only by its schedule's door; through the
+    // commit it shares with every other posting (here its fallback, before
+    // the database has commit_accrual_installment), the rule must not bite.
+    supabase.rpc.mockImplementation(async (fn: string) =>
+      fn === 'commit_accrual_installment'
+        ? { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } }
+        : { data: null, error: null },
+    )
 
-    const entry = await commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+    const result = await commitAccrualInstallment(supabase as never, 'company-1', 'user-1', { id: 'entry-1' }, 'inst-1')
 
-    expect(entry.id).toBe('entry-1')
+    expect(result).toMatchObject({ outcome: 'posted_unclaimed', entry: expect.objectContaining({ id: 'entry-1' }) })
     expect(supabase.rpc).toHaveBeenCalledWith(
       'commit_journal_entry',
       expect.objectContaining({ p_entry_id: 'entry-1' })

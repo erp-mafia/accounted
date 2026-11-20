@@ -9,6 +9,7 @@ describe('deriveSupplierInvoiceDefaults', () => {
     expect(deriveSupplierInvoiceDefaults(null)).toEqual({
       entityType: 'enskild_firma',
       accountingMethod: 'accrual',
+      bookingMoment: 'issue',
       oreRounding: false,
       dimensionsEnabled: false,
       vatRegistered: true,
@@ -30,10 +31,17 @@ describe('deriveSupplierInvoiceDefaults', () => {
     ).toEqual({
       entityType: 'aktiebolag',
       accountingMethod: 'cash',
+      bookingMoment: 'payment',
       oreRounding: false,
       dimensionsEnabled: true,
       vatRegistered: false,
     })
+  })
+
+  it('takes the booking moment from booking-mode, so deferred booking is not previewed as booked', () => {
+    expect(
+      deriveSupplierInvoiceDefaults(settings({ accounting_method: 'accrual', defer_invoice_booking: true })).bookingMoment,
+    ).toBe('manual')
   })
 
   it('only an explicit vat_registered=false gates VAT; null keeps the registered behaviour', () => {

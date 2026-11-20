@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
 import { useToast } from '@/components/ui/use-toast'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { chunk, cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
@@ -20,8 +22,9 @@ import type { ResidualKind } from '@/lib/reconciliation/residual'
  * "Matcha manuellt": the two-pane worksheet from the approved design. Left:
  * outside rows with no verifikat (bank transactions or skattekonto rows),
  * multi-select. Right: verifikat on the account with no outside row. The
- * right pane follows the left: with exactly ONE bank row picked it is
- * multi-select (one row settling several verifikat, the 1:N split of #1553);
+ * right pane follows the left: with exactly ONE row picked it is
+ * multi-select (one row settling several verifikat, the 1:N split of #1553;
+ * on the skattekonto one event booked over several verifikat, crm#1183);
  * with several rows picked it is single-select (N rows settling one
  * verifikat). The footer sums both sides; Koppla is enabled only when the
  * selection nets to zero, because the engine links N rows to ONE verifikat,
@@ -29,6 +32,17 @@ import type { ResidualKind } from '@/lib/reconciliation/residual'
  * skattekonto) refuses a group whose sum the verifikat does not settle. A
  * non-zero difference is shown, not hidden: for the N:1 shape the residual
  * can be booked in the same gesture; a split must close exactly.
+ *
+ * Skattekonto, non-zero difference: a summarised verifikat (one year-end or
+ * month-end voucher that books more events than the ones picked) can never
+ * close. A second button links the rows anyway and says what stays on the
+ * verifikat: the engine keeps that remainder in this same right-hand list,
+ * so nothing is hidden and unexplained does not move (crm#1043).
+ *
+ * With NO outside row picked on a SEK bank account the right pane is
+ * multi-select too: two or more verifikat that take each other out (a wrong
+ * verifikat and the rättelse booked by hand) are linked to each other and
+ * leave the list together. Nothing is booked (crm#1074).
  */
 
 interface ManualMatchModeProps {
@@ -39,8 +53,12 @@ interface ManualMatchModeProps {
 
 const LIMIT = 200
 
+/** Most rows one pair may carry (ReconciliationPairSchema). */
+const MAX_ROWS_PER_PAIR = 50
+
 export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeProps) {
   const t = useTranslations('reconciliation')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const [external, setExternal] = useState<ReconciliationItem[] | null>(null)
   const [ledger, setLedger] = useState<ReconciliationItem[] | null>(null)
@@ -53,6 +71,9 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
   const isSkv = account.kind === 'skattekonto'
   const currency = account.currency
+  // Verifikat can be linked to each other where the engine can judge that
+  // they net to zero: bank accounts kept in SEK (ledger-settlement.ts).
+  const canSettleLedger = account.kind === 'bank' && currency === 'SEK'
 
   const load = useCallback(async () => {
     try {
@@ -99,16 +120,26 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   const entry = entries.length === 1 ? entries[0] : null
   const ledgerSum = roundOre(entries.reduce((s, i) => s + i.amount, 0))
   const difference = roundOre(externalSum - ledgerSum)
-  // One bank row may settle several verifikat; several rows settle one.
-  // N:M has no engine shape and the right pane never lets it be built.
-  const splitMode = !isSkv && pickedExternal.size === 1
+  // One outside row may settle several verifikat (on the skattekonto only
+  // with their whole open amounts, crm#1183); several rows settle one. N:M
+  // has no engine shape and the right pane never lets it be built.
+  const splitMode = pickedExternal.size === 1
+  // No outside row picked: several verifikat may be picked to settle each other.
+  const ledgerOnlyMode = canSettleLedger && pickedExternal.size === 0
+  const multiEntries = splitMode || ledgerOnlyMode
   const isSplit = entries.length > 1
+  const settleMode = ledgerOnlyMode && entries.length >= 2
+  const canSettle = settleMode && Math.abs(ledgerSum) < 0.005 && !busy
   const canLink =
     pickedExternal.size > 0 &&
     entries.length > 0 &&
     !(pickedExternal.size > 1 && isSplit) &&
     Math.abs(difference) < 0.005 &&
     !busy
+  // What the verifikat would still hold beyond the picked rows (ledger sign).
+  const remainder = roundOre(ledgerSum - externalSum)
+  const canLinkWithRemainder =
+    isSkv && pickedExternal.size > 0 && entry !== null && Math.abs(difference) >= 0.005 && !busy
 
   function toggleExternal(id: string) {
     setPickedExternal((prev) => {
@@ -117,16 +148,28 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
       else next.add(id)
       // Leaving the one-row shape with several verifikat picked would build
       // an N:M selection: drop the verifikat side, the user re-picks one.
-      if (next.size !== 1) {
+      // Back at no row at all, several verifikat are a selection of their own
+      // where they can be linked to each other.
+      if (next.size > 1 || (next.size === 0 && !canSettleLedger)) {
         setPickedEntries((picked) => (picked.size > 1 ? new Set() : picked))
       }
       return next
     })
   }
 
+  // Skattekonto: a summarised verifikat takes every open row of the period,
+  // so the left pane can be ticked in one gesture (crm#1043).
+  const allExternalPicked = (external ?? []).length > 0 && pickedExternal.size === (external ?? []).length
+  function toggleAllExternal() {
+    const next = allExternalPicked ? new Set<string>() : new Set((external ?? []).map((i) => i.item_id))
+    setPickedExternal(next)
+    // Same rule as toggleExternal: several rows never keep several verifikat.
+    if (next.size !== 1) setPickedEntries((picked) => (picked.size > 1 ? new Set() : picked))
+  }
+
   function toggleEntry(id: string) {
     setPickedEntries((prev) => {
-      if (!splitMode) return prev.has(id) ? new Set() : new Set([id])
+      if (!multiEntries) return prev.has(id) ? new Set() : new Set([id])
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -134,7 +177,26 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
     })
   }
 
-  async function link() {
+  /**
+   * The pairs one click sends. A skattekonto selection against one verifikat
+   * with a remainder, or with more rows than one pair may carry, goes as
+   * pairs of at most 50 rows on that verifikat with allow_remainder: each
+   * pair joins the rows linked before it, so the verifikat ends with exactly
+   * what the footer showed (0 when the selection settles it).
+   */
+  function linkPairs(allowRemainder: boolean) {
+    const externalIds = [...pickedExternal]
+    if (isSkv && entry && (allowRemainder || externalIds.length > MAX_ROWS_PER_PAIR)) {
+      return chunk(externalIds, MAX_ROWS_PER_PAIR).map((part) => ({
+        external_ids: part,
+        journal_entry_ids: [entry.item_id],
+        allow_remainder: true,
+      }))
+    }
+    return [{ external_ids: externalIds, journal_entry_ids: entries.map((e) => e.item_id) }]
+  }
+
+  async function link(allowRemainder = false) {
     if (entries.length === 0 || pickedExternal.size === 0) return
     setBusy(true)
     try {
@@ -144,9 +206,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
       const res = await fetch(`${base}/links`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pairs: [{ external_ids: [...pickedExternal], journal_entry_ids: entries.map((e) => e.item_id) }],
-        }),
+        body: JSON.stringify({ pairs: linkPairs(allowRemainder) }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -165,6 +225,37 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
         })
       }
       setPickedExternal(new Set())
+      setPickedEntries(new Set())
+      await load()
+      onChanged()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Verifikat against each other, no outside row: the pair carries no
+  // external_ids and the engine refuses anything that does not sum to zero.
+  async function settle() {
+    if (!settleMode) return
+    setBusy(true)
+    try {
+      const res = await fetch(`${base}/links`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairs: [{ external_ids: [], journal_entry_ids: entries.map((e) => e.item_id) }] }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({ title: t('toast_failed'), description: getUserErrorMessage(json, { statusCode: res.status }), variant: 'destructive' })
+        return
+      }
+      const settled = (json.data?.settled as unknown[] | undefined)?.length ?? 0
+      const skipped = (json.data?.skipped as Array<{ message: string }> | undefined) ?? []
+      if (settled === 0) {
+        toast({ title: t('toast_failed'), description: skipped[0]?.message, variant: 'destructive' })
+      } else {
+        toast({ title: t('toast_settled', { count: entries.length }) })
+      }
       setPickedEntries(new Set())
       await load()
       onChanged()
@@ -198,36 +289,48 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
     }
   }
 
-  if (loadError) {
-    return (
-      <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>{t('load_failed')}</AttnLine>
-    )
+  // Nothing on screen yet: the load failure says so in place of the rows.
+  if (loadError && (!external || !ledger)) {
+    return <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
   }
   if (!external || !ledger) {
     return (
-      <div className="grid gap-6 lg:grid-cols-2" aria-busy>
+      <LateReveal className="grid gap-6 lg:grid-cols-2">
         <Skeleton className="h-64 w-full" />
         <Skeleton className="h-64 w-full" />
-      </div>
+      </LateReveal>
     )
   }
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-6 lg:grid-cols-2">
+      {/* A failed refresh keeps the rows under one line. */}
+      {loadError && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Left: outside rows, multi-select. */}
         <section aria-label={t(isSkv ? 'bucket_unmatched_external_skv' : 'bucket_unmatched_external_bank')}>
-          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          <h2 className="mb-2 text-xs font-semibold text-muted-foreground">
             {t(isSkv ? 'bucket_unmatched_external_skv' : 'bucket_unmatched_external_bank')}
-            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground/70">{external.length}</span>
+            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground">{external.length}</span>
           </h2>
           {external.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_left')}</p>
           ) : (
+            <div className="-mx-2 overflow-x-auto">
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
-                  <th className={cn(TH_CLASS, 'w-8 px-2')} />
+                  <th className={cn(TH_CLASS, 'w-8 px-2')}>
+                    {isSkv && (
+                      <Checkbox
+                        checked={allExternalPicked}
+                        onCheckedChange={toggleAllExternal}
+                        aria-label={t('match_select_all')}
+                      />
+                    )}
+                  </th>
                   <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_date')}</th>
                   <th className={TH_CLASS}>{t('col_event')}</th>
                   <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
@@ -250,34 +353,39 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                           aria-label={item.description}
                         />
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>{formatDate(item.date)}</td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>{formatDate(item.date)}</td>
                       <td className={cn(TD_CLASS, 'max-w-0')}>
                         <span className="block truncate" data-ph-mask title={item.description}>{item.description}</span>
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
-                        {formatCurrency(item.amount, currency)}
+                        {formatRowAmount(item.amount, currency)}
                       </td>
                     </tr>
                   )
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </section>
 
         {/* Right: verifikat without an outside row. Single-select for N:1,
             multi-select while exactly one bank row is picked (1:N). */}
         <section aria-label={t(isSkv ? 'bucket_unmatched_ledger_skv' : 'bucket_unmatched_ledger_bank')}>
-          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          <h2 className="mb-2 text-xs font-semibold text-muted-foreground">
             {t(isSkv ? 'bucket_unmatched_ledger_skv' : 'bucket_unmatched_ledger_bank')}
-            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground/70">{ledger.length}</span>
+            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground">{ledger.length}</span>
           </h2>
           {splitMode && ledger.length > 0 && (
-            <p className="mb-2 text-[12.5px] text-muted-foreground">{t('match_pick_vouchers')}</p>
+            <p className="mb-2 text-xs text-muted-foreground">{t('match_pick_vouchers')}</p>
+          )}
+          {ledgerOnlyMode && ledger.length > 0 && (
+            <p className="mb-2 text-xs text-muted-foreground">{t('match_pick_settle')}</p>
           )}
           {ledger.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_right')}</p>
           ) : (
+            <div className="-mx-2 overflow-x-auto">
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
@@ -298,7 +406,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                       className={cn('cursor-pointer', picked ? 'bg-secondary/60' : 'hover:bg-secondary/35')}
                     >
                       <td className={cn(TD_CLASS, 'px-2')}>
-                        {splitMode ? (
+                        {multiEntries ? (
                           <Checkbox
                             checked={picked}
                             onCheckedChange={() => toggleEntry(item.item_id)}
@@ -317,7 +425,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                           />
                         )}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>{formatDate(item.date)}</td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>{formatDate(item.date)}</td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')} data-ph-mask>
                         {item.voucher_number != null
                           ? formatVoucher({ voucher_series: item.voucher_series, voucher_number: item.voucher_number })
@@ -325,22 +433,31 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                       </td>
                       <td className={cn(TD_CLASS, 'max-w-0')}>
                         <span className="block truncate" data-ph-mask title={item.description}>{item.description}</span>
+                        {item.partially_linked && (
+                          <span className="block truncate text-xs text-muted-foreground" data-ph-mask>
+                            {t('chip_remainder', {
+                              total: formatRowAmount(item.partially_linked.entry_amount, currency),
+                              count: item.partially_linked.linked_count,
+                            })}
+                          </span>
+                        )}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
-                        {formatCurrency(item.amount, currency)}
+                        {formatRowAmount(item.amount, currency)}
                       </td>
                     </tr>
                   )
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </section>
       </div>
 
       {/* Footer: the arithmetic of the selection, and the one button. Sticks
           above the mobile bottom nav (--bottom-nav-h), not behind it. */}
-      <div className="sticky bottom-[var(--bottom-nav-h)] flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border bg-background py-3 text-[13px]">
+      <div {...PAGE_BOTTOM_BAR_PROPS} className="sticky bottom-[var(--bottom-nav-h)] flex flex-wrap items-center gap-x-6 gap-y-2 border-t-hairline bg-background py-3 text-[13px]">
         <span className="tabular-nums" data-ph-mask>
           {t('match_selected_external', { count: pickedExternal.size, amount: formatCurrency(externalSum, currency) })}
         </span>
@@ -352,7 +469,12 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
               : t('match_no_entry')}
         </span>
         <span
-          className={cn('tabular-nums', Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && entries.length > 0 ? 'text-warning' : 'text-muted-foreground')}
+          className={cn(
+            'tabular-nums',
+            Math.abs(difference) >= 0.005 && ((pickedExternal.size > 0 && entries.length > 0) || settleMode)
+              ? 'text-warning'
+              : 'text-muted-foreground',
+          )}
           data-ph-mask
         >
           {t('match_difference', { amount: formatCurrency(difference, currency) })}
@@ -361,35 +483,54 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
             (the engine refuses anything else), so the footer says so instead
             of offering a fee/interest booking against several verifikat. */}
         {Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && isSplit && (
-          <span className="text-[12.5px] text-muted-foreground">{t('match_hint_split')}</span>
+          <span className="text-xs text-muted-foreground">{t('match_hint_split')}</span>
+        )}
+        {Math.abs(difference) >= 0.005 && settleMode && (
+          <span className="text-xs text-muted-foreground">{t('match_hint_settle')}</span>
         )}
         {Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && entry && (
           isSkv ? (
-            <span className="text-[12.5px] text-muted-foreground">{t('match_hint_residual_skv')}</span>
+            <span className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted-foreground">{t('match_hint_remainder_skv')}</span>
+              <Button
+                variant="outline"
+                onClick={() => void link(true)}
+                disabled={!canLinkWithRemainder}
+                aria-busy={busy}
+              >
+                {t('match_apply_remainder', { amount: formatCurrency(remainder, currency) })}
+              </Button>
+            </span>
           ) : (
-            <span className="flex items-center gap-2 text-[12.5px]">
+            <span className="flex flex-wrap items-center gap-2 text-xs">
               <label htmlFor="residual-kind" className="text-muted-foreground">{t('match_residual_label')}</label>
               <select
                 id="residual-kind"
                 value={residualKind}
                 onChange={(e) => setResidualKind(e.target.value as ResidualKind | '')}
-                className="h-8 rounded-lg border border-border bg-background px-2 text-[12.5px]"
+                className="h-8 rounded-lg px-2 text-xs bg-control shadow-raised"
               >
                 <option value="">{t('match_residual_pick')}</option>
                 {(difference < 0 ? ['bank_fee', 'interest_expense', 'rounding'] : ['interest_income', 'rounding']).map((k) => (
                   <option key={k} value={k}>{t(`residual_${k}`)}</option>
                 ))}
               </select>
-              <Button size="sm" variant="outline" onClick={() => void bookResidual()} disabled={!residualKind || busy} aria-busy={busy}>
+              <Button variant="outline" onClick={() => void bookResidual()} disabled={!residualKind || busy} aria-busy={busy}>
                 {t('match_residual_apply', { amount: formatCurrency(Math.abs(difference), currency) })}
               </Button>
             </span>
           )
         )}
         <span className="ml-auto">
-          <Button size="sm" onClick={() => void link()} disabled={!canLink} aria-busy={busy}>
-            {isSplit ? t('match_apply_split', { count: entries.length }) : t('match_apply', { count: pickedExternal.size })}
-          </Button>
+          {settleMode ? (
+            <Button onClick={() => void settle()} disabled={!canSettle} aria-busy={busy}>
+              {t('match_apply_settle', { count: entries.length })}
+            </Button>
+          ) : (
+            <Button onClick={() => void link()} disabled={!canLink} aria-busy={busy}>
+              {isSplit ? t('match_apply_split', { count: entries.length }) : t('match_apply', { count: pickedExternal.size })}
+            </Button>
+          )}
         </span>
       </div>
     </div>

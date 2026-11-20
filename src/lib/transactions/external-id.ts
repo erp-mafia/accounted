@@ -17,6 +17,8 @@
  * booked). See `buildStableExternalIds` for the content-derived replacement.
  */
 
+import { daysBetweenIso } from '@/lib/dates/iso'
+
 /**
  * Normalize a monetary amount to integer öre (hundredths) for stable,
  * representation-agnostic comparison.
@@ -107,16 +109,205 @@ export function buildStableExternalIds(
   txns: Array<{ date: string; amount: number | string }>
 ): string[] {
   const occurrences = new Map<string, number>()
+  const head = stableExternalIdHead(prefix, accountScope)
   return txns.map((tx) => {
     const fingerprint = `${tx.date}_${amountToOre(tx.amount)}`
     const n = occurrences.get(fingerprint) ?? 0
     occurrences.set(fingerprint, n + 1)
-    return `${prefix}_${accountScope}_${fingerprint}_${n}`
+    return `${head}${fingerprint}_${n}`
+  })
+}
+
+/**
+ * The start every stable id of one account shares (`eb_{accountScope}_`):
+ * how a read finds the rows one account of a connection has stored.
+ */
+export function stableExternalIdHead(prefix: string, accountScope: string): string {
+  return `${prefix}_${accountScope}_`
+}
+
+/**
+ * The IBAN a bank-feed row was fetched for, read back from its stored
+ * `external_id` (`eb_{accountScope}_{date}_{öre}_{n}`, both aggregators).
+ * The scope is the account's pinned dedup scope, else its normalized IBAN,
+ * so for an account with an IBAN it names the physical account the row
+ * belongs to, whichever cash account the row sits on now. Null for every
+ * other id (bank files, a uid scope, legacy provider ids): the origin is
+ * then unknown and callers must not guess.
+ */
+export function bankFeedIbanOf(externalId: string | null | undefined): string | null {
+  const match = /^eb_([A-Z]{2}\d{2}[A-Z0-9]{1,30})_\d{4}-\d{2}-\d{2}_-?\d+_\d+$/.exec(externalId ?? '')
+  return match ? match[1] : null
+}
+
+/** What `dropRepeatedBankRows` reads from a fetched row. */
+export interface BankRowIdentity {
+  /** The bank's own id for the row (entry_reference / transaction_id), when it sent one. */
+  providerTransactionId?: string | null
+  date: string
+  amount: number | string
+  description: string
+}
+
+/**
+ * Drop the repeats of a bank row that ONE fetched response served more than
+ * once, keeping the first.
+ *
+ * Some banks page their transaction lists unstably: a later page repeats rows
+ * an earlier page already served and leaves others out (observed at Nordea
+ * through Enable Banking, crm#1295). `buildStableExternalIds` gives each copy
+ * its own occurrence index, so every copy was stored as a transaction of its
+ * own. A stored copy then also swallows a genuinely new row in a later sync:
+ * no incoming row bridges the copy, so `reconcileStableExternalIds` pairs the
+ * new row with it by id alone and Layer 1 skips it as a duplicate.
+ *
+ * A repeat carries the same non-empty bank id AND the same booking date,
+ * amount (öre) and description as an earlier row of the response: one bank
+ * entry, not two payments. Rows without a bank id are never dropped: two
+ * equal payments on the same day are real, and only the bank's id tells them
+ * apart from a repeat. The id is compared only within one response, so a bank
+ * that changes its ids between requests (the reason the stored key is not the
+ * bank's id) is unaffected. Callers apply this before building the ids, so
+ * the occurrence index counts each entry once.
+ */
+export function dropRepeatedBankRows<T>(rows: readonly T[], identity: (row: T) => BankRowIdentity): T[] {
+  const seen = new Set<string>()
+  return rows.filter((row) => {
+    const { providerTransactionId, date, amount, description } = identity(row)
+    const bankId = (providerTransactionId ?? '').trim()
+    if (bankId === '') return true
+    const key = JSON.stringify([bankId, date, amountToOre(amount), description])
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
   })
 }
 
 /** Splits a `buildStableExternalIds` id into its `{prefix}_{scope}_{date}_{öre}` family and index. */
 const STABLE_EXTERNAL_ID = /^(.+_\d{4}-\d{2}-\d{2}_-?\d+)_(\d+)$/
+
+/**
+ * Calendar days a bank may move a booked entry between two reads and still
+ * have it paired with its stored row by the bank's own id. One day is what
+ * has been seen (crm#2024: the same entry, same id and amount, dated one day
+ * later on a later read); four covers a long weekend.
+ */
+export const BANK_REDATE_MAX_DAYS = 4
+
+/** The bank's own id for a row and the feed and connection it came through. */
+export interface BankEntryRef {
+  /** import_source of the row. */
+  source?: string | null
+  bankConnectionId?: string | null
+  /** The bank's own id for the entry (provider_transaction_id). */
+  providerTransactionId?: string | null
+}
+
+/** A bank-feed row's stable id read apart, with the key its bank id gives it. */
+interface BankIdKey {
+  head: string
+  date: string
+  ore: string
+  family: string
+  /** Feed, connection, account scope and bank id: one bank entry. */
+  key: string
+}
+
+function bankIdKey(externalId: string | null, ref: BankEntryRef): BankIdKey | null {
+  const source = ref.source ?? null
+  const bankId = ref.providerTransactionId?.trim() || null
+  if (!externalId || !source || !bankId || !BOOKING_DATE_ID_SOURCES.has(source)) return null
+  const match = BOOKING_DATE_ID.exec(externalId)
+  if (!match) return null
+  const [, head, date, ore] = match
+  return { head, date, ore, family: `${head}_${date}_${ore}`, key: JSON.stringify([source, ref.bankConnectionId ?? null, head, bankId]) }
+}
+
+/**
+ * Incoming bank-feed rows the bank's own id pairs with a stored row: incoming
+ * index to the stored row's external_id.
+ *
+ * A pair needs one bank entry on both sides: the same feed (import_source),
+ * bank connection, account scope and bank id, an id that occurs once among
+ * the incoming rows and once among the stored ones (a bank that repeats an
+ * id in a response, or two stored rows under one id, prove nothing), and the
+ * same amount. On the same day that is the pair. On another day it is the
+ * same entry re-dated by the bank (crm#2024) only when all of this holds:
+ * the days are at most BANK_REDATE_MAX_DAYS apart, the descriptions bridge,
+ * the read covers the stored row's day, and every incoming row on that day
+ * and amount is paired with another stored row. Otherwise a row on the stored
+ * row's day could be the stored entry under a new id, and pairing across
+ * days could swallow a real payment: the incoming row then stays new, a
+ * visible duplicate rather than a lost row.
+ */
+function pairByBankId(
+  incoming: ReadonlyArray<{ external_id: string; description: string } & BankEntryRef>,
+  stored: ReadonlyArray<{ externalId: string | null; desc: string } & BankEntryRef>,
+): Map<number, string> {
+  const incomingKeys = incoming.map((tx) => bankIdKey(tx.external_id, tx))
+  const storedKeys = stored.map((row) => bankIdKey(row.externalId, row))
+  const occurrences = (keys: ReadonlyArray<BankIdKey | null>) => {
+    const counts = new Map<string, number>()
+    for (const k of keys) if (k) counts.set(k.key, (counts.get(k.key) ?? 0) + 1)
+    return counts
+  }
+  const incomingCount = occurrences(incomingKeys)
+  const storedCount = occurrences(storedKeys)
+  const storedByKey = new Map<string, number>()
+  storedKeys.forEach((k, j) => {
+    if (k && storedCount.get(k.key) === 1) storedByKey.set(k.key, j)
+  })
+
+  const pairs = new Map<number, string>()
+  const redated: Array<{ i: number; j: number }> = []
+  incomingKeys.forEach((k, i) => {
+    if (!k || incomingCount.get(k.key) !== 1) return
+    const j = storedByKey.get(k.key)
+    if (j === undefined || storedKeys[j]!.ore !== k.ore) return
+    if (storedKeys[j]!.date === k.date) pairs.set(i, stored[j].externalId!)
+    else redated.push({ i, j })
+  })
+  if (redated.length === 0) return pairs
+
+  // What the read covers, per account scope, and which incoming rows sit on
+  // each (day, amount): every incoming bank-feed id counts, with or without a
+  // bank id.
+  const rangeByHead = new Map<string, { from: string; to: string }>()
+  const incomingByFamily = new Map<string, number[]>()
+  incoming.forEach((tx, i) => {
+    const match = BOOKING_DATE_ID.exec(tx.external_id)
+    if (!match) return
+    const [, head, date, ore] = match
+    const range = rangeByHead.get(head)
+    if (!range) rangeByHead.set(head, { from: date, to: date })
+    else {
+      if (date < range.from) range.from = date
+      if (date > range.to) range.to = date
+    }
+    const family = `${head}_${date}_${ore}`
+    incomingByFamily.set(family, [...(incomingByFamily.get(family) ?? []), i])
+  })
+
+  // Repeat until nothing changes, so the outcome does not depend on the
+  // order the bank listed the rows in.
+  for (let added = true; added; ) {
+    added = false
+    for (const { i, j } of redated) {
+      if (pairs.has(i)) continue
+      const row = incomingKeys[i]!
+      const twin = storedKeys[j]!
+      const gap = Math.abs(daysBetweenIso(twin.date, row.date))
+      if (gap > BANK_REDATE_MAX_DAYS) continue
+      if (!descriptionsBridge(incoming[i].description, stored[j].desc)) continue
+      const range = rangeByHead.get(twin.head)
+      if (!range || twin.date < range.from || twin.date > range.to) continue
+      if ((incomingByFamily.get(twin.family) ?? []).some((k) => !pairs.has(k))) continue
+      pairs.set(i, stored[j].externalId!)
+      added = true
+    }
+  }
+  return pairs
+}
 
 /**
  * Re-key incoming stable ids so each one names the SAME physical transaction
@@ -130,20 +321,27 @@ const STABLE_EXTERNAL_ID = /^(.+_\d{4}-\d{2}-\d{2}_-?\d+)_(\d+)$/
  * duplicate, while the displaced stored transaction takes the fresh index and
  * is content-bridged to its own stored twin: the new transaction is lost.
  *
- * Within each id family that already has stored rows, incoming rows pair with
- * stored rows by: the same id with a bridging description, then any bridging
- * description (longest stored description first, as in the content bridge),
- * then the same id alone (a description that drifted without bridging dedups
- * exactly as before). Paired rows take the stored row's id; the rest are new
- * and keep their id, or take the lowest index no stored or paired row holds.
- * Ids outside the stable format, and families with no stored rows, pass
- * through unchanged.
+ * First, a bank-feed row whose bank id names exactly one stored row of the
+ * same feed and amount takes that row's id (pairByBankId): on the same day,
+ * or on another day when the bank has re-dated the entry (crm#2024).
+ * Then, within each id family that already has stored rows, the remaining
+ * incoming rows pair with the remaining stored rows by: the same id with a
+ * bridging description, then any bridging description (longest stored
+ * description first, as in the content bridge), then the same id alone (a
+ * description that drifted without bridging dedups exactly as before). Paired
+ * rows take the stored row's id; the rest are new and keep their id, or take
+ * the lowest index no stored or paired row holds. Ids outside the stable
+ * format, and families with no stored rows, pass through unchanged.
  */
 export function reconcileStableExternalIds(
-  incoming: Array<{ external_id: string; description: string }>,
-  stored: Array<{ externalId: string | null; desc: string }>
+  incoming: Array<{ external_id: string; description: string } & BankEntryRef>,
+  stored: Array<{ externalId: string | null; desc: string } & BankEntryRef>
 ): string[] {
   const ids = incoming.map((tx) => tx.external_id)
+  const bankPairs = pairByBankId(incoming, stored)
+  for (const [i, storedId] of bankPairs) ids[i] = storedId
+  const bankPairedStored = new Set(bankPairs.values())
+
   const storedByFamily = new Map<string, Map<string, string>>()
   for (const row of stored) {
     const match = row.externalId ? STABLE_EXTERNAL_ID.exec(row.externalId) : null
@@ -154,6 +352,7 @@ export function reconcileStableExternalIds(
   }
   const incomingByFamily = new Map<string, number[]>()
   incoming.forEach((tx, i) => {
+    if (bankPairs.has(i)) return
     const match = STABLE_EXTERNAL_ID.exec(tx.external_id)
     if (!match || !storedByFamily.has(match[1])) return
     incomingByFamily.set(match[1], [...(incomingByFamily.get(match[1]) ?? []), i])
@@ -161,7 +360,9 @@ export function reconcileStableExternalIds(
 
   for (const [family, members] of incomingByFamily) {
     const storedDesc = storedByFamily.get(family)!
-    const unpaired = new Set(storedDesc.keys())
+    // A stored row the bank id paired is accounted for; it still holds its
+    // index, so no fresh id below can take it.
+    const unpaired = new Set([...storedDesc.keys()].filter((storedId) => !bankPairedStored.has(storedId)))
     const tryPair = (i: number, storedId: string | null): boolean => {
       if (storedId === null || !unpaired.has(storedId)) return false
       ids[i] = storedId
@@ -256,20 +457,104 @@ export function descriptionsBridge(
 }
 
 /**
- * Shift an ISO `YYYY-MM-DD` date by a whole number of days, returning a new
- * `YYYY-MM-DD` string. Deterministic and INPUT-ONLY: it does the arithmetic
- * with `Date.UTC` on the parsed components and `new Date(ms)`, never the wall
- * clock (`Date.now()` / argless `new Date()`), so it is safe in dedup code that
- * must not depend on the current time. Correctly crosses month, year and
- * leap-day boundaries via UTC epoch math.
+ * Import feeds whose STORED `transactions.external_id` is the provider's own
+ * per-booking reference: the same booking always carries the same id, and a
+ * different id is a different booking.
  *
- * Used to enumerate the adjacent date buckets the date-drift dedup shadow
- * inspects: a booking date that drifts a day between syncs lands its twin in
- * `contentBucketKey(shiftIsoDate(date, ±1), amount)`, which the exact-date
- * content bridge cannot see.
+ * This is the per-ROW form of `IngestOptions.stableExternalIds`, which a feed
+ * states per batch at ingest and which is not stored on the row. Code that
+ * meets the row later (the booking-time duplicate guard) reads the statement
+ * from here instead. A feed belongs here only when its ingest call passes
+ * `stableExternalIds: true`; ids derived from content or position never
+ * qualify (the Enable Banking / Open Payments occurrence index from
+ * buildStableExternalIds, bank-file row hashes, ids an agent typed into
+ * create_transactions), because the same booking can come back under another
+ * one of those.
+ *
+ * - 'stripe': `stripe_{account}_{balance_txn}` and its `_fee` row
+ *   (extensions/general/stripe/lib/transaction-sync.ts). A Stripe balance
+ *   transaction id names one movement on the Stripe balance for good.
  */
-export function shiftIsoDate(date: string, deltaDays: number): string {
-  const [y, m, d] = date.split('-').map(Number)
-  const ms = Date.UTC(y, m - 1, d) + deltaDays * 86_400_000
-  return new Date(ms).toISOString().slice(0, 10)
+export const PROVIDER_BOOKING_ID_SOURCES: ReadonlySet<string> = new Set(['stripe'])
+
+/**
+ * Bank feeds whose stored external_id is the buildStableExternalIds key
+ * `{prefix}_{scope}_{booking date}_{öre}_{n}` (one 'eb' namespace for both
+ * aggregators, lib/bank-feed/sync.ts). The id is derived, so a different id
+ * alone proves nothing, but two of its parts do (crm#1312):
+ *
+ * - the booking date: both feeds store booked entries only (pending ones are
+ *   skipped until the bank books them), and a booked entry nearly always
+ *   keeps its booking date. A bank can still re-date one between reads, with
+ *   the same bank id and amount (crm#2024): two rows with one bank id are
+ *   then one entry under two dates, whatever the dates say;
+ * - within one date and amount, the bank's own id (provider_transaction_id):
+ *   a page the bank served twice repeats the entry WITH its id (crm#1295), so
+ *   two stored rows with two different bank ids are two entries.
+ */
+export const BOOKING_DATE_ID_SOURCES: ReadonlySet<string> = new Set(['enable_banking', 'open_payments'])
+
+/** `{prefix}_{scope}`, booking date, öre and occurrence index of a buildStableExternalIds id. */
+const BOOKING_DATE_ID = /^(.+)_(\d{4}-\d{2}-\d{2})_(-?\d+)_(\d+)$/
+
+/** The `transactions` columns that say which feed a row came from and under which id. */
+export interface TransactionIdentity {
+  external_id?: string | null
+  import_source?: string | null
+  bank_connection_id?: string | null
+  /** The bank's own id for the entry, as the bank feed sent it (not stable between requests at every bank). */
+  provider_transaction_id?: string | null
+  /** The uploaded bank file a file-import row came from (bank_file_imports). */
+  bank_file_import_id?: string | null
+}
+
+/**
+ * True when the ids ALONE prove two rows are different bookings. Both rows
+ * must come from the same feed (same import_source and bank connection) and
+ * carry an id, and then:
+ *
+ * - a feed whose ids are per-booking references (PROVIDER_BOOKING_ID_SOURCES):
+ *   the ids differ;
+ * - a bank feed keyed on the booking date (BOOKING_DATE_ID_SOURCES): both ids
+ *   have that shape under the same account scope, the two rows do not carry
+ *   one and the same bank id (a re-dated entry, crm#2024), and either the
+ *   booking dates (or amounts) in them differ, or both rows carry a bank id
+ *   and the bank ids differ;
+ * - a file import: both rows came from the same uploaded file under
+ *   different ids. One statement lists each booked movement once, and the
+ *   importer already keeps every row of a file as its own (the row index in
+ *   its id); a second upload of the same period is another file and still
+ *   dedups on content.
+ *
+ * False whenever the ids cannot speak: a missing id on either side, rows from
+ * two different feeds (a bank file and the feed, a hand-entered row, a
+ * reconnected bank under a new connection), an id of another shape (the
+ * pre-June-2026 Enable Banking ids), same-day rows of one amount without two
+ * bank ids, two bank-feed rows under one bank id, or two uploads. Callers then
+ * judge on content, as before.
+ * Mirrors the ingest-time identity guard (isOtherBookingOfSameFeed in
+ * lib/transactions/ingest.ts), so a row the ingest kept apart from its
+ * look-alike is not called that look-alike's copy at booking time.
+ */
+export function idsProveDistinctBookings(a: TransactionIdentity, b: TransactionIdentity): boolean {
+  const source = a.import_source ?? null
+  if (source === null) return false
+  if ((b.import_source ?? null) !== source) return false
+  if ((a.bank_connection_id ?? null) !== (b.bank_connection_id ?? null)) return false
+  const idA = a.external_id ?? null
+  const idB = b.external_id ?? null
+  if (!idA || !idB || idA === idB) return false
+  if (PROVIDER_BOOKING_ID_SOURCES.has(source)) return true
+  if (BOOKING_DATE_ID_SOURCES.has(source)) {
+    const keyA = BOOKING_DATE_ID.exec(idA)
+    const keyB = BOOKING_DATE_ID.exec(idB)
+    if (!keyA || !keyB || keyA[1] !== keyB[1]) return false
+    const bankA = a.provider_transaction_id?.trim() || null
+    const bankB = b.provider_transaction_id?.trim() || null
+    if (bankA !== null && bankA === bankB) return false
+    if (keyA[2] !== keyB[2] || keyA[3] !== keyB[3]) return true
+    return bankA !== null && bankB !== null && bankA !== bankB
+  }
+  const fileA = a.bank_file_import_id ?? null
+  return fileA !== null && fileA === (b.bank_file_import_id ?? null)
 }

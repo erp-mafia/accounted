@@ -63,6 +63,29 @@ describe('notifyPublishedAuthors', () => {
     expect(findCalls('company_skills', 'update').map((call) => call[0])).toEqual([{ published_notified_at: expect.any(String) }, { published_notified_at: null }])
   })
 
+  it('releases the claim when the send throws: a claim left standing meant the author was never told', async () => {
+    sendEmail.mockRejectedValue(new Error('socket hang up'))
+    enqueue({ data: [published] })
+    enqueue({ data: [{ id: 'sub-1' }] }) // claimed
+    enqueue({ data: null }) // released
+    expect(await notifyPublishedAuthors(service as never, page(200))).toEqual({ notified: [], waiting: [], failed: ['sub-1'] })
+    expect(findCalls('company_skills', 'update').map((call) => call[0])).toEqual([{ published_notified_at: expect.any(String) }, { published_notified_at: null }])
+  })
+
+  it('releases nothing when the failure came before this run claimed the row', async () => {
+    enqueue({ data: [published] })
+    const down = vi.fn(async () => { throw new Error('The operation was aborted due to timeout') }) as unknown as typeof fetch
+    expect(await notifyPublishedAuthors(service as never, down)).toEqual({ notified: [], waiting: [], failed: ['sub-1'] })
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
+
+  it('gives the page check a timeout', async () => {
+    enqueue({ data: [published] })
+    const fetchImpl = page(404)
+    await notifyPublishedAuthors(service as never, fetchImpl)
+    expect(vi.mocked(fetchImpl).mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('does nothing without an email service', async () => {
     configured.mockReturnValue(false)
     expect(await notifyPublishedAuthors(service as never, page(200))).toEqual({ notified: [], waiting: [], failed: [] })

@@ -24,12 +24,16 @@ import { formatDimensionValidationIssues } from '@/lib/bookkeeping/dimension-err
 import {
   describeMissingInvoicePaymentAccount,
   isInvoicePaymentAccountCurrency,
-} from '@/lib/invoices/payment-accounts'
-import { conflictCode, getErrorEntry, hasErrorEntry } from './structured-errors'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
+import { conflictCode, getErrorEntry, hasErrorEntry, siCreateInvalidInputMessages } from './structured-errors'
+import { bankRowAlreadyBookedMessages } from './match-si-tx-already-booked'
 import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
+import { DOCUMENT_PERIOD_LOCK_REFUSAL } from './document-period-lock-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
+import { syncHoldMessage } from '@/lib/bank-sync/sync-hold-message'
+import { bankRefusalMessage } from '@/lib/bank-feed/failure-text'
 
-type ErrorContext =
+export type ErrorContext =
   | 'invoice'
   | 'supplier_invoice'
   | 'customer'
@@ -47,6 +51,12 @@ interface GetErrorMessageOptions {
   context?: ErrorContext
   statusCode?: number
   locale?: ErrorLocale
+  /**
+   * The caller's own sentence for this failure ("Kunde inte nollställa
+   * året"), already in the user's language. Used when nothing in the error
+   * is readable, in place of the generic fallback.
+   */
+  fallback?: string
 }
 
 type Bilingual = { sv: string; en: string }
@@ -80,6 +90,17 @@ const POSTGRES_ERROR_MAP: Record<string, Bilingual> = {
   '40P01': { sv: 'En konflikt uppstod. Försök igen.', en: 'A conflict occurred. Please try again.' },
   '22P02': { sv: 'Ogiltigt värde angavs.', en: 'Invalid value supplied.' },
   '22003': { sv: 'Värdet är utanför tillåtet intervall.', en: 'Value is out of allowed range.' },
+}
+
+// Why a month-end cannot take an upplupen kostnad or intäkt
+// (SI_ACCRUED_COST_PERIOD_LOCKED / INVOICE_ACCRUED_INCOME_PERIOD_LOCKED
+// details.blocked[].reason, checkPeriodLock's vocabulary).
+const ACCRUED_COST_BLOCK_REASON_SV: Record<string, string> = {
+  company_lock_date_covers: 'inom företagets låsdatum',
+  period_locked_at_set: 'perioden är låst',
+  period_is_closed: 'räkenskapsåret är stängt',
+  no_fiscal_period: 'inget räkenskapsår',
+  lookup_failed: 'kunde inte kontrolleras',
 }
 
 // HTTP status codes -> localized messages
@@ -119,8 +140,11 @@ const GENERIC_FALLBACK: Bilingual = { sv: 'Något gick fel. Försök igen.', en:
 // Known error patterns → user-friendly Swedish messages
 const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   [
-    /reason must be 500 characters or fewer/i,
-    'Motiveringen får vara högst 500 tecken.',
+    // A document on a verifikat in a locked or closed year: the registry's
+    // sentence, read before the generic pattern below, which matches this
+    // text too and spoke of creating a verifikat.
+    DOCUMENT_PERIOD_LOCK_REFUSAL,
+    getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv,
   ],
   [
     /locked\/closed fiscal period/i,
@@ -131,16 +155,42 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     null, // null = extract the Swedish message directly from the raw error text
   ],
   [
-    /Period is already closed/i,
-    'Perioden är redan stängd: bokslutet är genomfört och perioden kan inte öppnas igen.',
+    // block_cancel_invoice_with_open_collection_case (migration
+    // 20261012030200): an invoice the collections provider is pursuing is
+    // never cancelled under it.
+    /COLLECTION_CASE_OPEN/,
+    'Fakturan har ett öppet inkassoärende. Återkalla ärendet på fakturan innan du makulerar den.',
   ],
   [
-    /Period is already locked/i,
-    'Perioden är redan låst.',
+    // block_delete_collected_payment and guard_collected_payment_source
+    // (migration 20261012030300): a payment the collections provider
+    // collected is part of its payout and is rebooked, never removed.
+    /COLLECTED_PAYMENT_(DELETE_BLOCKED|SOURCE_LOCKED)/,
+    'Betalningen togs emot av inkassobolaget och ingår i dess utbetalning. Den kan inte tas bort här; bokför om den via avräkningen.',
   ],
   [
-    /Cannot attach documents to entries in a locked/i,
-    'Kan inte bifoga dokument till verifikationer i en låst period.',
+    // guard_invoice_written_off_status (migration 20261021120700): a claim
+    // written off as a konstaterad kundförlust is no longer on 1510.
+    /INVOICE_WRITTEN_OFF_STATUS_LOCKED/,
+    'Fakturan är bokförd som kundförlust. En betalning efter avskrivningen bokförs som återvunnen kundförlust på fakturan.',
+  ],
+  [
+    // guard_customer_loss_voucher_* (migration 20261021120700): the decision
+    // row names the voucher's amounts and date.
+    /CUSTOMER_LOSS_VOUCHER_LOCKED/,
+    'En kundförlustverifikation rättas inte. Återför verifikationen (storno) och bokför kundförlusten på nytt.',
+  ],
+  [
+    // guard_counterparty_setoff_voucher_* (migration 20261022130100): the
+    // set-off row and both invoices name the voucher's amount and date.
+    /SETOFF_VOUCHER_LOCKED/,
+    'En kvittningsverifikation rättas inte. Återför verifikationen (storno) och bokför kvittningen på nytt.',
+  ],
+  [
+    // counterparty_setoffs_guard (migration 20261022130100): delete_last_voucher
+    // or any delete reaching a set-off row.
+    /SETOFF_DELETE_BLOCKED|SETOFF_IMMUTABLE/,
+    'En kvittning tas aldrig bort eller ändras. Återför kvittningsverifikationen (storno) i stället.',
   ],
   [
     /Entry date .+ is outside fiscal period/i,
@@ -172,6 +222,20 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   [
     /Cannot delete: other entries reference this voucher/i,
     'Verifikationen kan inte raderas eftersom andra verifikationer (t.ex. storno eller rättelse) refererar till den.',
+  ],
+  [
+    // retain_sie_batch_entry (migration 20260911140532): a verifikation an
+    // SIE import posted leaves the ledger only with its whole import, by
+    // storno. PH 212: the raw English reached the user, naming no way out.
+    /SIE batch entries cannot be deleted/i,
+    'Verifikationen kommer från en SIE-import och kan inte raderas en och en. Ångra hela importen under Bokföring > Importera/Exportera > Importhistorik: alla verifikationer i importen makuleras då med storno, och filen kan importeras igen.',
+  ],
+  [
+    // retain_sie_undo_reversal (migration 20261026003000): deleting a storno
+    // of an undone SIE import would make the import's verifikationer active
+    // again while the import stays undone.
+    /undone SIE import cannot be restored/i,
+    'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företaget > Företagsuppgifter > Riskzon.',
   ],
   [
     /timed out after \d+m?s/i,
@@ -289,9 +353,10 @@ function databaseErrorMessage(
 }
 
 /** Steps 4 to 6 of the priority chain: HTTP status, context, generic. */
-function fallbackMessage({ context, statusCode, locale = 'sv' }: GetErrorMessageOptions): string {
+function fallbackMessage({ context, statusCode, locale = 'sv', fallback }: GetErrorMessageOptions): string {
   if (statusCode && HTTP_STATUS_MAP[statusCode]) return pick(HTTP_STATUS_MAP[statusCode], locale)
   if (context && CONTEXT_FALLBACKS[context]) return pick(CONTEXT_FALLBACKS[context], locale)
+  if (fallback?.trim()) return fallback
   return pick(GENERIC_FALLBACK, locale)
 }
 
@@ -352,6 +417,11 @@ const TECHNICAL_LEAK_PATTERNS: RegExp[] = [
   /https?:\/\//,
 ]
 
+/** Whether a string carries a technical leak (TECHNICAL_LEAK_PATTERNS): never show it raw. */
+export function looksLikeTechnicalLeak(message: string): boolean {
+  return TECHNICAL_LEAK_PATTERNS.some((pattern) => pattern.test(message))
+}
+
 /**
  * Whether a free-text string reads as a Swedish sentence written for the user
  * (issue #2086): it carries å/ä/ö or Swedish words, and shows no sign of
@@ -367,6 +437,19 @@ export function looksLikeUserFacingSwedish(message: string): boolean {
   if (TECHNICAL_LEAK_PATTERNS.some((p) => p.test(text))) return false
   if (/[åäöÅÄÖ]/.test(text)) return true
   return hasSwedishWords(text)
+}
+
+/**
+ * A failed sync's error as the person may read it: the thrown error through
+ * the app's error mapping, kept only when that reads as a Swedish sentence
+ * written for a user (the mapping passes a few keywords through, "session"
+ * among them, that an English provider error can carry), else `fallback`.
+ * Never the raw exception. The nightly feed runners and the manual feed
+ * routes answer with it.
+ */
+export function userFacingFailure(error: unknown, fallback: string): string {
+  const mapped = getErrorMessage(error, { fallback })
+  return looksLikeUserFacingSwedish(mapped) ? mapped : fallback
 }
 
 function hasSwedishWords(text: string): boolean {
@@ -581,6 +664,18 @@ export function getErrorMessage(
       }
       if (structured.code === 'PT409') return conflictMessage(structured.message, locale)
 
+      // A bank sync that is held back: the registry sentence points agents at
+      // the field the time is in (next_allowed_at); a person reads the time.
+      const syncHold = syncHoldMessage(structured.code, structured.details, locale)
+      if (syncHold) return syncHold
+
+      // A bank's refusal the bank feed has a sentence for (another BankID
+      // session still open, a missing right, KYC): the route words only the
+      // Swedish, and the registry's English for the code is the line for a
+      // refusal without one.
+      const bankRefusal = bankRefusalMessage(structured.code, structured.details, locale)
+      if (bankRefusal) return bankRefusal
+
       // A refused delete as errorResponse sends it: the envelope already
       // carries the register's own sentence in both languages (#2831).
       if (typeof structured.code === 'string' && FOREIGN_KEY_REFUSAL_CODES.has(structured.code)) {
@@ -645,6 +740,55 @@ export function getErrorMessage(
         }
       }
 
+      // Say which rule refused the supplier invoice: the registry's one
+      // sentence for every reason left a customer unable to tell what to
+      // change (crm#1377, #96). Both locales, before the English shortcut.
+      if (structured.code === 'SI_CREATE_INVALID_INPUT') {
+        const reason = siCreateInvalidInputMessages(structured.details)
+        if (reason) return locale === 'en' ? reason.message_en : reason.message_sv
+      }
+
+      // A match on a booked bank row: name the verifikat that books it, in
+      // the UI's locale (accounted#58).
+      const booked = typeof structured.code === 'string' ? bankRowAlreadyBookedMessages(structured.code, structured.details) : null
+      if (booked) return locale === 'en' ? booked.message_en : booked.message_sv
+
+      // A refused re-date names each blocker (a verifikat, a lock date, a
+      // filed declaration) in Swedish domain copy, and the blockers are what
+      // the user can act on: an English UI gets the English lead with them,
+      // not the lead alone (accounted#18).
+      if (
+        locale === 'en' &&
+        (structured.code === 'FISCAL_PERIOD_DATES_BLOCKED' || structured.code === 'FISCAL_PERIOD_DELETE_BLOCKED')
+      ) {
+        const blockers = (structured.details as { blockers?: unknown } | undefined)?.blockers
+        const named = Array.isArray(blockers)
+          ? blockers.flatMap((b: unknown) => {
+              const sv = (b as { message_sv?: unknown } | null)?.message_sv
+              return typeof sv === 'string' && sv.trim() ? [sv.trim()] : []
+            })
+          : []
+        return [getErrorEntry(structured.code)?.message_en ?? '', ...named].join(' ').trim()
+      }
+
+      // Vacation days the calculation cannot price (issue #85), and a
+      // payment file whose paying account lacks its IBAN or BIC (crm#1483):
+      // both sentences are composed where the request is refused and name
+      // who or which account and what to do, so an English UI gets the
+      // English one, not the registry's generic line. A role refusal is the
+      // same: it says why this person may not (readOnlyRefusal), and without
+      // its own sentence it carries the registry's.
+      if (
+        locale === 'en' &&
+        (structured.code === 'SALARY_RUN_VACATION_PAY_UNDETERMINED' ||
+          structured.code === 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS' ||
+          structured.code === 'FORBIDDEN') &&
+        typeof structured.message_en === 'string' &&
+        structured.message_en.trim()
+      ) {
+        return structured.message_en
+      }
+
       // For English UI, return the registry's English message for any known
       // code instead of falling through to the Swedish branches below (which
       // ignored locale: English users were shown Swedish prose). The Swedish
@@ -663,13 +807,25 @@ export function getErrorMessage(
 
       // Name the accounts: the registry sentence alone sent a customer back
       // to a mapping step that does not exist in the onboarding flow (desk
-      // crm#63). The English registry text is returned above unchanged.
+      // crm#63). Every import entry now routes class 9 amounts to 2999 itself
+      // (#3312), so this fires only for a target someone chose in a mapping:
+      // point back at that choice, never at a page outside the user's flow.
+      // The English registry text is returned above unchanged.
       if (structured.code === 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS') {
         const accounts = (structured.details as { account_numbers?: unknown } | undefined)?.account_numbers
         if (Array.isArray(accounts) && accounts.length > 0) {
           const list = (accounts as string[]).join(', ')
-          const subject = accounts.length === 1 ? `Konto ${list} har` : `Kontona ${list} har`
-          return `${subject} belopp men ligger utanför 1000-8999 och kan inte tas med i balans- och resultatrapporterna. Mappa till ett konto i kontoplanen via Import, SIE-fil (observationskonton i klass 9 hör hemma på 2999 OBS-konto) och försök igen.`
+          const subject = accounts.length === 1 ? `Målkonto ${list} ligger` : `Målkontona ${list} ligger`
+          return `${subject} utanför 1000-8999 och kan inte ta emot belopp i balans- och resultatrapporterna. Välj ett konto i 1000-8999 i kontomappningen och försök igen (observationskonton i klass 9 hör hemma på 2999 OBS-konto).`
+        }
+      }
+
+      // Name both numbers, so the reader can tell a wrong file from a
+      // company registered under the wrong number.
+      if (structured.code === 'SIE_IMPORT_ORG_NUMBER_MISMATCH') {
+        const details = structured.details as { file_org_number?: unknown; company_org_number?: unknown } | undefined
+        if (typeof details?.file_org_number === 'string' && typeof details.company_org_number === 'string') {
+          return `SIE-filen gäller organisationsnummer ${details.file_org_number}, men företaget har ${details.company_org_number}. Kontrollera att det är rätt fil och rätt företag, och bekräfta för att importera ändå.`
         }
       }
 
@@ -753,15 +909,36 @@ export function getErrorMessage(
         return 'Det finns ingen räkenskapsperiod som täcker det valda datumet. Skapa eller öppna räkenskapsåret först.'
       }
 
-      if (structured.code === 'TARGET_PERIOD_CLOSED') {
-        return 'Räkenskapsåret för det valda datumet är stängt (bokslut) och kan inte återöppnas. Bokför rättelsen i innevarande period istället.'
-      }
+      // TARGET_PERIOD_CLOSED has no branch here: the registry's sentence (both
+      // locales) is the one answer. A copy here said the year "kan inte
+      // återöppnas", which sent a customer with an unsigned årsredovisning
+      // into a dead end (crm#1290).
 
       if (structured.code === 'TARGET_PERIOD_LOCKED') {
         const details = structured.details as { lockDate?: string } | undefined
         return details?.lockDate
           ? `Räkenskapsperioden för det valda datumet är låst (t.o.m. ${details.lockDate}). Lås upp perioden för att flytta verifikationen dit.`
           : 'Räkenskapsperioden för det valda datumet är låst. Lås upp perioden för att flytta verifikationen dit.'
+      }
+
+      // Name each month-end an upplupen kostnad or intäkt cannot book on, and
+      // why: the user has to unlock exactly those periods (or create the year).
+      if (structured.code === 'SI_ACCRUED_COST_PERIOD_LOCKED' || structured.code === 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED') {
+        const income = structured.code === 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED'
+        const blocked = (structured.details as { blocked?: unknown } | undefined)?.blocked
+        const named = Array.isArray(blocked)
+          ? blocked.flatMap((entry: unknown) => {
+              const { date, reason } = (entry ?? {}) as { date?: unknown; reason?: unknown }
+              if (typeof date !== 'string') return []
+              const why = typeof reason === 'string' ? ACCRUED_COST_BLOCK_REASON_SV[reason] : undefined
+              return [why ? `${date} (${why})` : date]
+            })
+          : []
+        if (named.length > 0) {
+          return income
+            ? `En upplupen intäkt bokförs sista dagen i varje månad, men ${named.join(', ')} kan inte ta emot verifikationer. Intäkten flyttas inte till en annan månad, så inget har bokförts. Lås upp perioden eller lägg upp räkenskapsåret, eller bokför raden utan periodisering.`
+            : `En upplupen kostnad bokförs sista dagen i varje månad, men ${named.join(', ')} kan inte ta emot verifikationer. Kostnaden flyttas inte till en annan månad, så inget har bokförts. Lås upp perioden eller lägg upp räkenskapsåret, eller bokför raden utan periodisering.`
+        }
       }
 
       if (structured.code === 'OB_COMPANY_LOCK_DATE') {
@@ -778,6 +955,9 @@ export function getErrorMessage(
         }
         if (details?.reason === 'identical_to_original') {
           return 'Rättelsen är identisk med originalverifikationen: inget har ändrats.'
+        }
+        if (details?.reason === 'negates_original') {
+          return 'Rättelsen är originalet med debet och kredit omkastade. Stornon nollställer redan originalet, så rättelsen skulle vända beloppen en gång till. Vill du bara ta bort verifikationen: använd Återför (storno). En rättelse innehåller de rader som borde ha bokförts, och omkastade sidor är bara rätt om originalet hade debet och kredit omkastade.'
         }
         return 'Rättelsen saknar ekonomisk innebörd: varje konto netto till noll. En rättelse måste beskriva en faktisk affärshändelse (BFL 5 kap. 5 §).'
       }
@@ -826,7 +1006,7 @@ export function getErrorMessage(
 
     // Accumulated per-item validation list from routes that collect several
     // problems before responding, e.g. the salary approve route:
-    //   { error: 'Valideringsfel …', details: ['Tomas Tysén: Bankuppgifter saknas …', …] }
+    //   { error: 'Valideringsfel …', details: ['Anna Andersson: Bankuppgifter saknas …', …] }
     // Surface the specific reasons: otherwise this shape falls all the way
     // through to the generic HTTP-400 message and the user learns nothing.
     if (
@@ -967,7 +1147,9 @@ export function classifyBankConnectionDenial(
   // Matched on the description alone: the code access_denied itself contains
   // "denied" and must not turn every denial into a cancel.
   if (description && BANK_DENIAL_CANCEL_PATTERN.test(description)) return 'cancelled'
-  if (code !== 'access_denied') return null
+  // Some banks name the cancel in the code itself (error=cancelled, no
+  // description). Only cancel/abort count there, for the reason above.
+  if (code !== 'access_denied') return /cancel|abort/i.test(code) ? 'cancelled' : null
   if (!description) return 'cancelled'
   if (BANK_DENIAL_CREDENTIALS_PATTERN.test(description)) return 'invalid_credentials'
   if (BANK_DENIAL_ACCOUNT_ACCESS_PATTERN.test(description)) return 'account_access'
@@ -1023,9 +1205,9 @@ const PROVIDER_REASON_PREFIX: Bilingual = {
 
 /**
  * The provider refused ONE register while the grant itself keeps working: a
- * Fortnox account without rights to leverantörsregistret, a Bokio token with a
- * narrower scope. Never say "återanslut" here, the reconnect re-mints the same
- * grant and hits the same 403.
+ * Fortnox user without rights to leverantörsregistret, a Bokio token with a
+ * narrower scope. A reconnect as the same user re-mints the same grant and
+ * hits the same refusal, so the copy names a different user instead.
  *
  * The base copy is the registry's PROVIDER_RESOURCE_FORBIDDEN entry, not a
  * second copy of it: the same sentence has to reach the toast, the API

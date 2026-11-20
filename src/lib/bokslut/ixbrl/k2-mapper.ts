@@ -15,7 +15,10 @@
  */
 
 import type { ConceptAmount, ConceptAmounts } from './types'
-import { equalOre, roundOre, sumOre } from '@/lib/money'
+import type { EntityType } from '@/types'
+import { equalOre, isZeroOre, roundOre, sumOre } from '@/lib/money'
+import { isEntityType, supportsMemberCapital } from '@/lib/company/entity-type'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import {
   SIGN_RECLASSIFICATION_RULES,
   type SignReclassificationId,
@@ -32,6 +35,15 @@ export interface TrialBalanceRowLike {
   account_name: string
   closing_debit: number
   closing_credit: number
+  /**
+   * The year's own activity on the account, opening balance excluded, as
+   * generateTrialBalance returns it. Only the unclosed-year derivation reads
+   * it, to tell a balance that was carried in and never touched from one
+   * booked during the year. Absent means unknown, which is never read as
+   * "untouched".
+   */
+  period_debit?: number
+  period_credit?: number
 }
 
 /**
@@ -105,31 +117,56 @@ export const K2_RR_MAPPINGS: PostMapping[] = [
     ranges: [r('7740', '7749'), r('7790', '7799')],
   },
   { concept: 'OvrigaRorelsekostnader', balance: 'debit', ranges: [r('7900', '7999')] },
-  { concept: 'ResultatAndelarKoncernforetag', balance: 'credit', ranges: [r('8000', '8099')] },
+  // Finansiella poster follow the BAS kopplingstabell for INK2R 3.12-3.18
+  // (fältkoder 7414, 7415, 7423, 7416, 7417, 7521, 7522), the same ÅRL rows.
+  // The "resultat från ..." concepts are "exklusive nedskrivningar" in the
+  // taxonomy: every x070-x089 nedskrivning/återföring account belongs to
+  // NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar.
+  // 82xx is "andra företag" (övriga finansiella anläggningstillgångar); the
+  // ägarintresse row only draws the four 81xx ägarintresse accounts.
+  {
+    concept: 'ResultatAndelarKoncernforetag',
+    balance: 'credit',
+    ranges: [r('8000', '8069'), r('8090', '8099')],
+  },
   {
     concept: 'ResultatAndelarIntresseforetagGemensamtStyrda',
     balance: 'credit',
-    ranges: [r('8100', '8199')],
+    ranges: [
+      r('8100', '8112'),
+      r('8114', '8117'),
+      r('8119', '8122'),
+      r('8124', '8132'),
+      r('8134', '8169'),
+      r('8190', '8199'),
+    ],
   },
   {
     concept: 'ResultatOvrigaforetagAgarintresse',
     balance: 'credit',
-    ranges: [r('8200', '8269')],
+    ranges: [r('8113', '8113'), r('8118', '8118'), r('8123', '8123'), r('8133', '8133')],
   },
   {
     concept: 'ResultatOvrigaFinansiellaAnlaggningstillgangar',
     balance: 'credit',
-    ranges: [r('8270', '8299')],
+    ranges: [r('8200', '8269'), r('8290', '8299')],
   },
   {
     concept: 'OvrigaRanteintakterLiknandeResultatposter',
     balance: 'credit',
-    ranges: [r('8300', '8399')],
+    ranges: [r('8300', '8369'), r('8390', '8399')],
   },
   {
     concept: 'NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar',
     balance: 'debit',
-    ranges: [r('8500', '8599')],
+    ranges: [
+      r('8070', '8089'),
+      r('8170', '8189'),
+      r('8270', '8289'),
+      r('8370', '8389'),
+      // 85xx is not a BAS range; kept so custom 85xx accounts keep their row.
+      r('8500', '8599'),
+    ],
   },
   {
     concept: 'RantekostnaderLiknandeResultatposter',
@@ -219,16 +256,17 @@ export const K2_BR_MAPPINGS: PostMapping[] = [
     balance: 'debit',
     ranges: [r('1346', '1347')],
   },
-  {
-    concept: 'AndraLangfristigaVardepappersinnehav',
-    balance: 'debit',
-    ranges: [r('1350', '1359'), r('1380', '1389')],
-  },
+  { concept: 'AndraLangfristigaVardepappersinnehav', balance: 'debit', ranges: [r('1350', '1359')] },
   { concept: 'LanDelagareNarstaende', balance: 'debit', ranges: [r('1360', '1369')] },
   {
+    // 138x is BAS "Andra långfristiga fordringar" (reversfordringar,
+    // depositioner, kapitalförsäkring, kontraktsfordringar, 1389 its
+    // nedskrivningar). K2 kapitel 11 lists "värde av kapitalförsäkring" under
+    // the post Andra långfristiga fordringar, and INK2R 2.12 (SRU 7235) takes
+    // 137x and 138x together. It used to land in AndraLangfristigaVardepappersinnehav.
     concept: 'AndraLangfristigaFordringar',
     balance: 'debit',
-    ranges: [r('1370', '1379'), r('1390', '1399')],
+    ranges: [r('1370', '1379'), r('1380', '1389'), r('1390', '1399')],
   },
   // Varulager m.m.
   { concept: 'LagerRavarorFornodenheter', balance: 'debit', ranges: [r('1400', '1439')] },
@@ -391,6 +429,184 @@ export const K2_BR_MAPPINGS: PostMapping[] = [
   },
 ]
 
+/**
+ * The BR posts each subtotal adds up, in uppställningsform order. This is the
+ * one definition of which post belongs under which heading: computeTotals
+ * sums exactly these lists for the årsredovisning, and the Balansrapport
+ * groups its accounts by them (k2BrSectionForAccount), so the two reports
+ * cannot place an account differently. Both equity tables share it: the
+ * förening posts (Medlemsinsatser, Forlagsinsatser) sit in bundet eget
+ * kapital next to the aktiebolag ones.
+ */
+const BR_SECTION_CONCEPTS = {
+  tecknatEjInbetaltKapital: ['TecknatEjInbetaltKapital'],
+  immateriellaAnlaggningstillgangar: [
+    'KoncessionerPatentLicenserVarumarkenLiknandeRattigheter',
+    'HyresratterLiknandeRattigheter',
+    'Goodwill',
+    'ForskottImmateriellaAnlaggningstillgangar',
+  ],
+  materiellaAnlaggningstillgangar: [
+    'ByggnaderMark',
+    'MaskinerAndraTekniskaAnlaggningar',
+    'InventarierVerktygInstallationer',
+    'ForbattringsutgifterAnnansFastighet',
+    'OvrigaMateriellaAnlaggningstillgangar',
+    'PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar',
+  ],
+  finansiellaAnlaggningstillgangar: [
+    'AndelarKoncernforetag',
+    'FordringarKoncernforetagLangfristiga',
+    'AndelarIntresseforetagGemensamtStyrdaForetag',
+    'FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga',
+    'AgarintressenOvrigaForetag',
+    'FordringarOvrigaForetagAgarintresseLangfristiga',
+    'AndraLangfristigaVardepappersinnehav',
+    'LanDelagareNarstaende',
+    'AndraLangfristigaFordringar',
+  ],
+  varulager: [
+    'LagerRavarorFornodenheter',
+    'LagerVarorUnderTillverkning',
+    'LagerFardigaVarorHandelsvaror',
+    'PagaendeArbetenAnnansRakningOmsattningstillgangar',
+    'ForskottTillLeverantorer',
+    'OvrigaLagertillgangar',
+  ],
+  kortfristigaFordringar: [
+    'Kundfordringar',
+    'FordringarKoncernforetagKortfristiga',
+    'FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga',
+    'FordringarOvrigaforetagAgarintresseKortfristiga',
+    'OvrigaFordringarKortfristiga',
+    'UpparbetadEjFaktureradIntakt',
+    'ForutbetaldaKostnaderUpplupnaIntakter',
+  ],
+  kortfristigaPlaceringar: ['AndelarKoncernforetagKortfristiga', 'OvrigaKortfristigaPlaceringar'],
+  kassaBank: ['KassaBankExklRedovisningsmedel', 'Redovisningsmedel'],
+  bundetEgetKapital: [
+    'Aktiekapital',
+    'EjRegistreratAktiekapital',
+    'Medlemsinsatser',
+    'Forlagsinsatser',
+    'OverkursfondBunden',
+    'Uppskrivningsfond',
+    'Reservfond',
+  ],
+  frittEgetKapital: ['Overkursfond', 'BalanseratResultat', 'AretsResultatEgetKapital'],
+  obeskattadeReserver: [
+    'Periodiseringsfonder',
+    'AckumuleradeOveravskrivningar',
+    'OvrigaObeskattadeReserver',
+  ],
+  avsattningar: [
+    'AvsattningarPensionerLiknandeForpliktelserEnligtLag',
+    'OvrigaAvsattningarPensionerLiknandeForpliktelser',
+    'OvrigaAvsattningar',
+  ],
+  langfristigaSkulder: [
+    'Obligationslan',
+    'CheckrakningskreditLangfristig',
+    'OvrigaLangfristigaSkulderKreditinstitut',
+    'SkulderKoncernforetagLangfristiga',
+    'SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga',
+    'SkulderOvrigaForetagAgarintresseLangfristiga',
+    'OvrigaLangfristigaSkulder',
+  ],
+  kortfristigaSkulder: [
+    'ForskottFranKunder',
+    'CheckrakningskreditKortfristig',
+    'OvrigaKortfristigaSkulderKreditinstitut',
+    'PagaendeArbetenAnnansRakningKortfristigaSkulder',
+    'FaktureradEjUpparbetadIntakt',
+    'Leverantorsskulder',
+    'Vaxelskulder',
+    'SkulderKoncernforetagKortfristiga',
+    'SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga',
+    'SkulderOvrigaForetagAgarintresseKortfristiga',
+    'Skatteskulder',
+    'OvrigaKortfristigaSkulder',
+    'UpplupnaKostnaderForutbetaldaIntakter',
+  ],
+} as const satisfies Record<string, readonly string[]>
+
+/** A BR section that holds posts, and so accounts, directly. */
+export type K2BrSectionKey = keyof typeof BR_SECTION_CONCEPTS
+
+export interface K2BrSection {
+  key: K2BrSectionKey
+  label: string
+  concepts: readonly string[]
+}
+
+/** A heading whose total is the sum of its sections (Anläggningstillgångar, Eget kapital). */
+export interface K2BrHeading {
+  key: 'anlaggningstillgangar' | 'omsattningstillgangar' | 'egetKapital'
+  label: string
+  sections: readonly K2BrSection[]
+}
+
+const section = (key: K2BrSectionKey, label: string): K2BrSection => ({
+  key,
+  label,
+  concepts: BR_SECTION_CONCEPTS[key],
+})
+
+/**
+ * The BR headings (ÅRL bilaga 1, K2 risbs) over the sections above, in
+ * uppställningsform order. The labels are the headings the årsredovisning
+ * prints (buildBrRows in lib/bokslut/arsredovisning/statement-rows.ts, pinned
+ * by a test); "Tecknat men ej inbetalt kapital" is a post of its own above
+ * Anläggningstillgångar.
+ */
+export const K2_BR_LAYOUT: {
+  assets: ReadonlyArray<K2BrSection | K2BrHeading>
+  equityLiabilities: ReadonlyArray<K2BrSection | K2BrHeading>
+} = {
+  assets: [
+    section('tecknatEjInbetaltKapital', 'Tecknat men ej inbetalt kapital'),
+    {
+      key: 'anlaggningstillgangar',
+      label: 'Anläggningstillgångar',
+      sections: [
+        section('immateriellaAnlaggningstillgangar', 'Immateriella anläggningstillgångar'),
+        section('materiellaAnlaggningstillgangar', 'Materiella anläggningstillgångar'),
+        section('finansiellaAnlaggningstillgangar', 'Finansiella anläggningstillgångar'),
+      ],
+    },
+    {
+      key: 'omsattningstillgangar',
+      label: 'Omsättningstillgångar',
+      sections: [
+        section('varulager', 'Varulager m.m.'),
+        section('kortfristigaFordringar', 'Kortfristiga fordringar'),
+        section('kortfristigaPlaceringar', 'Kortfristiga placeringar'),
+        section('kassaBank', 'Kassa och bank'),
+      ],
+    },
+  ],
+  equityLiabilities: [
+    {
+      key: 'egetKapital',
+      label: 'Eget kapital',
+      sections: [
+        section('bundetEgetKapital', 'Bundet eget kapital'),
+        section('frittEgetKapital', 'Fritt eget kapital'),
+      ],
+    },
+    section('obeskattadeReserver', 'Obeskattade reserver'),
+    section('avsattningar', 'Avsättningar'),
+    section('langfristigaSkulder', 'Långfristiga skulder'),
+    section('kortfristigaSkulder', 'Kortfristiga skulder'),
+  ],
+}
+
+const BR_SECTION_BY_CONCEPT: ReadonlyMap<string, K2BrSectionKey> = new Map(
+  (Object.keys(BR_SECTION_CONCEPTS) as K2BrSectionKey[]).flatMap((key) =>
+    BR_SECTION_CONCEPTS[key].map((concept) => [concept, key] as const),
+  ),
+)
+
 /** Accounts that map to a "nearest" post and deserve a manual-review nudge. */
 const RECLASSIFIED_ACCOUNTS: Record<string, string> = {
   '2083': 'Medlemsinsatser (2083) redovisas under Reservfond: granska klassificeringen.',
@@ -423,7 +639,111 @@ const SIGN_RECLASSIFICATION_POSTS: Record<
   },
 }
 
+/**
+ * Legal forms with their own K2 equity presentation. An aktiebolag shows
+ * share capital; an ekonomisk förening shows medlemsinsatser and
+ * förlagsinsatser as separate posts under bundet eget kapital (ÅRL 3 kap.
+ * 10 b §). Every other form renders with the aktiebolag layout and the
+ * reclassification warnings.
+ */
+export type K2LegalForm = 'aktiebolag' | 'ekonomisk_forening'
+
+export interface K2MappingOptions {
+  legalForm?: K2LegalForm
+  /**
+   * The pair mapped as `current` is an earlier fiscal year shown as history
+   * (the flerårsöversikt maps each prior year on its own, with no comparison
+   * year). It gets the comparison year's treatment: a result that never left
+   * the result accounts is derived (deriveUnclosedYearResult) instead of
+   * being left out of that year's equity.
+   */
+  currentIsPriorYear?: boolean
+}
+
+/**
+ * The aktiebolag table folds 2083/2084 into Reservfond (with a warning); an
+ * ekonomisk förening carries them as their own posts and warns about share
+ * capital instead, which it cannot have (EFL 1 kap.).
+ */
+const AKTIEBOLAG_ONLY_EQUITY_CONCEPTS = new Set([
+  'Aktiekapital',
+  'EjRegistreratAktiekapital',
+  'OverkursfondBunden',
+  'Overkursfond',
+])
+
+export const K2_BR_MAPPINGS_EKONOMISK_FORENING: PostMapping[] = K2_BR_MAPPINGS.flatMap(
+  (mapping) => {
+    // Share capital and överkursfond do not exist in a förening; a balance
+    // there is reported by the unmapped sweep and the targeted warning below.
+    if (AKTIEBOLAG_ONLY_EQUITY_CONCEPTS.has(mapping.concept)) return []
+    if (mapping.concept !== 'Reservfond') return [mapping]
+    return [
+      // 2087 is "Insatsemission" for an ekonomisk förening in BAS: insatser
+      // credited through insatsemission are medlemsinsatser (ÅRL 3 kap. 10 b §).
+      { concept: 'Medlemsinsatser', balance: 'credit', ranges: [r('2083', '2083'), r('2087', '2087')] },
+      { concept: 'Forlagsinsatser', balance: 'credit', ranges: [r('2084', '2084')] },
+      { ...mapping, ranges: [r('2086', '2086'), r('2088', '2089')] },
+    ]
+  },
+)
+
+function brMappingsFor(legalForm: K2LegalForm): PostMapping[] {
+  return legalForm === 'ekonomisk_forening' ? K2_BR_MAPPINGS_EKONOMISK_FORENING : K2_BR_MAPPINGS
+}
+
+/**
+ * The equity table a company's årsredovisning is mapped with: member capital
+ * (medlemsinsatser, förlagsinsatser) or share capital. A form that prepares
+ * no årsredovisning gets the share-capital table, whose asset and liability
+ * posts every table shares.
+ */
+export function k2LegalFormFor(entityType: EntityType): K2LegalForm {
+  return supportsMemberCapital(entityType) ? 'ekonomisk_forening' : 'aktiebolag'
+}
+
+/**
+ * k2LegalFormFor over the entity_type the annual report carries, which is
+ * 'unknown' for a company whose form is not set: that company is mapped with
+ * the share-capital table, as every form without member capital is. Every
+ * mapping of one report (the statements, each flerårsöversikt year, the
+ * iXBRL input and its cross-check) reads its table here, so they cannot
+ * disagree.
+ */
+export function k2LegalFormOf(entityType: string): K2LegalForm {
+  return isEntityType(entityType) ? k2LegalFormFor(entityType) : 'aktiebolag'
+}
+
+/**
+ * The BR section an account's balance is reported under in the
+ * årsredovisning, read from the same ranges and subtotal lists that drive
+ * mapTrialBalancesToK2. Null when no post covers the account: the mapper
+ * reports such a balance as missing from the årsredovisning.
+ *
+ * By BAS range only. The statutory sign reclassifications (a credit 1630 to
+ * Skatteskulder) are a presentation of the post's total, not of the account,
+ * and an account-oriented report keeps the account where it was booked.
+ */
+export function k2BrSectionForAccount(
+  accountNumber: string,
+  legalForm: K2LegalForm,
+): K2BrSectionKey | null {
+  const mapping = brMappingsFor(legalForm).find((m) => inRanges(accountNumber, m.ranges))
+  return mapping ? (BR_SECTION_BY_CONCEPT.get(mapping.concept) ?? null) : null
+}
+
+const RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING: Record<string, string> = {
+  '2080': 'Aktiekapital (2080) finns inte i en ekonomisk förening (EFL 1 kap.): flytta saldot till 2083 Medlemsinsatser eller 2084 Förlagsinsatser innan årsredovisningen upprättas.',
+  '2081': 'Aktiekapital (2081) finns inte i en ekonomisk förening (EFL 1 kap.): flytta saldot till 2083 Medlemsinsatser eller 2084 Förlagsinsatser innan årsredovisningen upprättas.',
+  '2082': 'Ej registrerat aktiekapital (2082) finns inte i en ekonomisk förening: granska klassificeringen.',
+  '2097': 'Överkursfond (2097) finns inte i en ekonomisk förening: granska klassificeringen (insatser hör till 2083/2087, förlagsinsatser till 2084).',
+  '2088': RECLASSIFIED_ACCOUNTS['2088'],
+  '2089': RECLASSIFIED_ACCOUNTS['2089'],
+}
+
 export interface K2MappingResult {
+  /** The equity layout the mapping was built for (defaults to aktiebolag). */
+  legalForm: K2LegalForm
   rr: ConceptAmounts
   br: ConceptAmounts
   /** Computed RR subtotals + BR totals, same orientation rules. */
@@ -469,13 +789,102 @@ function inRanges(account: string, ranges: Range[]): boolean {
   return ranges.some((range) => account >= range.start && account <= range.end)
 }
 
+/** BAS class 3-8: the result accounts, 8990-8999 included. */
+function isResultAccount(account: string): boolean {
+  return account >= '3' && account < '9'
+}
+
+const ARETS_RESULTAT_EGET_KAPITAL = 'AretsResultatEgetKapital'
+const BALANSERAT_RESULTAT = 'BalanseratResultat'
+
+interface UnclosedYearDerivation {
+  /** The year's result according to its own income statement, exact. */
+  result: number
+  /** What the equity result account held before the year began, exact. */
+  carriedIn: number
+}
+
 /**
- * Årets resultat (BAS 8990-8999). Deliberately mapped to no K2 concept: the
- * RR ranges stop at 8989 and årets resultat is derived from the RR sum
- * (computeTotals), so a balance here is never "missing" from the ÅR.
+ * The equity of a year that was never closed in these books.
+ *
+ * Closing a year moves its result off the result accounts (class 3-8) onto
+ * the equity result account (2099); the mapper then reads Årets resultat
+ * there. A year that was closed in another system and imported without that
+ * entry has the result still on the result accounts: read as booked, Årets
+ * resultat shows whatever happens to sit on 2099 and the year's balance sheet
+ * is out by exactly the result. For the current year that is the user's to
+ * fix (book the closing) and the mapper warns. A comparison year is behind
+ * them, and its closing balance is what the next year has to open on
+ * (balanskontinuitet, ÅRL 2 kap. 4 § p. 7), result included. So its equity is
+ * derived here instead of demanded.
+ *
+ * Returns the derivation only when the books explain it to the öre:
+ *   1. the result still on the result accounts of the full trial balance IS
+ *      the income statement's result (nothing was closed, anywhere), and
+ *   2. that amount is exactly what the balance sheet is out by, and
+ *   3. the equity result account is empty, or holds a balance that was
+ *      carried in and not touched during the year. Such a balance is an
+ *      earlier year's result (2099 only ever holds the current year's result
+ *      and moves to 2098 at year start: swedish-year-end-closing), so it is
+ *      presented with 2098 under Balanserat resultat.
+ * Anything else (a result closed against another account, a balance on 2099
+ * that moved during the year, a difference that is not the result) returns
+ * null: the figures stay as booked and the checks after smoothing warn.
+ * Null too when the year is already consistent.
  */
-function isAretsResultatAccount(account: string): boolean {
-  return account >= '8990' && account <= '8999'
+function deriveUnclosedYearResult(
+  fullRows: TrialBalanceRowLike[],
+  rrExact: ConceptAmounts,
+  brExact: ConceptAmounts,
+  field: 'current' | 'previous',
+  resultMapping: PostMapping,
+): UnclosedYearDerivation | null {
+  const exact = computeTotals(rrExact, brExact)
+  const result = exact.aretsResultat[field]
+  const assets = exact.tillgangar[field]
+  const eqLiab = exact.egetKapitalSkulder[field]
+  const booked = brExact[ARETS_RESULTAT_EGET_KAPITAL]?.[field]
+  if (result === null || assets === null || eqLiab === null) return null
+  if (booked === null || booked === undefined) return null
+
+  const gap = roundOre(assets - eqLiab)
+  if (isZeroOre(gap) && equalOre(result, booked)) return null
+
+  const unclosed = sumOre(
+    fullRows
+      .filter((row) => isResultAccount(row.account_number))
+      .map((row) => netBalance(row, 'credit')),
+  )
+  if (!equalOre(unclosed, result) || !equalOre(gap, unclosed)) return null
+  if (isZeroOre(booked)) return { result, carriedIn: 0 }
+
+  const untouched = fullRows
+    .filter((row) => inRanges(row.account_number, resultMapping.ranges))
+    .every(
+      (row) =>
+        row.period_debit !== undefined &&
+        row.period_credit !== undefined &&
+        isZeroOre(row.period_debit) &&
+        isZeroOre(row.period_credit),
+    )
+  return untouched ? { result, carriedIn: booked } : null
+}
+
+/** Tells the reader which comparison figures were derived, and to check them. */
+function unclosedYearNotice(derivation: UnclosedYearDerivation, account: string): string {
+  const parts: string[] = []
+  if (!isZeroOre(derivation.result)) {
+    parts.push(
+      `Jämförelseåret avslutades aldrig i bokföringen: årets resultat (${roundWhole(derivation.result)} kr) står kvar på resultatkontona. Årets resultat i jämförelseårets balansräkning är därför hämtat från resultaträkningen.`,
+    )
+  }
+  if (!isZeroOre(derivation.carriedIn)) {
+    parts.push(
+      `Saldot på konto ${account} (${roundWhole(derivation.carriedIn)} kr) fanns redan vid jämförelseårets ingång och visas som Balanserat resultat.`,
+    )
+  }
+  parts.push('Stäm av jämförelsetalen mot föregående års fastställda årsredovisning.')
+  return parts.join(' ')
 }
 
 function exactSumForMapping(rows: TrialBalanceRowLike[], mapping: PostMapping): number {
@@ -558,7 +967,11 @@ function add(a: ConceptAmount, b: ConceptAmount, sign = 1): ConceptAmount {
 
 const ZERO: ConceptAmount = { current: 0, previous: null }
 
-function sumConcepts(amounts: ConceptAmounts, concepts: string[], signs?: number[]): ConceptAmount {
+function sumConcepts(
+  amounts: ConceptAmounts,
+  concepts: readonly string[],
+  signs?: number[],
+): ConceptAmount {
   let total: ConceptAmount = { current: 0, previous: null }
   concepts.forEach((concept, index) => {
     total = add(total, amounts[concept] ?? ZERO, signs?.[index] ?? 1)
@@ -573,13 +986,23 @@ function sumConcepts(amounts: ConceptAmounts, concepts: string[], signs?: number
  * closing entry zeroes class 3-8); BR concepts come from the full TB (the
  * closing entry books 2099). See TrialBalancePair.
  *
+ * The current year must be closed in the books: an unbooked result is
+ * reported, never filled in. The comparison year is not the user's to close
+ * now, so when it never was, its Årets resultat is derived from its own
+ * income statement (deriveUnclosedYearResult) and a notice says so.
+ *
  * `previous = null` → first fiscal year (jämförelsesiffror omitted,
  * which kontrollera 3006/3007 accepts only for year one).
  */
 export function mapTrialBalancesToK2(
   current: TrialBalancePair,
   previous: TrialBalancePair | null,
+  options: K2MappingOptions = {},
 ): K2MappingResult {
+  const legalForm: K2LegalForm = options.legalForm ?? 'aktiebolag'
+  const brMappings = brMappingsFor(legalForm)
+  const reclassifiedAccounts =
+    legalForm === 'ekonomisk_forening' ? RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING : RECLASSIFIED_ACCOUNTS
   const warnings: string[] = []
   const rr: ConceptAmounts = {}
   const rrExact: ConceptAmounts = {}
@@ -598,11 +1021,37 @@ export function mapTrialBalancesToK2(
       previous: exact.previous === null ? null : roundWhole(exact.previous),
     }
   }
-  for (const mapping of K2_BR_MAPPINGS) {
+  for (const mapping of brMappings) {
     brExact[mapping.concept] = exactAmount(mapping, current.full, previous?.full ?? null)
   }
   applySignReclassifications(brExact, current.full, previous?.full ?? null, warnings)
-  for (const mapping of K2_BR_MAPPINGS) {
+
+  // A finished year (the comparison year, or a prior year mapped on its own
+  // for the flerårsöversikt) has its equity derived when it was never closed
+  // in these books. Done on the exact amounts, before the posts are rounded,
+  // so the rounding and residual smoothing below treat a derived Årets
+  // resultat exactly like a booked one.
+  const resultMapping = brMappings.find(
+    (mapping) => mapping.concept === ARETS_RESULTAT_EGET_KAPITAL,
+  )
+  const resultAccount = resultMapping?.ranges[0]?.start ?? ''
+  const unclosedYearNotices: string[] = []
+  const finishedYears: Array<['current' | 'previous', TrialBalanceRowLike[]]> = []
+  if (options.currentIsPriorYear) finishedYears.push(['current', current.full])
+  if (previous) finishedYears.push(['previous', previous.full])
+  for (const [field, fullRows] of finishedYears) {
+    if (!resultMapping) continue
+    const derivation = deriveUnclosedYearResult(fullRows, rrExact, brExact, field, resultMapping)
+    if (!derivation) continue
+    brExact[ARETS_RESULTAT_EGET_KAPITAL] = {
+      ...brExact[ARETS_RESULTAT_EGET_KAPITAL],
+      [field]: derivation.result,
+    }
+    adjustConcept(brExact, BALANSERAT_RESULTAT, field, derivation.carriedIn)
+    unclosedYearNotices.push(unclosedYearNotice(derivation, resultAccount))
+  }
+
+  for (const mapping of brMappings) {
     const exact = brExact[mapping.concept]
     br[mapping.concept] = {
       current: roundWhole(exact.current),
@@ -613,7 +1062,7 @@ export function mapTrialBalancesToK2(
   // Reclassification + unmapped sweep over balance-carrying accounts. Both TB
   // variants are swept: the full TB exposes unmapped BR accounts, the
   // pre-closing TB exposes unmapped RR accounts (zeroed in the full TB).
-  const allMappings = [...K2_RR_MAPPINGS, ...K2_BR_MAPPINGS]
+  const allMappings = [...K2_RR_MAPPINGS, ...brMappings]
   const unmappedAccounts: K2MappingResult['unmappedAccounts'] = []
   const seenReclass = new Set<string>()
   const seenAretsResultat = new Set<string>()
@@ -629,7 +1078,9 @@ export function mapTrialBalancesToK2(
       // A year imported already closed by another system carries the result
       // on 8999. The sweep used to report it as "beloppet saknas i
       // årsredovisningen" although the amount is exactly what the RR sum
-      // derives (feedback seq 345150): say so, and ask for nothing.
+      // derives (feedback seq 345150): say so, and ask for nothing. Årets
+      // resultat (8990-8999) is deliberately mapped to no K2 concept: the RR
+      // ranges stop at 8989 and computeTotals derives it from the RR sum.
       if (isAretsResultatAccount(row.account_number)) {
         if (!seenAretsResultat.has(row.account_number)) {
           seenAretsResultat.add(row.account_number)
@@ -639,7 +1090,7 @@ export function mapTrialBalancesToK2(
         }
         continue
       }
-      const reclass = RECLASSIFIED_ACCOUNTS[row.account_number]
+      const reclass = reclassifiedAccounts[row.account_number]
       if (reclass && !seenReclass.has(row.account_number)) {
         seenReclass.add(row.account_number)
         warnings.push(reclass)
@@ -678,7 +1129,7 @@ export function mapTrialBalancesToK2(
   for (const field of ['current', 'previous'] as const) {
     if (field === 'previous' && previous === null) continue
     const rrSmoothed = smoothRrResidual(rr, rrExact, br, brExact, totals, field)
-    const brSmoothed = smoothBrResidual(br, brExact, totals, field)
+    const brSmoothed = smoothBrResidual(br, brExact, totals, field, brMappings)
     smoothedAny = smoothedAny || rrSmoothed || brSmoothed
   }
   if (smoothedAny) totals = computeTotals(rr, br)
@@ -699,7 +1150,25 @@ export function mapTrialBalancesToK2(
     )
   }
 
-  return { rr, br, totals, warnings, unmappedAccounts }
+  // The comparison year gets the same two checks. A year that was simply
+  // never closed has been derived above and passes them; what is left is a
+  // difference the books do not explain, and a comparison figure is never
+  // adjusted on a guess: the figures stay as booked and the reader is told.
+  warnings.push(...unclosedYearNotices)
+  if (previous) {
+    if (totals.aretsResultat.previous !== brResult.previous) {
+      warnings.push(
+        `Jämförelseårets resultat enligt resultaträkningen (${totals.aretsResultat.previous ?? 0} kr) stämmer inte med konto ${resultAccount} (${brResult.previous ?? 0} kr), och skillnaden kan inte förklaras av ett år som aldrig avslutades. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.`,
+      )
+    }
+    if (totals.tillgangar.previous !== totals.egetKapitalSkulder.previous) {
+      warnings.push(
+        `Jämförelseårets balansräkning balanserar inte: Summa tillgångar ${totals.tillgangar.previous ?? 0} kr ≠ Summa eget kapital och skulder ${totals.egetKapitalSkulder.previous ?? 0} kr. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.`,
+      )
+    }
+  }
+
+  return { legalForm, rr, br, totals, warnings, unmappedAccounts }
 }
 
 function adjustConcept(
@@ -753,9 +1222,6 @@ const FIRST_EQ_LIAB_MAPPING_INDEX = K2_BR_MAPPINGS.findIndex(
   (mapping) => mapping.concept === 'Aktiekapital',
 )
 const ASSET_MAPPINGS = K2_BR_MAPPINGS.slice(0, FIRST_EQ_LIAB_MAPPING_INDEX)
-const EQ_LIAB_MAPPINGS = K2_BR_MAPPINGS.slice(
-  FIRST_EQ_LIAB_MAPPING_INDEX,
-)
 
 /**
  * Reconcile each BR side to its own rounded exact total without changing exact
@@ -768,7 +1234,14 @@ function smoothBrResidual(
   brExact: ConceptAmounts,
   totals: K2MappingResult['totals'],
   field: 'current' | 'previous',
+  brMappings: PostMapping[],
 ): boolean {
+  // The equity candidates come from the table the mapping was built with:
+  // an ekonomisk förening carries Medlemsinsatser and Forlagsinsatser instead
+  // of the aktiebolag concepts, and a residual could otherwise find no
+  // fractional post on that side. The asset mappings are shared by every
+  // legal form, so everything else in the table is the equity/liability side.
+  const eqLiabMappings = brMappings.filter((mapping) => !ASSET_MAPPINGS.includes(mapping))
   const assets = totals.tillgangar[field]
   const eqLiab = totals.egetKapitalSkulder[field]
   if (assets === null || eqLiab === null) return false
@@ -780,7 +1253,7 @@ function smoothBrResidual(
 
   const sides = [
     { mappings: ASSET_MAPPINGS, rounded: assets, target: roundWhole(exactAssets) },
-    { mappings: EQ_LIAB_MAPPINGS, rounded: eqLiab, target: roundWhole(exactEqLiab) },
+    { mappings: eqLiabMappings, rounded: eqLiab, target: roundWhole(exactEqLiab) },
   ]
   const residuals = sides.map((side) => side.target - side.rounded)
   if (residuals.every((residual) => residual === 0)) return false
@@ -863,54 +1336,16 @@ function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult[
   const aretsResultat = add(resultatForeSkatt, skatter, -1)
 
   // ---- BR totals ----
-  const immateriella = sumConcepts(br, [
-    'KoncessionerPatentLicenserVarumarkenLiknandeRattigheter',
-    'HyresratterLiknandeRattigheter',
-    'Goodwill',
-    'ForskottImmateriellaAnlaggningstillgangar',
-  ])
-  const materiella = sumConcepts(br, [
-    'ByggnaderMark',
-    'MaskinerAndraTekniskaAnlaggningar',
-    'InventarierVerktygInstallationer',
-    'ForbattringsutgifterAnnansFastighet',
-    'OvrigaMateriellaAnlaggningstillgangar',
-    'PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar',
-  ])
-  const finansiella = sumConcepts(br, [
-    'AndelarKoncernforetag',
-    'FordringarKoncernforetagLangfristiga',
-    'AndelarIntresseforetagGemensamtStyrdaForetag',
-    'FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga',
-    'AgarintressenOvrigaForetag',
-    'FordringarOvrigaForetagAgarintresseLangfristiga',
-    'AndraLangfristigaVardepappersinnehav',
-    'LanDelagareNarstaende',
-    'AndraLangfristigaFordringar',
-  ])
+  // The post lists are BR_SECTION_CONCEPTS: the Balansrapport groups accounts
+  // by the same lists, so a post moved between subtotals moves in both.
+  const immateriella = sumConcepts(br, BR_SECTION_CONCEPTS.immateriellaAnlaggningstillgangar)
+  const materiella = sumConcepts(br, BR_SECTION_CONCEPTS.materiellaAnlaggningstillgangar)
+  const finansiella = sumConcepts(br, BR_SECTION_CONCEPTS.finansiellaAnlaggningstillgangar)
   const anlaggningstillgangar = add(add(immateriella, materiella), finansiella)
-  const varulager = sumConcepts(br, [
-    'LagerRavarorFornodenheter',
-    'LagerVarorUnderTillverkning',
-    'LagerFardigaVarorHandelsvaror',
-    'PagaendeArbetenAnnansRakningOmsattningstillgangar',
-    'ForskottTillLeverantorer',
-    'OvrigaLagertillgangar',
-  ])
-  const kortfristigaFordringar = sumConcepts(br, [
-    'Kundfordringar',
-    'FordringarKoncernforetagKortfristiga',
-    'FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga',
-    'FordringarOvrigaforetagAgarintresseKortfristiga',
-    'OvrigaFordringarKortfristiga',
-    'UpparbetadEjFaktureradIntakt',
-    'ForutbetaldaKostnaderUpplupnaIntakter',
-  ])
-  const kortfristigaPlaceringar = sumConcepts(br, [
-    'AndelarKoncernforetagKortfristiga',
-    'OvrigaKortfristigaPlaceringar',
-  ])
-  const kassaBank = sumConcepts(br, ['KassaBankExklRedovisningsmedel', 'Redovisningsmedel'])
+  const varulager = sumConcepts(br, BR_SECTION_CONCEPTS.varulager)
+  const kortfristigaFordringar = sumConcepts(br, BR_SECTION_CONCEPTS.kortfristigaFordringar)
+  const kortfristigaPlaceringar = sumConcepts(br, BR_SECTION_CONCEPTS.kortfristigaPlaceringar)
+  const kassaBank = sumConcepts(br, BR_SECTION_CONCEPTS.kassaBank)
   const omsattningstillgangar = add(
     add(varulager, kortfristigaFordringar),
     add(kortfristigaPlaceringar, kassaBank),
@@ -920,53 +1355,13 @@ function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult[
     omsattningstillgangar,
   )
 
-  const bundetEgetKapital = sumConcepts(br, [
-    'Aktiekapital',
-    'EjRegistreratAktiekapital',
-    'OverkursfondBunden',
-    'Uppskrivningsfond',
-    'Reservfond',
-  ])
-  const frittEgetKapital = sumConcepts(br, [
-    'Overkursfond',
-    'BalanseratResultat',
-    'AretsResultatEgetKapital',
-  ])
+  const bundetEgetKapital = sumConcepts(br, BR_SECTION_CONCEPTS.bundetEgetKapital)
+  const frittEgetKapital = sumConcepts(br, BR_SECTION_CONCEPTS.frittEgetKapital)
   const egetKapital = add(bundetEgetKapital, frittEgetKapital)
-  const obeskattadeReserver = sumConcepts(br, [
-    'Periodiseringsfonder',
-    'AckumuleradeOveravskrivningar',
-    'OvrigaObeskattadeReserver',
-  ])
-  const avsattningar = sumConcepts(br, [
-    'AvsattningarPensionerLiknandeForpliktelserEnligtLag',
-    'OvrigaAvsattningarPensionerLiknandeForpliktelser',
-    'OvrigaAvsattningar',
-  ])
-  const langfristigaSkulder = sumConcepts(br, [
-    'Obligationslan',
-    'CheckrakningskreditLangfristig',
-    'OvrigaLangfristigaSkulderKreditinstitut',
-    'SkulderKoncernforetagLangfristiga',
-    'SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga',
-    'SkulderOvrigaForetagAgarintresseLangfristiga',
-    'OvrigaLangfristigaSkulder',
-  ])
-  const kortfristigaSkulder = sumConcepts(br, [
-    'ForskottFranKunder',
-    'CheckrakningskreditKortfristig',
-    'OvrigaKortfristigaSkulderKreditinstitut',
-    'PagaendeArbetenAnnansRakningKortfristigaSkulder',
-    'FaktureradEjUpparbetadIntakt',
-    'Leverantorsskulder',
-    'Vaxelskulder',
-    'SkulderKoncernforetagKortfristiga',
-    'SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga',
-    'SkulderOvrigaForetagAgarintresseKortfristiga',
-    'Skatteskulder',
-    'OvrigaKortfristigaSkulder',
-    'UpplupnaKostnaderForutbetaldaIntakter',
-  ])
+  const obeskattadeReserver = sumConcepts(br, BR_SECTION_CONCEPTS.obeskattadeReserver)
+  const avsattningar = sumConcepts(br, BR_SECTION_CONCEPTS.avsattningar)
+  const langfristigaSkulder = sumConcepts(br, BR_SECTION_CONCEPTS.langfristigaSkulder)
+  const kortfristigaSkulder = sumConcepts(br, BR_SECTION_CONCEPTS.kortfristigaSkulder)
   const egetKapitalSkulder = add(
     add(add(egetKapital, obeskattadeReserver), add(avsattningar, langfristigaSkulder)),
     kortfristigaSkulder,

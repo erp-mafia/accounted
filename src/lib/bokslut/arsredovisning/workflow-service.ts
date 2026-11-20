@@ -35,11 +35,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { createServiceClient } from '@/lib/supabase/server'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { buildCanonicalAnnualReport } from './model'
+import { cancelSigningForSupersededVersions, slotCoveredByBankIdSigning } from './bankid-signing'
 import { getAnnualReportCapabilities } from './capabilities'
-import { upsertAnnualReportProfile } from './profile-service'
-import { upsertNarrative, type NarrativeRow } from './narrative-service'
+import { getAnnualReportProfile, upsertAnnualReportProfile } from './profile-service'
+import { getNarrative, upsertNarrative, type NarrativeOverrides, type NarrativeRow } from './narrative-service'
 import {
   annualReportContentHash,
   createAnnualReportVersion,
@@ -59,6 +59,8 @@ import type {
   SignatureTransitionInput,
   VersionCreateInput,
 } from './workflow-schemas'
+import { isAuditorRole } from './workflow-schemas'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -86,6 +88,48 @@ async function periodBelongsToCompany(ctx: OperationContext, fiscalPeriodId: str
 // ─────────────────────────────────────────────────────────────────
 // Narrative
 // ─────────────────────────────────────────────────────────────────
+
+/**
+ * The K3 disclosure answers and the equity classifications are keyed maps
+ * that several doors edit one entry at a time (an agent answers one
+ * question): only the keys sent change, a null removes one, the rest stay.
+ */
+function mergeKeyed<T>(
+  stored: Record<string, T> | null | undefined,
+  sent: Record<string, T | null> | undefined,
+): Record<string, T> | undefined {
+  if (sent === undefined) return undefined
+  const merged: Record<string, T> = { ...(stored ?? {}) }
+  for (const [key, value] of Object.entries(sent)) {
+    if (value === null || value === undefined) delete merged[key]
+    else merged[key] = value
+  }
+  return merged
+}
+
+async function withMergedKeyedFields(
+  ctx: OperationContext,
+  fiscalPeriodId: string,
+  input: NarrativeUpdateInput,
+): Promise<Partial<NarrativeOverrides>> {
+  const { disclosure_answers, equity_movement_overrides, ...rest } = input
+  if (disclosure_answers === undefined && equity_movement_overrides === undefined) {
+    return rest as Partial<NarrativeOverrides>
+  }
+  const stored = await getNarrative(ctx.supabase, ctx.companyId, fiscalPeriodId)
+  const out: Partial<NarrativeOverrides> = { ...(rest as Partial<NarrativeOverrides>) }
+  const answers = mergeKeyed(
+    stored?.disclosure_answers as Record<string, unknown> | undefined,
+    disclosure_answers as Record<string, unknown> | undefined,
+  )
+  if (answers !== undefined) out.disclosure_answers = answers as NarrativeOverrides['disclosure_answers']
+  const overrides = mergeKeyed(
+    stored?.equity_movement_overrides as Record<string, unknown> | undefined,
+    equity_movement_overrides as Record<string, unknown> | undefined,
+  )
+  if (overrides !== undefined) out.equity_movement_overrides = overrides as NarrativeOverrides['equity_movement_overrides']
+  return out
+}
 
 export async function updateArsredovisningNarrative(
   ctx: OperationContext,
@@ -122,7 +166,13 @@ export async function updateArsredovisningNarrative(
       }
     }
 
-    const data = await upsertNarrative(ctx.supabase, ctx.companyId, ctx.userId, fiscalPeriodId, input)
+    const data = await upsertNarrative(
+      ctx.supabase,
+      ctx.companyId,
+      ctx.userId,
+      fiscalPeriodId,
+      await withMergedKeyedFields(ctx, fiscalPeriodId, input),
+    )
     const { error: confirmationError } = await ctx.supabase
       .from('annual_report_profiles')
       .update({ narrative_confirmed_at: null })
@@ -279,12 +329,15 @@ export async function createArsredovisningVersion(
 
     // Finalizing binds the signer roster to the version through an RPC only
     // the trusted service role may call (create_annual_report_version_with_signatures).
-    const data = await createAnnualReportVersion(
-      finalize ? createServiceClient() : ctx.supabase,
-      ctx.userId,
-      model,
-      finalize,
-    )
+    const writer = finalize ? createServiceClient() : ctx.supabase
+    const data = await createAnnualReportVersion(writer, ctx.userId, model, finalize)
+    // A re-lock supersedes the previous version: its open BankID signing can
+    // no longer be recorded, so it is cancelled (signatures made stay).
+    if (finalize) {
+      await cancelSigningForSupersededVersions(writer, ctx.companyId, fiscalPeriodId).catch((error) =>
+        ctx.log.warn('open BankID signing of a superseded version not cancelled', { message: error instanceof Error ? error.message : String(error) }),
+      )
+    }
     return { ok: true, data, created: true }
   } catch (error) {
     return failed(error)
@@ -350,10 +403,78 @@ export async function addArsredovisningSignatory(
   }
 }
 
+/** Paper or electronic: what an årsredovisning is signed in (ÅRL 2 kap. 5 och 7 §§). */
+function signatureMedium(method: string | null | undefined): 'paper' | 'electronic' {
+  return method === 'paper_original' ? 'paper' : 'electronic'
+}
+
+/**
+ * Whether the revisor's påteckning may be recorded on this version, and the
+ * facts it freezes. The påteckning is the revisor's hänvisning to the
+ * revisionsberättelse on the årsredovisning the board signed (ABL 9 kap.
+ * 28 §; 8 kap. 32 § lagen (2018:672) om ekonomiska föreningar), so:
+ *
+ *   - every board slot of the version is signed first: the hänvisning is to
+ *     a revisionsberättelse on the signed årsredovisning;
+ *   - it is made in the board's medium. An årsredovisning is drawn up either
+ *     in vanlig läsbar form or in elektronisk form, and in electronic form it
+ *     is signed with an avancerad elektronisk underskrift (ÅRL 2 kap. 5 §,
+ *     7 § andra stycket): a paper påteckning cannot sit on a document the
+ *     board signed electronically (BankID or another e-signature), nor an
+ *     electronic one on a paper original;
+ *   - the revisionsberättelse's opinion is answered on the profile. It and
+ *     the revisionsbolag are frozen on the revisor's slot with the
+ *     påteckning, so a signed or filed version keeps rendering the påteckning
+ *     it was given (BFL 7 kap. 1 §), whatever the profile says later.
+ */
+async function pateckningGate(
+  ctx: OperationContext,
+  fiscalPeriodId: string,
+  versionId: string,
+  signingMethod: string,
+): Promise<
+  | { ok: true; snapshot: { opinion: string; firmName: string | null } }
+  | { ok: false; code: 'ARSREDOVISNING_PATECKNING_BEFORE_BOARD' | 'ARSREDOVISNING_PATECKNING_MEDIUM_MIXED' | 'ARSREDOVISNING_PATECKNING_OPINION_MISSING' }
+> {
+  const { data: slots, error } = await ctx.supabase
+    .from('arsredovisning_signature_requests')
+    .select('role, status, signing_method, pateckning_opinion, pateckning_firm_name')
+    .eq('company_id', ctx.companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .eq('annual_report_version_id', versionId)
+  if (error) throw new Error(`Failed to read the version's signatures: ${error.message}`)
+  const rows = (slots ?? []) as Array<{
+    role: string
+    status: string
+    signing_method: string | null
+    pateckning_opinion: string | null
+    pateckning_firm_name: string | null
+  }>
+  const board = rows.filter((slot) => !isAuditorRole(slot.role))
+  if (board.length === 0 || board.some((slot) => slot.status !== 'signed')) {
+    return { ok: false, code: 'ARSREDOVISNING_PATECKNING_BEFORE_BOARD' }
+  }
+  if (board.some((slot) => signatureMedium(slot.signing_method) !== signatureMedium(signingMethod))) {
+    return { ok: false, code: 'ARSREDOVISNING_PATECKNING_MEDIUM_MIXED' }
+  }
+  // Several revisors give one joint revisionsberättelse (ABL 9 kap. 28 a §):
+  // a later revisor's påteckning carries what the first one froze.
+  const given = rows.find((slot) => isAuditorRole(slot.role) && slot.status === 'signed' && slot.pateckning_opinion)
+  if (given?.pateckning_opinion) {
+    return { ok: true, snapshot: { opinion: given.pateckning_opinion, firmName: given.pateckning_firm_name } }
+  }
+  const profile = await getAnnualReportProfile(ctx.supabase, ctx.companyId, fiscalPeriodId)
+  if (!profile.auditor_opinion) return { ok: false, code: 'ARSREDOVISNING_PATECKNING_OPINION_MISSING' }
+  return {
+    ok: true,
+    snapshot: { opinion: profile.auditor_opinion, firmName: profile.auditor_firm_name?.trim() || null },
+  }
+}
+
 function isSignatureDateAllowed(signedAt: string, finalizedAt: string): boolean {
-  const signedDate = getSwedishLocalDate(new Date(signedAt))
-  const finalizedDate = getSwedishLocalDate(new Date(finalizedAt))
-  const today = getSwedishLocalDate()
+  const signedDate = todayIsoStockholm(new Date(signedAt))
+  const finalizedDate = todayIsoStockholm(new Date(finalizedAt))
+  const today = todayIsoStockholm()
   return signedDate >= finalizedDate && signedDate <= today
 }
 
@@ -371,6 +492,13 @@ export async function recordArsredovisningSignature(
   { dryRun }: { dryRun: boolean },
 ): Promise<OperationOutcome<SignatureRequest>> {
   try {
+    // 'bankid' is the evidence our own BankID signing writes
+    // (record_signing_signature); nobody types it. A BankID signature made in
+    // another service is an advanced e-signature.
+    if (input.status === 'signed' && input.signing_method === 'bankid') return { ok: false, code: 'SIGNING_METHOD_RESERVED' }
+    // One track per version: a slot a BankID request covers takes no
+    // evidence, and no decline, recorded by hand.
+    if (await slotCoveredByBankIdSigning(ctx, signatureId)) return { ok: false, code: 'ARSREDOVISNING_SIGNING_TRACK_MIXED' }
     if (input.status === 'signed') {
       const { data: version, error: versionError } = await ctx.supabase
         .from('annual_report_versions')
@@ -382,16 +510,33 @@ export async function recordArsredovisningSignature(
         .maybeSingle()
       if (versionError) throw new Error(`Failed to load annual report version: ${versionError.message}`)
       if (!version?.finalized_at) return { ok: false, code: 'ARSREDOVISNING_VERSION_NOT_SIGNABLE' }
-
       const { data: requestRow, error: requestError } = await ctx.supabase
         .from('arsredovisning_signature_requests')
-        .select('id, annual_report_version_id, status')
+        .select('id, annual_report_version_id, status, role')
         .eq('id', signatureId)
         .eq('company_id', ctx.companyId)
         .eq('fiscal_period_id', fiscalPeriodId)
         .eq('status', 'pending')
         .maybeSingle()
       if (requestError) throw new Error(`Failed to load annual report signature: ${requestError.message}`)
+
+      // A version that carries a BankID signature stays on that track, also
+      // after its signing request was cancelled. The revisor's påteckning is
+      // not on the board's BankID request (bankid-signing.ts): it is recorded
+      // by hand, in the board's medium (pateckningGate).
+      const auditor = isAuditorRole((requestRow as { role?: string } | null)?.role)
+      if (!auditor) {
+        const { data: bankidSigned, error: bankidError } = await ctx.supabase
+          .from('arsredovisning_signature_requests')
+          .select('id')
+          .eq('company_id', ctx.companyId)
+          .eq('annual_report_version_id', input.annual_report_version_id)
+          .eq('status', 'signed')
+          .eq('signing_method', 'bankid')
+          .limit(1)
+        if (bankidError) throw new Error(`Failed to read the version's signatures: ${bankidError.message}`)
+        if (Array.isArray(bankidSigned) && bankidSigned.length > 0) return { ok: false, code: 'ARSREDOVISNING_SIGNING_TRACK_MIXED' }
+      }
       if (
         !requestRow ||
         (requestRow.annual_report_version_id !== null &&
@@ -402,6 +547,12 @@ export async function recordArsredovisningSignature(
       const signedAt = input.signed_at ?? new Date().toISOString()
       if (!isSignatureDateAllowed(signedAt, version.finalized_at)) {
         return { ok: false, code: 'ARSREDOVISNING_SIGNATURE_DATE_INVALID' }
+      }
+      let pateckning: { opinion: string; firmName: string | null } | undefined
+      if (auditor) {
+        const gate = await pateckningGate(ctx, fiscalPeriodId, input.annual_report_version_id, input.signing_method)
+        if (!gate.ok) return gate
+        pateckning = gate.snapshot
       }
       if (dryRun) {
         return {
@@ -415,6 +566,7 @@ export async function recordArsredovisningSignature(
             signing_method: input.signing_method,
             evidence_reference: input.evidence_reference,
             signed_at: signedAt,
+            ...(pateckning ? { pateckning_opinion: pateckning.opinion, pateckning_firm_name: pateckning.firmName } : {}),
           },
         }
       }
@@ -427,6 +579,7 @@ export async function recordArsredovisningSignature(
         evidenceReference: input.evidence_reference,
         evidenceRecordedBy: ctx.userId,
         signedAt,
+        ...(pateckning ? { pateckning } : {}),
       })
       return { ok: true, data }
     }

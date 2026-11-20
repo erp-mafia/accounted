@@ -1,6 +1,6 @@
 # Peppol invoice foundation
 
-Issue #546 requires two separable capabilities:
+Peppol support is two separable capabilities:
 
 1. Produce a correctly structured Peppol BIS Billing 3 invoice from Accounted data.
 2. Deliver and receive documents through the Peppol network.
@@ -43,7 +43,7 @@ The local preflight is not a replacement for the official validation stack. Befo
 
 ## Remaining architecture
 
-The subsections below are the requirements written before the Qvalia decision. Access-point delivery and the UI send flow shipped on 2026-08-21 and are described under "Access point: Qvalia"; the text is kept as the acceptance criteria that work met. Standards validation (the release-pinned validator run before transport) is still open.
+The subsections below are the requirements. Access-point delivery and the UI send flow shipped on 2026-08-21 and are described under "Access point: Qvalia"; the text is kept as the acceptance criteria that work met. Standards validation (the release-pinned validator run before transport) is still open.
 
 ### Standards validation
 
@@ -82,13 +82,13 @@ Inbound invoices are a separate acceptance slice. It requires provider webhook a
 
 The UI downloads a locally checked XML file and can prepare an immutable delivery snapshot. Both actions state that they did not send the invoice. Once an adapter exists, sending must be a distinct confirmation flow that performs recipient lookup, shows the discovered participant and capabilities, and records the resulting timeline. The download remains available for diagnosis and interoperability testing. Shipped 2026-08-21: the confirmation dialog on the invoice page and `POST /api/invoices/{id}/peppol/send` (see "Access point: Qvalia").
 
-### Access point: Qvalia (decided 2026-08-21)
+### Access point: Qvalia
 
-The contract with Qvalia (certified Swedish Access Point + SMP, partner model) was signed on 2026-08-21. The adapter lives in `src/lib/invoices/transports/qvalia.ts` and implements the `PeppolTransport` boundary:
+Qvalia is a certified Swedish Access Point and SMP, used in its partner model. The adapter lives in `src/lib/invoices/transports/qvalia.ts` and implements the `PeppolTransport` boundary:
 
 - recipient lookup: `GET /partner/{partnerRegNo}/peppol/lookup/{scheme:id}?docTypeRoot=Invoice`;
 - submission: `POST /partner/{partnerRegNo}/transaction/{accountRegNo}/invoices/outgoing` with the staged UBL XML (`content-type: application/xml`); the returned `integrationId` is the provider submission id; a `409` (same document id and receiver) is recovered to the existing `integrationId` only when Qvalia's stored copy carries the same seller endpoint, otherwise it stays a duplicate error;
-- webhooks: `POST /api/webhooks/peppol/qvalia`, authenticated by the shared secret Accounted configures as Qvalia's outbound auth header (Qvalia did not sign webhooks when the adapter was built; see the September update below); the same event can arrive more than once and is deduplicated on `eventType + globalTransactionId + status.status`; `status.status` is declared free text, so the mapping is tolerant and unknown wording never advances beyond `submission_accepted`;
+- webhooks: `POST /api/webhooks/peppol/qvalia`, authenticated by Qvalia's HMAC-SHA256 signature (`X-Qvalia-Signature` over `<t>.<raw body>`, timing-safe, 5-minute window on `t`) once `QVALIA_WEBHOOK_SIGNING_SECRET` is set; until then by the shared secret Accounted configures as Qvalia's outbound auth header, with a warning logged per request (Qvalia did not sign webhooks when the adapter was built; see the September update below); the same event can arrive more than once and is deduplicated on `eventType + globalTransactionId + status.status`, the key the status poll also writes; `status.status` is declared free text, so the mapping is tolerant and unknown wording never advances beyond `submission_accepted`;
 - evidence: the message-log status and Qvalia's stored XML copy, recorded as `qvalia_message_record`.
 
 #### Qvalia API update (docs re-read 2026-09-21)
@@ -98,59 +98,33 @@ Qvalia reworked the parts of its API that the notes above, and the pre-contract 
 - Signed webhooks: HMAC-SHA256 in `X-Qvalia-Signature: t=<unix>,v1=<hex>` over `<t>.<raw body>`, with `X-Qvalia-Event-Id` for replay protection (recommended tolerance 5 minutes). The first `PUT .../webhook/configure` returns the `signingSecret` once; rotation through `POST .../webhook/{id}/secret` keeps the old secret valid for an overlap (default 24 h).
 - Event payload: a documented schema with `eventId` (the dedupe key, stable across redeliveries), `occurredAt` (order by this, arrival order is not guaranteed), `integrationId`, `globalTransactionId`, `direction`, `status` and `peppol_metadata`. A fourth event type, `document_delayed`, reports a Peppol send that is being retried.
 - Status values: `pending`, `delayed` and `warning` are non-terminal; `processed`, `processed_with_warning` and `error` are terminal. The field is still declared free text, so unknown wording must keep meaning "no change".
-- Idempotent submission: an `Idempotency-Key` request header; a repeat within 24 hours returns the original response with the original `integrationId`. Per Qvalia (2026-09-18) it is live in the test environment. A duplicate document id and receiver still answers `409` (`?overwrite=true` replaces the document).
+- Idempotent submission: an `Idempotency-Key` request header; a repeat within 24 hours returns the original response with the original `integrationId`. It is live in the test environment. A duplicate document id and receiver still answers `409` (`?overwrite=true` replaces the document).
 - Authentication and environments: the docs now show the bare key in `Authorization: <key>` (what the sandbox always accepted) and name two environments, `api.qvalia.com` and `api-test.qvalia.com`.
 - Errors: one JSON envelope (`status`, `type`, `data`, `metadata`); branch on `type`, which is stable.
-- By design, per Qvalia: `integrationId` appears in several places of a response, always with the same value; `readinvoices` acknowledges and marks documents read, while the plain incoming endpoint with `includeRead=true` does not. Still under review on their side: the last error-envelope variants and normalizing document types from SMP lookups (the adapter keeps reducing SMP service URLs to the bare identifier).
-- Webhook availability: per Qvalia (2026-09-18) live for partner accounts, general availability in the API within two weeks. Not re-tested by us against the production host since the 404 on 2026-08-21.
+- By design: `integrationId` appears in several places of a response, always with the same value; `readinvoices` acknowledges and marks documents read, while the plain incoming endpoint with `includeRead=true` does not. Still under review on their side: the last error-envelope variants and normalizing document types from SMP lookups (the adapter keeps reducing SMP service URLs to the bare identifier).
+- Webhook availability: webhooks are documented for partner accounts. Webhooks and `/invoices/outgoing/status` answer in the test environment; check that the production host serves them before relying on either there.
+
+Qvalia keeps one webhook subscription per account. An installation on its own Qvalia account receives webhooks on `POST /api/webhooks/peppol/qvalia` and configures the subscription with `qvalia-probe.ts webhook-configure`; the probe refuses the production host without `--production`, so a probe run cannot repoint a production subscription by accident. In connector mode no webhook reaches the instance: delivery status comes from polling alone.
 
 One limit is explicit in the same docs and shapes our design: a failed webhook delivery (non-2xx, 10 s timeout, unreachable endpoint) is not retried, and a missed event is lost. The status poll below therefore stays as the safety net even after webhooks are switched on.
 
-Adapter follow-ups (not built): verify `X-Qvalia-Signature` instead of the shared-secret header, dedupe on `eventId`, send `Idempotency-Key` on submit, handle `document_delayed`, and treat the documented terminal `error` status as final.
+Built 2026-09-29 (#3191): `X-Qvalia-Signature` verification, required whenever `QVALIA_WEBHOOK_SIGNING_SECRET` is set (the shared-secret header is then ignored). Dedupe deliberately stays on `eventType + globalTransactionId + status.status` rather than `eventId`: the status poll writes the same key, so a webhook and a poll for one transition remain one event.
+
+Adapter follow-ups (not built): send `Idempotency-Key` on submit, handle `document_delayed`, and treat the documented terminal `error` status as final.
 
 Configuration is environment-only (`PEPPOL_TRANSPORT_PROVIDER=qvalia` plus `QVALIA_API_KEY`, `QVALIA_PARTNER_REG_NO`, `QVALIA_BASE_URL`, `QVALIA_WEBHOOK_SECRET`, optional `QVALIA_ACCOUNT_REG_NO`, `QVALIA_WEBHOOK_HEADER`, `QVALIA_AUTH_SCHEME`; see `.env.example`). `src/lib/init.ts` registers the adapter when the credentials are present; the product only sends when the provider is also selected. `scripts/peppol/qvalia-probe.ts` is the first-contact probe against the sandbox (auth scheme, child accounts, registered Peppol IDs, lookup, send).
 
 `POST /api/invoices/{id}/peppol/send` performs the send: stage the exact XML, look up the recipient, record `recipient_verified` and `submitting`, submit, record `submission_accepted` with the provider submission id, and only then issue a draft with the mark-sent semantics (`issueAndBookInvoice`: F-number, status, verifikat under faktureringsmetoden, PDF archived as underlag). A synchronous rejection is recorded as a terminal `failed` event so the identical document is never re-sent; an operational failure is `retryable_failure` and a retry is allowed. Resending an exact XML that already carries a provider submission id is an idempotent replay, never a second transmission.
 
-v1 uses Qvalia's consolidated setup (every company's documents under Accounted's partner account, `accountRegNo = partnerRegNo`). Qvalia confirmed (2026-08-21) that the sending account is irrelevant as long as `AccountingSupplierParty` carries a valid endpoint id, so no per-company child accounts are needed.
+v1 uses Qvalia's consolidated setup (every company's documents under Accounted's partner account, `accountRegNo = partnerRegNo`). The sending account is irrelevant as long as `AccountingSupplierParty` carries a valid endpoint id, so no per-company child accounts are needed.
 
-### Receiving (PR2)
+### Receiving
 
 - `peppol_registrations`: one live row per company and per participant; written by `POST/DELETE /api/settings/peppol` (service role after the membership check) through `src/lib/invoices/peppol-registration.ts`, which publishes `0007:orgnr` with the company's business card and the BIS Billing 3 Invoice + CreditNote document types via `transport.registerRecipient()`. Personnummer-based identifiers are refused (`0088` GLN pending). The switch lives in Settings > Fakturering ("E-faktura via Peppol").
 - `peppol_inbound_documents`: every document the Access Point hands us, with the exact XML (immutable, undeletable) and the provider's UBL-JSON; routed to a company by the `AccountingCustomerParty` endpoint through the registrations; states `received`, `routed`, `unrouted`, `converted`, `ignored`, `failed`.
 - `GET /api/peppol/inbound/cron` every 10 minutes: `src/lib/invoices/peppol-inbound.ts` lists unread invoices and credit notes, archives (`archiveInboundPeppolMessage`), routes and delivers; `src/lib/invoices/peppol-inbox-delivery.ts` archives the XML as a WORM document (`upload_source: 'e_invoice'`, no AI extraction), the embedded PDF when present, and creates the `invoice_inbox_items` row (`source: 'peppol'`) with the extraction filled from the structured UBL (`src/lib/invoices/peppol-inbound-ubl.ts`, confidence 1). The existing inbox review and convert flows take over from there.
 - Outbound status without webhooks: `GET /api/peppol/outbound/status/cron` (four times an hour) asks the Access Point about every open delivery (`transport.pollDeliveryStatus`, Qvalia: `/invoices/outgoing/status`) and records the answer through the same lifecycle RPC a webhook uses, with the same dedupe key, so a later webhook for the same transition is a harmless duplicate. Built because Qvalia's webhook API answered 404 on its production host on 2026-08-21 (Qvalia reports it live for partner accounts since September); kept as the safety net regardless, since Qvalia does not retry a failed webhook delivery.
 - Still open: the Qvalia `new_document` webhook for inbound (today polled), credit-note conversion from the inbox, `0088` GLN for enskild firma, the release-pinned validation stack, and a UI surface for `unrouted` documents.
-
-### Storecove versus Qvalia (historical, pre-contract)
-
-Storecove is the stronger fit for the lifecycle already modeled. Its official API documents recipient discovery, caller-supplied `idempotencyGuid`, a returned submission `guid`, tenant correlation, asynchronous sending webhooks, and a dedicated evidence endpoint. Its sandbox supports webhook simulation and the OpenPeppol test network. A Storecove adapter still requires a commercial contract and credentials; these public semantics do not prove Accounted's tenant is authorized or onboarded.
-
-Qvalia is a Swedish certified Access Point and SMP with an explicit partner and multi-tenant offering. Its public quick start documents production and sandbox endpoints, account registration numbers, and separate keys. As of August 2026, public material did not specify a Storecove-equivalent contract for idempotency, signed webhooks, event ordering, or exact transmitted-document evidence. Those points had to be obtained from Qvalia Sales or Support before an adapter could be production quality.
-
-Superseded 2026-09-21: Qvalia has since documented an idempotency key, HMAC-signed webhooks with replay protection, an event id and `occurredAt` for ordering, and terminal versus non-terminal statuses (see "Qvalia API update" above). The gap this paragraph describes no longer separates the two providers; what remains different is that Qvalia does not retry a failed webhook delivery.
-
-Inputs required for either selection:
-
-- multitenant or reseller authorization for Accounted customer companies;
-- setup, monthly, per-document, inbound, lookup, and support pricing;
-- test and production API credentials and secret rotation;
-- sender-only versus searchable participant registration;
-- Swedish organization-number and optional GLN onboarding;
-- webhook signing, retention, service levels, and data-processing terms;
-- support for the mandatory May 2026 Peppol release.
-
-Additional API contract inputs required before implementation:
-
-- the external tenant, legal entity, and account identifiers for every Accounted company;
-- exact discovery request and response semantics for `0007` and `0088` participants;
-- idempotency retention, duplicate response behavior, and retry guarantees;
-- webhook signature or authentication scheme, secret rotation, replay window, event identifiers, retry policy, and ordering guarantees;
-- exact meanings of transport, acknowledgement, acceptance, rejection, and terminal events;
-- evidence endpoint response, retention, exact-document guarantees, and audit export format;
-- sandbox participant IDs, production onboarding checks, and agreed conformance acceptance tests.
-
-Provider credentials and prices are external operational inputs. They are not invented, stored in source, or represented by a fake provider in this change.
 
 ## Primary specifications and authority guidance
 

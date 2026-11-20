@@ -8,7 +8,7 @@
  * a dry run that previews the real generator's lines and writes nothing.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeSupplierInvoice } from '@/tests/helpers'
+import { makeSupplierInvoice, isIdempotencyClaim } from '@/tests/helpers'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
@@ -95,7 +95,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['supplier_invoices', 'journal_entries', 'journal_entry_lines', 'document_attachments'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const SI_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -218,6 +218,57 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/book', () => {
     expect(wrote(client)).toBe(false)
   })
 
+  // #93: ML 7 kap. 26 §, an EU goods acquisition's moms belongs at the latest
+  // to the period holding the 15th of the month after delivery.
+  const lateEuGoods = () => registered({
+    invoice_date: '2026-09-20',
+    delivery_date: '2026-07-10',
+    reverse_charge: true,
+    reverse_charge_kind: 'eu_goods',
+    subtotal: 8000,
+    vat_amount: 0,
+    total: 8000,
+    items: [{ id: 'item-1', description: 'Varor', account_number: '4010', line_total: 8000, vat_rate: 0, vat_amount: 0 }],
+    supplier: { id: 'sup-1', name: 'Leverantören AB', supplier_type: 'eu_business' },
+  })
+
+  it('400 PERIOD_LOCKED on the 15th after delivery of a late EU goods invoice, naming that date', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      supplier_invoices: { data: lateEuGoods(), error: null },
+      company_settings: [ACCRUAL, { data: { bookkeeping_locked_through: '2026-08-31' }, error: null }],
+      fiscal_periods: OPEN_PERIOD,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await book()
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(body.error.details).toMatchObject({ reason: 'company_lock_date_covers', invoice_date: '2026-09-20', entry_date: '2026-08-15' })
+    expect(createRegistrationEntryMock).not.toHaveBeenCalled()
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run of a late EU goods invoice previews the verifikat on the 15th after delivery', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      supplier_invoices: { data: lateEuGoods(), error: null },
+      company_settings: [ACCRUAL, NO_LOCK_DATE],
+      fiscal_periods: [OPEN_PERIOD, OPEN_PERIOD_LIST],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await book('?dry_run=true')
+    expect(res.status).toBe(200)
+    const { journal_entry: entry } = (await res.json()).data.preview
+    expect(entry).toMatchObject({ entry_date: '2026-08-15', balanced: true })
+    expect(entry.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ account_number: '4515', debit_amount: 8000 }),
+      expect.objectContaining({ account_number: '2614', credit_amount: 2000 }),
+      expect.objectContaining({ account_number: '2645', debit_amount: 2000 }),
+    ]))
+    expect(wrote(client)).toBe(false)
+  })
+
   it('a dry run previews the registration lines and writes nothing', async () => {
     const client = makeClient({
       company_members: MEMBER,
@@ -230,6 +281,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/book', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.dry_run).toBe(true)
+    // Names the invoice, so a staged Bokför can be told apart (feedback seq 930807).
+    expect(body.data.preview).toMatchObject({
+      supplier_invoice_number: '55012',
+      supplier_name: 'Leverantören AB',
+      total: 10000,
+      currency: 'SEK',
+    })
     const { journal_entry: entry } = body.data.preview
     expect(entry).toMatchObject({ fiscal_period_id: FP_ID, entry_date: '2026-09-03', balanced: true, total_debit: 10000 })
     expect(entry.lines).toEqual([
@@ -283,6 +341,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/book', () => {
       expect.any(Array),
       'swedish_business',
       'Leverantören AB',
+      expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     expect(client.calls).toContainEqual({ table: 'supplier_invoices', method: 'is', args: ['registration_journal_entry_id', null] })
     expect(anchorMock).toHaveBeenCalledWith(client, COMPANY_ID, SI_ID)

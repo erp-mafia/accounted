@@ -1,5 +1,6 @@
 import type { ExtractionSchemaDef, FieldKind } from './schemas'
-import { isValidOrgNumber, normalizeValue, valuesAgree, type ExtractedField, type Payload, type Reading } from './fields'
+import { isValidOrgNumber } from '@/lib/invariants/org-number'
+import { normalizeValue, valuesAgree, type ExtractedField, type Payload, type Reading } from './fields'
 
 /**
  * Two readings become one record. Agreement settles a field; disagreement,

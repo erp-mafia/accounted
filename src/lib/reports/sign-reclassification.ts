@@ -16,7 +16,7 @@
  * kronor and truncates per SFL 22 kap. 1 §.
  *
  * Labels and warnings stay Swedish: these surface on Skatteverket and
- * Bolagsverket forms (see .claude/rules/i18n.md).
+ * Bolagsverket forms.
  */
 
 export type SignReclassificationId =

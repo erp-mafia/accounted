@@ -18,7 +18,7 @@
  */
 
 import { createLogger } from '@/lib/logger'
-import { FALLBACK_TAX_TABLES, FALLBACK_TAX_TABLE_YEARS } from './tax-tables-fallback'
+import { wholeKronaPercentage } from '@/lib/money'
 
 const log = createLogger('tax-tables')
 
@@ -73,23 +73,6 @@ export class TaxTableUnavailableError extends Error {
   ) {
     super(message)
     this.name = 'TaxTableUnavailableError'
-  }
-}
-
-/**
- * Look up tax amount for a given monthly income using Skatteverket's API.
- * Returns the tax amount in SEK and the data source used.
- */
-export async function lookupTaxFromApi(
-  tableNumber: number,
-  column: number,
-  monthlyIncome: number,
-  year: number = new Date().getFullYear()
-): Promise<{ taxAmount: number; source: TaxTableSource }> {
-  const { rates, source } = await fetchTaxTableRates(year, tableNumber, column)
-  return {
-    taxAmount: lookupTaxAmount(tableNumber, column, monthlyIncome, rates),
-    source,
   }
 }
 
@@ -173,12 +156,16 @@ function taxForRate(rate: TaxTableRate, roundedIncome: number): number {
 /**
  * Build TaxTableRate[] for a given year/table/column from the bundled fallback data.
  * Returns null when the requested year/table is not present in the fallback module.
+ *
+ * The fallback module (~470 KB of table rows) is imported here, when the API
+ * has failed, rather than at load of every module that reaches tax-tables.ts.
  */
-function getFallbackRates(
+async function getFallbackRates(
   year: number,
   tableNumber: number,
   column: number
-): TaxTableRate[] | null {
+): Promise<TaxTableRate[] | null> {
+  const { FALLBACK_TAX_TABLES } = await import('./tax-tables-fallback')
   const yearTables = FALLBACK_TAX_TABLES[year]
   if (!yearTables) return null
   const rows = yearTables[tableNumber]
@@ -283,10 +270,45 @@ async function fetchApiRows(
  *
  * Results are cached in-memory for 1 hour.
  */
+/** Both sections of one table as the API returns them: every row carries all six columns. */
+interface ApiTaxTable {
+  amountRows: ApiTaxRow[]
+  percentRows: ApiTaxRow[]
+}
+
+/**
+ * Fetch both sections of a table: "30B" rows (fixed SEK amounts, incomes up
+ * to 80 000 kr) and "30%" rows (percent of the whole income, above). Loading
+ * only the B-rows would silently clamp high incomes to the last krona
+ * bracket and under-withhold.
+ */
+async function fetchApiTable(year: number, tableNumber: number): Promise<ApiTaxTable> {
+  const [amountRows, percentRows] = await Promise.all([
+    fetchApiRows(year, tableNumber, '30B'),
+    fetchApiRows(year, tableNumber, '30%'),
+  ])
+
+  if (amountRows.length === 0 || percentRows.length === 0) {
+    // API responded but is missing a section for this year/table: treat like
+    // failure so the caller's fallback path runs.
+    throw new Error(
+      `Skatteverket API returned no ${amountRows.length === 0 ? 'amount' : 'percent'} rows ` +
+        `for table ${tableNumber} year ${year}`
+    )
+  }
+  return { amountRows, percentRows }
+}
+
 export async function fetchTaxTableRates(
   year: number,
   tableNumber: number,
-  column: number
+  column: number,
+  /**
+   * Where the API rows come from. A run that needs several columns of one
+   * table passes a shared loader so the table is fetched once, not once per
+   * column; each column is still parsed, and falls back, on its own.
+   */
+  loadApiTable: () => Promise<ApiTaxTable> = () => fetchApiTable(year, tableNumber)
 ): Promise<TaxTableRatesResult> {
   const cacheKey = `${year}-${tableNumber}-${column}`
   const cached = rateCache.get(cacheKey)
@@ -297,23 +319,7 @@ export async function fetchTaxTableRates(
   try {
     log.info(`Fetching tax table ${tableNumber} col ${column} for ${year} from Skatteverket API`)
 
-    // Fetch both sections of the table: "30B" rows (fixed SEK amounts, incomes
-    // up to 80 000 kr) and "30%" rows (percent of the whole income, above).
-    // Loading only the B-rows would silently clamp high incomes to the last
-    // krona bracket and under-withhold.
-    const [amountRows, percentRows] = await Promise.all([
-      fetchApiRows(year, tableNumber, '30B'),
-      fetchApiRows(year, tableNumber, '30%'),
-    ])
-
-    if (amountRows.length === 0 || percentRows.length === 0) {
-      // API responded but is missing a section for this year/table: treat like
-      // failure so the fallback path runs below.
-      throw new Error(
-        `Skatteverket API returned no ${amountRows.length === 0 ? 'amount' : 'percent'} rows ` +
-          `for table ${tableNumber} year ${year}`
-      )
-    }
+    const { amountRows, percentRows } = await loadApiTable()
 
     // Parse results: each row has all 6 columns, we extract the requested one.
     // Kolumn values are parsed strictly: a malformed value must not silently
@@ -374,7 +380,7 @@ export async function fetchTaxTableRates(
     return { rates, source: 'api' }
   } catch (err) {
     const apiErr = err instanceof Error ? err.message : 'unknown'
-    const fallbackRates = getFallbackRates(year, tableNumber, column)
+    const fallbackRates = await getFallbackRates(year, tableNumber, column)
 
     if (fallbackRates) {
       log.warn(
@@ -388,6 +394,7 @@ export async function fetchTaxTableRates(
       return { rates: fallbackRates, source: 'fallback' }
     }
 
+    const { FALLBACK_TAX_TABLE_YEARS } = await import('./tax-tables-fallback')
     const supportedYears = Array.from(FALLBACK_TAX_TABLE_YEARS).join(', ') || 'none'
     throw new TaxTableUnavailableError(
       `Kunde inte hämta skattetabell ${tableNumber} kolumn ${column} för ${year} från Skatteverket ` +
@@ -399,7 +406,8 @@ export async function fetchTaxTableRates(
 
 /**
  * Fetch all tax table rates for a year (all tables/columns for a salary run).
- * Used by the calculate route for bulk lookups.
+ * Used by the calculate route for bulk lookups: every requested table paired
+ * with every requested column.
  *
  * Returns { rates, source } where source is 'api' if every table came from the
  * API, 'fallback' if every table came from the local fallback, and 'mixed' if
@@ -410,18 +418,32 @@ export async function fetchAllTaxTableRatesForRun(
   tableNumbers: number[],
   columns: number[]
 ): Promise<{ rates: TaxTableRate[]; source: TaxTableSource | 'mixed' }> {
+  const uniqueTables = [...new Set(tableNumbers)]
+  const uniqueColumns = [...new Set(columns)]
+
+  // One API fetch per table, shared by every column of it (each row carries
+  // all six), and the tables in parallel. Every column is still parsed and
+  // falls back on its own, exactly as a single fetchTaxTableRates call does.
+  const perTable = await Promise.allSettled(
+    uniqueTables.map(async (table) => {
+      let apiTable: Promise<ApiTaxTable> | null = null
+      const loadApiTable = () => (apiTable ??= fetchApiTable(year, table))
+      const results: TaxTableRatesResult[] = []
+      for (const col of uniqueColumns) {
+        results.push(await fetchTaxTableRates(year, table, col, loadApiTable))
+      }
+      return results
+    })
+  )
+
+  // Collected in table-then-column order, and the first failure in that
+  // order is the one reported, as when the tables were fetched one by one.
   const allRates: TaxTableRate[] = []
-  const uniquePairs = new Set<string>()
   let sawApi = false
   let sawFallback = false
-
-  for (const table of tableNumbers) {
-    for (const col of columns) {
-      const key = `${table}-${col}`
-      if (uniquePairs.has(key)) continue
-      uniquePairs.add(key)
-
-      const { rates, source } = await fetchTaxTableRates(year, table, col)
+  for (const settled of perTable) {
+    if (settled.status === 'rejected') throw settled.reason
+    for (const { rates, source } of settled.value) {
       allRates.push(...rates)
       if (source === 'api') sawApi = true
       else if (source === 'fallback') sawFallback = true
@@ -527,20 +549,12 @@ function normalizeKommunName(raw: string): string {
 /**
  * Percentage-based skatteavdrag stated in whole kronor with öretal dropped
  * (the whole-krona rule in SFF 2011:1261 22 kap. 1 §), same rule as
- * taxForRate above. Computed in integer öre and hundredths of a percent:
- * truncating the raw float product would lose a whole krona when float noise
- * lands an exact result just below an integer
- * (1000 × 0.007 === 6.999999999999999, so 0.7 % jämkning of 1 000 kr would
- * come out as 6 kr instead of 7 kr).
+ * taxForRate above. The arithmetic is wholeKronaPercentage (lib/money.ts),
+ * shared with the förhöjt skatteavdrag (lib/salary/extra-tax.ts), which the
+ * employee form imports and so must not pull in this module.
  */
 function wholeKronaPercentageTax(monthlyIncome: number, percentage: number): number {
-  const incomeOre = Math.round(monthlyIncome * 100)
-  const percentageHundredths = Math.round(percentage * 100)
-  // Math.trunc, not Math.floor: dropping öre truncates toward zero, and a
-  // negative taxable income (deductions exceeding pay) must not gain an extra
-  // negative krona. Normalize the -0 that Math.trunc leaves on small negatives.
-  const wholeKronor = Math.trunc((incomeOre * percentageHundredths) / 1_000_000)
-  return wholeKronor === 0 ? 0 : wholeKronor
+  return wholeKronaPercentage(monthlyIncome, percentage)
 }
 
 /**

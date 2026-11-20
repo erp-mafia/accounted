@@ -18,6 +18,27 @@ function row(id: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe('planBankSyncRun', () => {
+  it('puts every connection in the sunset bucket and selects nothing once the Enable Banking feed has ended', () => {
+    const rows = [row('due', { last_synced_at: ago(30 * HOUR_MS) }), row('never'), row('free', { company_id: 'free' })]
+    const plan = planBankSyncRun(rows, ENTITLED, NOW, 300, { sunset: true })
+
+    expect(plan.selected).toEqual([])
+    expect(plan.stats).toEqual({
+      sunset: 3,
+      eligible: 0,
+      notEntitled: 0,
+      noAccounts: 0,
+      fresh: 0,
+      coolingDown: 0,
+      due: 0,
+      selected: 0,
+      deferredByBatchLimit: 0,
+      oldestOverdueHours: 0,
+    })
+    // Without the flag the same rows plan as before, with an empty sunset bucket.
+    expect(planBankSyncRun(rows, ENTITLED, NOW, 300).stats).toMatchObject({ sunset: 0, due: 2, notEntitled: 1 })
+  })
+
   it('takes never-synced connections first, then the oldest sync', () => {
     const plan = planBankSyncRun(
       [
@@ -81,6 +102,31 @@ describe('planBankSyncRun', () => {
 
     expect(plan.selected).toEqual([])
     expect(plan.stats).toMatchObject({ coolingDown: 1, due: 0, oldestOverdueHours: 24 })
+  })
+
+  it('counts a connection whose only switched-on account is a mirror card account as nothing to fetch', () => {
+    const plan = planBankSyncRun(
+      [
+        row('card-only', {
+          accounts_data: [
+            { uid: 'main', iban: 'SE1', enabled: false },
+            { uid: 'card', name: 'SVEA_MQ_Debit_B2B', enabled: true },
+          ],
+        }),
+        row('main-and-card', {
+          accounts_data: [
+            { uid: 'main', iban: 'SE2', enabled: true },
+            { uid: 'card', name: 'SVEA_MQ_Debit_B2B', enabled: true },
+          ],
+        }),
+      ],
+      ENTITLED,
+      NOW,
+      300,
+    )
+
+    expect(plan.selected.map(c => c.id)).toEqual(['main-and-card'])
+    expect(plan.stats).toMatchObject({ noAccounts: 1, due: 1 })
   })
 
   it('puts every connection in exactly one bucket', () => {

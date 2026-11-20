@@ -11,7 +11,7 @@
  *
  * That guard is silent by design, which is its own problem: the user never
  * learns why the EUR invoice that obviously matches is missing from the
- * suggestions. `findInvoiceMatchCandidates()` therefore returns the dropped
+ * suggestions. `matchInvoiceCandidates()` therefore returns the dropped
  * invoices alongside the matches (same shape as `unconverted_fx_count` in
  * lib/reports/supplier-ledger.ts), so a caller can name them and point at the
  * repair: POST /api/invoices/{id}/refresh-exchange-rate.
@@ -23,14 +23,22 @@
  *
  * The supplier-side twin is lib/invoices/supplier-invoice-matching.ts. Keep the
  * two guards in step.
+ *
+ * Reading and scoring are separate: `loadInvoiceMatchPool()` reads the open
+ * invoices once for a batch of bank rows, and the scorers below are pure, so
+ * a batch never re-reads the same invoices for every row.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-currency'
+import { descriptionMentionsReference } from '@/lib/invariants/reference-number'
 import { normalizeOcrReference } from './duplicate-payment-guard'
-import { matchesNormalizedReference, distinctiveReferenceKeys } from './ocr-keys'
+import { invoiceDocumentRefusal } from '@/lib/transactions/invoice-document-refusal'
+import { invoicesNamedByReference, invoicesNamedInTiers, distinctiveReferenceKeys } from './ocr-keys'
 import type { Invoice, Transaction, Customer } from '@/types'
+import { excludeCreditNotes } from '@/lib/bookkeeping/credit-note-state'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 
 export interface InvoiceMatch {
   invoice: Invoice & { customer?: Customer }
@@ -142,6 +150,55 @@ export function customerNameMatches(
 }
 
 /**
+ * A Swedish mobile number standing in free text as a whole token: +46 7x,
+ * 0046 7x or 07x, then eight more digits, single spaces or hyphens allowed
+ * between digits; or the country code with no plus, 467 and eight digits
+ * written together, which is how SEB writes a Swish payer's number as the
+ * whole bank text (crm#1399). The token may not touch a digit on either
+ * side, so the digits inside a 16-digit Swish id or any longer run never
+ * read as a number. Group 1 or group 2 is the subscriber part from the 7.
+ */
+const SWEDISH_MOBILE_IN_TEXT = /(?<![\d+])(?:(?:(?:\+|00)46[ -]?|0)(7(?:[ -]?\d){8})|46(7\d{8}))(?!\d)/g
+
+/**
+ * The Swedish mobile numbers in a bank text, normalised to `+467XXXXXXXX`.
+ */
+export function swedishMobileNumbersIn(text: string | null | undefined): string[] {
+  if (!text) return []
+  return Array.from(text.matchAll(SWEDISH_MOBILE_IN_TEXT), (m) => `+46${(m[1] ?? m[2]).replace(/\D/g, '')}`)
+}
+
+/**
+ * A stored phone number (customers.phone, typed by hand in any format) as
+ * `+467XXXXXXXX`, or null when it is not a Swedish mobile number.
+ */
+export function normalizeSwedishMobile(phone: string | null | undefined): string | null {
+  if (!phone) return null
+  let digits = phone.replace(/[^\d+]/g, '')
+  if (digits.startsWith('+46')) digits = digits.slice(3)
+  else if (digits.startsWith('0046')) digits = digits.slice(4)
+  else if (/^467\d{8}$/.test(digits)) digits = digits.slice(2)
+  if (digits.startsWith('0')) digits = digits.slice(1)
+  return /^7\d{8}$/.test(digits) ? `+46${digits}` : null
+}
+
+/**
+ * True when the customer's mobile number appears in the bank row. Swish
+ * payments carry the payer's number in the bank text, often with no name at
+ * all, so this is the same "this is the customer" signal as a name match.
+ * Each field is searched on its own.
+ */
+export function customerPhoneMatches(
+  customerPhone: string | null | undefined,
+  transaction: Pick<Transaction, 'description' | 'merchant_name' | 'reference'>
+): boolean {
+  const phone = normalizeSwedishMobile(customerPhone)
+  if (!phone) return false
+  return [transaction.description, transaction.merchant_name, transaction.reference]
+    .some((text) => swedishMobileNumbersIn(text).includes(phone))
+}
+
+/**
  * Calculate confidence score and match reason for an invoice match
  */
 export function calculateMatchScore(
@@ -153,16 +210,21 @@ export function calculateMatchScore(
 
   const exactAmount = amountsMatchExact(transactionAmount, invoiceTotal)
   const fuzzyAmount = !exactAmount && amountsMatchFuzzy(transactionAmount, invoiceTotal)
-  const customerMatch = customerNameMatches(
+  const nameMatch = customerNameMatches(
     invoice.customer?.name,
     transaction.description,
     transaction.merchant_name
   )
+  // A phone hit counts as the customer, like a name hit; the amount is
+  // still required below. The name reason wins when both hold.
+  const phoneMatch = !nameMatch && customerPhoneMatches(invoice.customer?.phone, transaction)
+  const customerMatch = nameMatch || phoneMatch
+  const customerReason = phoneMatch ? 'kundens telefonnummer matchar' : 'kundnamn matchar'
 
   if (exactAmount && customerMatch) {
     return {
       confidence: CONFIDENCE.EXACT_AMOUNT_CUSTOMER,
-      matchReason: `Exakt belopp (${invoiceTotal} ${invoice.currency}) och kundnamn matchar`,
+      matchReason: `Exakt belopp (${invoiceTotal} ${invoice.currency}) och ${customerReason}`,
     }
   }
 
@@ -176,7 +238,7 @@ export function calculateMatchScore(
   if (fuzzyAmount && customerMatch) {
     return {
       confidence: CONFIDENCE.FUZZY_AMOUNT_CUSTOMER,
-      matchReason: `Belopp nära (±1%) och kundnamn matchar`,
+      matchReason: `Belopp nära (±1%) och ${customerReason}`,
     }
   }
 
@@ -262,74 +324,59 @@ function emptyResult(): InvoiceMatchResult {
   return { matches: [], unconvertedFxCount: 0, unconvertedFxInvoices: [] }
 }
 
+/** An open customer invoice as the matcher reads it: the row with its customer. */
+export type MatchableInvoice = Invoice & { customer?: Customer }
+
 /**
- * Find invoices that potentially match a bank transaction
+ * The open customer invoices a batch of bank rows is matched against. Read
+ * once per batch by `loadInvoiceMatchPool()`, then scored row by row by the
+ * pure `matchInvoiceCandidates()`, so a batch of N income rows costs the same
+ * two reads as one row instead of 2N.
  *
- * Only matches income transactions (amount > 0) against unpaid invoices
- * Returns matches sorted by confidence, filtered to >= 50% confidence
- *
- * Thin wrapper over `findInvoiceMatchCandidates()` that drops the exclusion
- * diagnostics. Use the candidates function when the caller can tell the user
- * why an invoice was withheld.
+ * Already narrowed to what may be offered: fakturor only (no quote, proforma
+ * or delivery note), no credit note, no invoice a live credit note covers, and
+ * no sent/overdue invoice whose payment voucher already exists. Ordered by id.
  */
-export async function findMatchingInvoices(
-  supabase: SupabaseClient,
-  companyId: string,
-  transaction: Transaction
-): Promise<InvoiceMatch[]> {
-  const { matches } = await findInvoiceMatchCandidates(supabase, companyId, transaction)
-  return matches
+export interface InvoiceMatchPool {
+  readonly invoices: readonly MatchableInvoice[]
 }
 
 /**
- * `findMatchingInvoices()` plus the invoices that were dropped before scoring
- * because they carried no comparable amount.
+ * Read the open, payable customer invoices of a company once, for a whole
+ * batch of bank rows. A failed invoice read yields an empty pool (no match,
+ * never a failed import); a failed payment-voucher read throws, because
+ * without it a status-leaked paid invoice would be offered again.
  */
-export async function findInvoiceMatchCandidates(
+export async function loadInvoiceMatchPool(
   supabase: SupabaseClient,
   companyId: string,
-  transaction: Transaction
-): Promise<InvoiceMatchResult> {
-  // Only match income transactions
-  if (transaction.amount <= 0) {
-    return emptyResult()
-  }
-
-  // Query unpaid invoices (sent or overdue) with customer info. Proformas,
-  // delivery notes and quotes are never receivables, so a sent quote is never
-  // proposed as a payment candidate.
+): Promise<InvoiceMatchPool> {
+  // Unpaid invoices (sent or overdue) with customer info. Proformas, delivery
+  // notes and quotes are never receivables, so a sent quote is never proposed
+  // as a payment candidate.
   let invoices: Array<Invoice & { customer?: { name?: string | null } | null }>
   try {
     invoices = await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('invoices')
-        .select('*, customer:customers(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
-        .eq('company_id', companyId)
-        .eq('document_type', 'invoice')
-        .is('credited_invoice_id', null)
-        .in('status', ['sent', 'overdue', 'partially_paid'])
+      excludeCreditNotes(
+        supabase
+          .from('invoices')
+          .select('*, customer:customers(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
+          .eq('company_id', companyId)
+          .eq('document_type', 'invoice')
+          .in('status', [...MATCHABLE_INVOICE_STATUSES]),
+      )
         .order('id', { ascending: true })
         .range(from, to),
     )
   } catch {
-    // Failed to fetch invoices: return empty matches
-    return emptyResult()
+    return { invoices: [] }
   }
 
   // Defensive filter: exclude invoices that already have a payment voucher
   // attached but whose status leaked (still 'sent'/'overdue'). Partially-paid
   // invoices can legitimately take more payments, so they pass through.
   // Without this, a status leak would double-book the receipt.
-  const payableInvoices = invoices.filter(
-    (invoice) => {
-      const creditNotes = (invoice as Invoice & {
-        credit_notes?: Array<{ status: string; creation_complete?: boolean }>
-      }).credit_notes ?? []
-      return !invoice.credited_invoice_id && !creditNotes.some(
-        (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
-      )
-    },
-  )
+  const payableInvoices = invoices.filter((invoice) => invoiceDocumentRefusal(invoice) === null)
   const fullCandidateIds = payableInvoices
     .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
     .map((inv) => inv.id as string)
@@ -346,33 +393,49 @@ export async function findInvoiceMatchCandidates(
         .range(from, to),
     )
     for (const row of paymentRows) {
-      paidIds.add((row as { invoice_id: string }).invoice_id)
+      paidIds.add(row.invoice_id)
     }
   }
-  const filteredInvoices = payableInvoices.filter((inv) => !paidIds.has(inv.id as string))
-  if (filteredInvoices.length === 0) {
+  return {
+    invoices: payableInvoices.filter((inv) => !paidIds.has(inv.id as string)) as MatchableInvoice[],
+  }
+}
+
+/**
+ * Score one bank row against a loaded pool: the matches (sorted by confidence,
+ * >= 50 %) plus the invoices dropped before scoring because they carried no
+ * comparable amount. Pure: no reads, so a caller scores a whole batch against
+ * one `loadInvoiceMatchPool()`.
+ *
+ * Only income rows (amount > 0) match.
+ */
+export function matchInvoiceCandidates(
+  transaction: Transaction,
+  pool: InvoiceMatchPool,
+): InvoiceMatchResult {
+  if (transaction.amount <= 0 || pool.invoices.length === 0) {
     return emptyResult()
   }
+  const filteredInvoices = pool.invoices
 
   const matches: InvoiceMatch[] = []
   const unconvertedFxInvoices: InvoiceMatchExclusion[] = []
 
   // OCR/Bankgiro reference matching: highest confidence
-  // Swedish standard: match transaction reference to invoice OCR number. Both
-  // forms count, the bare invoice number and the OCR the invoice printed
-  // (same digits plus a Luhn check digit), because both are things a customer
-  // can legitimately have typed into the bank.
+  // Swedish standard: match transaction reference to invoice OCR number. The
+  // bare invoice number, the OCR the invoice printed (same digits plus a Luhn
+  // check digit) and Bankgirot's length-digit OCR all count, because each is
+  // something a customer can legitimately have typed into the bank; which
+  // invoices a reference names is ocr-keys' one rule.
   const txReference = (transaction as Transaction & { reference?: string | null }).reference
   const normalizedRef = normalizeOcrReference(txReference)
   if (normalizedRef) {
-    for (const invoice of filteredInvoices) {
-      if (matchesNormalizedReference(invoice.invoice_number, normalizedRef)) {
-        matches.push({
-          invoice: invoice as Invoice & { customer?: Customer },
-          confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-          matchReason: `OCR-referens matchar fakturanummer ${invoice.invoice_number}`,
-        })
-      }
+    for (const invoice of invoicesNamedByReference(filteredInvoices, normalizedRef)) {
+      matches.push({
+        invoice,
+        confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
+        matchReason: `OCR-referens matchar fakturanummer ${invoice.invoice_number}`,
+      })
     }
 
     // If we found an OCR match, return immediately (highest possible confidence)
@@ -382,27 +445,37 @@ export async function findInvoiceMatchCandidates(
   }
 
   // Fallback: plenty of banks drop the OCR into the free text instead of the
-  // reference field ("Faktura 202600425", "BG inbet 2026 0042 5"). Comparing
-  // digit runs is weaker than an exact reference, so it scores lower and,
-  // unlike the exact branch above, it does NOT short-circuit: every invoice is
-  // still scored on amount below and the stronger of the two reasons wins.
-  // Each field is normalised on its own: concatenating first would let the
-  // last digits of the description and the first of the merchant name form a
-  // run that exists in neither.
+  // reference field ("Faktura 202600425", "BG inbet 2026 0042 5"). Free text
+  // is weaker than an exact reference, so it scores lower and, unlike the
+  // exact branch above, it does NOT short-circuit: every invoice is still
+  // scored on amount below and the stronger of the two reasons wins.
+  // The reference must stand in the text as a whole number
+  // (descriptionMentionsReference), never as digits inside a longer run:
+  // "Inbetalning 2026-10-11" is a date, not invoice 1011. The invoice number
+  // as written is a needle too, so a series prefix with digits and a dash
+  // ("2026-001") is still found where its bare digits are not. That holds
+  // only when the bare digits are distinctive themselves; otherwise "701"
+  // would slip under the floor that its 4-digit OCR clears. Each field is
+  // searched on its own, so the end of the description and the start of the
+  // merchant name never form a reference that exists in neither. The forms
+  // are ranked as for the reference field (invoicesNamedInTiers): a text
+  // that names an invoice by its number or printed OCR is read exactly as
+  // before, and Bankgirot's length-digit OCR is read only when it names none.
   const referenceHaystacks = [transaction.description, transaction.merchant_name]
-    .map((value) => normalizeOcrReference(value))
-    .filter((digits) => digits.length > 0)
+    .filter((value): value is string => Boolean(value))
   const referenceInTextIds = new Set<string>()
   if (referenceHaystacks.length > 0) {
-    for (const invoice of filteredInvoices) {
-      const keys = distinctiveReferenceKeys(invoice.invoice_number)
-      if (keys.some((key) => referenceHaystacks.some((digits) => digits.includes(key)))) {
-        referenceInTextIds.add(invoice.id as string)
-      }
-    }
+    const mentioned = invoicesNamedInTiers(filteredInvoices, (invoice, forms) => {
+      const keys = distinctiveReferenceKeys(invoice.invoice_number, forms)
+      const needles = keys.includes(normalizeOcrReference(invoice.invoice_number))
+        ? [...keys, invoice.invoice_number as string]
+        : keys
+      return needles.some((needle) => referenceHaystacks.some((text) => descriptionMentionsReference(text, needle)))
+    })
+    for (const invoice of mentioned) referenceInTextIds.add(invoice.id as string)
   }
-  const inTextMatch = (invoice: Invoice): InvoiceMatch => ({
-    invoice: invoice as Invoice & { customer?: Customer },
+  const inTextMatch = (invoice: MatchableInvoice): InvoiceMatch => ({
+    invoice,
     confidence: CONFIDENCE.OCR_REFERENCE_IN_TEXT,
     matchReason: `OCR-referens för faktura ${invoice.invoice_number} förekommer i banktexten`,
   })
@@ -450,27 +523,18 @@ export async function findInvoiceMatchCandidates(
       continue
     }
 
-    // Calculate score
-    const invoiceWithAdjustedTotal = {
+    // Score against the comparable amount; the pool's row is left untouched.
+    const { confidence, matchReason } = calculateMatchScore(transaction, {
       ...invoice,
-      total: compareAmount, // Use the comparable amount
-    }
-
-    const { confidence, matchReason } = calculateMatchScore(
-      transaction,
-      invoiceWithAdjustedTotal as Invoice & { customer?: Customer }
-    )
+      total: compareAmount,
+    })
 
     // The reference reason and the amount reason are two readings of the same
     // invoice, so the invoice is offered once, under the stronger of the two.
     if (referenceInText && CONFIDENCE.OCR_REFERENCE_IN_TEXT > confidence) {
       matches.push(inTextMatch(invoice))
     } else if (confidence >= CONFIDENCE.MIN_THRESHOLD) {
-      matches.push({
-        invoice: invoice as Invoice & { customer?: Customer },
-        confidence,
-        matchReason,
-      })
+      matches.push({ invoice, confidence, matchReason })
     }
   }
 
@@ -491,59 +555,24 @@ export async function findInvoiceMatchCandidates(
 }
 
 /**
- * Get the best matching invoice for a transaction
- * Returns the highest confidence match if it meets the threshold
+ * The highest-confidence match for one bank row when it meets
+ * `minConfidence`, else null. Pure, like `matchInvoiceCandidates()`.
  *
  * `InvoiceMatch | null` has nowhere to carry a reason, so an invoice withheld
  * for a missing exchange rate is invisible on this path. Callers that can show
- * the user something should use `findInvoiceMatchCandidates()` and read
- * `unconvertedFxInvoices`; widening this signature is left to whoever has a
- * surface to render it on.
+ * the user something should use `matchInvoiceCandidates()` and read
+ * `unconvertedFxInvoices`.
  */
-export async function getBestInvoiceMatch(
-  supabase: SupabaseClient,
-  companyId: string,
+export function bestInvoiceMatch(
   transaction: Transaction,
-  minConfidence: number = 0.80
-): Promise<InvoiceMatch | null> {
-  const matches = await findMatchingInvoices(supabase, companyId, transaction)
-
+  pool: InvoiceMatchPool,
+  minConfidence: number = 0.80,
+): InvoiceMatch | null {
+  const { matches } = matchInvoiceCandidates(transaction, pool)
   if (matches.length > 0 && matches[0].confidence >= minConfidence) {
     return matches[0]
   }
-
   return null
 }
 
-/**
- * True when `reference` occurs in `description` as a whole number, never as
- * part of a longer digit run. Whitespace is stripped from both sides first so
- * an OCR string typed in groups ("1234 5678") still matches; after that a hit
- * may not touch a digit on either side. That is what keeps ankomstnummer 14
- * out of "Levbet Tele2 (1814)" and invoice 26 out of "2026-05-11". The plain
- * substring test this replaces linked a Tele2 payment to a Postronic invoice
- * as a 99 % match (desk crm#64, 2026-09-16).
- */
-export function descriptionMentionsReference(
-  description: string | null | undefined,
-  reference: string | number | null | undefined,
-): boolean {
-  if (!description || reference === null || reference === undefined) return false
-  const haystack = description.replace(/\s+/g, '').toLowerCase()
-  const needle = String(reference).replace(/\s+/g, '').toLowerCase()
-  if (needle.length < 2) return false
-  let from = 0
-  while (from + needle.length <= haystack.length) {
-    const at = haystack.indexOf(needle, from)
-    if (at === -1) return false
-    const before = at > 0 ? haystack[at - 1] : ''
-    const after = haystack[at + needle.length] ?? ''
-    if (!isDigit(before) && !isDigit(after)) return true
-    from = at + 1
-  }
-  return false
-}
-
-function isDigit(ch: string): boolean {
-  return ch >= '0' && ch <= '9'
-}
+export { descriptionMentionsReference }

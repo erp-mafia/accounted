@@ -3,6 +3,7 @@ import { getPeriodiskSammanstallningCsv } from '@/lib/reports/filing-report-serv
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/reports/periodisk-sammanstallning/csv
@@ -52,12 +53,9 @@ export const GET = withRouteContext(
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return errorResponseFromCode('PS_REPORT_GENERATION_FAILED', log, { requestId })
 
-    return new Response(new Uint8Array(outcome.data.bytes), {
-      status: 200,
-      headers: {
-        'Content-Type': outcome.data.contentType,
-        'Content-Disposition': `attachment; filename="${outcome.data.filename}"`,
-        'X-Request-Id': requestId,
-      },
+    return fileResponse(new Uint8Array(outcome.data.bytes), {
+      filename: outcome.data.filename,
+      contentType: outcome.data.contentType,
+      headers: { 'X-Request-Id': requestId },
     })
   }, { requireCompleteLedger: true })

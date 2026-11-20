@@ -1,8 +1,8 @@
 /**
  * Auth mail templates for the Supabase Send Email hook (WL-05, WL-13).
  *
- * Swedish-only, like the other user-facing mail templates in lib/email/
- * (see .claude/rules/i18n.md): these are transactional mails, not UI chrome,
+ * Swedish-only, like the other user-facing mail templates in lib/email/:
+ * these are transactional mails, not UI chrome,
  * so they deliberately do not go through next-intl.
  *
  * The appName parameter carries the brand of the requesting host (resolved

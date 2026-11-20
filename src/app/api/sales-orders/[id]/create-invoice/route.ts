@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateInvoiceFromSalesOrderSchema } from '@/lib/api/schemas'
 import { createInvoiceFromSalesOrder } from '@/lib/sales-orders/create-invoice-from-order'
 import { serviceFailureResponse } from '@/lib/sales-orders/respond'
-
-ensureInitialized()
 
 /**
  * POST /api/sales-orders/[id]/create-invoice: create an unnumbered DRAFT

@@ -17,6 +17,7 @@ vi.mock('@/lib/parties/scb/client', async (importOriginal) => {
 })
 
 import { createClient } from '@/lib/supabase/server'
+import { hashPersonalNumber } from '@/lib/auth/bankid'
 import { isScbConfigured } from '@/lib/parties/scb/config'
 import { ScbApiError } from '@/lib/parties/scb/transport'
 import { GET } from '../route'
@@ -25,9 +26,19 @@ import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 const mockCreateClient = vi.mocked(createClient)
 const mockIsScbConfigured = vi.mocked(isScbConfigured)
 
-function buildSupabase(user: { id: string } | null) {
+/**
+ * `bankIdPersonalNumber`: the personnummer of the caller's proven BankID link
+ * (stored only as its hash), or null for an account without one.
+ */
+function buildSupabase(user: { id: string } | null, bankIdPersonalNumber: string | null = null) {
+  const identity = bankIdPersonalNumber
+    ? { personal_number_hash: hashPersonalNumber(bankIdPersonalNumber), email_verified_at: '2026-10-01T00:00:00Z' }
+    : null
   return {
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
+    from: vi.fn(() => ({
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: identity, error: null }) }) }),
+    })),
   }
 }
 
@@ -83,7 +94,8 @@ describe('GET /api/company/search', () => {
     expect(searchByName).not.toHaveBeenCalled()
   })
 
-  it('asks SCB with sole traders included and maps the rows the picker needs', async () => {
+  it("asks SCB with sole traders included and maps the rows the picker needs, the caller's own firm too", async () => {
+    mockCreateClient.mockResolvedValue(buildSupabase({ id: 'user-1' }, '198001011234') as never)
     searchByName.mockResolvedValue({
       query: 'Testbrand',
       mode: 'starts_with',
@@ -100,6 +112,35 @@ describe('GET /api/company/search', () => {
       { orgNumber: '5566778899', name: 'Testbrand AB', city: 'Malmö', legalEntityType: 'AB', active: true },
       { orgNumber: '8001011234', name: 'ANDERSSON, ANNA', city: 'Lund', legalEntityType: 'EF', active: true },
     ])
+  })
+
+  describe('sole traders who share a name (crm#1456)', () => {
+    // Synthetic personnummer: three firms under one owner name, the middle
+    // one the caller's own.
+    const sameName = (orgNumber: string) =>
+      candidate({ orgNumber, name: 'ANDERSSON, ANNA', legalFormCode: '10', legalForm: 'Fysisk person', city: 'Lund' })
+    const result = () => ({
+      query: 'Anna Andersson',
+      mode: 'starts_with',
+      total: 4,
+      truncated: false,
+      candidates: [sameName('8201011239'), sameName('8201022343'), sameName('0201011236'), candidate()],
+    })
+
+    it("lists only the firm whose org number is the caller's BankID personnummer", async () => {
+      mockCreateClient.mockResolvedValue(buildSupabase({ id: 'user-1' }, '198201022343') as never)
+      searchByName.mockResolvedValue(result())
+      const res = await GET(createMockRequest('/api/company/search?q=Anna%20Andersson'))
+      const { body } = await parseJsonResponse<{ data: { suggestions: Array<{ orgNumber: string }> } }>(res)
+      expect(body.data.suggestions.map((s) => s.orgNumber)).toEqual(['8201022343', '5566778899'])
+    })
+
+    it('lists no sole trader to an account without BankID', async () => {
+      searchByName.mockResolvedValue(result())
+      const res = await GET(createMockRequest('/api/company/search?q=Anna%20Andersson'))
+      const { body } = await parseJsonResponse<{ data: { suggestions: Array<{ orgNumber: string }> } }>(res)
+      expect(body.data.suggestions.map((s) => s.orgNumber)).toEqual(['5566778899'])
+    })
   })
 
   it('caps the list at the picker size and says so', async () => {

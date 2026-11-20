@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 
-vi.mock('@/lib/extensions/loader', () => ({
-  loadExtensions: vi.fn(),
-}))
-
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: {
     get: vi.fn(),
@@ -25,7 +21,6 @@ vi.mock('@/lib/auth/cron', () => ({
 
 import { GET } from '../route'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { reconcileStrandedInboxUnderlag } from '@/lib/transactions/inbox-underlag-reconcile'
 import { verifyCronSecret } from '@/lib/auth/cron'
 
@@ -53,6 +48,7 @@ const SUMMARY = {
   companiesTouched: 1,
   historyAppended: 2,
   failures: 0,
+  skippedResetArchives: 0,
 }
 
 beforeEach(() => {
@@ -72,28 +68,27 @@ describe('GET /api/extensions/invoice-inbox/underlag-reconcile/cron', () => {
     expect(mockReconcile).not.toHaveBeenCalled()
   })
 
-  it('returns 503 EXTENSION_DISABLED when the extension is not in the registry', async () => {
+  it('answers 200 skipped when the extension is not in the registry', async () => {
     // Physical extension routes deploy in every build; the registry, generated
-    // from extensions.config.json, is what turns them on. Disabled must mean
-    // no reconciling AND a visible failure if the cron is scheduled anyway.
-    mockRegistryGet.mockReturnValue(undefined)
+    // from extensions.config.json, is what turns them on. Disabled means no
+    // reconciling, and a skip (not a failure) for the crontab that calls it anyway.
+    mockRegistryGet.mockResolvedValue(undefined)
 
     const response = await GET(makeRequest())
     const body = await response.json()
 
-    expect(response.status).toBe(503)
-    expect(body.code).toBe('EXTENSION_DISABLED')
+    expect(response.status).toBe(200)
+    expect(body).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(mockReconcile).not.toHaveBeenCalled()
   })
 
   it('runs the reconciliation in execute mode and returns its summary when enabled', async () => {
-    mockRegistryGet.mockReturnValue({ id: 'invoice-inbox' } as never)
+    mockRegistryGet.mockResolvedValue({ id: 'invoice-inbox' } as never)
     mockReconcile.mockResolvedValue(SUMMARY)
 
     const response = await GET(makeRequest())
     const body = await response.json()
 
-    expect(loadExtensions).toHaveBeenCalled()
     expect(mockRegistryGet).toHaveBeenCalledWith('invoice-inbox')
     expect(mockReconcile).toHaveBeenCalledWith(
       expect.anything(),

@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 import { cn } from '@/lib/utils'
 
 interface BankOption {
@@ -42,7 +43,6 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
   }
   const [banks, setBanks] = useState<BankOption[]>(FALLBACK_BANKS)
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
@@ -71,63 +71,31 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
     ? banks.filter((b) => b.name.toLowerCase().includes(value.toLowerCase()))
     : banks
 
-  useEffect(() => {
-    setHighlightedIndex(-1)
-  }, [value])
-
-  useEffect(() => {
-    if (!isOpen) return
-    function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [isOpen])
-
-  // Scroll highlighted item into view
-  useEffect(() => {
-    if (highlightedIndex < 0 || !listRef.current) return
-    const item = listRef.current.children[highlightedIndex] as HTMLElement
-    item?.scrollIntoView({ block: 'nearest' })
-  }, [highlightedIndex])
-
   function selectBank(bank: BankOption) {
     setValue(bank.name)
     setIsOpen(false)
     inputRef.current?.focus()
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (!isOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-      setIsOpen(true)
-      e.preventDefault()
-      return
-    }
+  const close = useCallback(() => setIsOpen(false), [])
+  const insideRefs = useMemo(() => [containerRef], [])
+  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+    count: filtered.length,
+    isOpen,
+    open: () => setIsOpen(true),
+    close,
+    activate: (index) => {
+      if (filtered[index]) selectBank(filtered[index])
+    },
+    listRef,
+    insideRefs,
+    wrap: true,
+    initialIndex: -1,
+  })
 
-    if (!isOpen) return
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        setHighlightedIndex((i) => (i < filtered.length - 1 ? i + 1 : 0))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        setHighlightedIndex((i) => (i > 0 ? i - 1 : filtered.length - 1))
-        break
-      case 'Enter':
-        e.preventDefault()
-        if (highlightedIndex >= 0 && filtered[highlightedIndex]) {
-          selectBank(filtered[highlightedIndex])
-        }
-        break
-      case 'Escape':
-        setIsOpen(false)
-        break
-    }
-  }
+  useEffect(() => {
+    setHighlightedIndex(-1)
+  }, [value, setHighlightedIndex])
 
   return (
     <div ref={containerRef} className="relative">
@@ -163,6 +131,7 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
               key={bank.name}
               role="option"
               aria-selected={highlightedIndex === i}
+              data-highlighted={highlightedIndex === i}
               className={cn(
                 'flex items-center gap-2 px-3 py-2 text-sm cursor-pointer transition-colors',
                 highlightedIndex === i && 'bg-accent text-accent-foreground',

@@ -15,28 +15,44 @@
  * REST envelope so a single registry covers every entry point.
  */
 import { NextResponse } from 'next/server'
+import { userFacingCode } from './user-facing'
+import { toError } from './to-error'
 import { ZodError } from 'zod'
 import { getErrorMessage } from './get-error-message'
+import { DOCUMENT_PERIOD_LOCK_REFUSAL } from './document-period-lock-refusal'
 import { foreignKeyRefusal } from './foreign-key-refusal'
 import { fieldValidationError, zodErrorFieldIssues } from './refusal'
 import {
   conflictCode,
   getErrorEntry,
+  siCreateInvalidInputMessages,
   type StructuredErrorEntry,
   type StructuredErrorRemediation,
 } from './structured-errors'
+import { bankRowAlreadyBookedMessages } from './match-si-tx-already-booked'
 import {
   AccountsNotInChartError,
+  AccruedCostPeriodInvalidError,
+  AccruedCostPeriodLockedError,
+  AccruedIncomePeriodInvalidError,
+  AccruedIncomePeriodLockedError,
+  DeferralPeriodPastError,
+  deferralPeriodPastDetails,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
   CannotEditNonDraftError,
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
+  CannotReverseCollectedPaymentError,
   CorrectionChainTooDeepError,
   DimensionValidationError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
+  ImportVatWithoutBaseError,
+  CorrectionBankAccountChangedError,
+  MigratedDeductionHeldByRequestError,
+  ReversalHookMissingError,
   FiscalPeriodNotFoundError,
   InvalidMappingResultError,
   JournalEntryNotBalancedError,
@@ -49,6 +65,12 @@ import {
   NoOpenPeriodForDateError,
   TargetPeriodClosedError,
   TargetPeriodLockedError,
+  TransactionMissingSekValueError,
+  TransactionLinesNotBalancedError,
+  UnattendedCommitLimitExceededError,
+  AccrualDraftPostedByScheduleError,
+  BookingReviewRequiredError,
+  BookingReviewLimitError,
   isBookkeepingError,
 } from '../bookkeeping/errors'
 
@@ -100,11 +122,33 @@ const TRANSIENT_MESSAGE_PATTERNS = [
   /too many clients/i,
   /rate limit/i,
   /timed out/i,
+  /aborted due to timeout/i,
 ]
+
+/**
+ * The platform's own error for a deadline that ran out: what a fetch rejects
+ * with when it outlives AbortSignal.timeout. Its sentence ("The operation was
+ * aborted due to timeout") names neither what was waited for nor what to do,
+ * so it is answered with the sentences below; a timeout its thrower worded
+ * (lib/http/fetch-with-timeout, or an error that wraps this one) keeps its
+ * words. A call that got no answer may still have been carried out, hence
+ * the check.
+ */
+function isPlatformTimeout(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'TimeoutError'
+}
+const TIMEOUT_MESSAGE_SV = 'En tjänst som behövs för det här svarade inte i tid. Försök igen om en stund.'
+const TIMEOUT_MESSAGE_EN =
+  'A service this request depends on did not answer in time. Retry after a short wait; if the request changes something, first check whether it already went through.'
 
 function isTransientFailure(error: unknown, message: string): boolean {
   if (typeof error === 'object' && error !== null) {
     const obj = error as Record<string, unknown>
+    // A deadline that ran out, by the name the platform gives it (a
+    // DOMException from AbortSignal.timeout) and lib/http/fetch-with-timeout
+    // keeps. Read by name: the sentence differs by who raised it, and the
+    // pattern above only catches the platform's once another error wraps it.
+    if (obj.name === 'TimeoutError') return true
     const inner = typeof obj.error === 'object' && obj.error !== null ? (obj.error as Record<string, unknown>) : undefined
     for (const c of [obj.code, inner?.code]) {
       if (typeof c === 'string' && TRANSIENT_SQLSTATES.has(c)) return true
@@ -130,6 +174,14 @@ interface StructuredErrorOptions {
 /**
  * Pull a stable code out of various error shapes.
  */
+/**
+ * The shape of an application error code: upper-case words joined by
+ * underscores, digits allowed inside a word (INVALID_K3_COMPONENTS). A
+ * single word must be letters only, so a five-character SQLSTATE such as
+ * P0002 that reached here is never taken for one.
+ */
+const APPLICATION_CODE = /^(?:[A-Z_]+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)$/
+
 function extractCode(error: unknown): string | null {
   if (typeof error !== 'object' || error === null) return null
 
@@ -140,7 +192,7 @@ function extractCode(error: unknown): string | null {
   if (obj.code === 'PT409') return conflictCode(obj.message)
 
   // Typed bookkeeping error: { code: 'JOURNAL_ENTRY_NOT_BALANCED', ... }
-  if (typeof obj.code === 'string' && /^[A-Z_]+$/.test(obj.code)) {
+  if (typeof obj.code === 'string' && APPLICATION_CODE.test(obj.code)) {
     return obj.code
   }
 
@@ -148,7 +200,7 @@ function extractCode(error: unknown): string | null {
   if (typeof obj.error === 'object' && obj.error !== null) {
     const inner = obj.error as Record<string, unknown>
     if (inner.code === 'PT409') return conflictCode(inner.message)
-    if (typeof inner.code === 'string' && /^[A-Z_]+$/.test(inner.code)) {
+    if (typeof inner.code === 'string' && APPLICATION_CODE.test(inner.code)) {
       return inner.code
     }
   }
@@ -157,27 +209,47 @@ function extractCode(error: unknown): string | null {
 }
 
 /**
- * Heuristically infer a code from the message text when nothing structured
- * is available. Keeps known-error patterns programmatically dispatchable.
+ * Refusals the database raises as plain text (RAISE EXCEPTION with no code of
+ * ours): the period-lock triggers (migration 017: a verifikat, and a document
+ * on one), the company lock date, and the locked period's tax adjustment and
+ * tax depreciation election triggers. Every one of them is a lock. Triggers
+ * are never edited, so their sentences are read here, once, for every door:
+ * routes and services ask isPeriodLockRefusal/isLockDateRefusal instead of
+ * matching them. Application code throws a code instead (codedRefusal,
+ * userFacing): a sentence is never how the app tells a door what failed.
  */
-function inferCode(message: string): string | null {
-  if (/Period must be locked before closing/i.test(message)) return 'PERIOD_NOT_LOCKED'
-  if (/Year-end closing must be executed/i.test(message)) return 'YEAR_END_NOT_RUN'
-  if (/Kan inte låsa period:.*affärstransaktion/i.test(message)) return 'PERIOD_HAS_UNBOOKED_TRANSACTIONS'
-  if (/Insufficient scope/i.test(message)) return 'INSUFFICIENT_SCOPE'
-  if (/already has a journal entry/i.test(message)) return 'TRANSACTION_ALREADY_CATEGORIZED'
-  if (/already been sent/i.test(message) || /already sent/i.test(message)) return 'INVOICE_ALREADY_SENT'
-  if (/locked\/closed fiscal period/i.test(message)) return 'PERIOD_LOCKED'
-  // close_period / lock_period / run_year_end and period-service throw these
-  // as plain strings; without a code they surfaced as UNKNOWN_ERROR with
-  // "Något gick fel" (feedback seq 392722, close_period after run_year_end).
-  if (/Period is already closed|already closed/i.test(message)) return 'PERIOD_ALREADY_CLOSED'
-  if (/Period is already locked|already locked/i.test(message)) return 'PERIOD_LOCK_ALREADY_LOCKED'
-  if (/Bokföringen är låst/i.test(message)) return 'PERIOD_LOCKED'
-  if (/Transaction not found/i.test(message)) return 'NOT_FOUND'
-  if (/Invoice not found/i.test(message)) return 'NOT_FOUND'
-  if (/must be \d+ characters or fewer/i.test(message)) return 'VALIDATION_ERROR'
-  return null
+const DATABASE_REFUSALS: ReadonlyArray<{ pattern: RegExp; code: string; lockDate?: true }> = [
+  // First: the generic pattern below matches the document trigger's text too.
+  // A document refused on a locked year was a 500 on v1 upload and three
+  // different sentences elsewhere; every door now answers this one code.
+  { pattern: DOCUMENT_PERIOD_LOCK_REFUSAL, code: 'DOC_UPLOAD_PERIOD_LOCKED' },
+  { pattern: /locked\/closed fiscal period/i, code: 'PERIOD_LOCKED' },
+  { pattern: /Bokföringen är låst/, code: 'PERIOD_LOCKED', lockDate: true },
+  { pattern: /Fiscal period is locked for tax (adjustments|depreciation elections)/i, code: 'PERIOD_LOCKED' },
+]
+
+function databaseRefusal(message: string) {
+  return DATABASE_REFUSALS.find(({ pattern }) => pattern.test(message)) ?? null
+}
+
+function databaseRefusalCode(message: string): string | null {
+  return databaseRefusal(message)?.code ?? null
+}
+
+/**
+ * The database refused a write behind a lock: a locked or closed period (a
+ * verifikat, or a document on one), the company lock date, or a locked
+ * period's tax figures. Takes the thrown value or its message.
+ */
+export function isPeriodLockRefusal(error: unknown): boolean {
+  if (error === null || error === undefined) return false
+  return databaseRefusal(extractEnglishMessage(error)) !== null
+}
+
+/** The company lock date (enforce_company_lock_date) refused it, not a period's own lock. */
+export function isLockDateRefusal(error: unknown): boolean {
+  if (error === null || error === undefined) return false
+  return databaseRefusal(extractEnglishMessage(error))?.lockDate === true
 }
 
 /**
@@ -233,8 +305,147 @@ function extractEnglishMessage(error: unknown): string {
   return 'Unknown error'
 }
 
+const NO_ROW_MESSAGE_EN =
+  'Not found: no record with that id exists in this company. Check the id, and company_id if the record belongs to another company.'
+
 /**
- * Build a StructuredError for an arbitrary thrown value.
+ * What a thrown value is, as a registry code. The one decision behind every
+ * door: errorResponse (REST, and v1 through it) and getStructuredError (MCP)
+ * both take the code from here, so a failure answers the same code wherever
+ * it surfaces. The doors differ only in their wording (the registry sentence
+ * for REST, the thrown text for an agent) and their fallback name.
+ */
+export interface ErrorClassification {
+  /** Registry code; UNKNOWN_ERROR when nothing identifies the failure. */
+  code: string
+  /** Structured context for the REST envelope (field issues, pgCode, the typed error's fields). */
+  details?: Record<string, unknown>
+  /** A sentence that replaces the registry's: the refusal's own, or the one its thrower wrote. */
+  message_sv?: string
+  message_en?: string
+  /** Both messages were written for this failure (userFacing): nothing may reword them. */
+  authored?: boolean
+  remediation?: StructuredErrorRemediation
+  /** The identical request may succeed after a backoff. */
+  transient: boolean
+}
+
+function asDetails(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
+}
+
+/** The field issues a VALIDATION_ERROR refusal carries (fieldValidationError, badArgument). */
+function thrownIssues(error: unknown): Record<string, unknown> | undefined {
+  const issues = (error as { issues?: unknown } | null)?.issues
+  return Array.isArray(issues) && issues.length > 0 ? { issues } : undefined
+}
+
+export function classifyError(error: unknown): ErrorClassification {
+  // Typed bookkeeping errors carry their own code and the fields behind it.
+  if (isBookkeepingError(error)) {
+    const { code, details } = extractBookkeepingDetails(error)
+    return { code, details: asDetails(details), transient: false }
+  }
+
+  // A Zod `.parse()` that threw past its call site. A parse of data the
+  // server built itself is a server bug, not a caller mistake: such a site
+  // must catch its own failure and throw INTERNAL_ERROR.
+  if (isZodError(error) && Array.isArray(error.issues) && error.issues.length > 0) {
+    const issues = error.issues.map((i) => ({ field: i.path.join('.'), message: i.message, code: i.code }))
+    return { code: 'VALIDATION_ERROR', details: { issues }, transient: false }
+  }
+
+  // A `.single()` lookup that matched no row. 46 MCP tools read one record
+  // that way, and a wrong or other-company id surfaced as UNKNOWN_ERROR with
+  // "Något gick fel. Försök igen.", which tells an agent to retry a call
+  // that can never succeed (get_inbox_item: 56 calls, 30 days).
+  if (isNoRowFromSingle(error)) {
+    return {
+      code: 'NOT_FOUND',
+      message_sv: getErrorEntry('NOT_FOUND')?.message_sv ?? 'Resursen kunde inte hittas.',
+      message_en: NO_ROW_MESSAGE_EN,
+      transient: false,
+    }
+  }
+
+  // A delete the database refused because other rows still point at the row
+  // (#2831): a code to branch on, English to act on and the way back.
+  // details names the referencing table so an API client knows what holds it.
+  const refusal = foreignKeyRefusal(error)
+  if (refusal) {
+    return {
+      code: refusal.code,
+      details: {
+        ...(isPostgresError(error) ? { pgCode: error.code } : {}),
+        ...(refusal.referencedBy ? { referenced_by: refusal.referencedBy } : {}),
+        ...(refusal.register ? { register: refusal.register } : {}),
+      },
+      ...(refusal.message_sv ? { message_sv: refusal.message_sv } : {}),
+      message_en: refusal.message_en,
+      ...(refusal.remediation ? { remediation: refusal.remediation } : {}),
+      transient: false,
+    }
+  }
+
+  const message = extractEnglishMessage(error)
+  const transient = isTransientFailure(error, message)
+
+  if (isPostgresError(error)) {
+    // Application conflicts use PT409 so PostgREST does not retry them as
+    // serialization failures. A serialization failure or a statement timeout
+    // is the opposite: the same statement may succeed on retry.
+    const code = isIgnoredTransactionJournalConstraint(error)
+      ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
+      : error.code === 'PT409'
+        ? conflictCode(error.message)
+        : TRANSIENT_SQLSTATES.has(error.code)
+          ? 'TRANSIENT_ERROR'
+          : postgresCodeToStructured(error.code)
+    if (code) return { code, details: { pgCode: error.code }, transient }
+  }
+
+  // A refusal its author wrote for the reader keeps that sentence in both
+  // languages (Swedish, like the engine's other domain errors).
+  // The throw site knows more than the registry when it attaches a hint.
+  const remediation = extractRemediation(error)
+
+  const spoken = userFacingCode(error)
+  if (spoken) {
+    return {
+      code: spoken,
+      message_sv: message,
+      message_en: message,
+      authored: true,
+      ...(remediation ? { remediation } : {}),
+      transient,
+    }
+  }
+
+  const code = extractCode(error)
+  if (code) {
+    return {
+      code,
+      ...(code === 'VALIDATION_ERROR' ? { details: thrownIssues(error) } : {}),
+      ...(remediation ? { remediation } : {}),
+      transient,
+    }
+  }
+
+  const databaseCode = databaseRefusalCode(message)
+  if (databaseCode) return { code: databaseCode, transient: false }
+
+  // Nothing more specific matched but the failure is transient: the stable
+  // TRANSIENT_ERROR code lets a client dispatch on it.
+  if (!transient) return { code: 'UNKNOWN_ERROR', transient }
+  return {
+    code: 'TRANSIENT_ERROR',
+    ...(isPlatformTimeout(error) ? { message_sv: TIMEOUT_MESSAGE_SV, message_en: TIMEOUT_MESSAGE_EN } : {}),
+    transient,
+  }
+}
+
+/**
+ * Build a StructuredError for an arbitrary thrown value: the MCP door.
  *
  * Always returns a valid StructuredError; never throws.
  */
@@ -242,64 +453,31 @@ export function getStructuredError(
   error: unknown,
   options: StructuredErrorOptions = {}
 ): StructuredError {
-  // A `.single()` lookup that matched no row. 46 MCP tools read one record
-  // that way, and a wrong or other-company id surfaced as UNKNOWN_ERROR with
-  // "Något gick fel. Försök igen.", which tells an agent to retry a call
-  // that can never succeed (get_inbox_item: 56 calls, 4 companies, 30 days).
-  if (isNoRowFromSingle(error)) {
-    const entry = getErrorEntry('NOT_FOUND')
-    return {
-      code: 'NOT_FOUND',
-      message_sv: entry?.message_sv ?? 'Resursen kunde inte hittas.',
-      message_en:
-        'Not found: no record with that id exists in this company. Check the id, and company_id if the record belongs to another company.',
-      retryable: false,
-    }
-  }
-
-  // A delete the database refused because other rows still point at the row.
-  // Before #2831 an agent got UNKNOWN_ERROR and the raw Postgres sentence;
-  // now it gets a code to branch on, English it can act on and the way back.
-  const refusal = foreignKeyRefusal(error)
-  if (refusal) {
-    return {
-      code: refusal.code,
-      message_sv: refusal.message_sv ?? getErrorMessage(error),
-      message_en: refusal.message_en,
-      remediation: refusal.remediation,
-      retryable: false,
-    }
-  }
-
-  // A Zod `.parse()` that threw past its call site. errorResponse below has
-  // always answered VALIDATION_ERROR for it; this door answered UNKNOWN_ERROR
-  // with the issue list as raw JSON (create_skill, set_inbox_extracted_data).
-  // A parse of data the server built itself is a server bug, not a caller
-  // mistake: such a site must catch its own failure and throw INTERNAL_ERROR.
+  // A Zod parse names every field at fault in both languages, as a refusal
+  // thrown with fieldValidationError does.
   if (isZodError(error) && Array.isArray(error.issues) && error.issues.length > 0) {
     return getStructuredError(fieldValidationError('Invalid arguments', zodErrorFieldIssues(error)), options)
   }
 
-  const message_en = extractEnglishMessage(error)
-  const message_sv = getErrorMessage(error)
-
-  const transient = isTransientFailure(error, message_en)
-  let code = isIgnoredTransactionJournalConstraint(error)
-    ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
-    : extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
-  // Nothing more specific matched but the failure is transient: surface the
-  // stable TRANSIENT_ERROR code so agents can dispatch on it.
-  if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
+  const classified = classifyError(error)
+  const { code } = classified
+  const message_en = classified.message_en ?? extractEnglishMessage(error)
+  const message_sv = classified.message_sv ?? getErrorMessage(error)
 
   const entry = getErrorEntry(code)
-  // The throw site knows more than the registry when it attaches a hint.
-  let remediation = extractRemediation(error) ?? entry?.remediation
+  let remediation = classified.remediation ?? entry?.remediation
 
   // Specialize INSUFFICIENT_SCOPE with the actual scope name when known.
+  // Approve gets its own hint: it is never pre-ticked on the MCP consent page
+  // (product decision 2026-10-03, issue #3408), so a default connection lacks
+  // it, and the way forward is the review list in the app, or reconnecting
+  // with it ticked (scopes cannot be added to an existing key).
   if (code === 'INSUFFICIENT_SCOPE' && options.attemptedScope && remediation) {
     remediation = {
       ...remediation,
-      description: `The current API key does not have the "${options.attemptedScope}" scope. Mint a new key with that scope or add it to the existing key in API settings.`,
+      description: options.attemptedScope === 'pending_operations:approve'
+        ? 'This connection cannot approve or reject agent proposals: it was made without the "pending_operations:approve" scope (Godkänn). The user approves or rejects them in Accounted under Att göra > Rutin (/pending). To let the agent approve in chat, the user disconnects under Agenter > Koppla en agent (/settings/api) and connects again with Godkänn ticked.'
+        : `The current API key does not have the "${options.attemptedScope}" scope. Mint a new key with that scope or add it to the existing key in API settings.`,
     }
   }
 
@@ -310,7 +488,7 @@ export function getStructuredError(
     ...(remediation ? { remediation } : {}),
     // Registry declaration wins; otherwise the transient inference decides.
     // Always explicit: agents must never have to distinguish absent from false.
-    retryable: entry?.retryable ?? transient,
+    retryable: entry?.retryable ?? classified.transient,
   }
 }
 
@@ -351,7 +529,7 @@ interface MinimalLogger {
 
 /**
  * 4xx outcomes are expected request failures (auth, validation, domain
- * guards) — log them at warn so Vercel's runtime-error clustering surfaces
+ * guards) - log them at warn so Vercel's runtime-error clustering surfaces
  * only genuine 5xx. Falls back to error when the caller's logger has no warn.
  */
 function logAtLevel(
@@ -420,14 +598,11 @@ export function isIgnoredTransactionJournalConstraint(error: unknown): boolean {
 }
 
 /**
- * Build the canonical REST error envelope for any thrown value.
- *
- * Order of dispatch:
- *   1. typed BookkeepingError → reuses bookkeepingErrorResponse()
- *   2. ZodError                → VALIDATION_ERROR with field-level details
- *   3. Postgres error code     → mapped to a structured code
- *   4. Error with `code` field present in registry → use that
- *   5. Anything else            → INTERNAL_ERROR
+ * Build the canonical REST error envelope for any thrown value. The code is
+ * classifyError's, so REST, v1 and MCP answer the same code for the same
+ * failure. Only registered codes are part of the REST contract: an
+ * unregistered or unidentified failure is the INTERNAL_ERROR (500) it always
+ * was. The messages are the registry's, unless the failure brought its own.
  *
  * Always logs the underlying error (no silent error returns). The caller
  * must pass a logger so the request id propagates to the log line.
@@ -437,96 +612,39 @@ export function errorResponse(
   log: MinimalLogger,
   ctx: ErrorResponseContext = {},
 ): NextResponse {
-  // 1. Bookkeeping domain errors: route through the registry, preserving
-  //    the structured details each typed error class carries.
-  if (isBookkeepingError(err)) {
-    const { code, details } = extractBookkeepingDetails(err)
-    const entry = entryFor(code)
-    logAtLevel(log, entry.httpStatus, code, err as Error, { requestId: ctx.requestId })
-    return buildResponse(code, entry, ctx.requestId, details ?? ctx.details)
+  const classified = classifyError(err)
+  const code =
+    classified.code !== 'UNKNOWN_ERROR' && getErrorEntry(classified.code) ? classified.code : 'INTERNAL_ERROR'
+  const registered = entryFor(code)
+  // The failure's own sentences and hint only speak for the code they came with.
+  const own = code === classified.code ? classified : undefined
+  const entry: StructuredErrorEntry = {
+    ...registered,
+    httpStatus: ctx.status ?? registered.httpStatus,
+    message_sv: own?.message_sv ?? registered.message_sv,
+    message_en: own?.message_en ?? registered.message_en,
+    remediation: own?.remediation ?? registered.remediation,
   }
-
-  // 2. Zod validation errors
-  if (isZodError(err)) {
-    const issues = (err as ZodError).issues.map((i) => ({
-      field: i.path.join('.'),
-      message: i.message,
-      code: i.code,
-    }))
-    logAtLevel(log, 400, 'validation failed', err as Error, {
+  const pgCode = classified.details?.pgCode
+  if (code === 'INTERNAL_ERROR') {
+    log.error('unhandled error', toError(err), {
       requestId: ctx.requestId,
-      issueCount: issues.length,
+      ...(pgCode ? { pgCode } : {}),
     })
-    const entry = entryFor('VALIDATION_ERROR')
-    const details = mergeDetails({ issues }, ctx.details)
-    return buildResponse('VALIDATION_ERROR', entry, ctx.requestId, details)
-  }
-
-  // 3. Postgres errors
-  if (isPostgresError(err)) {
-    // A refused delete gets its own code, sentence and remediation instead of
-    // the generic VALIDATION_ERROR (#2831). details names the referencing
-    // table so an API client knows what still holds the row.
-    const refusal = foreignKeyRefusal(err)
-    if (refusal) {
-      const entry = entryFor(refusal.code)
-      logAtLevel(log, entry.httpStatus, 'refused delete', err as unknown as Error, {
-        requestId: ctx.requestId,
-        pgCode: err.code,
-      })
-      const details = mergeDetails(
-        {
-          pgCode: err.code,
-          ...(refusal.referencedBy ? { referenced_by: refusal.referencedBy } : {}),
-          ...(refusal.register ? { register: refusal.register } : {}),
-        },
-        ctx.details,
-      )
-      return buildResponse(
-        refusal.code,
-        {
-          ...entry,
-          message_sv: refusal.message_sv ?? entry.message_sv,
-          message_en: refusal.message_en,
-          remediation: refusal.remediation,
-        },
-        ctx.requestId,
-        details,
-      )
-    }
-    const mapped = isIgnoredTransactionJournalConstraint(err)
-      ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
-      : err.code === 'PT409' ? conflictCode(err.message) : postgresCodeToStructured(err.code)
-    if (mapped) {
-      const entry = entryFor(mapped)
-      logAtLevel(log, entry.httpStatus, 'database error', err as unknown as Error, {
-        requestId: ctx.requestId,
-        pgCode: err.code,
-      })
-      const details = mergeDetails({ pgCode: err.code }, ctx.details)
-      return buildResponse(mapped, entry, ctx.requestId, details)
-    }
-    log.error('database error', err as unknown as Error, {
+  } else {
+    logAtLevel(log, entry.httpStatus, code, toError(err), {
       requestId: ctx.requestId,
-      pgCode: err.code,
+      ...(pgCode ? { pgCode } : {}),
     })
   }
-
-  // 4. Errors with a known structured code on them
-  const code = extractCode(err)
-  if (code && getErrorEntry(code)) {
-    const entry = entryFor(code)
-    const status = ctx.status ?? entry.httpStatus
-    logAtLevel(log, status, `${code}`, err instanceof Error ? err : new Error(String(err)), { requestId: ctx.requestId })
-    return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details)
-  }
-
-  // 5. Fallback: log the actual error so we can still debug
-  log.error('unhandled error', err instanceof Error ? err : new Error(String(err)), {
-    requestId: ctx.requestId,
-  })
-  const fallback = entryFor('INTERNAL_ERROR')
-  return buildResponse('INTERNAL_ERROR', fallback, ctx.requestId, ctx.details)
+  // A typed bookkeeping error's details are canonical and stand alone; any
+  // other failure's details take the route's extra context alongside.
+  const details = own?.details
+    ? isBookkeepingError(err)
+      ? own.details
+      : mergeDetails(own.details, ctx.details)
+    : ctx.details
+  return buildResponse(code, entry, ctx.requestId, details, own?.authored === true)
 }
 
 function mergeDetails(
@@ -539,7 +657,12 @@ function mergeDetails(
   return base
 }
 
-function extractBookkeepingDetails(err: unknown): { code: string; details?: unknown } {
+/**
+ * The registry code and structured details of a typed bookkeeping error, as
+ * errorResponse answers them. Exported for a route that keeps both but writes
+ * the message itself.
+ */
+export function extractBookkeepingDetails(err: unknown): { code: string; details?: unknown } {
   if (err instanceof AccountsNotInChartError) {
     return { code: err.code, details: { account_numbers: err.accountNumbers } }
   }
@@ -584,6 +707,7 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   if (err instanceof CannotReverseStornoError) {
     return { code: err.code, details: { sourceType: err.sourceType } }
   }
+  if (err instanceof CannotReverseCollectedPaymentError) return { code: err.code }
   if (err instanceof CannotCorrectNonPostedError) {
     return { code: err.code, details: { currentStatus: err.currentStatus } }
   }
@@ -596,12 +720,49 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
     return { code: err.code, details: { currentStatus: err.currentStatus } }
   }
   if (err instanceof EntryAlreadyReversedError) return { code: err.code }
+  if (err instanceof MigratedDeductionHeldByRequestError) {
+    return { code: err.code, details: { invoiceId: err.invoiceId } }
+  }
+  if (err instanceof ReversalHookMissingError) {
+    return { code: err.code, details: { sourceType: err.sourceType } }
+  }
   if (err instanceof CurrencyRevaluationAlreadyExistsError) return { code: err.code }
   if (err instanceof InvalidMappingResultError) {
     return {
       code: err.code,
       details: { debitAccount: err.debitAccount, creditAccount: err.creditAccount },
     }
+  }
+  if (err instanceof TransactionMissingSekValueError) {
+    return {
+      code: err.code,
+      details: { transactionId: err.transactionId, currency: err.currency, date: err.date },
+    }
+  }
+  if (err instanceof TransactionLinesNotBalancedError) {
+    return {
+      code: err.code,
+      details: {
+        transactionId: err.transactionId,
+        totalDebit: err.totalDebit,
+        totalCredit: err.totalCredit,
+        fromLinePattern: err.fromLinePattern,
+      },
+    }
+  }
+  // The two numbers the remediation refers to, as the staged-operation
+  // refusal carries them (pending-operations/commit.ts).
+  if (err instanceof UnattendedCommitLimitExceededError) {
+    return { code: err.code, details: { attempted: err.attempted, limit: err.limit } }
+  }
+  if (err instanceof BookingReviewRequiredError) {
+    return { code: err.code, ...(err.journalEntryId ? { details: { journal_entry_id: err.journalEntryId } } : {}) }
+  }
+  if (err instanceof AccrualDraftPostedByScheduleError) {
+    return { code: err.code, ...(err.journalEntryId ? { details: { journal_entry_id: err.journalEntryId } } : {}) }
+  }
+  if (err instanceof BookingReviewLimitError) {
+    return { code: err.code, details: { amount_sek: err.amountSek, limit_sek: err.limitSek } }
   }
   if (err instanceof MeaninglessCorrectionError) {
     return { code: err.code, details: { reason: err.reason } }
@@ -614,6 +775,12 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   }
   if (err instanceof DimensionValidationError) {
     return { code: err.code, details: { issues: err.issues } }
+  }
+  if (err instanceof ImportVatWithoutBaseError) {
+    return { code: err.code, details: { import_vat_accounts: err.importVatAccounts } }
+  }
+  if (err instanceof CorrectionBankAccountChangedError) {
+    return { code: err.code, details: { bank_account: err.bankAccount, moved_to: err.movedTo } }
   }
   // Without this arm a required-dimension refusal (account_dimension_rules)
   // fell through to the INTERNAL_ERROR default: a 500 that never said which
@@ -630,6 +797,18 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   if (err instanceof TargetPeriodLockedError) {
     return { code: err.code, details: { date: err.date, lockDate: err.lockDate } }
   }
+  if (err instanceof AccruedCostPeriodInvalidError || err instanceof AccruedIncomePeriodInvalidError) {
+    return {
+      code: err.code,
+      details: { periodStart: err.periodStart, periodEnd: err.periodEnd, invoiceDate: err.invoiceDate },
+    }
+  }
+  if (err instanceof AccruedCostPeriodLockedError || err instanceof AccruedIncomePeriodLockedError) {
+    return { code: err.code, details: { blocked: err.blocked } }
+  }
+  if (err instanceof DeferralPeriodPastError) {
+    return { code: err.code, details: deferralPeriodPastDetails(err) }
+  }
   if (err instanceof BookkeepingDatabaseError) {
     return { code: err.code, details: { operation: err.operation, ...(err.pgCode ? { pgCode: err.pgCode } : {}) } }
   }
@@ -641,6 +820,13 @@ function buildResponse(
   entry: StructuredErrorEntry,
   requestId: string | undefined,
   details: unknown,
+  /**
+   * The messages on `entry` were written for THIS failure rather than looked up
+   * from the registry, so nothing may replace them. Explicit rather than
+   * inferred: comparing against the registry entry would also silently swallow
+   * an authored sentence that happens to read like the canned one.
+   */
+  authoredMessage = false,
 ): NextResponse {
   const body: ErrorEnvelope = {
     error: {
@@ -654,9 +840,32 @@ function buildResponse(
   }
   // Consumers that read only error.message need the same actionable summary
   // as the app. Keep the full issues array and stable code for API clients.
-  if (code === 'VALIDATION_ERROR' && Array.isArray((details as { issues?: unknown } | undefined)?.issues)) {
+  //
+  // Never over an authored message. This branch rewrites both locales from the
+  // issue list, and an error marked user-facing arrives here with the sentence
+  // its author wrote in exactly those fields: a VALIDATION_ERROR carrying
+  // `details.issues` would have had that sentence replaced by a field summary,
+  // which is the single thing this whole path exists to prevent. Not reachable
+  // today (no marked error populates `issues`), and guarded rather than left to
+  // the next caller that pairs the two.
+  if (!authoredMessage && code === 'VALIDATION_ERROR' && Array.isArray((details as { issues?: unknown } | undefined)?.issues)) {
     body.error.message = getErrorMessage(body, { locale: 'sv' })
     body.error.message_en = getErrorMessage(body, { locale: 'en' })
+  }
+  // The same for a refused supplier invoice: the sentence for its
+  // details.reason, so a v1 client and the dashboard read which rule refused
+  // it, not one sentence for all of them (#96).
+  const invalidInput = !authoredMessage && code === 'SI_CREATE_INVALID_INPUT' ? siCreateInvalidInputMessages(details) : null
+  if (invalidInput) {
+    body.error.message = invalidInput.message_sv
+    body.error.message_en = invalidInput.message_en
+  }
+  // A match on a booked bank row names the verifikat that books it
+  // (accounted#58), on every door that answers with the code.
+  const alreadyBooked = !authoredMessage ? bankRowAlreadyBookedMessages(code, details) : null
+  if (alreadyBooked) {
+    body.error.message = alreadyBooked.message_sv
+    body.error.message_en = alreadyBooked.message_en
   }
   const res = NextResponse.json(body, { status: entry.httpStatus })
   if (requestId) res.headers.set('X-Request-Id', requestId)
@@ -671,7 +880,15 @@ function buildResponse(
 export function errorResponseFromCode(
   code: string,
   log: MinimalLogger,
-  ctx: ErrorResponseContext & { reason?: string } = {},
+  ctx: ErrorResponseContext & {
+    reason?: string
+    /**
+     * Replaces the registry's next step, with messageSv/messageEn, when a door
+     * keeps a code it has published but speaks another entry's answer (v1
+     * documents.link: PERIOD_LOCKED with DOC_UPLOAD_PERIOD_LOCKED's).
+     */
+    remediation?: StructuredErrorRemediation
+  } = {},
 ): NextResponse {
   const entry = entryFor(code)
   const status = ctx.status ?? entry.httpStatus
@@ -683,8 +900,10 @@ export function errorResponseFromCode(
       httpStatus: status,
       ...(ctx.messageSv ? { message_sv: ctx.messageSv } : {}),
       ...(ctx.messageEn ? { message_en: ctx.messageEn } : {}),
+      ...(ctx.remediation ? { remediation: ctx.remediation } : {}),
     },
     ctx.requestId,
     ctx.details,
+    Boolean(ctx.messageSv || ctx.messageEn),
   )
 }

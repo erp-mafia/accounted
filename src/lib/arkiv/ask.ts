@@ -16,7 +16,6 @@ import type { WordBox } from '@/lib/documents/read/types'
  * nothing is stored except the question itself as an activity; an answer
  * a person wants kept becomes a fact through the normal proposal path.
  */
-export const ASKER = { name: 'arkiv.ask', version: '1' } as const
 
 /** Text budget per question: the whole document when it fits, the most relevant pages otherwise. */
 const MAX_CHARS = 60_000

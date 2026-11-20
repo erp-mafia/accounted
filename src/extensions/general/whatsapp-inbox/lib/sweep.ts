@@ -23,6 +23,18 @@
  *     else reads (delivery_status is otherwise write-only).
  *  6. Re-open parked receipts whose company question is closed but whose
  *     drain never landed (a failed UPDATE), and process them.
+ *
+ * A run has a deadline: a re-claimed message can be a file the model reads
+ * (up to 250 s), a pass holds up to 25 of them, and nothing stopped a run
+ * from starting the next one at any point (seen at 102 s of its 300 in the 30
+ * days to 2026-11-12). No message, ack or drain is started at or after
+ * `deadlineAt`; what is left is counted, and the next run, a minute later,
+ * derives it again from the same rows.
+ *
+ * A pass that cannot read its work says so: supabase-js answers a failed
+ * query with `error`, it does not throw, and every pass read only `data`. A
+ * failed scan therefore looked exactly like "nothing stuck", and a channel
+ * whose recovery was not running reported a clean sweep every minute.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -78,6 +90,12 @@ export interface SweepSummary {
   /** Parked rows with no open company question left to re-open them,
    *  re-opened and processed by pass 6. */
   reopenedOrphans: number
+  /** Messages, acks and drains not started because the run's time was up:
+   *  the next run finds them again. */
+  deferred: number
+  /** Passes that could not read their work or failed part-way (each also
+   *  logged as an error). Non-empty means the run did not do its job. */
+  failedPasses: string[]
 }
 
 interface StuckRow {
@@ -138,8 +156,21 @@ async function loadPhoneLink(
   return (data as { phone_enc: string | null } | null) ?? null
 }
 
-/** Run one sweep pass. Never throws. */
-export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> {
+/** A pass's read failed: thrown inside the pass so its catch reports it like any other failure of that pass. */
+function readFailed(what: string, error: { message: string }): Error {
+  return new Error(`${what} could not be read: ${error.message}`)
+}
+
+/**
+ * Run one sweep pass. Never throws: a pass that fails is logged and named in
+ * `failedPasses`, and the passes after it still run. `deadlineAt` (epoch ms)
+ * is when the run stops starting work.
+ */
+export async function runSweep(
+  supabase: SupabaseClient,
+  opts: { deadlineAt?: number } = {},
+): Promise<SweepSummary> {
+  const outOfTime = () => opts.deadlineAt !== undefined && Date.now() >= opts.deadlineAt
   const summary: SweepSummary = {
     reclaimedReceived: 0,
     reclaimedProcessing: 0,
@@ -149,6 +180,8 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     clearedPins: 0,
     outboundFailed24h: 0,
     reopenedOrphans: 0,
+    deferred: 0,
+    failedPasses: [],
   }
   const finalizeConversations = new Set<string>()
   const now = Date.now()
@@ -156,7 +189,7 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
   // ── 1a. Stuck 'received' rows ──────────────────────────────
   try {
     const cutoff = new Date(now - RECEIVED_STUCK_MS).toISOString()
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('whatsapp_messages')
       .select(
         'id, attempts, conversation_id, direction, message_type, sender_phone_hash, phone_link_id, correlation_id, raw_payload',
@@ -165,7 +198,13 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
       .lt('created_at', cutoff)
       .order('created_at', { ascending: true })
       .limit(BATCH)
-    for (const row of ((data ?? []) as StuckRow[])) {
+    if (error) throw readFailed('stuck received rows', error)
+    const rows = (data ?? []) as StuckRow[]
+    for (const [index, row] of rows.entries()) {
+      if (outOfTime()) {
+        summary.deferred += rows.length - index
+        break
+      }
       if (row.attempts >= MAX_ATTEMPTS) {
         await markMaxAttempts(supabase, row, 'received')
         summary.erroredMaxAttempts++
@@ -179,12 +218,13 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     }
   } catch (err) {
     log.error('sweep: received re-claim failed', err)
+    summary.failedPasses.push('received')
   }
 
   // ── 1b. Stuck 'processing' rows (claimed, then the worker died) ──
   try {
     const cutoff = new Date(now - PROCESSING_STUCK_MS).toISOString()
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('whatsapp_messages')
       .select(
         'id, attempts, conversation_id, direction, message_type, sender_phone_hash, phone_link_id, correlation_id, raw_payload',
@@ -193,7 +233,13 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
       .lt('updated_at', cutoff)
       .order('updated_at', { ascending: true })
       .limit(BATCH)
-    for (const row of ((data ?? []) as StuckRow[])) {
+    if (error) throw readFailed('stuck processing rows', error)
+    const rows = (data ?? []) as StuckRow[]
+    for (const [index, row] of rows.entries()) {
+      if (outOfTime()) {
+        summary.deferred += rows.length - index
+        break
+      }
       if (row.attempts >= MAX_ATTEMPTS) {
         await markMaxAttempts(supabase, row, 'processing')
         summary.erroredMaxAttempts++
@@ -216,28 +262,31 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     }
   } catch (err) {
     log.error('sweep: processing re-claim failed', err)
+    summary.failedPasses.push('processing')
   }
 
   // ── 2a. Stale pending_ack (the debounce worker died pre-claim) ──
   try {
     const cutoff = new Date(now - ACK_STALE_MS).toISOString()
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('whatsapp_conversations')
       .select('id')
       .eq('pending_ack', true)
       .lt('debounce_until', cutoff)
       .limit(BATCH)
+    if (error) throw readFailed('stale pending acks', error)
     for (const row of ((data ?? []) as { id: string }[])) {
       finalizeConversations.add(row.id)
     }
   } catch (err) {
     log.error('sweep: stale pending_ack scan failed', err)
+    summary.failedPasses.push('pending_ack')
   }
 
   // ── 2b. Unacked ingested rows whose winner died post-claim ──
   try {
     const cutoff = new Date(now - UNACKED_REARM_MS).toISOString()
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('whatsapp_messages')
       .select('conversation_id')
       .eq('direction', 'inbound')
@@ -247,6 +296,7 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
       .not('conversation_id', 'is', null)
       .lt('updated_at', cutoff)
       .limit(BATCH * 2)
+    if (error) throw readFailed('unacked rows', error)
     const conversationIds = [
       ...new Set(((data ?? []) as { conversation_id: string }[]).map((r) => r.conversation_id)),
     ]
@@ -267,20 +317,27 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     }
   } catch (err) {
     log.error('sweep: unacked re-arm failed', err)
+    summary.failedPasses.push('unacked')
   }
 
-  for (const conversationId of finalizeConversations) {
+  // A conversation not reached keeps its pending_ack (or its unacked rows), so the next run finds it again.
+  for (const [index, conversationId] of [...finalizeConversations].entries()) {
+    if (outOfTime()) {
+      summary.deferred += finalizeConversations.size - index
+      break
+    }
     await finalizeBurst(supabase, conversationId)
     summary.finalizedAcks++
   }
 
   // ── 3. Question TTL (48h) ──────────────────────────────────
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('whatsapp_conversations')
       .select('*')
       .neq('state', 'idle')
       .limit(BATCH * 2)
+    if (error) throw readFailed('open questions', error)
     for (const conversation of ((data ?? []) as WhatsAppConversation[])) {
       const context = getContext(conversation)
       const askedAt = context.pending_question?.asked_at
@@ -325,12 +382,15 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
           .eq('processing_status', 'skipped')
           .eq('error_message', STAGED_AWAITING_COMPANY)
           .lt('created_at', staleCutoff)
-        const { count: stillStaged } = await supabase
+        const { count: stillStaged, error: stagedError } = await supabase
           .from('whatsapp_messages')
           .select('id', { count: 'exact', head: true })
           .eq('conversation_id', conversation.id)
           .eq('processing_status', 'skipped')
           .eq('error_message', STAGED_AWAITING_COMPANY)
+        // Unknown is not zero: taking a failed count as "nothing staged" would drop the company options the
+        // parked receipts still wait on. The question stays as it is and expires on a later run.
+        if (stagedError) throw readFailed('staged receipts of an expired company question', stagedError)
         keepCompanyOptions = (stillStaged ?? 0) > 0
       }
       // Queued questions expire with the episode.
@@ -365,15 +425,17 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     }
   } catch (err) {
     log.error('sweep: question TTL pass failed', err)
+    summary.failedPasses.push('question_ttl')
   }
 
   // ── 4. Expired company pins (8h sliding) ───────────────────
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('whatsapp_conversations')
       .select('*')
       .not('company_id', 'is', null)
       .limit(BATCH * 2)
+    if (error) throw readFailed('pinned conversations', error)
     for (const conversation of ((data ?? []) as WhatsAppConversation[])) {
       const context = getContext(conversation)
       const expiresAt = context.pin_expires_at
@@ -396,20 +458,23 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     }
   } catch (err) {
     log.error('sweep: pin expiry pass failed', err)
+    summary.failedPasses.push('pin_expiry')
   }
 
   // ── 5. Outbound delivery failures, last 24h (one head count) ──
   try {
     const since = new Date(now - 24 * 60 * 60 * 1000).toISOString()
-    const { count } = await supabase
+    const { count, error } = await supabase
       .from('whatsapp_messages')
       .select('id', { count: 'exact', head: true })
       .eq('direction', 'outbound')
       .eq('delivery_status', 'failed')
       .gte('created_at', since)
+    if (error) throw readFailed('outbound failures', error)
     summary.outboundFailed24h = count ?? 0
   } catch (err) {
     log.error('sweep: outbound failure count failed', err)
+    summary.failedPasses.push('outbound_failures')
   }
 
   // ── 6. Orphaned parked rows ────────────────────────────────
@@ -423,13 +488,14 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
   // milliseconds before its question was armed out of this pass.
   try {
     const parkedBefore = new Date(now - ORPHAN_PARKED_MIN_AGE_MS).toISOString()
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('whatsapp_messages')
       .select('conversation_id, conversation:whatsapp_conversations!inner(context)')
       .eq('processing_status', 'skipped')
       .eq('error_message', STAGED_AWAITING_COMPANY)
       .lt('created_at', parkedBefore)
       .limit(BATCH * 4)
+    if (error) throw readFailed('parked receipts', error)
     const orphaned = new Set<string>()
     for (const row of ((data ?? []) as unknown as Array<{
       conversation_id: string | null
@@ -440,20 +506,30 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
       if (options && options.length > 0) continue // question still open: not an orphan
       orphaned.add(row.conversation_id)
     }
-    for (const conversationId of orphaned) {
+    for (const [index, conversationId] of [...orphaned].entries()) {
+      if (outOfTime()) {
+        summary.deferred += orphaned.size - index
+        break
+      }
       const drained = await drainParkedRows(supabase, conversationId)
       if (drained.reopenedIds.length === 0) continue
       log.info('sweep: re-opened orphaned parked receipts', {
         conversationId,
         count: drained.reopenedIds.length,
       })
-      for (const id of drained.reopenedIds) {
+      for (const [at, id] of drained.reopenedIds.entries()) {
+        // A re-opened row not reached is a plain 'received' row now: pass 1a takes it on the next run.
+        if (outOfTime()) {
+          summary.deferred += drained.reopenedIds.length - at
+          break
+        }
         await processInboundMessage(supabase, id)
         summary.reopenedOrphans++
       }
     }
   } catch (err) {
     log.error('sweep: orphaned parked rows pass failed', err)
+    summary.failedPasses.push('orphaned_parked')
   }
 
   return summary

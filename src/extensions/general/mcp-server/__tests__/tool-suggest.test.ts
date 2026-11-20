@@ -4,9 +4,9 @@ import { tools } from '../server'
 
 const catalog = [
   { name: 'gnubok_reverse_journal_entry', description: 'Stage a storno of a posted journal entry.' },
-  { name: 'gnubok_query_journal', description: 'Read journal entries with lines.', annotations: { readOnlyHint: true } },
-  { name: 'gnubok_list_accounts', description: 'Chart of accounts.', annotations: { readOnlyHint: true } },
-  { name: 'gnubok_list_cash_accounts', description: 'Bank accounts and their ledger account.', annotations: { readOnlyHint: true }, keywords: ['bankkonto'] },
+  { name: 'gnubok_query_journal', description: 'Read journal entries with lines.', annotations: { effect: 'read_only' as const } },
+  { name: 'gnubok_list_accounts', description: 'Chart of accounts.', annotations: { effect: 'read_only' as const } },
+  { name: 'gnubok_list_cash_accounts', description: 'Bank accounts and their ledger account.', annotations: { effect: 'read_only' as const }, keywords: ['bankkonto'] },
   { name: 'gnubok_create_invoice', description: 'Stage a customer invoice.' },
 ]
 
@@ -45,8 +45,8 @@ describe('suggestToolNames: equal scores', () => {
 
   it('goes to the guess verb when the names are equally close: list_salary_runs for a list_ guess', () => {
     const payroll = [
-      { name: 'gnubok_get_salary_run', description: 'One salary run.', annotations: { readOnlyHint: true } },
-      { name: 'gnubok_list_salary_runs', description: 'Salary runs, oldest first.', annotations: { readOnlyHint: true } },
+      { name: 'gnubok_get_salary_run', description: 'One salary run.', annotations: { effect: 'read_only' as const } },
+      { name: 'gnubok_list_salary_runs', description: 'Salary runs, oldest first.', annotations: { effect: 'read_only' as const } },
     ]
     for (const list of bothOrders(payroll)) {
       expect(first('gnubok_list_salary_run', list)).toBe('gnubok_list_salary_runs')
@@ -62,7 +62,7 @@ describe('suggestToolNames: equal scores', () => {
       {
         name: 'gnubok_list_reconciliation_items',
         description: 'Rows behind one reconciliation.',
-        annotations: { readOnlyHint: true },
+        annotations: { effect: 'read_only' as const },
         keywords: ['skattekonto rows'],
       },
     ]
@@ -73,8 +73,8 @@ describe('suggestToolNames: equal scores', () => {
 
   it('goes to the closer name before the verb: get_supplier keeps list_suppliers first', () => {
     const suppliers = [
-      { name: 'gnubok_get_supplier_payment_batch', description: 'One payment batch.', annotations: { readOnlyHint: true } },
-      { name: 'gnubok_list_suppliers', description: 'The supplier register.', annotations: { readOnlyHint: true } },
+      { name: 'gnubok_get_supplier_payment_batch', description: 'One payment batch.', annotations: { effect: 'read_only' as const } },
+      { name: 'gnubok_list_suppliers', description: 'The supplier register.', annotations: { effect: 'read_only' as const } },
     ]
     for (const list of bothOrders(suppliers)) {
       expect(first('gnubok_get_supplier', list)).toBe('gnubok_list_suppliers')

@@ -32,47 +32,19 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as createLine } from '../../employees/[employeeId]/lines/route'
 import { PATCH as patchLine, DELETE as deleteLine } from '../[lineId]/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const tableCalls: string[] = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    tableCalls,
-    from: vi.fn((table: string) => {
-      tableCalls.push(table)
-      return buildChain(table)
-    }),
-  }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -137,13 +109,13 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
 
   it('creates a line and returns 201 with the qualified id (happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
         salary_run_employees: { data: { id: SRE_ID, employee_id: EMPLOYEE_ID }, error: null },
         salary_line_items: { data: SAMPLE_LINE, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createLine(
@@ -163,11 +135,11 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
 
   it('returns 400 SALARY_RUN_LINE_NOT_DRAFT when the run has advanced', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'review' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createLine(
@@ -186,12 +158,12 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
 
   it('returns 404 SALARY_RUN_EMPLOYEE_NOT_FOUND when the employee is not in the run', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
         salary_run_employees: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createLine(
@@ -209,10 +181,10 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
 
   it('rejects an unknown item_type with 400 VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createLine(
@@ -229,13 +201,13 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
   })
 
   it('returns a dry-run preview without inserting', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
       salary_run_employees: { data: { id: SRE_ID, employee_id: EMPLOYEE_ID }, error: null },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await createLine(
       makeRequest(
@@ -251,16 +223,17 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
     expect(body.data.preview.salary_line_item_id).toBeNull()
     // roundOre: 1.005 -> 1.01 (the exact-half case naive rounding gets wrong).
     expect(body.data.preview.amount).toBe(1.01)
-    expect(body.data.preview.account_number).toBe('7210')
+    // No override given: the booking resolves the default.
+    expect(body.data.preview.account_number).toBeNull()
     // No insert happened: salary_line_items was never touched.
-    expect(supabaseMock.tableCalls).not.toContain('salary_line_items')
+    expect(supabaseMock.tables()).not.toContain('salary_line_items')
   })
 
   it('returns 400 when Idempotency-Key is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const req = new Request(
@@ -284,7 +257,7 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
       scopes: ['payroll:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await createLine(
       makeRequest(
@@ -298,7 +271,7 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await createLine(
       new Request(
@@ -314,7 +287,7 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
 describe('PATCH /salary-runs/:id/lines/:lineId', () => {
   it('updates a line (happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
         salary_line_items: [
@@ -322,7 +295,7 @@ describe('PATCH /salary-runs/:id/lines/:lineId', () => {
           { data: { ...SAMPLE_LINE, amount: 5500 }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await patchLine(
@@ -341,7 +314,7 @@ describe('PATCH /salary-runs/:id/lines/:lineId', () => {
 
   it('returns 404 SALARY_LINE_NOT_FOUND for a line from another run', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
         salary_line_items: {
@@ -352,7 +325,7 @@ describe('PATCH /salary-runs/:id/lines/:lineId', () => {
           error: null,
         },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await patchLine(
@@ -370,10 +343,10 @@ describe('PATCH /salary-runs/:id/lines/:lineId', () => {
 
   it('rejects an empty patch with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await patchLine(
@@ -393,7 +366,7 @@ describe('PATCH /salary-runs/:id/lines/:lineId', () => {
 describe('DELETE /salary-runs/:id/lines/:lineId', () => {
   it('deletes a line and returns 204', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
         salary_line_items: [
@@ -401,7 +374,7 @@ describe('DELETE /salary-runs/:id/lines/:lineId', () => {
           { data: null, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteLine(
@@ -417,11 +390,11 @@ describe('DELETE /salary-runs/:id/lines/:lineId', () => {
 
   it('returns 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'booked' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteLine(
@@ -435,5 +408,246 @@ describe('DELETE /salary-runs/:id/lines/:lineId', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('SALARY_RUN_LINE_NOT_DRAFT')
+  })
+})
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts) and the 0 kr rule
+// every door shares (crm#1076).
+describe('v1 payslip lines: text rows and 0 kr rows', () => {
+  const owner = { company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null } }
+  const idem = { idempotency_keys: { data: null, error: null } }
+  const draftRun = { salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null } }
+  const onRun = { salary_run_employees: { data: { id: SRE_ID, employee_id: EMPLOYEE_ID }, error: null } }
+
+  const TEXT_LINE = {
+    ...SAMPLE_LINE,
+    item_type: 'text',
+    description: 'Lön enligt kollektivavtal',
+    amount: 0,
+    is_taxable: false,
+    is_avgift_basis: false,
+    is_vacation_basis: false,
+    account_number: null,
+    sort_order: 5,
+  }
+
+  const createUrl = `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}/lines`
+  const lineUrl = `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/lines/${LINE_ID}`
+  const textBody = { item_type: 'text', description: 'Lön enligt kollektivavtal' }
+
+  async function create(tables: Parameters<typeof createTableMockSupabase>[0], body: unknown) {
+    const mock = createTableMockSupabase(tables)
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await createLine(
+      makeRequest(createUrl, { method: 'POST', body: JSON.stringify(body) }),
+      createParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+    return { res, body: await res.json(), mock }
+  }
+
+  async function update(tables: Parameters<typeof createTableMockSupabase>[0], body: unknown) {
+    const mock = createTableMockSupabase(tables)
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await patchLine(
+      makeRequest(lineUrl, { method: 'PATCH', body: JSON.stringify(body) }),
+      lineParams(COMPANY_ID, RUN_ID, LINE_ID),
+    )
+    return { res, body: await res.json(), mock }
+  }
+
+  describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
+    it('creates a text row with no amount and returns 201', async () => {
+      const { res, body, mock } = await create(
+        { ...owner, ...idem, ...draftRun, ...onRun, salary_line_items: { data: TEXT_LINE, error: null } },
+        { ...textBody, is_taxable: true },
+      )
+
+      expect(res.status).toBe(201)
+      expect(body.data).toMatchObject({ salary_line_item_id: LINE_ID, item_type: 'text', amount: 0, account_number: null })
+      expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+        item_type: 'text',
+        description: 'Lön enligt kollektivavtal',
+        quantity: null,
+        unit_price: null,
+        amount: 0,
+        account_number: null,
+        is_taxable: false,
+        is_avgift_basis: false,
+        is_vacation_basis: false,
+        is_gross_deduction: false,
+        is_net_deduction: false,
+      })
+    })
+
+    it('previews a text row on dry_run without writing', async () => {
+      const mock = createTableMockSupabase({ ...owner, ...idem, ...draftRun, ...onRun })
+      mockServiceClient.mockReturnValue(mock.supabase)
+      const res = await createLine(
+        makeRequest(`${createUrl}?dry_run=true`, { method: 'POST', body: JSON.stringify(textBody) }),
+        createParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data.preview).toMatchObject({ salary_line_item_id: null, item_type: 'text', amount: 0, account_number: null })
+      expect(mock.tables()).not.toContain('salary_line_items')
+    })
+
+    it('returns 400 VALIDATION_ERROR for a text row with an amount', async () => {
+      const { res, body, mock } = await create({ ...owner, ...idem, ...draftRun, ...onRun }, { ...textBody, amount: 500 })
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details).toMatchObject({
+        field: 'amount',
+        message: 'En textrad har inget belopp. Lägg beloppet på en egen rad.',
+      })
+      expect(mock.tables()).not.toContain('salary_line_items')
+    })
+
+    it('returns 400 VALIDATION_ERROR for a 0 kr money row and a money row without an amount', async () => {
+      for (const body of [
+        { item_type: 'bonus', description: 'Bonus', amount: 0 },
+        { item_type: 'bonus', description: 'Bonus' },
+      ]) {
+        const { res, body: json, mock } = await create({ ...owner, ...idem, ...draftRun, ...onRun }, body)
+        expect(res.status).toBe(400)
+        expect(json.error.code).toBe('VALIDATION_ERROR')
+        expect(json.error.details.field).toBe('amount')
+        expect(json.error.details.message).toMatch(/inte är 0 kr/)
+        expect(mock.tables()).not.toContain('salary_line_items')
+      }
+    })
+
+    it('returns 400 VALIDATION_ERROR for a wrong sign', async () => {
+      for (const body of [
+        { item_type: 'gross_deduction_other', description: 'Avdrag', amount: 1000 },
+        { item_type: 'mileage_taxfree', description: 'Mil', amount: -300 },
+        { item_type: 'benefit_other', description: 'Förmån', amount: -100 },
+      ]) {
+        const { res, body: json, mock } = await create({ ...owner, ...idem, ...draftRun, ...onRun }, body)
+        expect(res.status).toBe(400)
+        expect(json.error.code).toBe('VALIDATION_ERROR')
+        expect(json.error.details.field).toBe('amount')
+        expect(mock.tables()).not.toContain('salary_line_items')
+      }
+    })
+
+    it('creates a vacation line that carries only its days, as the docs say (crm#1331)', async () => {
+      const VACATION_LINE = { ...SAMPLE_LINE, item_type: 'vacation', description: 'Semester', quantity: 5, amount: 0 }
+      const { res, body, mock } = await create(
+        { ...owner, ...idem, ...draftRun, ...onRun, salary_line_items: { data: VACATION_LINE, error: null } },
+        { item_type: 'vacation', description: 'Semester', quantity: 5 },
+      )
+      expect(res.status).toBe(201)
+      expect(body.data).toMatchObject({ item_type: 'vacation', quantity: 5, amount: 0 })
+      expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ item_type: 'vacation', quantity: 5, amount: 0 })
+    })
+
+    it('returns 400 VALIDATION_ERROR for a vacation line with neither days nor an amount', async () => {
+      const { res, body, mock } = await create(
+        { ...owner, ...idem, ...draftRun, ...onRun },
+        { item_type: 'vacation', description: 'Semester' },
+      )
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details.field).toBe('quantity')
+      expect(mock.tables()).not.toContain('salary_line_items')
+    })
+
+    it('returns 404 SALARY_RUN_NOT_FOUND for an unknown run', async () => {
+      const { res, body } = await create(
+        { ...owner, ...idem, salary_runs: { data: null, error: null } },
+        textBody,
+      )
+      expect(res.status).toBe(404)
+      expect(body.error.code).toBe('SALARY_RUN_NOT_FOUND')
+    })
+
+    it('returns 404 SALARY_RUN_EMPLOYEE_NOT_FOUND for an employee not on the run', async () => {
+      const { res, body } = await create(
+        { ...owner, ...idem, ...draftRun, salary_run_employees: { data: null, error: null } },
+        textBody,
+      )
+      expect(res.status).toBe(404)
+      expect(body.error.code).toBe('SALARY_RUN_EMPLOYEE_NOT_FOUND')
+    })
+
+    it('returns 401 for a text row without a bearer token', async () => {
+      mockValidate.mockResolvedValue(null)
+      mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+      const res = await createLine(
+        new Request(createUrl, { method: 'POST', body: JSON.stringify(textBody) }),
+        createParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+      )
+      expect(res.status).toBe(401)
+    })
+  })
+
+  describe('PATCH /salary-runs/:id/lines/:lineId', () => {
+    const storedText = { data: { ...TEXT_LINE, salary_run_employee: { salary_run_id: RUN_ID } }, error: null }
+
+    it('updates the words of a text row and returns 200', async () => {
+      const { res, body, mock } = await update(
+        {
+          ...owner,
+          ...idem,
+          ...draftRun,
+          salary_line_items: [storedText, { data: { ...TEXT_LINE, description: 'Ny text' }, error: null }],
+        },
+        { description: 'Ny text' },
+      )
+      expect(res.status).toBe(200)
+      expect(body.data).toMatchObject({ salary_line_item_id: LINE_ID, description: 'Ny text', amount: 0 })
+      expect(mock.findCall('salary_line_items', 'update')?.[0]).toMatchObject({
+        description: 'Ny text',
+        account_number: null,
+        is_taxable: false,
+      })
+    })
+
+    it('returns 400 VALIDATION_ERROR for an amount on a text row', async () => {
+      const { res, body, mock } = await update(
+        { ...owner, ...idem, ...draftRun, salary_line_items: [storedText] },
+        { amount: 250 },
+      )
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details.field).toBe('amount')
+      expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+    })
+
+    it('returns 400 VALIDATION_ERROR when a money row is patched to 0 kr', async () => {
+      const { res, body, mock } = await update(
+        {
+          ...owner,
+          ...idem,
+          ...draftRun,
+          salary_line_items: [{ data: { ...SAMPLE_LINE, salary_run_employee: { salary_run_id: RUN_ID } }, error: null }],
+        },
+        { amount: 0 },
+      )
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details.message).toMatch(/inte är 0 kr/)
+      expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+    })
+
+    it('returns 404 SALARY_RUN_NOT_FOUND for an unknown run', async () => {
+      const { res, body } = await update(
+        { ...owner, ...idem, salary_runs: { data: null, error: null } },
+        { description: 'Ny text' },
+      )
+      expect(res.status).toBe(404)
+      expect(body.error.code).toBe('SALARY_RUN_NOT_FOUND')
+    })
+
+    it('returns 401 without a bearer token', async () => {
+      mockValidate.mockResolvedValue(null)
+      mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+      const res = await patchLine(
+        new Request(lineUrl, { method: 'PATCH', body: JSON.stringify({ description: 'Ny text' }) }),
+        lineParams(COMPANY_ID, RUN_ID, LINE_ID),
+      )
+      expect(res.status).toBe(401)
+    })
   })
 })

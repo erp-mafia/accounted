@@ -149,6 +149,23 @@ describe('POST /api/import/skattekonto-file/parse', () => {
     expect(body.data.file_hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it('reads the same number stored in 12 digits as this company', async () => {
+    enqueue({ data: null }) // no prior import
+    enqueue({ data: { org_number: '165566778899' } }) // company_settings
+    enqueue({ data: [] }) // existing rows page
+    const { body } = await jsonOf(await POST(makeFileRequest(MODERN_CSV), emptyParams))
+    expect(body.data.org_number_mismatch).toBe(false)
+  })
+
+  it('checks against a number held only on the company row', async () => {
+    enqueue({ data: null }) // no prior import
+    enqueue({ data: { org_number: null } }) // company_settings
+    enqueue({ data: { org_number: '5591112223' } }) // companies
+    enqueue({ data: [] }) // existing rows page
+    const { body } = await jsonOf(await POST(makeFileRequest(MODERN_CSV), emptyParams))
+    expect(body.data.org_number_mismatch).toBe(true)
+  })
+
   it('flags an org number mismatch', async () => {
     enqueue({ data: null }) // no prior import
     enqueue({ data: { org_number: '5591112223' } }) // different company

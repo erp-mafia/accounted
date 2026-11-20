@@ -1,22 +1,30 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { CustomerImportExecuteSchema } from '@/lib/api/schemas'
-import { normalizeOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
+import { createRegisterMatcher, customerMatchRow } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
+import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import {
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+} from '@/lib/invariants/personal-number-shape'
+import { invoiceTermsFor } from '@/lib/invoices/due-date'
+import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 
 interface ExistingCustomer {
   id: string
   name: string
+  customer_number: string | null
   org_number: string | null
+  /** Ciphertext; read only to know whether one is stored. */
+  personal_number: string | null
   email: string | null
   phone: string | null
   address_line1: string | null
@@ -33,9 +41,16 @@ interface ExistingCustomer {
 /**
  * POST /api/import/customers/execute
  *
- * Imports validated customer rows. Duplicates (matched by org_number or email)
- * are either updated (merge: only non-empty file fields overwrite) or skipped
- * based on `update_duplicates`.
+ * Imports validated customer rows. Duplicates (matched by customer number,
+ * org number or e-mail, or a same-name customer the user confirmed: see
+ * lib/import/shared/register-match.ts) are either updated (merge: only
+ * non-empty file fields overwrite) or skipped based on `update_duplicates`.
+ *
+ * An individual's personnummer arrives in the org number column; the schema
+ * moves it into personal_number and this route stores it encrypted, with
+ * org_number empty. It is never a match key, here as in the preview
+ * (customerMatchRow): an individual is found by customer number, e-mail or a
+ * confirmed name only, and never in a business that has an org number.
  */
 export const POST = withRouteContext(
   'register_import.customers.execute',
@@ -56,27 +71,25 @@ export const POST = withRouteContext(
     }
 
     try {
+      const beforeImport = await snapshotRowsForUndo(supabase, companyId, 'customers', update_duplicates)
       const existingRaw = await fetchAllRows(({ from, to }) =>
         supabase
           .from('customers')
           .select(
-            'id, name, org_number, email, phone, address_line1, address_line2, ' +
+            'id, name, customer_number, org_number, email, phone, address_line1, address_line2, ' +
               'postal_code, city, country, vat_number, default_payment_terms, notes, ' +
-              'customer_type',
+              'customer_type, personal_number',
           )
           .eq('company_id', companyId)
           .range(from, to),
       )
       const existing = existingRaw as unknown as ExistingCustomer[]
 
-      const byOrg = new Map<string, ExistingCustomer>()
-      const byEmail = new Map<string, ExistingCustomer>()
-      for (const c of existing) {
-        const org = normalizeOrgNumber(c.org_number)
-        if (org) byOrg.set(org, c)
-        const email = normalizeEmail(c.email)
-        if (email) byEmail.set(email, c)
-      }
+      const matcher = createRegisterMatcher(existing)
+      // A row without terms puts a new card on the company default: read once.
+      const companyDefaultTerms = rows.some((row) => row.default_payment_terms === null)
+        ? await resolveDefaultPaymentTerms(supabase, companyId, undefined)
+        : null
 
       const created: Customer[] = []
       const updated: Customer[] = []
@@ -84,12 +97,7 @@ export const POST = withRouteContext(
       const errors: { row_index: number; name: string; reason: string }[] = []
 
       for (const row of rows) {
-        const orgKey = normalizeOrgNumber(row.org_number)
-        const emailKey = normalizeEmail(row.email)
-        const match =
-          (orgKey && byOrg.get(orgKey)) ||
-          (emailKey && byEmail.get(emailKey)) ||
-          null
+        const match = matcher.resolve(customerMatchRow(row), row.confirmed_duplicate_of)
 
         if (match) {
           if (!update_duplicates) {
@@ -101,7 +109,21 @@ export const POST = withRouteContext(
           const merged: Record<string, unknown> = {}
           if (row.name) merged.name = row.name
           if (row.customer_type) merged.customer_type = row.customer_type
-          if (row.org_number) merged.org_number = row.org_number
+          if (row.customer_number) merged.customer_number = row.customer_number
+          if (row.customer_type === 'individual') {
+            // An individual has no org number, so whatever the matched row
+            // carried there goes. A personnummer an earlier import stored
+            // there is kept, encrypted in personal_number, unless the file
+            // brings one or the row already holds one.
+            if (match.org_number?.trim()) merged.org_number = null
+            const personalNumber = row.personal_number
+              ?? (!match.personal_number && orgNumberHoldsPersonalNumber('individual', match.org_number)
+                ? normalizeReroutedPersonalNumber(match.org_number!)
+                : null)
+            if (personalNumber) merged.personal_number = encryptCustomerPersonalNumber(personalNumber)
+          } else if (row.org_number) {
+            merged.org_number = row.org_number
+          }
           if (row.email) merged.email = row.email
           if (row.phone) merged.phone = row.phone
           if (row.address_line1) merged.address_line1 = row.address_line1
@@ -110,7 +132,7 @@ export const POST = withRouteContext(
           if (row.city) merged.city = row.city
           if (row.country) merged.country = row.country
           if (row.vat_number) merged.vat_number = row.vat_number
-          if (row.default_payment_terms) merged.default_payment_terms = row.default_payment_terms
+          if (row.default_payment_terms !== null) merged.default_payment_terms = row.default_payment_terms
           if (row.notes) merged.notes = row.notes
 
           if (Object.keys(merged).length === 0) {
@@ -130,7 +152,10 @@ export const POST = withRouteContext(
             errors.push({ row_index: row.row_index, name: row.name, reason: getUserErrorMessage(error) })
             continue
           }
-          if (data) updated.push(data as Customer)
+          if (data) {
+            updated.push(data as Customer)
+            matcher.add(data as ExistingCustomer)
+          }
           continue
         }
 
@@ -142,6 +167,7 @@ export const POST = withRouteContext(
             company_id: companyId,
             name: row.name,
             customer_type: row.customer_type,
+            customer_number: row.customer_number || null,
             email: row.email,
             phone: row.phone,
             address_line1: row.address_line1,
@@ -150,8 +176,10 @@ export const POST = withRouteContext(
             city: row.city,
             country: row.country || 'SE',
             org_number: row.org_number,
+            // Stored as ciphertext (customers_personal_number_check).
+            personal_number: encryptCustomerPersonalNumber(row.personal_number),
             vat_number: row.vat_number,
-            default_payment_terms: row.default_payment_terms || 30,
+            default_payment_terms: invoiceTermsFor(row.default_payment_terms, companyDefaultTerms),
             notes: row.notes,
           })
           .select()
@@ -168,22 +196,37 @@ export const POST = withRouteContext(
         }
         if (data) {
           created.push(data as Customer)
-          // Track newly inserted org/email so subsequent rows in the same batch
-          // dedup against them too.
-          const newOrg = normalizeOrgNumber(data.org_number)
-          if (newOrg) byOrg.set(newOrg, data as ExistingCustomer)
-          const newEmail = normalizeEmail(data.email)
-          if (newEmail) byEmail.set(newEmail, data as ExistingCustomer)
+          // Later rows in the same batch dedup against it too.
+          matcher.add(data as ExistingCustomer)
         }
       }
 
       // Emit events for downstream listeners (non-blocking).
+      // Masked like POST /api/customers: the row carries personal_number
+      // ciphertext, which no listener needs.
       for (const c of created) {
         await eventBus.emit({
           type: 'customer.created',
-          payload: { customer: c, companyId: companyId!, userId: user.id },
+          payload: { customer: maskCustomerRow(c), companyId: companyId!, userId: user.id },
         })
       }
+
+      // A personnummer the merge moved out of a legacy individual's
+      // org_number stays out of the undo record: register_import_runs would
+      // hold it in plaintext and the undo would put it back in org_number.
+      // The undo restores the row's other fields and leaves it encrypted.
+      for (const c of updated) {
+        const prev = beforeImport.get(c.id)
+        if (
+          prev?.customer_type === 'individual'
+          && c.customer_type === 'individual'
+          && orgNumberHoldsPersonalNumber('individual', prev.org_number as string | null)
+        ) {
+          beforeImport.set(c.id, { ...prev, org_number: c.org_number, personal_number: c.personal_number })
+        }
+      }
+
+      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
 
       const response: CustomerImportExecuteResult = {
         success: errors.length === 0,

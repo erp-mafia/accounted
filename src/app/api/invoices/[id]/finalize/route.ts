@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Invoice } from '@/types'
-
-ensureInitialized() // Module-level: loads extensions so invoice.created handlers are wired.
 
 /**
  * POST /api/invoices/[id]/finalize: "Granska och skapa".
@@ -29,7 +28,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: invoice, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, document_type, is_self_billed')
+      .select('id, status, invoice_number, document_type, is_self_billed, customer_id, credited_invoice_id, total')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -54,11 +53,33 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode('INVOICE_FINALIZE_NOT_DRAFT', log, { requestId })
     }
 
+    // An F-number is not a credit note's: one issued in-app has its own number
+    // from the start, and one imported without a link has no original to name
+    // (ML 17 kap 22 §), so it would hold a number no door can issue.
+    if (isCreditNoteDocument(invoice)) {
+      return errorResponseFromCode('INVOICE_CREDIT_NOTE_NOT_ISSUABLE', log, { requestId })
+    }
+
+    // A number is only spent on an invoice with a buyer: a draft whose
+    // customer was deleted (crm#263) stays unnumbered, so it can still be
+    // given a customer or deleted outright.
+    if (invoiceLacksCustomer(invoice)) {
+      return errorResponseFromCode('INVOICE_CUSTOMER_MISSING', log, { requestId })
+    }
+
     try {
       await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
     } catch (err) {
+      // A series refusal used up nothing and leaves the draft unnumbered: the
+      // company sets where its series continues and finalizes again.
       log.error('failed to assign invoice number on finalize', err as Error, { invoiceId: id })
-      return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
+      const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+      return errorResponseFromCode(failure.code, log, {
+        requestId,
+        messageSv: failure.messageSv,
+        messageEn: failure.messageEn,
+        details: failure.details,
+      })
     }
 
     const { data: completeInvoice, error: refetchError } = await supabase

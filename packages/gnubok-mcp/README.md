@@ -11,7 +11,7 @@ Write tools stage a pending operation that you confirm before anything is booked
 
 ## Quickstart
 
-1. Mint an API key in the Accounted dashboard at **[/settings/api](https://app.gnubok.se/settings/api)**. Use a `gnubok_sk_test_*` key against the sandbox while you evaluate; switch to `gnubok_sk_live_*` for real data. The key's scopes gate which tools are callable.
+1. Mint an API key in the Accounted dashboard at **[/settings/api](https://app.gnubok.se/settings/api)**. Use a `gnubok_sk_test_*` key while you evaluate: it reaches the same companies as a live key (there is no separate sandbox company), but no write goes through: a write that supports a dry run is forced into one and any other write is refused, so nothing is booked or sent. Switch to a live key (`gnubok_sk_*`, no `test_` infix) to commit real writes. The key's scopes gate which tools are callable.
 
 2. Run the bridge with the key in the environment:
 
@@ -49,9 +49,11 @@ Restart Claude Desktop. The Accounted tools appear in the client and you can sta
 | `GNUBOK_URL` | no | `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp` | Override the MCP endpoint (e.g. for self-hosted Accounted). |
 | `GNUBOK_CLIENT` | no | - | Distribution-channel marker (e.g. `openclaw`), sent as `X-Gnubok-Client`. Telemetry only: never affects auth or behavior. |
 
+Every request carries `User-Agent: gnubok-mcp/<version>`. Without `GNUBOK_CLIENT`, from the MCP client's `initialize` request on, the bridge appends that request's `clientInfo` as `gnubok-mcp/<version> (<name>/<version>)`, each value reduced to `[A-Za-z0-9._-]` and at most 64 characters. Telemetry only, like `GNUBOK_CLIENT`; the forwarded messages are unchanged.
+
 ## Alternative: claude.ai connector (no API key)
 
-If you use **claude.ai** or Claude Desktop's custom-connector flow, you can skip this bridge entirely and add Accounted as an OAuth 2.1 custom connector instead: paste the connector URL `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?client=claude-connector` and authorise on the Accounted consent screen (read-only scopes by default; write scopes are ticked explicitly).
+If you use **claude.ai** or Claude Desktop's custom-connector flow, you can skip this bridge entirely and add Accounted as an OAuth 2.1 custom connector instead: paste the connector URL `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?client=claude-connector&auth=required` (keep `auth=required`: it makes the dialog detect the sign-in) and authorise on the Accounted consent screen (every permission except Approve is pre-selected; tick Approve only if the agent should approve its own proposals).
 
 ## Docs
 
@@ -59,7 +61,7 @@ Full setup, sample prompts, and a 10-minute reviewer test: **[Connect with Claud
 
 ## Releasing
 
-The package is published to npm by the `Publish MCP bridges to npm` workflow
+The package is published to npm by the `Publish packages to npm` workflow
 (`.github/workflows/npm-publish.yml`), never by hand:
 
 1. Bump `version` in `packages/gnubok-mcp/package.json`.
@@ -71,12 +73,12 @@ The package is published to npm by the `Publish MCP bridges to npm` workflow
    already exists on npm is skipped, so other `package.json` edits are harmless.
 
 The workflow needs the repository secret `NPM_TOKEN`: an npm granular access
-token with read and write access to `accounted-mcp` and `gnubok-mcp`, with
-two-factor bypass enabled so CI can publish. npm caps the lifetime of such
-tokens (90 days at the time of writing), so rotate the secret before it lapses.
-Without the secret the run fails at its first step. The workflow can also be
-started from the Actions tab, for one package or both, with a dry-run option
-that packs and validates without publishing.
+token with read and write access to `accounted-mcp`, `gnubok-mcp` and
+`accounted`, with two-factor bypass enabled so CI can publish. npm caps the
+lifetime of such tokens (90 days at the time of writing), so rotate the secret
+before it lapses. Without the secret the run fails at its first step. The
+workflow can also be started from the Actions tab, for one package or all, with
+a dry-run option that packs and validates without publishing.
 
 ## License
 

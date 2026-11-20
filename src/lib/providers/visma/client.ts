@@ -1,5 +1,5 @@
 import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
-import { TokenBucketRateLimiter } from '../rate-limiter';
+import { TokenBucketRateLimiter, connectionRateKey } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { VISMA_BASE_URL, VISMA_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
@@ -52,7 +52,7 @@ export class VismaClient {
     const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {

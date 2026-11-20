@@ -1,19 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { isValidOrgNumber, normalizeAmount, normalizeDate, normalizeOrgNumber, normalizeValue, valuesAgree } from '../fields'
+import { normalizeAmount, normalizeDate, normalizeValue, valuesAgree } from '../fields'
 
 describe('organisation numbers', () => {
   it('keeps ten digits and drops the century of a 12-digit form', () => {
-    expect(normalizeOrgNumber('559538-6219')).toBe('5595386219')
-    expect(normalizeOrgNumber('16 5595386219')).toBe('5595386219')
-    expect(normalizeOrgNumber('55953862')).toBeNull()
-    expect(normalizeOrgNumber(5595386219)).toBeNull()
+    expect(normalizeValue('orgnr', '559538-6219')).toBe('5595386219')
+    expect(normalizeValue('orgnr', '16 5595386219')).toBe('5595386219')
+    expect(normalizeValue('orgnr', '18 5595386219')).toBe('5595386219')
+    expect(normalizeValue('orgnr', '55953862')).toBeNull()
+    expect(normalizeValue('orgnr', 5595386219)).toBeNull()
   })
 
-  it('checks the Luhn digit', () => {
-    expect(isValidOrgNumber('5595386219')).toBe(true)
-    expect(isValidOrgNumber('5595386218')).toBe(false)
-    expect(isValidOrgNumber('5560167452')).toBe(false)
-    expect(isValidOrgNumber('abc')).toBe(false)
+  it('reads no Swedish number out of a foreign one', () => {
+    expect(normalizeValue('orgnr', 'BE5595386219')).toBeNull()
   })
 })
 
@@ -43,6 +41,10 @@ describe('normalizeDate', () => {
     expect(normalizeDate('01.03.2026')).toBe('2026-03-01')
     expect(normalizeDate('1 mars 2026')).toBe('2026-03-01')
     expect(normalizeDate('1 okt. 2026')).toBe('2026-10-01')
+  })
+
+  it('reads a day-first date with dashes, as "Oss tillhanda: 25-11-2026" prints it (crm#1610)', () => {
+    expect(normalizeDate('25-11-2026')).toBe('2026-11-25')
   })
 
   it('refuses a partial or impossible date', () => {

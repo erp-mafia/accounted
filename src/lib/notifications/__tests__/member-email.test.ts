@@ -22,7 +22,7 @@ vi.mock('@/lib/logger', () => ({
   }),
 }))
 
-import { resolveMemberEmail, resolveMemberEmails } from '../member-email'
+import { resolveMemberEmail } from '../member-email'
 
 interface QueryRecord {
   table: string
@@ -65,18 +65,11 @@ function makeSupabase(opts: {
         record.filters[key] = value
         return builder
       },
-      in: (key: string, value: unknown) => {
-        record.filters[key] = value
-        return builder
-      },
-      order: () => builder,
-      range: () => builder,
       maybeSingle: async () => {
         const r = result()
         const rows = r.data as Array<Record<string, unknown>> | null
         return { data: rows?.[0] ?? null, error: r.error }
       },
-      then: (resolve: (v: unknown) => void) => resolve(result()),
     })
     return builder
   }
@@ -149,51 +142,51 @@ describe('resolveMemberEmail', () => {
 })
 
 describe('resolveMemberEmails', () => {
-  it('maps every member with a profile email, keyed by user id', async () => {
-    const { supabase, queries } = makeSupabase({
-      memberRows: [{ user_id: 'user-1' }, { user_id: 'user-2' }, { user_id: 'user-3' }],
-      profileRows: [
-        { id: 'user-1', email: 'owner@example.com' },
-        { id: 'user-2', email: 'revisor@byra.se' },
-        { id: 'user-3', email: null },
+  function batchSupabase(memberIds: string[], profiles: Array<{ id: string; email: string | null; deleted_at: string | null }>) {
+    const asked: Record<string, unknown[]> = {}
+    const chain = (table: string) => {
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        in: (_column: string, ids: unknown[]) => {
+          asked[table] = ids
+          return builder
+        },
+        then: (resolve: (v: unknown) => void) =>
+          resolve(
+            table === 'company_members'
+              ? { data: memberIds.map((user_id) => ({ user_id })), error: null }
+              : { data: profiles.filter((p) => (asked.profiles ?? []).includes(p.id)), error: null },
+          ),
+      }
+      return builder
+    }
+    return { supabase: { from: chain } as unknown as SupabaseClient, asked }
+  }
+
+  it('keys each active member to their address, leaving out non-members, deleted accounts and empty addresses', async () => {
+    const { resolveMemberEmails } = await import('../member-email')
+    const { supabase, asked } = batchSupabase(
+      ['u-member', 'u-deleted', 'u-blank'],
+      [
+        { id: 'u-member', email: ' anna@example.se ', deleted_at: null },
+        { id: 'u-deleted', email: 'gone@example.se', deleted_at: '2026-10-01T00:00:00Z' },
+        { id: 'u-blank', email: '  ', deleted_at: null },
+        { id: 'u-former', email: 'former@example.se', deleted_at: null },
       ],
-    })
+    )
 
-    const emails = await resolveMemberEmails(supabase, 'company-1')
+    const emails = await resolveMemberEmails(supabase, 'company-1', ['u-member', 'u-deleted', 'u-blank', 'u-former'])
 
-    expect(emails.get('user-1')).toBe('owner@example.com')
-    expect(emails.get('user-2')).toBe('revisor@byra.se')
-    expect(emails.has('user-3')).toBe(false)
-    const memberQuery = queries.find((q) => q.table === 'company_members')
-    expect(memberQuery?.columns).toBe('user_id')
-    const profileQuery = queries.find((q) => q.table === 'profiles')
-    expect(profileQuery?.columns).toBe('id, email')
-    expect(profileQuery?.filters).toMatchObject({ id: ['user-1', 'user-2', 'user-3'] })
+    expect([...emails]).toEqual([['u-member', 'anna@example.se']])
+    // Only members' profiles are read.
+    expect(asked.profiles).toEqual(['u-member', 'u-deleted', 'u-blank'])
   })
 
-  it('returns an empty map for a company with no members (no profile query)', async () => {
-    const { supabase, queries } = makeSupabase({ memberRows: [] })
-    const emails = await resolveMemberEmails(supabase, 'company-1')
-    expect(emails.size).toBe(0)
-    expect(queries.some((q) => q.table === 'profiles')).toBe(false)
-  })
-
-  it('logs and returns an empty map on a member query error', async () => {
-    const { supabase } = makeSupabase({
-      membersError: { message: 'permission denied for table company_members' },
-    })
-    const emails = await resolveMemberEmails(supabase, 'company-1')
-    expect(emails.size).toBe(0)
-    expect(warnedWith('could not read company members')).toBe(true)
-  })
-
-  it('logs and returns an empty map on a profiles query error', async () => {
-    const { supabase } = makeSupabase({
-      memberRows: [{ user_id: 'user-1' }],
-      profilesError: { message: 'timeout' },
-    })
-    const emails = await resolveMemberEmails(supabase, 'company-1')
-    expect(emails.size).toBe(0)
-    expect(warnedWith('could not read member emails')).toBe(true)
+  it('reads nothing for nobody', async () => {
+    const { resolveMemberEmails } = await import('../member-email')
+    const from = vi.fn()
+    expect((await resolveMemberEmails({ from } as unknown as SupabaseClient, 'company-1', [])).size).toBe(0)
+    expect(from).not.toHaveBeenCalled()
   })
 })

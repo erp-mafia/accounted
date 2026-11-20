@@ -10,6 +10,14 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
 const mockCreateJE = vi.fn()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: (...args: unknown[]) => mockCreateJE(...args),
 }))
@@ -30,6 +38,20 @@ vi.mock('@/lib/transactions/link-journal-entry', () => ({
 }))
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
+}))
+
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
 }))
 
 import { categorizeMatchedTransaction } from '../categorize-core'
@@ -69,6 +91,7 @@ describe('categorizeMatchedTransaction: VAT registration', () => {
     async ({ vat_registered, vatLines }) => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({ data: txRow() }) // transactions select
+      enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
       enqueue({ data: { entity_type: 'ideell_forening', fiscal_year_start_month: 1, vat_registered } })
       enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
       enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod: open period exists

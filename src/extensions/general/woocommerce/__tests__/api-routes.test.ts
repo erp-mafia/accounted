@@ -30,7 +30,11 @@ vi.mock('@/lib/auth/api-keys', () => ({
 import { woocommerceExtension } from '../index'
 import { requireCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { testConnectionAndFetchStoreInfo } from '../lib/api-client'
+import {
+  STORE_FIREWALL_CODE,
+  WooCommerceApiError,
+  testConnectionAndFetchStoreInfo,
+} from '../lib/api-client'
 import { syncWooCommerceOrders } from '../lib/order-sync'
 import { decryptCredential } from '../lib/credentials'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -99,15 +103,6 @@ describe('woocommerce extension routes', () => {
   })
 
   describe('GET /status', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('GET', '/status').handler(
-        makeRequest('GET'),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('prefers the active connection and reports configured', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
@@ -126,29 +121,110 @@ describe('woocommerce extension routes', () => {
       const body = await res.json()
       expect(body.configured).toBe(true)
       expect(body.connection.id).toBe('c1')
+      expect(body.connection.skipped_currency_orders).toBeUndefined()
+    })
+
+    it('lists a failed attempt on another store, not the failed attempts before a store connected (crm#2056)', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      const shop = 'https://shop.example.se'
+      enqueue({
+        data: [
+          { id: 'live', status: 'active', store_url: shop },
+          { id: 'gone', status: 'revoked', store_url: shop },
+          ...Array.from({ length: 8 }, (_, i) => ({ id: `retry-${i}`, status: 'error', store_url: shop })),
+          { id: 'other', status: 'error', store_url: 'https://www.shop.example.se' },
+          ...Array.from({ length: 5 }, (_, i) => ({ id: `first-${i}`, status: 'error', store_url: shop })),
+        ],
+      })
+      enqueue({ data: [] })
+      const res = await findRoute('GET', '/status').handler(makeRequest('GET'), makeContext(supabase))
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.connections.map((c: { id: string }) => c.id)).toEqual(['live', 'other'])
+      expect(body.connection.id).toBe('live')
+    })
+
+    it('shows the newest row when every store was disconnected', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({
+        data: [
+          { id: 'gone', status: 'revoked', store_url: 'https://shop.example.se', connected_at: '2026-11-01T10:00:00.000Z' },
+          { id: 'old', status: 'error', store_url: 'https://shop.example.se', connected_at: null },
+        ],
+      })
+      enqueue({ data: [] })
+      const res = await findRoute('GET', '/status').handler(makeRequest('GET'), makeContext(supabase))
+      const body = await res.json()
+      expect(body.connections.map((c: { id: string }) => c.id)).toEqual(['gone'])
+    })
+
+    it('does not bring back a failed attempt the user removed', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({
+        data: [
+          { id: 'removed', status: 'revoked', store_url: 'https://shop.example.se', connected_at: null },
+          { id: 'old', status: 'error', store_url: 'https://shop.example.se', connected_at: null },
+        ],
+      })
+      const res = await findRoute('GET', '/status').handler(makeRequest('GET'), makeContext(supabase))
+      const body = await res.json()
+      expect(body.connections).toEqual([])
+      expect(body.connection).toBeNull()
+    })
+
+    it('attaches the durable skipped-orders list to its store', async () => {
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: [{ id: 'c1', status: 'active', store_url: 'https://shop.example.se' }] })
+      const order = {
+        order_id: 7,
+        order_number: '7',
+        order_date: '2026-08-01',
+        currency: '&euro;',
+        first_seen_at: '2026-09-01T00:00:00.000Z',
+        last_seen_at: '2026-09-01T00:00:00.000Z',
+      }
+      enqueue({
+        data: [{ key: 'skipped_currency_orders:shop.example.se', value: { orders: [order] } }],
+      })
+      const res = await findRoute('GET', '/status').handler(
+        makeRequest('GET'),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.connections[0].skipped_currency_orders).toEqual({ count: 1, orders: [order] })
+      // Read on the caller's own client, scoped to the company.
+      expect(calls).toContainEqual({ table: 'extension_data', method: 'eq', args: ['company_id', 'company-1'] })
+    })
+
+    it('still answers when the skipped-orders list cannot be read', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: [{ id: 'c1', status: 'active', store_url: 'https://shop.example.se' }] })
+      enqueue({ error: { message: 'boom' } })
+      const res = await findRoute('GET', '/status').handler(
+        makeRequest('GET'),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.connections[0].id).toBe('c1')
+      expect(body.connections[0].skipped_currency_orders).toBeUndefined()
     })
   })
 
   describe('POST /connect', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/connect').handler(
-        makeRequest('POST', {}),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('blocks anonymous (sandbox) users before any external call', async () => {
       const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({
-        data: { user: { id: 'user-1', is_anonymous: true } },
-        error: null,
-      })
+      // The dispatcher marks an anonymous (sandbox) session on the context.
       const res = await findRoute('POST', '/connect').handler(
         makeRequest('POST', {}),
-        makeContext(supabase),
+        { ...makeContext(supabase), isAnonymous: true },
       )
       expect(res.status).toBe(403)
       const body = await res.json()
@@ -263,6 +339,30 @@ describe('woocommerce extension routes', () => {
       expect(res.status).toBe(400)
     })
 
+    it('names the firewall in both languages when the store refused us before WooCommerce (crm#1669)', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] }) // no existing connection
+      vi.mocked(testConnectionAndFetchStoreInfo).mockRejectedValue(
+        new WooCommerceApiError('WooCommerce API 403', 403, STORE_FIREWALL_CODE, { bodyKind: 'html' }),
+      )
+      const res = await findRoute('POST', '/manual-connect').handler(
+        makeRequest('POST', {
+          store_url: 'https://shop.example.se',
+          consumer_key: 'ck_x',
+          consumer_secret: 'cs_y',
+        }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.code).toBe('PROBE_FIREWALL')
+      expect(body.error).toMatch(/brandvägg/)
+      expect(body.error_en).toMatch(/firewall/)
+      expect(JSON.stringify(body)).not.toContain('cs_y')
+    })
+
     it('verifies, encrypts and activates on the happy path', async () => {
       const { supabase, enqueue, findCall } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
@@ -339,6 +439,7 @@ describe('woocommerce extension routes', () => {
         removed: 0,
         frozenFlagged: 0,
         crossMarked: 0,
+        unknownCurrency: 0,
         errors: 0,
       })
       const res = await findRoute('POST', '/sync').handler(
@@ -372,19 +473,9 @@ describe('woocommerce extension routes', () => {
       removed: 0,
       frozenFlagged: 0,
       crossMarked: 0,
+      unknownCurrency: 0,
       errors: 0,
     }
-
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/backfill').handler(
-        makeRequest('POST', { from: '2026-01-01' }),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-      expect(syncWooCommerceOrders).not.toHaveBeenCalled()
-    })
 
     it('rejects a date it cannot honour with 400', async () => {
       const { supabase } = createQueuedMockSupabase()

@@ -35,12 +35,41 @@ export interface BankIdUser {
   name: string
 }
 
+// ---------------------------------------------------------------------------
+// Sign session
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /auth/bankid/sign. The signer approves userVisibleData in the BankID
+ * app and the signature binds it; userNonVisibleData rides in the signature
+ * unseen (TIC's advice: put the document hash there).
+ */
+export interface BankIdSignRequest {
+  endUserIp: string
+  userAgent?: string
+  /** Shown in the BankID app. Max 40 000 characters. */
+  userVisibleData: string
+  userVisibleDataFormat?: 'simpleMarkdownV1'
+  /** Signed but not shown. Max 200 000 characters. */
+  userNonVisibleData?: string
+  /** 12 digits; only this person can sign the order. */
+  personalNumber?: string
+}
+
+/** The signature a completed sign session collects. */
+export interface BankIdSignatureData {
+  /** XML-DSig, base64: the signed texts, the signer's certificate and the signature. */
+  value: string
+  /** OCSP response, base64: the certificate was valid when the signer signed. */
+  ocspResponse: string
+}
+
 export interface BankIdPollResponse {
   sessionId: string
   /**
    * `collected`: TIC has already handed the completed result out (it does so
    * at most twice per session, poll and collect combined) and will not again;
-   * `user` is absent. Observed in prod 2026-09-10 (#2471), not in TIC's
+   * `user` is absent. seen 2026-09-10 (#2471), not in TIC's
    * documentation. /poll answers `failed` for it unless the flow cookie holds
    * the sealed result.
    */
@@ -59,6 +88,8 @@ export interface BankIdPollResponse {
   qrStartSecret?: string
   /** Present when status is 'failed' */
   error?: string
+  /** A sign session's signature, when the poll that completes it carries one. */
+  signature?: BankIdSignatureData
 }
 
 export interface BankIdCollectResponse {
@@ -70,6 +101,8 @@ export interface BankIdCollectResponse {
   orderCount?: number
   maxOrders?: number
   sessionExpiresInSeconds?: number
+  /** Present for a completed sign session. */
+  signature?: BankIdSignatureData
 }
 
 // ---------------------------------------------------------------------------

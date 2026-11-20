@@ -28,37 +28,11 @@ vi.mock('@supabase/supabase-js', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listTransactions } from '../route'
 import { GET as getTransaction } from '../[id]/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
-const calls: Array<{ table: string; method: string; args: unknown[] }> = []
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -73,7 +47,6 @@ function makeRequest(url: string): Request {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  calls.length = 0
   mockValidate.mockResolvedValue({
     userId: USER_ID,
     companyId: COMPANY_ID,
@@ -86,7 +59,7 @@ beforeEach(() => {
 describe('GET /api/v1/companies/:companyId/transactions', () => {
   it('returns a list with pagination metadata', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: [
@@ -94,7 +67,7 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
           ],
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await listTransactions(
@@ -111,7 +84,7 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 
   it('passes cash_account_id through as a filter and returns it on each row', async () => {
     const CASH_ACCOUNT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
-    const supabase = makeFlexibleSupabase({
+    const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: {
         data: [
@@ -138,10 +111,10 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 
   it('rejects a non-UUID cash_account_id filter with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: [], error: null },
-      }),
+      }).supabase,
     )
     const res = await listTransactions(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?cash_account_id=1930`),
@@ -152,9 +125,9 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 
   it('rejects invalid status filter with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await listTransactions(
       makeRequest(
@@ -165,6 +138,104 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
     expect(res.status).toBe(400)
   })
 
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=unbooked`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(401)
+  })
+
+  // "Unbooked" is the work queue (decision 4): not ignored, not private, and
+  // anchored to no verifikat. A bulk-booked (transaction_voucher_links) or
+  // allocation-settled row keeps journal_entry_id NULL, so the pointer alone
+  // listed it as unbooked and left it out of status=booked.
+  async function listWithStatus(status: 'booked' | 'unbooked') {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: [], error: null },
+      open_bank_rows: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=${status}`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    const read = (table: string) => calls.filter((c) => c.table === table)
+    const filters = read('transactions')
+      .filter((c) => ['eq', 'not', 'is'].includes(c.method))
+      .map((c) => [c.method, ...c.args])
+    return { res, filters, read }
+  }
+
+  it('status=unbooked lists the work queue: no ignored, no private, no row anchored to a verifikat', async () => {
+    const { res, read } = await listWithStatus('unbooked')
+    expect(res.status).toBe(200)
+    // public.open_bank_rows holds the whole rule: a read of the table is a copy of it.
+    expect(read('open_bank_rows').map((c) => c.method)).toContain('select')
+    expect(read('transactions')).toEqual([])
+  })
+
+  it('status=booked lists every row anchored to a verifikat, not only the journal_entry_id pointer', async () => {
+    const { res, filters } = await listWithStatus('booked')
+    expect(res.status).toBe(200)
+    expect(filters).toContainEqual(['eq', 'is_booked', true])
+    expect(filters).not.toContainEqual(['not', 'journal_entry_id', 'is', null])
+  })
+
+  it('names the open proposal that already holds a row as pending_operation_id, null on a free row (crm#1264)', async () => {
+    const FREE_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const OPERATION_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const row = (id: string) => ({ id, date: '2026-05-12', amount: -100, currency: 'SEK', description: 'ICA', created_at: '2026-05-12T08:00:00.000Z' })
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      open_bank_rows: { data: [row(TX_ID), row(FREE_ID)], error: null },
+      pending_operations: {
+        data: [{ id: OPERATION_ID, operation_type: 'categorize_transaction', params: { transaction_id: TX_ID } }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=unbooked`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.map((t: { id: string; pending_operation_id: string | null }) => [t.id, t.pending_operation_id])).toEqual([
+      [TX_ID, OPERATION_ID],
+      [FREE_ID, null],
+    ])
+    // One read for the page, scoped to the company.
+    const claimReads = calls.filter((c) => c.table === 'pending_operations')
+    expect(claimReads.filter((c) => c.method === 'select')).toHaveLength(1)
+    expect(claimReads.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([['company_id', COMPANY_ID]])
+  })
+
+  it('status=booked reads no proposals: every row answers pending_operation_id null', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: [{ id: TX_ID, date: '2026-05-12', amount: -100, currency: 'SEK', description: 'ICA', created_at: '2026-05-12T08:00:00.000Z' }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=booked`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data[0].pending_operation_id).toBeNull()
+    expect(calls.filter((c) => c.table === 'pending_operations')).toEqual([])
+  })
+
   it('rejects keys without transactions:read scope', async () => {
     mockValidate.mockResolvedValue({
       userId: USER_ID,
@@ -172,7 +243,7 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await listTransactions(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions`),
       { params: Promise.resolve({ companyId: COMPANY_ID }) },
@@ -182,29 +253,97 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 })
 
 describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
-  it('returns 200 with the transaction', async () => {
+  it('returns 200 with the transaction and an empty split for a row without parts', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: { id: TX_ID, date: '2026-05-12', amount: -100, currency: 'SEK' },
           error: null,
         },
-      }),
+        bank_transaction_parts: { data: [], error: null },
+      }).supabase,
     )
     const res = await getTransaction(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`),
       { params: Promise.resolve({ companyId: COMPANY_ID, id: TX_ID }) },
     )
     expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.parts).toEqual([])
+  })
+
+  it('names a foreign payment\'s payee by the IBAN the bank sent (PH 196)', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: { id: TX_ID, date: '2026-10-16', amount: -5000, currency: 'SEK', description: 'UTLANDSBETALNING', counterparty_account: null, counterparty_iban: 'NO9386011117947' },
+        error: null,
+      },
+      bank_transaction_parts: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const res = await getTransaction(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`),
+      { params: Promise.resolve({ companyId: COMPANY_ID, id: TX_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ counterparty_account: null, counterparty_iban: 'NO9386011117947' })
+    const select = calls.find((c) => c.table === 'transactions' && c.method === 'select')
+    expect(String(select?.args[0])).toContain('counterparty_iban')
+  })
+
+  it('carries the Bankgirot split with the suggested invoice per part', async () => {
+    const INV_1 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1'
+    const INV_2 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2'
+    const PART = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee'
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: { id: TX_ID, date: '2026-10-12', amount: 1500, currency: 'SEK', potential_match_method: 'bankgiro_split' },
+        error: null,
+      },
+      bank_transaction_parts: {
+        data: [
+          { id: `${PART}1`, company_id: COMPANY_ID, transaction_id: TX_ID, seq: 1, amount: '500.00', currency: 'SEK', counterparty_name: 'Kund AB', counterparty_org_number: '5560160680', counterparty_account: null, reference: '10017', invoice_numbers: [], message: null, provider_part_id: 'P1', suggested_invoice_id: INV_1, suggested_supplier_invoice_id: null, suggestion_reason: 'ocr_exact', created_at: '2026-10-12T05:00:00Z', updated_at: '2026-10-12T05:00:00Z' },
+          { id: `${PART}2`, company_id: COMPANY_ID, transaction_id: TX_ID, seq: 2, amount: '1000.00', currency: 'SEK', counterparty_name: 'Bolaget AB', counterparty_org_number: null, counterparty_account: null, reference: null, invoice_numbers: ['1002'], message: 'Faktura 1002', provider_part_id: 'P2', suggested_invoice_id: INV_2, suggested_supplier_invoice_id: null, suggestion_reason: 'invoice_number', created_at: '2026-10-12T05:00:00Z', updated_at: '2026-10-12T05:00:00Z' },
+        ],
+        error: null,
+      },
+      invoices: {
+        data: [
+          { id: INV_1, invoice_number: '1001', remaining_amount: '500.00', currency: 'SEK', status: 'sent', customer: { name: 'Kund AB' } },
+          { id: INV_2, invoice_number: '1002', remaining_amount: '1000.00', currency: 'SEK', status: 'sent', customer: { name: 'Bolaget AB' } },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const res = await getTransaction(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`),
+      { params: Promise.resolve({ companyId: COMPANY_ID, id: TX_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.potential_match_method).toBe('bankgiro_split')
+    expect(body.data.parts).toEqual([
+      expect.objectContaining({ seq: 1, amount: 500, reference: '10017', suggestion_reason: 'ocr_exact', suggested_invoice: { kind: 'customer_invoice', invoice_id: INV_1, invoice_number: '1001', counterparty_name: 'Kund AB', remaining_amount: 500, currency: 'SEK' } }),
+      expect.objectContaining({ seq: 2, amount: 1000, invoice_numbers: ['1002'], message: 'Faktura 1002', suggested_invoice: expect.objectContaining({ invoice_id: INV_2, invoice_number: '1002' }) }),
+    ])
+    // Parts and their invoices are read for this company only.
+    const partsEq = calls.filter((c) => c.table === 'bank_transaction_parts' && c.method === 'eq').map((c) => c.args)
+    expect(partsEq).toEqual([['company_id', COMPANY_ID], ['transaction_id', TX_ID]])
+    const invoicesEq = calls.filter((c) => c.table === 'invoices' && c.method === 'eq').map((c) => c.args)
+    expect(invoicesEq).toEqual([['company_id', COMPANY_ID]])
   })
 
   it('returns 404 NOT_FOUND for unknown id', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await getTransaction(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`),
@@ -215,9 +354,9 @@ describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
 
   it('rejects non-UUID id with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await getTransaction(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/not-a-uuid`),

@@ -51,14 +51,12 @@
  */
 
 import { z } from 'zod'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
@@ -68,21 +66,30 @@ import {
   generateInvoiceEmailSubject,
   generateInvoiceEmailText,
 } from '@/lib/email/invoice-templates'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
   archiveIssuedInvoicePdf,
+  emailRefusal,
+  issuable,
+  lacksMomsRuta,
   markInvoiceSentAndBook,
   restoreUnbookedDraft,
 } from '@/lib/invoices/issue-and-book-invoice'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
+import {
+  MAX_INVOICE_ATTACHMENTS,
+  linkInvoiceAttachments,
+  loadInvoiceEmailAttachments,
+} from '@/lib/invoices/invoice-attachments'
 import {
   EMAIL_PATTERN,
   exceedsInvoiceEmailRecipientLimit,
@@ -92,17 +99,16 @@ import {
   resolveInvoiceEmailRecipients,
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
-import {
-  hasRequiredInvoicePaymentAccount,
-  invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
-import { eventBus } from '@/lib/events'
+import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
+import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
-import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
+import { InvoiceEmailOverrideShape } from '@/lib/api/schemas'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
+import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const InvoiceSendBody = z.object({
   additional_cc: z.array(z.string().trim().pipe(z.email().max(254)))
@@ -111,6 +117,13 @@ const InvoiceSendBody = z.object({
   additional_bcc: z.array(z.string().trim().pipe(z.email().max(254)))
     .max(MAX_INVOICE_EMAIL_COPY_RECIPIENTS)
     .optional(),
+  ...InvoiceEmailOverrideShape,
+  attachment_document_ids: z.array(z.string().uuid())
+    .max(MAX_INVOICE_ATTACHMENTS)
+    .optional()
+    .describe(
+      'Ids of documents already in the company archive to attach to the invoice before it is sent (upload first via POST /documents). They are emailed after the invoice PDF, together with any files already attached to the draft, and stay with the invoice once it is sent.',
+    ),
 }).refine(
   (data) => (
     (data.additional_cc?.length ?? 0) + (data.additional_bcc?.length ?? 0)
@@ -142,15 +155,16 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/send',
   summary: 'Send a draft invoice to the customer by email.',
   description:
-    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → issue: flip status to sent and post the journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) BEFORE the email, fail closed → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → archive PDF as underlag → emit invoice.sent. A refused journal entry returns the engine\'s error and nothing is sent; post-email failures surface as warnings.',
+    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → issue: flip status to sent and post the journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) BEFORE the email, fail closed → email via the email extension (Resend or SMTP; the PDF, then the invoice\'s own attachments, copy to company) → archive PDF as underlag → emit invoice.sent. A refused journal entry returns the engine\'s error and nothing is sent; post-email failures surface as warnings.',
   useWhen:
-    'You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices go through POST /invoices/{id}/send-peppol (check readiness first with GET /invoices/{id}/peppol; per-company access grant requested with POST /peppol/access-request or under Inställningar > Fakturering (Settings > Invoicing); senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions). A successful Peppol send issues the invoice itself, so do not call :mark-sent after it; only if it reports that the invoice was sent via Peppol but could not be marked as sent (issuance.ok=false) does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.',
+    'You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices go through POST /invoices/{id}/send-peppol (check readiness first with GET /invoices/{id}/peppol; per-company access grant requested with POST /peppol/access-request or under Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol); senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions). A successful Peppol send issues the invoice itself, so do not call :mark-sent after it; only if it reports that the invoice was sent via Peppol but could not be marked as sent (issuance.ok=false) does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.',
   doNotUseFor:
-    'Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).',
+    'Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (400 INVOICE_SEND_DELIVERY_NOTE: it is marked sent with :mark-sent, never emailed). Sending a credit note (use the :credit endpoint to issue the kreditfaktura, then deliver its PDF yourself).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL (or an SMTP relay via EMAIL_PROVIDER=smtp) the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
     'Customer must have an email address. 400 INVOICE_SEND_NO_CUSTOMER_EMAIL otherwise.',
+    'An invoice without a customer (customer_id null, e.g. its customer was deleted) is refused with 409 INVOICE_CUSTOMER_MISSING before anything changes. Set customer_id on the draft or delete it.',
     'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.',
     'The journal entry is posted before the email leaves: a refusal (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) returns the engine\'s error, the invoice stays in `draft` and no email is sent. Fix the tag or the period and send again.',
     'Email failure with nothing booked (kontantmetoden, deferred booking, proforma) returns 502 INVOICE_SEND_PROVIDER_FAILED with the invoice back in `draft`; the F-series number stays consumed (same orphan window as :mark-sent). Email failure after the journal entry posted returns 502 INVOICE_SEND_ISSUED_NOT_DELIVERED: the invoice stays issued (`sent`, booked, PDF archived) and must be delivered another way; do not call :send again.',
@@ -158,6 +172,8 @@ registerEndpoint({
     'additional_cc and additional_bcc require the API key user to be an owner or admin of the company.',
     'The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.',
     'BCC recipients are retained only in the restricted delivery archive and are omitted from normal and dry-run responses.',
+    'email_subject and email_body replace the subject and the message of this one email (the greeting and sign-off stay) and take the same placeholders as the company email texts; they are not stored on the invoice. Empty or whitespace-only means the company or stock text.',
+    'attachment_document_ids attaches existing documents of the same company (404 INVOICE_ATTACHMENT_DOCUMENT_NOT_FOUND for an unknown or foreign id); there is no upload here. At most 10 files and 25 MB together (400 INVOICE_ATTACHMENTS_TOO_MANY / INVOICE_ATTACHMENTS_TOO_LARGE). Once the invoice is sent its attachments are fixed and their documents can no longer be deleted (BFL retention).',
   ],
   example: {
     request: {
@@ -231,7 +247,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (capBlocked) return capBlocked
 
     // Step 1: email service configured?
-    const emailService = getEmailService()
+    const emailService = await getEmailService()
     if (!emailService.isConfigured()) {
       return v1ErrorResponseFromCode('INVOICE_SEND_EMAIL_NOT_CONFIGURED', ctx.log, {
         requestId: ctx.requestId,
@@ -251,7 +267,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         // the PDF template derives the masked personnummer (YYYYMMDD-XXXX)
         // from it. It stays out of INVOICE_FULL_COLUMNS (the API projection)
         // and this route never echoes the row.
-        `${INVOICE_FULL_COLUMNS}, deduction_personnummer_encrypted, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number, invoice_email_cc_addresses, invoice_email_bcc_addresses), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
+        `${INVOICE_FULL_COLUMNS}, deduction_personnummer_encrypted, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, address_state, vat_number, invoice_email_cc_addresses, invoice_email_bcc_addresses), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -292,47 +308,34 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const bodyResult = InvoiceSendBody.safeParse(rawBody)
     if (!bodyResult.success) return v1ValidationError(ctx, bodyResult.error)
 
-    // Reject delivery notes: they have a different (D-series) lifecycle.
-    if (typed.document_type === 'delivery_note') {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'document_type',
-          message: 'Delivery notes are not sent via this endpoint; use the dashboard or a custom channel.',
-        },
-      })
-    }
+    const notEmailed = emailRefusal(typed)
+    if (notEmailed) return v1ErrorResponseFromCode(notEmailed.code, ctx.log, { requestId: ctx.requestId })
 
     // Reject credit notes. `:credit` creates them atomically in 'sent' state
     // with their own number: there is no v1 path that produces a draft
-    // credit note, so reaching :send with credited_invoice_id set is either
-    // a misuse or a manual DB edit. Allowing it would give a credit note
-    // an F-series number; ML 17 kap 22-23§ require (a) a distinct
-    // kreditfaktura series and (b) an explicit back-reference to the
-    // original invoice's löpnummer: neither enforced by this route.
-    // Any future "send a credit note" v1 path MUST honor both.
-    if (typed.credited_invoice_id) {
+    // credit note, so reaching :send with one is an import or a misuse.
+    // Allowing it would give a credit note an F-series number; ML 17 kap
+    // 22-23§ require (a) a distinct kreditfaktura series and (b) an explicit
+    // back-reference to the original invoice's löpnummer: neither enforced by
+    // this route. Any future "send a credit note" v1 path MUST honor both.
+    if (isCreditNoteDocument(typed)) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {
           field: 'credited_invoice_id',
           message:
-            'Credit notes cannot be sent via this endpoint. Use POST /invoices/{id}/credit, which creates and sends the credit note atomically.',
+            'Credit notes cannot be sent via this endpoint. Use POST /invoices/{id}/credit, which creates and issues the credit note atomically. It sends nothing to the customer: deliver its PDF yourself.',
         },
       })
     }
 
-    if (!typed.moms_ruta) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+    // Step 2: customer email. A draft whose customer was deleted (crm#263)
+    // has no buyer at all: say that, not "no email".
+    if (invoiceLacksCustomer(typed)) {
+      return v1ErrorResponseFromCode('INVOICE_CUSTOMER_MISSING', ctx.log, {
         requestId: ctx.requestId,
-        details: {
-          field: 'moms_ruta',
-          message: 'Invoice has no moms_ruta set; re-create the draft via POST /invoices.',
-        },
       })
     }
-
-    // Step 2: customer email.
     const customer = typed.customer
     if (!customer?.email?.trim() || !EMAIL_PATTERN.test(customer.email.trim())) {
       return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {
@@ -359,6 +362,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const settings = company as CompanySettings & { accounting_method?: string }
+    if (lacksMomsRuta(typed, settings)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'moms_ruta',
+          message: 'Invoice has no moms_ruta set: send its items with PATCH /invoices/{id} or re-create it via POST /invoices.',
+        },
+      })
+    }
     const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
     // Freeze the chosen bank account's payee at issue (no-op without a choice).
     const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed, { persist: !ctx.dryRun })
@@ -369,16 +381,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     typed.payment_details = payeeSnapshot.payee
-    if (!hasRequiredInvoicePaymentAccount(settings, typed)) {
-      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+    const refused = issuable(typed, settings)
+    if (refused) {
+      return v1ErrorResponseFromCode(refused.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { currency: typed.currency },
-      })
-    }
-
-    if (!hasRequiredSellerVatNumber(settings, typed)) {
-      return v1ErrorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', ctx.log, {
-        requestId: ctx.requestId,
+        details: refused.details,
       })
     }
 
@@ -449,20 +456,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const isFreshAllocation = !typed.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(settings, typed.currency, {
+        await renderInvoicePdfBuffer({
+          invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
+          customer,
+          items,
+          company: settings,
+          originalInvoiceNumber,
           paymentAccountRequired,
-          payee: typed.payment_details ?? null,
         })
-        await renderToBuffer(
-          InvoicePDF({
-            invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
-            customer,
-            items,
-            company: preflight.company,
-            originalInvoiceNumber,
-            branding: preflight.branding,
-          }),
-        )
       } catch (err) {
         ctx.log.error('invoices.send: preflight PDF render failed', err as Error, {
           invoiceId,
@@ -472,6 +473,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           requestId: ctx.requestId,
         })
       }
+    }
+
+    // Step 5b: the files the invoice carries (crm#1269). Requested documents
+    // are attached first (checked only, on a dry run); the whole set is then
+    // read before a number is allocated or anything is issued, so a missing
+    // or oversized file stops the send while nothing irreversible happened.
+    const attachments = await linkInvoiceAttachments(
+      ctx.supabase,
+      ctx.companyId!,
+      invoiceId,
+      bodyResult.data.attachment_document_ids ?? [],
+      { dryRun: ctx.dryRun },
+    )
+    if (!attachments.ok) {
+      return v1ErrorResponseFromCode(attachments.code, ctx.log, { requestId: ctx.requestId })
     }
 
     if (ctx.dryRun) {
@@ -485,6 +501,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_send_to: customer.email,
           would_cc: recipients.cc[0] ?? null,
           would_cc_addresses: recipients.cc,
+          would_attach: attachments.value.map((a) => a.file_name),
           would_create_journal_entry:
             (!typed.document_type || typed.document_type === 'invoice') &&
             booksInvoicesOnIssue(settings),
@@ -495,6 +512,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
       response.headers.set('Cache-Control', 'private, no-store')
       return response
+    }
+
+    const extraAttachments = await loadInvoiceEmailAttachments(ctx.supabase, ctx.companyId!, invoiceId)
+    if (!extraAttachments.ok) {
+      return v1ErrorResponseFromCode(extraAttachments.code, ctx.log, { requestId: ctx.requestId })
     }
 
     let deliveryId: string
@@ -524,8 +546,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         invoiceId,
         companyId: ctx.companyId,
       })
-      return v1ErrorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', ctx.log, {
+      const failure = invoiceNumberingFailure(err, 'INVOICE_SEND_NUMBER_ASSIGN_FAILED')
+      return v1ErrorResponseFromCode(failure.code, ctx.log, {
         requestId: ctx.requestId,
+        ...(failure.details ? { details: failure.details } : {}),
       })
     }
 
@@ -584,25 +608,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     let pdfBuffer: Buffer
     try {
-      const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-        settings,
-        renderableInvoice.currency,
-        { paymentAccountRequired, payee: typed.payment_details ?? null },
-      )
-      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
-      pdfBuffer = await renderToBuffer(
-        InvoicePDF({
+      pdfBuffer = (
+        await renderInvoicePdfBuffer({
           invoice: renderableInvoice,
           customer,
           items,
-          company: renderCompany,
+          company: settings,
           originalInvoiceNumber,
-          branding,
-          swishQrDataUrl,
-          paymentLinkQrDataUrl,
-        }),
-      )
+          paymentAccountRequired,
+          payee: typed.payment_details ?? null,
+        })
+      ).buffer
     } catch (err) {
       // F-series number IS consumed at this point (orphan window).
       ctx.log.error('invoices.send: final PDF render failed AFTER number allocation', err as Error, {
@@ -673,9 +689,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         log: ctx.log,
       })
       try {
-        await eventBus.emit({
-          type: 'invoice.sent',
-          payload: { invoice: renderableInvoice, companyId: ctx.companyId!, userId: ctx.userId },
+        await emitInvoiceSent({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          invoice: renderableInvoice,
+          settings,
+          log: ctx.log,
         })
       } catch (err) {
         ctx.log.error('invoice.sent emit failed', err as Error, { invoiceId, companyId: ctx.companyId })
@@ -702,7 +722,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // API-key context: no signed-in user to fall back to for Reply-To.
     const replyTo = resolveInvoiceReplyTo(settings)
-    const emailData = { invoice: renderableInvoice, customer, company: settings, replyTo }
+    const emailData = {
+      invoice: renderableInvoice,
+      customer,
+      company: settings,
+      replyTo,
+      // This send's own subject and message; not stored on the invoice.
+      overrides: { subject: bodyResult.data.email_subject, body: bodyResult.data.email_body },
+    }
     const subject = generateInvoiceEmailSubject(emailData)
     const html = generateInvoiceEmailHtml(emailData)
     const text = generateInvoiceEmailText(emailData)
@@ -726,6 +753,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         from: await resolveInvoiceSender(ctx.supabase, ctx.companyId!, settings.company_name),
         filename,
         pdfBuffer,
+        extraAttachments: extraAttachments.value,
       })
     } catch (err) {
       ctx.log.error('invoices.send: delivery snapshot failed before email', err as Error, {
@@ -788,6 +816,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           ctx.companyId!,
           result.documentId,
           journalEntryId,
+          // The delivered PDF of this invoice on the invoice's own verifikat.
+          linkBasisColumns('system_derived'),
         )
       } catch (err) {
         ctx.log.error('invoices.send: archived PDF journal link failed', err as Error, {
@@ -803,13 +833,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 10b: emit invoice.sent.
     try {
-      await eventBus.emit({
-        type: 'invoice.sent',
-        payload: {
-          invoice: renderableInvoice,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-        },
+      await emitInvoiceSent({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        invoice: renderableInvoice,
+        settings,
+        log: ctx.log,
       })
     } catch (err) {
       ctx.log.error('invoice.sent emit failed', err as Error, {

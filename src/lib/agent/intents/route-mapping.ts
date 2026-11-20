@@ -1,8 +1,8 @@
 // Route → intent dispatch for the floating "Fråga [namn]" trigger.
 //
-// The page-specific buttons ("Granska med assistent" on a supplier invoice
-// page, "Fråga om bokslutet" in the year-end wizard) already open the right
-// intent because they know what they're attached to. The floating FAB
+// The page-specific buttons ("Skapa med assistent" on Bokföring, "Fråga
+// assistenten" in Underlag) already open the right intent because they know
+// what they're attached to. The floating FAB
 // previously always opened general.help with just the URL string, so clicking
 // it on /invoices/abc-123 gave the agent zero context about that invoice.
 //
@@ -82,9 +82,8 @@ export function routeToIntent(
     }
   }
 
-  // /bookkeeping/year-end: the bokslut wizard. Match the page's "Fråga om
-  // bokslutet" button (bokslut.step) instead of general.help, so the FAB and the
-  // page button open the SAME assistant here rather than two different ones.
+  // /bookkeeping/year-end: the bokslut wizard. The FAB opens bokslut.step here
+  // instead of general.help; the wizard has no assistant button of its own.
   if (first === 'bookkeeping' && second === 'year-end') {
     return {
       intentId: 'bokslut.step',
@@ -99,8 +98,8 @@ export function routeToIntent(
   // verifikation editor is a dense regulatory surface and the floating
   // pill earned its way off the page.
 
-  // /kpi: nyckeltal dashboard. Match the page's "Fråga om nyckeltalen" button
-  // (kpi.explain) so the FAB and the page button agree on this page.
+  // /kpi: nyckeltal dashboard. The FAB opens kpi.explain; the page has no
+  // assistant button of its own.
   if (first === 'kpi') {
     return {
       intentId: 'kpi.explain',
@@ -111,9 +110,9 @@ export function routeToIntent(
   }
 
   // Note: /transactions and /reports intentionally fall through to general.help.
-  // Their on-page triggers are entity/view-specific (a transaction row needs a
-  // transaction_id; the VAT report button needs the selected period/view): the
-  // FAB only knows the pathname, so page-level help is the honest default there.
+  // A transaction needs a transaction_id and a VAT review the selected
+  // period/view (vat.review has no entry point today): the FAB only knows the
+  // pathname, so page-level help is the honest default there.
 
   // /settings/<panel>[/...]: settings.help captures which panel is active.
   // Uses the second segment as panel slug so /settings/invoicing/templates

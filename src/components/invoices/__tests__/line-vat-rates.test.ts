@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest'
 import {
   FALLBACK_VAT_RATE,
   planCustomerSwitchVatSnap,
+  planVatPlanSnap,
   resolveLineVatRates,
 } from '@/components/invoices/line-vat-rates'
 
@@ -163,6 +164,84 @@ describe('planCustomerSwitchVatSnap', () => {
         nextDefaultRate: 25,
       }),
     ).toEqual([])
+  })
+})
+
+// crm#1007: the invoice states omvänd betalningsskyldighet for construction
+// services (the editor checkbox). Only 0 % is lawful under it, and only for a
+// Swedish business whose Swedish VAT number the invoice can print.
+const DOMESTIC_RC = { vat_treatment: 'reverse_charge_domestic' as const, delivery_country: null }
+const swedishWithVatNumber = { ...swedish, vat_number: 'SE556677889901' }
+
+describe('resolveLineVatRates: the invoice states domestic reverse charge (crm#1007)', () => {
+  it('locks the picker to 0 % for a Swedish business with a Swedish VAT number', () => {
+    const plan = resolveLineVatRates(swedishWithVatNumber, DOMESTIC_RC)
+    expect(plan.options.map((o) => o.rate)).toEqual([0])
+    expect(plan.options[0].treatment).toBe('reverse_charge_domestic')
+    expect(plan.defaultRate).toBe(0)
+    expect(plan.hasSingleDefault).toBe(true)
+    expect(plan.isPickerLocked).toBe(true)
+  })
+
+  it("keeps the customer's plan while the customer has no Swedish VAT number, as the server would", () => {
+    expect(resolveLineVatRates(swedish, DOMESTIC_RC)).toEqual(resolveLineVatRates(swedish))
+    expect(resolveLineVatRates({ ...swedish, vat_number: 'DE123456789' }, DOMESTIC_RC)).toEqual(
+      resolveLineVatRates(swedish),
+    )
+  })
+
+  it("keeps the customer's plan for a customer the treatment can never apply to", () => {
+    expect(resolveLineVatRates(euValidated, DOMESTIC_RC)).toEqual(resolveLineVatRates(euValidated))
+    expect(resolveLineVatRates({ customer_type: 'individual' }, DOMESTIC_RC)).toEqual(
+      resolveLineVatRates({ customer_type: 'individual' }),
+    )
+  })
+
+  it('is the plain customer plan without an override', () => {
+    expect(resolveLineVatRates(swedishWithVatNumber, null)).toEqual(resolveLineVatRates(swedishWithVatNumber))
+  })
+})
+
+describe('planVatPlanSnap', () => {
+  const rcPlan = resolveLineVatRates(swedishWithVatNumber, DOMESTIC_RC)
+  const domesticPlan = resolveLineVatRates(swedishWithVatNumber)
+
+  it('moves every priced line onto 0 % when the plan is locked to it, deliberate rates included', () => {
+    const snaps = planVatPlanSnap({
+      items: [
+        { vat_rate: 25 },
+        { vat_rate: 12 },
+        { vat_rate: 0 },
+        { line_type: 'text', vat_rate: 25 },
+        { vat_rate: undefined },
+      ],
+      previousDefaultRate: 25,
+      next: rcPlan,
+    })
+    expect(snaps).toEqual([
+      { index: 0, rate: 0 },
+      { index: 1, rate: 0 },
+      { index: 4, rate: 0 },
+    ])
+  })
+
+  it('moves the 0 % lines back to the customer default when the plan unlocks', () => {
+    const snaps = planVatPlanSnap({
+      items: [{ vat_rate: 0 }, { vat_rate: 0 }, { line_type: 'text', vat_rate: 0 }],
+      previousDefaultRate: 0,
+      next: domesticPlan,
+    })
+    expect(snaps).toEqual([
+      { index: 0, rate: 25 },
+      { index: 1, rate: 25 },
+    ])
+  })
+
+  it('is planCustomerSwitchVatSnap for an unlocked plan', () => {
+    const items = [{ vat_rate: 25 }, { vat_rate: 12 }]
+    expect(planVatPlanSnap({ items, previousDefaultRate: 25, next: resolveLineVatRates(euValidated) })).toEqual(
+      planCustomerSwitchVatSnap({ items, previousDefaultRate: 25, nextDefaultRate: 0 }),
+    )
   })
 })
 

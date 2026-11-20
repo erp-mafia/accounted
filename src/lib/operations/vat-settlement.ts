@@ -64,6 +64,14 @@ const ExistingEntry = z.object({
   source_type: z.string().nullable(),
   voucher_series: z.string().nullable(),
   voucher_number: z.number().nullable(),
+  late_settlement: z
+    .object({
+      cleared: z.number().describe('The VAT balances it clears, net (positive = att betala).'),
+      net: z.number().describe('What it moves to 2650/1650 or straight to the skattekonto (positive = att betala).'),
+      via: z.enum(['net_account', 'tax_account']),
+    })
+    .optional()
+    .describe('Set on a momsredovisning dated after the period that settles it: it clears exactly the period\'s VAT balances and moves the filed net.'),
 })
 
 const EXAMPLE_LINES = [
@@ -82,13 +90,15 @@ export const reportsVatSettlementProposal = defineOperation({
   docs: {
     summary: 'The proposed momsredovisning verifikat for a VAT period: clear 26xx to 2650 or 1650.',
     description:
-      'Builds the settlement entry for a momsperiod from the same ledger totals as the momsdeklaration: every output VAT account (261x-263x, reverse charge and import included) debited and every input VAT account (264x) credited by its period balance at exact öre, the net to 2650 (att betala, credit) or 1650 (att återfå, debit) at the whole-krona amount the declaration is filed with (ruta 49), and the öre gap on 3740. Dated the period\'s last day. existing_entries lists settlements already booked or drafted in the period (tagged vat_settlement or recognised by shape); booking_status sums them up. fingerprint identifies these exact lines. Read-only.',
+      'Builds the settlement entry for a momsperiod from the same ledger totals as the momsdeklaration: every output VAT account (261x-263x, reverse charge and import included) debited and every input VAT account (264x) credited by its period balance at exact öre, the net to 2650 (att betala, credit) or 1650 (att återfå, debit) at the whole-krona amount the declaration is filed with (ruta 49), and the öre gap on 3740. Dated the period\'s last day, or the first open day after it when that day is closed or locked (entry_date_reason says why). existing_entries lists the settlements already booked or drafted for the period: dated inside it (tagged vat_settlement or recognised by shape) unless it clears exactly the previous period\'s balances instead, or dated after it and clearing exactly this period\'s balances (late_settlement set); booking_status sums them up. When the posted ones cleared only part of the period\'s VAT (a settlement that came with an import mid-period, a verifikat added after the period was settled), partly_settled is true and lines hold only what is left on the accounts, with the net less what they already moved. fingerprint identifies these exact lines. Read-only.',
     useWhen: 'Before booking the VAT for a period (POST /vat/settlement), to review what will be posted.',
     doNotUseFor: 'The declaration rutor themselves (GET /reports/vat-declaration) or paying the VAT (the skattekonto payment is booked separately).',
     pitfalls: [
       'booking_status booked means a posted settlement exists: booking again is refused; reverse that verifikat first if the period must be re-booked.',
       'is_empty true means the period has no VAT to clear.',
-      'The proposal clears the WHOLE period, not the change since an earlier settlement.',
+      'lines clear the WHOLE period, also when booking_status is booked and the period is settled in full. Only with partly_settled true are they what is left after the settlements already posted: booking is still refused then (booking_status booked), so the rest is posted as an ordinary verifikat or the earlier settlement is reversed and the period booked whole.',
+      'An ordinary verifikat stays out of the declaration rutor as a momsredovisning only when it has a 2650 or 1650 line (or is a pure 26xx movement against 1630): two 26xx accounts against each other count as VAT of the period.',
+      'An existing_entries row recognised by shape can be a correction, not a momsredovisning (e.g. output VAT moved to 1650 next to a sales correction): once the user confirms, it is marked as one on the Moms page or with gnubok_mark_not_momsredovisning; the rutor then read it and it no longer counts as a momsredovisning.',
     ],
     example: {
       request: { period_type: 'quarterly', year: 2026, period: 1 },
@@ -97,11 +107,13 @@ export const reportsVatSettlementProposal = defineOperation({
           period: { type: 'quarterly', year: 2026, period: 1, start: '2026-01-01', end: '2026-03-31' },
           period_label: 'Kvartal 1 2026',
           entry_date: '2026-03-31',
+          entry_date_reason: null,
           description: 'Momsredovisning Kvartal 1 2026',
           lines: EXAMPLE_LINES,
           filed_net: 18749,
           rounding_amount: 0.6,
           is_empty: false,
+          partly_settled: false,
           existing_entries: [],
           booking_status: 'none',
           fingerprint: '3f9a…',
@@ -121,11 +133,18 @@ export const reportsVatSettlementProposal = defineOperation({
     }),
     period_label: z.string(),
     entry_date: z.string(),
+    entry_date_reason: z
+      .enum(['period_closed', 'period_locked', 'company_lock_date'])
+      .nullable()
+      .describe('Why entry_date is not the period\'s last day: that day is in a closed or locked fiscal year, or on or before the company lock date. Null when it is.'),
     description: z.string(),
     lines: z.array(ProposalLine),
     filed_net: z.number().describe('Ruta 49 as filed, whole kronor; positive = att betala.'),
     rounding_amount: z.number().describe('Signed öre gap balanced on 3740 (positive = credited).'),
     is_empty: z.boolean(),
+    partly_settled: z
+      .boolean()
+      .describe('True when the settlements already posted for the period cleared only part of its VAT: lines are then what is left, not the whole period.'),
     existing_entries: z.array(ExistingEntry),
     booking_status: z.enum(['booked', 'draft', 'none']),
     fingerprint: z.string(),
@@ -163,12 +182,12 @@ export const vatBookSettlement = defineOperation({
   docs: {
     summary: 'Book the momsredovisning verifikat for a VAT period, exactly as the proposal gives it.',
     description:
-      'Posts the settlement proposal of GET /reports/vat-declaration/settlement-proposal as a verifikat (source_type vat_settlement) through the bookkeeping engine: 26xx cleared, the net on 2650 or 1650 at the filed whole-krona amount, the öre gap on 3740, dated the period\'s last day. The lines are the server\'s, never the caller\'s. Refused when a settlement is already posted in the period, when there is nothing to clear, when expected_fingerprint no longer matches, or when the date is locked. The declaration projection excludes vat_settlement entries, so the momsdeklaration does not change. Idempotent. Dry-runnable: the dry run previews the verifikat and writes nothing.',
+      'Posts the settlement proposal of GET /reports/vat-declaration/settlement-proposal as a verifikat (source_type vat_settlement) through the bookkeeping engine: 26xx cleared, the net on 2650 or 1650 at the filed whole-krona amount, the öre gap on 3740, dated the proposal\'s entry_date (the period\'s last day, or the first open day after it). The lines are the server\'s, never the caller\'s. Refused when a settlement is already posted for the period (also one dated after it that clears exactly its balances), when there is nothing to clear, when expected_fingerprint no longer matches, or when the date is locked. The declaration projection excludes vat_settlement entries, so the momsdeklaration does not change. Idempotent. Dry-runnable: the dry run previews the verifikat and writes nothing.',
     useWhen: 'The VAT period is reviewed (and usually filed) and the 26xx accounts should be cleared to the skattekonto liability.',
     doNotUseFor:
       'Filing the momsdeklaration with Skatteverket (the eSKD file or the Skatteverket connection), booking the payment to the skattekonto, or custom settlement lines (post an ordinary verifikat with POST /journal-entries).',
     pitfalls: [
-      'A posted settlement in the period answers 409 VAT_SETTLEMENT_ALREADY_BOOKED with details.journal_entry_id: reverse it first if the period must be re-booked.',
+      'A posted settlement in the period answers 409 VAT_SETTLEMENT_ALREADY_BOOKED with details.journal_entry_id: reverse it first if the period must be re-booked. When that verifikat is a correction the shapes caught, not a momsredovisning, and the user confirms it, mark it as one instead (the Moms page, or gnubok_mark_not_momsredovisning).',
       'Pass expected_fingerprint from the proposal you reviewed: if the ledger changed since, 409 VAT_SETTLEMENT_PROPOSAL_CHANGED instead of booking different lines.',
       'A locked or closed period, or a date on or before the company lock date, answers 400 PERIOD_LOCKED; no voucher number is spent.',
       'A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.',

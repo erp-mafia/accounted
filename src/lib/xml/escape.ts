@@ -1,6 +1,6 @@
 /**
  * Escape a string for use as XML text or attribute content. Used by every
- * XML-emitting generator (AGI, KU10, pain.001, Peppol BIS, ROT/RUT). The
+ * XML-emitting generator (AGI, pain.001, Peppol BIS, ROT/RUT). The
  * replace order matters: `&` first, so the entities it produces are not
  * re-escaped.
  */

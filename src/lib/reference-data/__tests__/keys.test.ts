@@ -12,6 +12,7 @@ describe('refKeys', () => {
     expect(refKeys.customers(null)).toBeNull()
     expect(refKeys.suppliers(null)).toBeNull()
     expect(refKeys.articles(null)).toBeNull()
+    expect(refKeys.employees(null)).toBeNull()
   })
 
   it('puts the kind first and the company id second on every key', () => {
@@ -25,6 +26,7 @@ describe('refKeys', () => {
       refKeys.customers('c1'),
       refKeys.suppliers('c1'),
       refKeys.articles('c1'),
+      refKeys.employees('c1'),
     ]
     for (const key of keys) {
       expect(key).not.toBeNull()
@@ -32,6 +34,13 @@ describe('refKeys', () => {
       expect(key![1]).toBe('c1')
     }
     expect(new Set(keys.map((k) => k![0])).size).toBe(keys.length)
+  })
+
+  it('keys one kept customer under the customers kind, so a customer invalidation refreshes it', () => {
+    expect(refKeys.customer('c1', 'cust-1')).toEqual(['ref:customers', 'c1', 'cust-1'])
+    expect(refKeys.customer('c1', null)).toBeNull()
+    expect(refKeys.customer(null, 'cust-1')).toBeNull()
+    expect(isReferenceKey(refKeys.customer('c1', 'cust-1'))).toBe(true)
   })
 
   it('keeps the legacy company_settings key shape used by useCompanySettings', () => {
@@ -43,6 +52,8 @@ describe('refKeys', () => {
     expect(refKeys.accounts('c1', false)).toEqual(['ref:accounts', 'c1', false])
     expect(refKeys.articles('c1')).toEqual(['ref:articles', 'c1', false])
     expect(refKeys.articles('c1', true)).toEqual(['ref:articles', 'c1', true])
+    expect(refKeys.employees('c1')).toEqual(['ref:employees', 'c1', false])
+    expect(refKeys.employees('c1', true)).toEqual(['ref:employees', 'c1', true])
   })
 })
 

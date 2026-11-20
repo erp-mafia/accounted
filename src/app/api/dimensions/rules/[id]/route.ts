@@ -1,23 +1,20 @@
 /**
- * /api/dimensions/rules/[id] — mutate one account dimension rule (PR10).
+ * /api/dimensions/rules/[id] - mutate one account dimension rule (PR10).
  *
- * PATCH  { rule_type?, value_id?, is_active? } — value presence is
+ * PATCH  { rule_type?, value_id?, is_active? } - value presence is
  *        re-validated against the EFFECTIVE rule_type (required ⇔ no value).
- * DELETE — removes the rule; enforcement stops immediately. Pausing without
+ * DELETE - removes the rule; enforcement stops immediately. Pausing without
  *          losing the configuration is is_active: false.
  *
  * The rules live in lib/dimensions/rules-service.ts, shared with the v1
  * operations dimension-rules.* and their MCP tools.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateAccountDimensionRuleSchema } from '@/lib/api/schemas'
 import { deleteAccountDimensionRule, updateAccountDimensionRule } from '@/lib/dimensions/rules-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'dimension.rules.update',

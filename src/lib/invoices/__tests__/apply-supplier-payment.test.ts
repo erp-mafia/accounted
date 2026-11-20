@@ -309,11 +309,13 @@ describe('planSupplierBankMatch', () => {
       const r = plan(eur(), tx(-100, 'EUR', -1050))
       expect(r).toMatchObject({ ok: true, plan: { newStatus: 'paid', settledAmount: 100 } })
       if (r.ok) {
+        // apInInvoiceCurrency: the EUR 2440 clears, stamped on that line (crm#1590).
         expect(r.plan.booking).toEqual({
           kind: 'clearing',
           paymentAmount: 1100,
           exchangeRateDifference: 50,
           bankFeeSek: 0,
+          apInInvoiceCurrency: 100,
         })
       }
     })
@@ -327,7 +329,7 @@ describe('planSupplierBankMatch', () => {
     it('a foreign row without amount_sek books at the invoice rate, with no kursdifferens', () => {
       const r = plan(eur(), tx(-100, 'EUR'))
       expect(r.ok).toBe(true)
-      if (r.ok) expect(r.plan.booking).toEqual({ kind: 'clearing', paymentAmount: 1100, bankFeeSek: 0 })
+      if (r.ok) expect(r.plan.booking).toEqual({ kind: 'clearing', paymentAmount: 1100, bankFeeSek: 0, apInInvoiceCurrency: 100 })
     })
 
     it('splits a EUR card fee on top at the bank row rate', () => {
@@ -342,6 +344,8 @@ describe('planSupplierBankMatch', () => {
           paymentAmount: 19229.4,
           exchangeRateDifference: -39.13,
           bankFeeSek: 113.77,
+          // The invoice's EUR, not the row's: the fee is not 2440's.
+          apInInvoiceCurrency: 1739.43,
         })
       }
     })

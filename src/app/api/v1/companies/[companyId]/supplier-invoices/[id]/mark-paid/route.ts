@@ -1,21 +1,16 @@
 /**
  * POST /api/v1/companies/{companyId}/supplier-invoices/{id}/mark-paid
  *
- * Records a payment against a supplier invoice. Books the payment journal
- * entry via createSupplierInvoicePaymentEntry (accrual) or
- * createSupplierInvoiceCashEntry (cash basis: recognizes the expense here),
- * then flips status to `paid` or `partially_paid` with an optimistic-lock
- * UPDATE that prevents double-booking under concurrent calls.
+ * Records a payment against a supplier invoice. The rules and the booking are
+ * lib/invoices/settle-supplier-payment.ts, shared with the dashboard door; this
+ * route owns the request, the one rule of the public API (a foreign payment
+ * states its SEK) and the response.
  *
  * The credited payment account is `payment_account` when the body names one,
- * otherwise DEFAULT_SUPPLIER_PAYMENT_ACCOUNT (1930): the same resolution the
- * dashboard route uses, and the same one the generators own. Issue #2550: this
- * door accepted the field in its schema but dropped it on the floor, so every
- * API payment landed on 1930 no matter what the caller asked for.
- *
- * Strict-mode v1 (per Phase 3 lessons): if JE creation fails, the route
- * ABORTS before any SI state mutation: no payment row is written, status
- * is unchanged. The caller can retry cleanly.
+ * otherwise the company's primary bank account: the same resolution the
+ * dashboard route uses, in planSupplierSettlement. Issue #2550: this door
+ * accepted the field in its schema but dropped it on the floor, so every API
+ * payment landed on 1930 no matter what the caller asked for.
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  */
@@ -26,33 +21,18 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import {
-  DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
-  createSupplierInvoiceCashEntry,
-  createSupplierInvoicePaymentEntry,
-} from '@/lib/bookkeeping/supplier-invoice-entries'
-import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import {
-  resolveSupplierPaymentSek,
-  supplierPaymentSekInputIssue,
-} from '@/lib/bookkeeping/supplier-payment-amounts'
-import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
-import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
-import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
-import { paidAtFromDate } from '@/lib/invoices/paid-at'
-import { eventBus } from '@/lib/events'
-import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+  bookSupplierSettlement,
+  planSupplierSettlement,
+  supplierSettlementInput,
+  type SettleableSupplierInvoice,
+  type SupplierSettlementInput,
+} from '@/lib/invoices/settle-supplier-payment'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
 
 const SI_PAID_RESPONSE_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id'
-
-const PAYABLE_STATUSES = ['registered', 'approved', 'partially_paid', 'overdue'] as const
+  'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id, registration_journal_entry_id'
 
 const SupplierInvoicePaidResponse = z.object({
   id: z.string().uuid(),
@@ -62,6 +42,7 @@ const SupplierInvoicePaidResponse = z.object({
   remaining_amount: z.number(),
   paid_at: z.string().nullable(),
   payment_journal_entry_id: z.string().uuid().nullable(),
+  registration_journal_entry_id: z.string().uuid().nullable(),
 })
 
 registerEndpoint({
@@ -70,21 +51,25 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices/:id/mark-paid',
   summary: 'Record a payment against a supplier invoice.',
   description:
-    'Books the payment journal entry (Debit 2440 / Credit the payment account under accrual; or Debit expense + Debit 2641 / Credit the payment account under cash) and flips the SI status to `paid` (full settlement) or `partially_paid`. The payment account is `payment_account` when supplied, otherwise 1930 Företagskonto. Strict-mode: a JE failure aborts before any SI mutation. Idempotent. Dry-runnable.',
+    'Books the payment journal entry (Debit 2440 / Credit the payment account under accrual; or Debit expense + Debit 2641 / Credit the payment account under cash) and flips the SI status to `paid` (full settlement) or `partially_paid`. The payment account is `payment_account` when supplied, otherwise 1930 Företagskonto. A booking failure leaves the SI unchanged. Idempotent. Dry-runnable.',
   useWhen:
     'You paid a registered or approved leverantörsfaktura through a channel other than the synced bank flow. For bank-matched payments use POST /transactions/{id}/match-supplier-invoice instead: that path also reconciles the bank line.',
   doNotUseFor:
-    'Refunding a payment (the public API does not expose unmark-paid; credit the SI instead). Paying a credited or already-paid SI (returns 409 SI_PAID_ALREADY).',
+    'Refunding a payment (the public API does not expose unmark-paid; credit the SI instead). Paying a credited or already-paid SI (returns 409 SI_PAID_ALREADY). Paying a credit note (returns 400 SI_PAID_NOT_PAYABLE with details.reason credit_note).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'payment_date must fall in an open fiscal period: locked period returns 400 PERIOD_LOCKED.',
+    'amount above what the SI still owes returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING with details.remaining_amount and details.excess, and books nothing. Issue a credit note via :credit for over-billing, or book a refund through the transactions endpoints.',
+    'payment_date after today (Swedish calendar day) returns 400 PAYMENT_DATE_IN_FUTURE: a payment is booked on the day the money moved.',
+    'payment_date must fall in an open fiscal period: locked period returns 400 SI_PAID_PERIOD_LOCKED.',
     'Foreign-currency SIs under accrual: amount is in the invoice currency and the verifikat is in SEK. The SEK cleared off 2440 is read from the ledger (the registration verifikat minus earlier payments), never computed by the caller; an SI with no registration verifikat (migrated) clears at its own exchange_rate, and one with no rate either returns 400 SI_FX_RATE_MISSING. State what the payment cost in SEK with amount_sek (the SEK that left the payment account; the difference to the cleared SEK books on 3960 gain / 7960 loss) or with exchange_rate_difference (cleared SEK minus paid SEK; 0 for none). One of the two is required, not both.',
     'Foreign-currency SI whose linked vouchers contradict each other (a batch voucher shared with another invoice, payment rows that do not add up to paid_amount, a registration or payment voucher reversed with no single correction), or whose 2440 balance is more than 10% away from remaining_amount x exchange_rate (reason ledger_rate_mismatch: the registration was corrected for something other than the rate), or whose history is longer than one request resolves (reason ledger_history_too_long: more than 50 payment rows or 20 storno hops), returns 409 SI_PAID_SEK_UNRESOLVED with details.reason and books nothing. Check the SEK against the ledger and resend with explicit SEK lines.',
     'Kontantmetoden company paying an SI that was registered on 2440 (booked at receipt, before a switch of method): the payment clears 2440 like under faktureringsmetoden, so a foreign-currency one needs amount_sek or exchange_rate_difference too. Only an SI never registered gets the cash entry (expense + ingående moms at payment).',
-    'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.',
+    'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an SI registered without its verifikat is booked first by the :book step (Debit cost + 2641 / Credit 2440, dated on the invoice date, periodiseringar included), then the payment clears that 2440. registration_journal_entry_id in the response names it, and the dry run returns it as registration_journal_entry. When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year SI_BOOK_NO_FISCAL_PERIOD, a locked accrual month SI_ACCRUED_COST_PERIOD_LOCKED, a partially paid SI SI_BOOK_INVALID_STATUS), the payment is refused with that code, details.registration_first is true, and nothing is booked.',
+    'A failure while booking changes nothing: a voucher left without its payment row or status is cancelled and its number documented as a gap (500 SI_PAID_FAILED). Retry the call.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
     'Cash basis + öresavrundning: a SEK invoice with ore_rounding on and an öre-bearing total is paid in whole kronor, so the generated entry credits the payment account with the rounded amount and books the residual on 3740 (no VAT). amount, paid_amount and remaining_amount stay in exact öre. Invoices whose rounding is already an invoice row on 3740 have a whole-krona total and are unaffected.',
-    'payment_account picks the BAS account credited for the payment (1930 Företagskonto when omitted, on both the accrual and the cash path). It must be active in the chart of accounts: an unknown or deactivated account returns 400 ACCOUNTS_NOT_IN_CHART and books nothing. Beyond that it is credited exactly as given, with no range check: 19xx bank or kassa is the ordinary choice, but 1630 (betald via skattekontot) and 2893 / 2018 / 2820 (someone else paid, utlägg) are equally valid, so choosing an account that does not represent where the money actually came from is the caller\'s error to avoid. Unlike the dashboard dialog, this endpoint does not read the company\'s last-used payment account: omitting the field always means 1930.',
+    'payment_account picks the BAS account credited for the payment (the company\'s primary bank account when omitted, on both the accrual and the cash path). It must be active in the chart of accounts: an unknown or deactivated account returns 400 ACCOUNTS_NOT_IN_CHART and books nothing. Beyond that it is credited exactly as given, with no range check: 19xx bank or kassa is the ordinary choice, but 1630 (betald via skattekontot) and 2893 / 2018 / 2820 (someone else paid, utlägg) are equally valid, so choosing an account that does not represent where the money actually came from is the caller\'s error to avoid. Unlike the dashboard dialog, this endpoint does not read the company\'s last-used payment account: omitting the field always means the primary bank account.',
+    'An invoice with a bank payment order that is signed or being signed (awaiting_signature, awaiting_second_signer, accepted) returns 409 SI_BANK_PAYMENT_UNDER_WAY, also under dry-run and with no force: the bank still pays it. Let that payment settle the invoice, or cancel the order first; once the money has left, match its bank row to the invoice instead.',
     'Duplicate-payment guard: on a full settlement, if a business bank transaction of the same amount around payment_date carries the supplier name (first distinctive token, so abbreviated bank text such as "HI3G" for Hi3G Access AB counts), returns 409 SI_PAID_LIKELY_DUPLICATE with candidate transactions. A candidate with match_reason `already_booked` is a bank row that is ALREADY a verifikat: do not pay the invoice, correct the double booking instead. Retry with `force: true` only after the user confirms, and with a fresh Idempotency-Key (the original is body-hash bound). Also evaluated under dry-run. A forced full settlement is recorded in behandlingshistorik together with the candidates the guard would have flagged.',
   ],
   example: {
@@ -98,6 +83,7 @@ registerEndpoint({
         remaining_amount: 0,
         paid_at: '2026-05-13',
         payment_journal_entry_id: '7b3a…',
+        registration_journal_entry_id: '5d1f…',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -136,48 +122,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    let bodyAmount: number | undefined
-    let bodyAmountSek: number | undefined
-    let bodyPaymentDate: string | undefined
-    let exchangeRateDifference: number | undefined
-    let bodyNotes: string | undefined
-    let bodyPaymentAccount: string | undefined
-    let force = false
-    let customLines:
-      | Array<{ account_number: string; debit_amount: number; credit_amount: number; line_description?: string }>
-      | undefined
+    let input: SupplierSettlementInput = {}
     if (rawBody) {
       const parsed = MarkSupplierInvoicePaidSchema.safeParse(rawBody)
       if (!parsed.success) return v1ValidationError(ctx, parsed.error)
-      bodyAmount = parsed.data.amount
-      bodyAmountSek = parsed.data.amount_sek
-      bodyPaymentDate = parsed.data.payment_date
-      exchangeRateDifference = parsed.data.exchange_rate_difference
-      bodyNotes = parsed.data.notes
-      bodyPaymentAccount = parsed.data.payment_account
-      customLines = parsed.data.lines
-      force = parsed.data.force === true
-    }
-
-    const today = new Date().toISOString().split('T')[0]
-    const paymentDate = bodyPaymentDate || today
-    const paidAt = paidAtFromDate(paymentDate)
-
-    // Reject future payment_date at the schema layer. BFL 5 kap 2 §
-    // requires bokföring to follow real cash movement; a payment booked
-    // in the future is a scheduling artefact, not an affärshändelse.
-    // No legitimate v1 workflow needs to backstamp tomorrow; if the user
-    // wants to schedule, that's a different surface.
-    if (paymentDate > today) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'payment_date',
-          message: 'payment_date cannot be in the future.',
-          attempted: paymentDate,
-          today,
-        },
-      })
+      input = supplierSettlementInput(parsed.data)
     }
 
     // Fetch SI with supplier + items (needed by the engine for cash-basis).
@@ -185,7 +134,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .from('supplier_invoices')
       .select(`
         id, supplier_id, status, currency, exchange_rate, total, paid_amount, remaining_amount,
-        supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge, payment_reference,
+        supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge, reverse_charge_kind, payment_reference,
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
         is_credit_note, credited_invoice_id, payment_journal_entry_id, registration_journal_entry_id, default_dimensions,
         supplier:suppliers(id, name, supplier_type),
@@ -202,156 +151,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('SI_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
 
-    type SupplierObj = { id: string; name: string; supplier_type: string }
-    type SI = {
-      id: string
-      supplier_id: string
-      status: string
-      currency: string
-      total: number
-      paid_amount: number
-      remaining_amount: number
-      supplier_invoice_number: string
-      arrival_number: number
-      invoice_date: string
-      is_credit_note: boolean
-      supplier: SupplierObj | SupplierObj[] | null
-      items?: unknown[]
-    } & Record<string, unknown>
+    const opCtx = { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log }
+    const planned = await planSupplierSettlement(opCtx, invoice as unknown as SettleableSupplierInvoice, input)
+    if (!planned.ok) return v1OutcomeResponse(planned, ctx)
+    const { plan } = planned
 
-    const typed = invoice as unknown as SI
-
-    if (typed.is_credit_note) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'id', message: 'Credit notes cannot be marked paid.' },
-      })
-    }
-
-    if (!PAYABLE_STATUSES.includes(typed.status as (typeof PAYABLE_STATUSES)[number])) {
-      const code = typed.status === 'paid' || typed.status === 'credited' || typed.status === 'reversed'
-        ? 'SI_PAID_ALREADY'
-        : 'SI_PAID_NOT_PAYABLE'
-      return v1ErrorResponseFromCode(code, ctx.log, {
-        requestId: ctx.requestId,
-        details: { current_status: typed.status },
-      })
-    }
-
-    // Application-layer period-lock pre-check.
-    const lockVerdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, paymentDate)
-    if (lockVerdict.locked) {
-      return v1ErrorResponseFromCode('SI_PAID_PERIOD_LOCKED', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          reason: lockVerdict.reason,
-          fiscal_period_id: lockVerdict.fiscal_period_id,
-          payment_date: paymentDate,
-        },
-      })
-    }
-
-    const sekInputIssue = supplierPaymentSekInputIssue({
-      currency: typed.currency,
-      amountSek: bodyAmountSek,
-      exchangeRateDifference,
-      hasLines: !!customLines,
-    })
-    if (sekInputIssue) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: sekInputIssue,
-      })
-    }
-
-    // In the invoice's currency, like remaining_amount and the payment row.
-    const paymentAmount = bodyAmount != null
-      ? Math.round(bodyAmount * 100) / 100
-      : Math.round(typed.remaining_amount * 100) / 100
-
-    if (paymentAmount <= 0) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'amount', message: 'amount must be positive.' },
-      })
-    }
-
-    // Reject overpayment up front. Without this, the silent `Math.max(0, ...)`
-    // clamp below would book the full payment_amount in the JE but only
-    // reduce the SI balance to 0: the difference would be an unaccounted
-    // overpayment on the 2440 ledger. If a refund is genuinely due, the
-    // caller credits the SI (which reverses the obligation) and books the
-    // refund as a separate bank transaction. Half-öre tolerance allows
-    // legitimate rounding artefacts from FX-difference adjustments.
-    if (paymentAmount > typed.remaining_amount + 0.005) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'amount',
-          message:
-            'amount exceeds remaining_amount. Issue a credit note via :credit for over-billing, or book the refund through the transactions endpoints.',
-          attempted: paymentAmount,
-          remaining_amount: typed.remaining_amount,
-        },
-      })
-    }
-
-    const newRemaining = Math.max(
-      0,
-      Math.round((typed.remaining_amount - paymentAmount) * 100) / 100,
-    )
-    // Half-öre epsilon: same convention as v1 invoices.mark-paid.
-    const newStatus: 'paid' | 'partially_paid' = newRemaining <= 0.005 ? 'paid' : 'partially_paid'
-    const newPaidAmount = Math.round((typed.paid_amount + paymentAmount) * 100) / 100
-
-    // Settings fetch hoisted ahead of the dry-run branch so the FX-required
-    // check below fires in both preview and commit modes (and so dry-run can
-    // surface the requirement before a caller learns it the hard way).
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
-
-    // Route on the supplier invoice's actual booking state: if 2440 was
-    // posted at receipt, payment must clear 2440 regardless of the current
-    // accounting_method.
-    const siAlreadyBooked = !!(typed as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
-    const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
-
-    // createSupplierInvoiceCashEntry books the FULL invoice and takes no
-    // payment amount: reject partials and part-paid completions for
-    // never-booked kontantmetoden invoices instead of over-booking the
-    // expense. Fires in dry-run too, so a preview cannot mask the rejection.
-    const cashBlock = cashPartialBlockReason({
-      invoiceAlreadyBooked: siAlreadyBooked,
-      accountingMethod,
-      priorPaidAmount: typed.paid_amount,
-      paysRemainingInFull: newStatus === 'paid',
-    })
-    if (cashBlock) {
-      return v1ErrorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          reason: cashBlock,
-          payment_amount: paymentAmount,
-          paid_amount: typed.paid_amount,
-          remaining_amount: typed.remaining_amount,
-        },
-      })
-    }
-
-    // FX-required validation. Whenever the registration JE used the invoice's
-    // exchange rate to compute subtotal_sek (i.e. the SI was booked under
-    // accrual or migrated from accrual), the payment JE has to book any rate
-    // delta to 3960 / 7960 or AP will carry a stranded 2440 balance after the
-    // bank line clears. Gated on the booking state, not the current setting.
+    // The API states what the dashboard dialog defaults to: when the verifikat
+    // clears 2440 at its booked SEK, any rate delta must reach 3960 / 7960 or
+    // AP carries a stranded 2440 balance after the bank line clears. Gated on
+    // the booking state, not the current setting.
     if (
-      typed.currency !== 'SEK' &&
-      !useCashEntry &&
-      exchangeRateDifference === undefined &&
-      bodyAmountSek === undefined
+      plan.invoice.currency !== 'SEK' &&
+      !plan.useCashEntry &&
+      input.exchangeRateDifference === undefined &&
+      input.amountSek === undefined
     ) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -361,346 +174,71 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             message:
               'exchange_rate_difference (cleared SEK minus paid SEK) or amount_sek (the SEK that left the payment account) is required when paying a non-SEK supplier invoice under faktureringsmetoden. Use exchange_rate_difference 0 if the payment cost exactly the SEK the invoice carries on 2440.',
           }],
-          invoice_currency: typed.currency,
+          invoice_currency: plan.invoice.currency,
         },
-      })
-    }
-
-    // The 2440 clearing books SEK, read from the ledger (#2955): the invoice-
-    // currency amount used to be posted as if it were kronor. Resolved before
-    // the dry-run so a preview shows the SEK and cannot mask a refusal.
-    let clearingSek = paymentAmount
-    if (!customLines && !useCashEntry) {
-      const sek = await resolveSupplierPaymentSek(
-        ctx.supabase,
-        ctx.companyId!,
-        typed as unknown as SupplierInvoice,
-        { amount: paymentAmount, amountSek: bodyAmountSek, exchangeRateDifference },
-      )
-      if (!sek.ok) {
-        return v1ErrorResponseFromCode(sek.code, ctx.log, {
-          requestId: ctx.requestId,
-          details: sek.details,
-        })
-      }
-      clearingSek = sek.clearingSek
-      exchangeRateDifference = sek.exchangeRateDifference
-    }
-
-    const pickSupplier = (s: SI['supplier']): SupplierObj | null => {
-      if (!s) return null
-      return Array.isArray(s) ? (s[0] ?? null) : s
-    }
-    const supplierRow = pickSupplier(typed.supplier)
-
-    // Duplicate-payment guard: parity with the dashboard mark-paid route and
-    // the v1 invoices twin, which this door lacked entirely. Runs before the
-    // dry-run preview so a successful preview cannot mask the warning, only on
-    // a full settlement (a partial is an explicit, deliberate action), and
-    // never on force=true. Same shared detector as the dashboard route.
-    if (!force && newStatus === 'paid') {
-      const candidates = await findDuplicatePaymentCandidatesForSupplierInvoice(ctx.supabase, {
-        companyId: ctx.companyId!,
-        invoice: {
-          supplier_invoice_number: typed.supplier_invoice_number ?? null,
-          payment_reference: (typed as { payment_reference?: string | null }).payment_reference ?? null,
-          supplier_name: supplierRow?.name,
-          currency: typed.currency ?? null,
-          total: typed.total ?? null,
-          total_sek: (typed as { total_sek?: number | null }).total_sek ?? null,
-          exchange_rate: (typed as { exchange_rate?: number | null }).exchange_rate ?? null,
-        },
-        paymentAmount,
-        paymentDate,
-      })
-      if (candidates.length > 0) {
-        return v1ErrorResponseFromCode('SI_PAID_LIKELY_DUPLICATE', ctx.log, {
-          requestId: ctx.requestId,
-          details: { candidates },
-        })
-      }
-    } else if (force && newStatus === 'paid') {
-      // force on a PARTIAL payment overrides nothing: the guard never runs
-      // there. Only a bypassed full settlement is logged here and recorded in
-      // behandlingshistorik after the voucher exists.
-      ctx.log.warn('duplicate-payment guard bypassed', {
-        reason: 'force=true',
-        invoiceId,
-        userId: ctx.userId,
-        paymentAmount,
       })
     }
 
     if (ctx.dryRun) {
-      // Keep the preview aligned with the live date-only payment timestamp.
       return dryRunPreview(
         {
-          ...typed,
-          status: newStatus,
-          paid_amount: newPaidAmount,
-          remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? paidAt : null,
-          payment_date: paymentDate,
-          payment_amount: paymentAmount,
+          ...plan.invoice,
+          status: plan.newStatus,
+          paid_amount: plan.newPaidAmount,
+          remaining_amount: plan.newRemaining,
+          paid_at: plan.paidAt,
+          payment_date: plan.paymentDate,
+          payment_amount: plan.paymentAmount,
           // SEK the accrual clearing takes off 2440, and the kursdifferens
           // (> 0 gain on 3960, < 0 loss on 7960). Custom lines and the cash
           // entry carry their own SEK.
-          ...(!customLines && !useCashEntry
-            ? { payment_amount_sek: clearingSek, exchange_rate_difference: exchangeRateDifference ?? 0 }
+          ...(!input.lines && !plan.useCashEntry
+            ? { payment_amount_sek: plan.clearingSek, exchange_rate_difference: plan.exchangeRateDifference ?? 0 }
             : {}),
           // The account the committed entry will credit, already resolved, so
           // a caller can verify the routing before committing.
-          payment_account: bodyPaymentAccount ?? DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
+          payment_account: plan.paymentAccount,
           would_create_payment_journal_entry: true,
+          // The registration verifikat the commit books first, or null.
+          would_book_registration_first: plan.registration.required,
+          registration_journal_entry: plan.registration.required ? plan.registration.entry : null,
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
 
-    // Strict-mode: book the JE FIRST. Failure aborts before any SI mutation.
-    let journalEntryId: string | null = null
-    try {
-      if (customLines) {
-        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', ctx.log, {
-            requestId: ctx.requestId,
-            details: { totalDebit, totalCredit },
-          })
-        }
-        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, paymentDate)
-        if (!fiscalPeriodId) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
-            requestId: ctx.requestId,
-            details: { payment_date: paymentDate },
-          })
-        }
-        const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
-        const desc = supplierRow?.name
-          ? `Utbetalning leverantörsfaktura ${typed.supplier_invoice_number}, ${supplierRow.name}`
-          : `Utbetalning leverantörsfaktura ${typed.supplier_invoice_number}`
-        const entry = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
-          fiscal_period_id: fiscalPeriodId,
-          entry_date: paymentDate,
-          description: desc,
-          source_type: sourceType,
-          source_id: typed.id,
-          lines: customLines,
-        })
-        journalEntryId = entry?.id ?? null
-      } else if (useCashEntry) {
-        const entry = await createSupplierInvoiceCashEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          typed as unknown as SupplierInvoice,
-          (typed.items ?? []) as SupplierInvoiceItem[],
-          paymentDate,
-          supplierRow?.supplier_type ?? 'swedish_business',
-          supplierRow?.name,
-          bodyPaymentAccount,
-          // Foreign invoice: the SEK that left the account pins the entry to
-          // the payment-date rate, as a bank match does.
-          bodyAmountSek,
-        )
-        journalEntryId = entry?.id ?? null
-      } else {
-        const entry = await createSupplierInvoicePaymentEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          typed as unknown as SupplierInvoice,
-          clearingSek,
-          paymentDate,
-          exchangeRateDifference,
-          supplierRow?.name,
-          bodyPaymentAccount,
-        )
-        journalEntryId = entry?.id ?? null
-      }
-      if (!journalEntryId) {
-        // Engine returned null (no open fiscal period). Strict-mode abort.
-        return v1ErrorResponseFromCode('SI_PAID_FAILED', ctx.log, {
-          requestId: ctx.requestId,
-          details: { reason: 'no_fiscal_period', payment_date: paymentDate },
-        })
-      }
-    } catch (err) {
-      if (isBookkeepingError(err)) {
-        return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
-      }
-      ctx.log.error('supplier-invoice mark-paid JE creation failed', err as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('SI_PAID_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
-      })
-    }
+    const settled = await bookSupplierSettlement(opCtx, plan, {
+      user_id: ctx.userId,
+      actor_id: ctx.apiKeyId ?? null,
+      actor_type: ctx.actor.type,
+      actor_label: ctx.actor.label ?? null,
+    })
+    if (!settled.ok) return v1OutcomeResponse(settled, ctx)
 
-    // Step 2: optimistic-lock SI update. The .in() filter guards against
-    // concurrent calls (or a credit/mark-paid race) flipping the status
-    // between our pre-flight and write.
-    const { data: updated, error: updateErr } = await ctx.supabase
+    // The response is the row as stored, never the pre-flight's items or supplier.
+    const { data: stored, error: storedError } = await ctx.supabase
       .from('supplier_invoices')
-      .update({
-        status: newStatus,
-        remaining_amount: newRemaining,
-        paid_amount: newPaidAmount,
-        paid_at: newStatus === 'paid' ? paidAt : null,
-        payment_journal_entry_id: journalEntryId,
-      })
+      .select(SI_PAID_RESPONSE_COLUMNS)
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
-      .in('status', PAYABLE_STATUSES as unknown as string[])
-      .select(SI_PAID_RESPONSE_COLUMNS)
       .maybeSingle()
-
-    if (updateErr) {
-      ctx.log.error('supplier-invoice mark-paid update failed: attempting storno of orphaned JE', updateErr, {
-        invoiceId,
-        companyId: ctx.companyId,
-        userId: ctx.userId,
-        journalEntryId,
-      })
-      // The payment JE is already posted but the SI update failed: without a
-      // storno, the AP ledger would carry a 2440/1930 entry with no matching
-      // SI status change (BFL 5 kap 5 § integrity violation). reverseEntry()
-      // takes the entry id directly (no pre-fetch needed), matching the CAS-
-      // race branch immediately below.
-      try {
-        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
-      } catch (revErr) {
-        ctx.log.error('orphan JE storno failed after SI update error: manual reconciliation required', revErr as Error, {
-          invoiceId,
-          companyId: ctx.companyId,
-          userId: ctx.userId,
-          journalEntryId,
-        })
-      }
-      return v1ErrorResponseFromCode('SI_PAID_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: 'si_update_failed', journal_entry_id: journalEntryId },
-      })
-    }
-    if (!updated) {
-      // CAS race: the SI moved out of a payable state between pre-flight and
-      // write. The JE we just posted is now orphaned. Storno it.
-      ctx.log.warn('supplier-invoice mark-paid race: JE was orphaned, attempting storno', {
-        invoiceId,
-        companyId: ctx.companyId,
-        userId: ctx.userId,
-        journalEntryId,
-      })
-      try {
-        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
-      } catch (revErr) {
-        ctx.log.error('orphan JE storno failed: manual reconciliation required', revErr as Error, {
-          invoiceId,
-          companyId: ctx.companyId,
-          userId: ctx.userId,
-          journalEntryId,
-        })
-      }
-      return v1ErrorResponseFromCode('SI_PAID_ALREADY', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: 'race' },
-      })
+    if (storedError) {
+      ctx.log.warn('supplier-invoice mark-paid: the settled row could not be re-read', storedError, { invoiceId })
     }
 
-    // Step 3: record the payment row (non-blocking: its only consumer is the
-    // dashboard's "payment history" tab, and the JE is the source of truth).
-    const { error: paymentErr } = await ctx.supabase
-      .from('supplier_invoice_payments')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        supplier_invoice_id: invoiceId,
-        payment_date: paymentDate,
-        amount: paymentAmount,
-        currency: typed.currency,
-        exchange_rate_difference: exchangeRateDifference ?? 0,
-        journal_entry_id: journalEntryId,
-        notes: bodyNotes ?? null,
-      })
-    if (paymentErr) {
-      ctx.log.warn('supplier_invoice_payments insert failed (non-blocking)', paymentErr, {
-        invoiceId,
-      })
-    }
-
-    // The caller was told a possible double payment existed and asked for it
-    // to be booked anyway. Append one behandlingshistorik row naming the
-    // payment voucher and what the guard would have flagged (BFNAR 2013:2
-    // p. 9.16): the server log alone leaves the books with no trace of the
-    // override. Runs after the voucher is committed and never throws.
-    if (force && newStatus === 'paid') {
-      await recordSupplierInvoiceDuplicateGuardBypass(ctx.supabase, {
-        companyId: ctx.companyId!,
-        invoice: {
-          id: invoiceId,
-          supplier_invoice_number: typed.supplier_invoice_number ?? null,
-          payment_reference: (typed as { payment_reference?: string | null }).payment_reference ?? null,
-          supplier_name: supplierRow?.name,
-          currency: typed.currency ?? null,
-          total: typed.total ?? null,
-          total_sek: (typed as { total_sek?: number | null }).total_sek ?? null,
-          exchange_rate: (typed as { exchange_rate?: number | null }).exchange_rate ?? null,
-        },
-        paymentAmount,
-        paymentDate,
-        paymentAccount: bodyPaymentAccount ?? null,
-        journalEntryId,
-        actor: {
-          user_id: ctx.userId,
-          actor_id: ctx.apiKeyId ?? null,
-          actor_type: ctx.apiKeyId ? 'api_key' : 'user',
-          actor_label: ctx.apiKeyName ?? null,
-        },
-      })
-    }
-
-    // Fully settled: retire every transaction's suggestion pointer at this
-    // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
-    // a bank transaction, so any pointer at it is now dead.
-    if (newStatus === 'paid') {
-      await clearSettledInvoiceSuggestions(
-        ctx.supabase,
-        ctx.companyId!,
-        'supplier_invoice',
-        invoiceId,
-      )
-    }
-
-    // Anchor the invoice's retained source document to a posted verifikat if
-    // it is still floating. Under kontantmetoden the cash entry we just booked
-    // is the only booking of the affärshändelse, so its underlag belongs here
-    // (BFL 5 kap 6 §); under faktureringsmetoden the document is normally
-    // already on the registration verifikat and this is a no-op. Without it an
-    // API-key/MCP-driven payment leaves the document unanchored, which every
-    // missing-underlag surface reads as "Underlag saknas". Never throws.
-    await anchorSupplierInvoiceDocument(ctx.supabase, ctx.companyId!, invoiceId)
-
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.paid',
-        payload: {
-          supplierInvoice: {
-            ...typed,
-            paid_at: newStatus === 'paid' ? paidAt : (typed.paid_at ?? null),
-          } as unknown as SupplierInvoice,
-          paymentAmount,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-        },
-      })
-    } catch (err) {
-      ctx.log.warn('supplier_invoice.paid emit failed', err as Error)
-    }
-
-    return ok(updated, { requestId: ctx.requestId })
+    return ok(
+      stored ?? {
+        id: invoiceId,
+        status: settled.newStatus,
+        total: plan.invoice.total,
+        paid_amount: settled.newPaidAmount,
+        remaining_amount: settled.newRemaining,
+        paid_at: settled.paidAt,
+        payment_journal_entry_id: settled.journalEntryId,
+        registration_journal_entry_id: settled.registrationJournalEntryId ?? plan.invoice.registration_journal_entry_id ?? null,
+      },
+      { requestId: ctx.requestId, ...(settled.warnings.length > 0 ? { warnings: settled.warnings } : {}) },
+    )
   },
   { requireIdempotencyKey: true },
 )

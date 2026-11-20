@@ -66,6 +66,18 @@ describe('attachments-store', () => {
     expect(findCall(TABLE, 'lte')).toEqual(['through_date', '2026-12-31'])
   })
 
+  it('lists every file of a range past the 1000-row page, in a stable order', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const page = (start: number, n: number) => Array.from({ length: n }, (_, i) => row({ id: `a${start + i}` }))
+    enqueue({ data: page(0, 1000) })
+    enqueue({ data: page(1000, 2) })
+    const rows = await listAttachmentRowsInRange(supabase as never, COMPANY, '2026-01-01', '2026-12-31')
+    expect(rows).toHaveLength(1002)
+    expect(findCalls(TABLE, 'range')).toEqual([[0, 999], [1000, 1999]])
+    expect(findCalls(TABLE, 'order').map((a) => a[0])).toContain('id')
+    expect(findCalls(TABLE, 'limit')).toEqual([])
+  })
+
   it('strips bucket and path from the public shape', () => {
     const pub = toPublicAttachment({ ...row(), size_bytes: 12345 } as never)
     expect(pub).not.toHaveProperty('storage_path')

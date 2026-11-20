@@ -1,19 +1,20 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
-import { createJournalEntry, findFiscalPeriod } from './engine'
-import { resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
-import { resolveBookingAccount } from './accruals/account-suggestions'
-import {
-  coerceDimensionsBag,
-  dimensionsBagKey,
-  mergeDimensionBags,
-  type LineDimensions,
-} from './dimension-resolver'
-import { generateSalesVatLines } from './vat-entries'
-import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
-import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { findFiscalPeriod } from './engine'
+import { coerceDimensionsBag } from './dimension-resolver'
+import { clearedSek, statedSettlement } from './ledger-carried-sek'
+import { fxDifferenceLine } from './ore-rounding'
 import { createLogger } from '@/lib/logger'
-import { roundOre } from '@/lib/money'
-import { creditNatural } from './line-side'
+import { ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
+import { postingPort } from '@/lib/posting/port'
+import { assertAccruedIncomeLinesBookable } from './accruals/accrued-cost-guard'
+import {
+  creditNoteBusinessEvent,
+  invoicePaymentBusinessEvent,
+  invoiceRegistrationBusinessEvent,
+  type InvoicePaymentPostingContext,
+  type InvoicePostingContext,
+} from './invoice-business-events'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -21,9 +22,7 @@ import type {
   CreateJournalEntryLineInput,
   EntityType,
   Invoice,
-  InvoiceItem,
   JournalEntry,
-  VatTreatment,
 } from '@/types'
 
 const log = createLogger('invoice-entries')
@@ -34,335 +33,22 @@ const log = createLogger('invoice-entries')
 // need only those, and importing them from here dragged the engine, the
 // account backfill and with it the full BAS chart into the browser bundle.
 export { getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
-import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
-
-/**
- * Convert an invoice-currency item amount to SEK for a journal entry line.
- *
- * SEK invoices short-circuit exactly as before, and so does any invoice with a
- * legitimately supplied positive rate: the only new behaviour is the refusal
- * above when a foreign invoice reaches a booking path with no rate at all.
- * `amountSek` is deliberately null: an InvoiceItem has no per-item SEK column,
- * so the rate is the only honest source at item granularity.
- */
-function itemToSekOrThrow(
-  amount: number,
-  currency: string | null | undefined,
-  exchangeRate: number | null | undefined
-): number {
-  const sek = resolveSekAmountOrNull(amount, null, currency, exchangeRate)
-  if (sek === null) throw new InvoiceFxRateMissingError(currency || 'okänd valuta')
-  return sek
-}
-
-/**
- * Convert an invoice-level (header) amount to SEK for a journal entry line.
- *
- * Same refusal contract as `itemToSekOrThrow`, but honours a pre-computed
- * `*_sek` column when the row carries one: header amounts (subtotal /
- * vat_amount / total) have SEK twins that items lack. Rows that DO carry a
- * `*_sek` value or a usable rate convert exactly as before; only the "foreign
- * amount with no SEK source at all" case changes, from silently relabelling
- * the foreign number as kronor (the lenient `resolveSekAmount` ladder, which
- * currency-utils marks READ-ONLY CODE ONLY) to the same INVOICE_FX_RATE_MISSING
- * refusal the item-driven generators raise. Without this, a rate-less foreign
- * invoice booked through a caller without hydrated items posted its raw
- * foreign number as kronor (1 250 EUR → 1 250 kr on 1510): balanced, so no
- * trigger fired, and undetectable downstream.
- */
-function headerToSekOrThrow(
-  amount: number,
-  amountSek: number | null | undefined,
-  currency: string | null | undefined,
-  exchangeRate: number | null | undefined
-): number {
-  const sek = resolveSekAmountOrNull(amount, amountSek, currency, exchangeRate)
-  if (sek === null) throw new InvoiceFxRateMissingError(currency || 'okänd valuta')
-  return sek
-}
-
-/**
- * Build the invoice identifier used in line_description. Prefers the assigned
- * invoice number; falls back to a draft tag with the first 8 chars of the
- * invoice UUID so the verifikation still identifies *vad affärshändelsen avser*
- * per BFL 5 kap 6§ p.3 even if a journal entry is somehow created against an
- * unnumbered invoice. The send path always assigns a number first, so this
- * fallback is defensive, but it leaves no ambiguity if a future caller skips
- * ensureInvoiceNumber.
- */
-function invoiceTag(invoice: Pick<Invoice, 'id' | 'invoice_number'>): string {
-  return invoice.invoice_number ?? `utkast ${invoice.id.slice(0, 8)}`
-}
-
-/**
- * Build a BFL-compliant verifikation description with event type and counterparty.
- * Falls back to prefix + invoiceNumber if name is not provided (backward compat).
- */
-function buildInvoiceDescription(
-  prefix: string, invoiceNumber: string | null, counterpartyName?: string,
-  invoiceId?: string,
-): string {
-  const tag = invoiceNumber ?? (invoiceId ? `utkast ${invoiceId.slice(0, 8)}` : null)
-  const tagPart = tag ? ` ${tag}` : ''
-  return counterpartyName
-    ? `${prefix}${tagPart}, ${counterpartyName}`
-    : `${prefix}${tagPart}`
-}
-
-/**
- * Group invoice items by VAT rate and generate per-rate revenue + VAT lines.
- * Returns credit lines only (revenue + VAT). The caller adds the debit side.
- *
- * options.deferAccruals: substitute the 29xx interim account for lines with a
- * periodisering period. Only the callers that also create/cancel accrual
- * schedules may pass true (invoice entry + credit note): the cash-method
- * entry books revenue directly even if a line carries stale accrual fields,
- * since no schedule would ever dissolve the interim balance.
- *
- * options.defaultDimensions (dimensions PR7): the invoice-level bag. Revenue
- * lines carry item.dimensions merged over it (item wins per key): the merged
- * bag is part of the aggregation identity, so two items on the same
- * rate+account but different tags stay on separate lines. VAT lines carry
- * the default only (the VAT account is a function of the treatment, never of
- * a specific item).
- *
- * options.goodsDeliveryCountry (#2906): the invoice's delivery_country. The
- * zero-rated reverse_charge / export lines of an invoice that stated a goods
- * delivery abroad book the goods accounts (3108 / 3105, rutor 35 / 36)
- * instead of the services ones (getRevenueAccount).
- */
-function generatePerRateLines(
-  items: InvoiceItem[],
-  invoiceVatTreatment: VatTreatment,
-  entityType: EntityType,
-  invoiceTagText: string,
-  currency?: string | null,
-  exchangeRate?: number | null,
-  options?: { deferAccruals?: boolean; defaultDimensions?: LineDimensions; goodsDeliveryCountry?: string | null }
-): CreateJournalEntryLineInput[] {
-  const goodsDeliveryCountry = options?.goodsDeliveryCountry ?? null
-  const lines: CreateJournalEntryLineInput[] = []
-  const isForeign = currency != null && currency !== 'SEK'
-
-  // Free-text / blank rows carry no amounts and never book: drop them before
-  // grouping so they can't produce a zero-amount revenue line.
-  items = items.filter((item) => item.line_type !== 'text')
-
-  // Helper: convert item amount to SEK when dealing with foreign currency.
-  // Refuses (InvoiceFxRateMissingError) rather than relabelling the foreign
-  // number as kronor: see itemToSekOrThrow above.
-  const toSek = (amount: number): number =>
-    itemToSekOrThrow(amount, currency, exchangeRate)
-
-  // Check if items have per-line vat_rate set (new invoices)
-  const hasPerLineVat = items.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
-
-  if (!hasPerLineVat) {
-    // Legacy fallback: single rate from invoice level. All items collapse
-    // into one revenue line, so only the invoice default can apply here:
-    // legacy rows predate per-item tagging anyway.
-    const revenueAccount = getRevenueAccount(invoiceVatTreatment, entityType, goodsDeliveryCountry)
-    const subtotal = items.reduce((sum, item) => sum + item.line_total, 0)
-    const subtotalSek = toSek(subtotal)
-    lines.push({
-      account_number: revenueAccount,
-      debit_amount: 0,
-      credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${invoiceTagText}`,
-      dimensions: options?.defaultDimensions,
-    })
-
-    const totalVat = items.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
-    if (totalVat > 0) {
-      if (isForeign) {
-        // For foreign currency, compute VAT in SEK directly
-        const vatSek = toSek(totalVat)
-        const vatAccount = getOutputVatAccount(invoiceVatTreatment)
-        lines.push({
-          account_number: vatAccount,
-          debit_amount: 0,
-          credit_amount: vatSek,
-          line_description: `Utgående moms faktura ${invoiceTagText}`,
-          dimensions: options?.defaultDimensions,
-        })
-      } else {
-        const vatLines = generateSalesVatLines({
-          vatTreatment: invoiceVatTreatment,
-          baseAmount: subtotal,
-          direction: 'sales',
-        })
-        lines.push(...vatLines.map((line) => ({
-          ...line,
-          dimensions: options?.defaultDimensions,
-        })))
-      }
-    }
-    return lines
-  }
-
-  // Group items by vat_rate (preserve first-seen rate order). Within each rate,
-  // sub-group revenue by the resolved BAS account + merged dimensions bag so a
-  // per-line/article account override (or a per-item dimension tag) produces
-  // its own credit line. VAT stays aggregated per rate (the VAT account is a
-  // function of the treatment, never of the revenue override).
-  type RevenueBucket = {
-    account: string
-    dimensions?: LineDimensions
-    subtotal: number
-  }
-  type RateGroup = {
-    vatAmount: number
-    // account + dims bag -> bucket (first-seen order)
-    buckets: Map<string, RevenueBucket>
-  }
-  const rateGroups = new Map<number, RateGroup>()
-
-  for (const item of items) {
-    const rate = item.vat_rate ?? 0
-    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
-      ? invoiceVatTreatment
-      : getVatTreatmentForRate(rate)
-    // reverse_charge / export force the statutory revenue account (3308/3305,
-    // or 3108/3105 for goods delivered abroad); a per-line override only
-    // applies to ordinary domestic rates so EU/export sales keep landing in
-    // the right VAT-declaration ruta.
-    const isSpecialTreatment = treatment === 'reverse_charge' || treatment === 'export'
-    const plAccount = !isSpecialTreatment && item.revenue_account
-      ? item.revenue_account
-      : getRevenueAccount(treatment, entityType, goodsDeliveryCountry)
-    // Periodiserade lines credit the 29xx interim account (förutbetalda
-    // intäkter) instead of revenue; the schedule dissolves it monthly. Output
-    // VAT below is untouched. Moms is never deferred. Special treatments are
-    // never deferred (ruta 39/40 must reflect the full period's sales).
-    const account = isSpecialTreatment || !options?.deferAccruals
-      ? plAccount
-      : resolveBookingAccount('revenue', item, plAccount)
-
-    const dimensions = mergeDimensionBags(options?.defaultDimensions, item.dimensions)
-    const bucketKey = `${account}\u0000${dimensionsBagKey(dimensions)}`
-
-    const group = rateGroups.get(rate) ?? { vatAmount: 0, buckets: new Map<string, RevenueBucket>() }
-    group.vatAmount += item.vat_amount || 0
-    const bucket = group.buckets.get(bucketKey) ?? { account, dimensions, subtotal: 0 }
-    bucket.subtotal += item.line_total
-    group.buckets.set(bucketKey, bucket)
-    rateGroups.set(rate, group)
-  }
-
-  // Generate revenue + VAT lines per rate group.
-  for (const [rate, group] of rateGroups) {
-    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
-      ? invoiceVatTreatment
-      : getVatTreatmentForRate(rate)
-
-    // The rate-level rounded subtotal is the balance anchor: identical to the
-    // pre-override single-account behaviour. When a rate splits across multiple
-    // buckets (account and/or dimensions), distribute that exact total so
-    // independent per-bucket rounding can never introduce a 1-öre imbalance
-    // against the 1510 debit: every bucket but the last rounds normally; the
-    // last absorbs the remainder.
-    const rateSubtotalSek = Math.round(
-      toSek(Array.from(group.buckets.values()).reduce((sum, b) => sum + b.subtotal, 0)) * 100
-    ) / 100
-
-    const buckets = Array.from(group.buckets.values())
-    let allocated = 0
-    buckets.forEach((bucket, idx) => {
-      const isLast = idx === buckets.length - 1
-      const credit = isLast
-        ? Math.round((rateSubtotalSek - allocated) * 100) / 100
-        : Math.round(toSek(bucket.subtotal) * 100) / 100
-      allocated = Math.round((allocated + credit) * 100) / 100
-      // A bucket that nets below zero (rabatt row, negative correction row)
-      // books as a debit of the absolute value: every line carries exactly
-      // one non-negative side (creditNatural), never a negative credit.
-      lines.push({
-        account_number: bucket.account,
-        ...creditNatural(credit),
-        line_description: `Försäljning faktura ${invoiceTagText}`,
-        dimensions: bucket.dimensions,
-      })
-    })
-
-    const roundedVat = Math.round(toSek(group.vatAmount) * 100) / 100
-    if (roundedVat !== 0) {
-      const vatAccount = getOutputVatAccount(treatment)
-      lines.push({
-        account_number: vatAccount,
-        ...creditNatural(roundedVat),
-        line_description: `Utgående moms ${rate}% faktura ${invoiceTagText}`,
-        dimensions: options?.defaultDimensions,
-      })
-    }
-  }
-
-  return lines
-}
-
-/**
- * Generate ROT/RUT-avdrag debit lines from invoice items.
- *
- * For each item flagged with `deduction_type`, produces a debit on BAS 1513
- * (Övriga kortfristiga fordringar, Skatteverket) for the computed
- * deduction amount. The caller must REDUCE the 1510 debit (kundfordringar)
- * by the same total: the customer only owes the post-deduction amount;
- * Skatteverket pays the rest via Husavdragstjänsten. Returns both the
- * lines and the total so callers can apply both adjustments atomically.
- *
- * Foreign-currency invoices: ROT/RUT-avdrag is a Sweden-only rule, so
- * receivables on 1513 are always recorded in SEK. We use the same SEK
- * conversion as the rest of the entry (the shared itemToSekOrThrow helper, so
- * this function and generatePerRateLines cannot drift).
- */
-function generateRotRutLines(
-  items: InvoiceItem[],
-  invoiceTagText: string,
-  currency?: string | null,
-  exchangeRate?: number | null,
-  defaultDimensions?: LineDimensions,
-  side: 'debit' | 'credit' = 'debit',
-): { lines: CreateJournalEntryLineInput[]; totalSek: number } {
-  const lines: CreateJournalEntryLineInput[] = []
-
-  // Same refusal as generatePerRateLines: 1513 is a kronor receivable on
-  // Skatteverket, so an unconvertible foreign amount must not land there.
-  const toSek = (amount: number): number =>
-    itemToSekOrThrow(amount, currency, exchangeRate)
-
-  let totalSek = 0
-
-  for (const item of items) {
-    if (!item.deduction_type) continue
-    // Recompute server-side to defend against tampered client values.
-    const amount = computeDeduction({
-      unit_price: side === 'credit' ? Math.abs(item.unit_price) : item.unit_price,
-      quantity: side === 'credit' ? Math.abs(item.quantity) : item.quantity,
-      // The deduction base is the NET line total (rabatt reduces what the
-      // customer pays); omitting this books 1513 on the gross while the
-      // stored deduction_total and the Skatteverket claim carry the net.
-      discount_percent: item.discount_percent ?? 0,
-      deduction_type: item.deduction_type,
-      vat_rate: item.vat_rate,
-    })
-    if (amount <= 0) continue
-    const amountSek = Math.round(toSek(amount) * 100) / 100
-    if (amountSek <= 0) continue
-    totalSek += amountSek
-    const kind = item.deduction_type === 'rot' ? 'ROT' : 'RUT'
-    lines.push({
-      account_number: '1513',
-      debit_amount: side === 'debit' ? amountSek : 0,
-      credit_amount: side === 'credit' ? amountSek : 0,
-      line_description: side === 'credit'
-        ? `${kind}-avdrag kreditfaktura ${invoiceTagText}`
-        : `${kind}-avdrag faktura ${invoiceTagText}`,
-      // Per-item line: carries the item's merged bag like its revenue line.
-      dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
-    })
-  }
-
-  return { lines, totalSek: Math.round(totalSek * 100) / 100 }
-}
+// The pure line builders live in ./invoice-lines so the browser can run them
+// (the payment dialog proposes the kontantmetoden entry with
+// buildInvoiceCashLines, the send dialog the registration or credit-note entry);
+// this module keeps the engine wrappers that book them.
+import {
+  buildCreditNoteLines,
+  buildInvoiceCashLines,
+  buildInvoiceDescription,
+  buildInvoiceRegistrationLines,
+  creditNoteDeductionSplit,
+  headerToSekOrThrow,
+  installmentOutputVat,
+  invoiceCashBankSek,
+  splitDeductionShare,
+} from './invoice-lines'
+export { buildInvoiceCashLines, buildInvoiceCashPartialLines } from './invoice-lines'
 
 /**
  * Create journal entry when an invoice is created (status != draft)
@@ -382,6 +68,13 @@ function generateRotRutLines(
  * Export (non-EU):
  *   Debit  1510 Kundfordringar     [subtotal]
  *   Credit 3305 Försäljning tjänst Export [subtotal]
+ *
+ * Posting port (step 2f): the verifikat goes through lib/posting, which
+ * hands `input` to the engine unchanged and, while POSTING_EVENTS is shadow
+ * or strict, records the sale.invoiced event first and has the engine link
+ * it to the draft before a voucher number is drawn. `options.posting` is what
+ * the door saw (its link basis), called only while the port is on: off, the
+ * engine gets the call it always did.
  */
 export async function createInvoiceJournalEntry(
   supabase: SupabaseClient,
@@ -400,11 +93,18 @@ export async function createInvoiceJournalEntry(
    * customLines: user-edited rows from the send dialog. Booked verbatim
    * (caller validates balance); line generation is skipped entirely.
    */
-  options?: InvoiceJournalEntryOptions
+  options?: InvoiceJournalEntryOptions & { posting?: () => InvoicePostingContext }
 ): Promise<JournalEntry | null> {
   const input = await buildInvoiceJournalEntryInput(supabase, companyId, invoice, entityType, customerName, options)
   if (!input) return null
-  return createJournalEntry(supabase, companyId, userId, input)
+  const userEditedLines = !!options?.customLines && options.customLines.length > 0
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => invoiceRegistrationBusinessEvent(invoice, options?.posting?.(), { userEditedLines }),
+    input,
+  })
 }
 
 export interface InvoiceJournalEntryOptions {
@@ -415,10 +115,12 @@ export interface InvoiceJournalEntryOptions {
 
 /**
  * The verifikat createInvoiceJournalEntry would post, without posting it: the
- * fiscal period lookup is the only database read, and nothing is written. The
- * deferred "Bokför" dry run previews these lines. Returns null when no open
- * fiscal period covers invoice_date. Throws the same generator errors
- * (InvoiceFxRateMissingError) the committing path throws.
+ * fiscal period lookup (and, for an upplupen intäkt on 17xx, the lock state
+ * of its month-ends) are the only database reads, and nothing is written.
+ * The deferred "Bokför" dry run previews these lines. Returns null when no
+ * open fiscal period covers invoice_date. Throws the same generator errors
+ * (InvoiceFxRateMissingError, AccruedIncomePeriodInvalidError,
+ * AccruedIncomePeriodLockedError) the committing path throws.
  */
 export async function buildInvoiceJournalEntryInput(
   supabase: SupabaseClient,
@@ -450,93 +152,13 @@ export async function buildInvoiceJournalEntryInput(
     }
   }
 
-  const lines: CreateJournalEntryLineInput[] = []
-  const isForeign = invoice.currency !== 'SEK'
-  const tag = options?.numberOverride ?? invoiceTag(invoice)
-  // Dimensions PR7: the invoice default rides every generated line; item bags
-  // merge over it inside generatePerRateLines/generateRotRutLines.
-  const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
+  // An upplupen intäkt (17xx line, #62) books its months right after this
+  // entry: refuse here, before the 17xx credit exists, when one of those
+  // months cannot take its entry (every door that books a sale reaches this
+  // point). User-edited lines above book as reviewed and get no schedule.
+  await assertAccruedIncomeLinesBookable(supabase, companyId, invoice.invoice_date, invoice.items ?? [])
 
-  // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
-  const creditLines: CreateJournalEntryLineInput[] = []
-
-  if (invoice.items && invoice.items.length > 0) {
-    creditLines.push(...generatePerRateLines(
-      invoice.items, invoice.vat_treatment, entityType, tag,
-      invoice.currency, invoice.exchange_rate,
-      // Schedules are created right after this entry commits (send/mark-sent
-      // flows), so deferring to 29xx here is safe.
-      { deferAccruals: true, defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
-    ))
-  } else {
-    // Fallback: no items available, use invoice-level amounts. Strict
-    // conversion: a rate-less foreign header must refuse exactly like the
-    // item-driven path, not post the raw foreign number as kronor.
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
-    const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
-
-    creditLines.push({
-      account_number: revenueAccount,
-      debit_amount: 0,
-      credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${tag}`,
-      dimensions: defaultDimensions,
-    })
-
-    if (invoice.vat_amount > 0) {
-      if (isForeign) {
-        const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
-        const vatAccount = getOutputVatAccount(invoice.vat_treatment)
-        creditLines.push({
-          account_number: vatAccount,
-          debit_amount: 0,
-          credit_amount: vatSek,
-          line_description: `Utgående moms faktura ${tag}`,
-          dimensions: defaultDimensions,
-        })
-      } else {
-        const vatLines = generateSalesVatLines({
-          vatTreatment: invoice.vat_treatment,
-          baseAmount: invoice.subtotal,
-          direction: 'sales',
-        })
-        creditLines.push(...vatLines.map((line) => ({
-          ...line,
-          dimensions: defaultDimensions,
-        })))
-      }
-    }
-  }
-
-  // ROT/RUT-avdrag debit lines (1513 Skatteverket). When present, they
-  // reduce the 1510 debit by the same total so the verifikation stays
-  // balanced (debits 1510 + 1513 = credits revenue + VAT). The customer
-  // only owes the post-deduction amount; Skatteverket pays the rest.
-  const rotRut = invoice.items && invoice.items.length > 0
-    ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate, defaultDimensions)
-    : { lines: [], totalSek: 0 }
-
-  // Debit: Kundfordringar, balance guarantee: debit = NET of all revenue/VAT
-  // lines (a negative rabatt/avrundning row sits on the debit side after
-  // creditNatural, so it must subtract) MINUS the ROT/RUT total which goes
-  // to 1513 instead.
-  const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
-  const debitAmount = isForeign
-    ? Math.round(totalCredits * 100) / 100
-    : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
-  const arAmount = Math.round((debitAmount - rotRut.totalSek) * 100) / 100
-
-  lines.push({
-    account_number: '1510',
-    debit_amount: arAmount,
-    credit_amount: 0,
-    line_description: `Faktura ${tag}`,
-    dimensions: defaultDimensions,
-    ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
-  })
-
-  lines.push(...rotRut.lines)
-  lines.push(...creditLines)
+  const lines = buildInvoiceRegistrationLines(invoice, entityType, options?.numberOverride)
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -588,34 +210,25 @@ function invoiceOutstandingAmount(invoice: Invoice): number {
 }
 
 /**
- * Create journal entry when an invoice is marked as paid
- *
- *   Debit  1930 Företagskonto       [total]
- *   Credit 1510 Kundfordringar      [total]
- *
- * `settlementAccountNumber` overrides the debit side for payments that land
- * somewhere other than the bank account: e.g. '1686' (Fordringar för
- * kontokort) when a Stripe payment settles into the PSP balance and only
- * reaches 1930 with the later payout.
+ * The lines of the payment verifikat createInvoicePaymentJournalEntry posts,
+ * as a pure function so a preview shows exactly what the mark-paid doors
+ * book: the settlement account debited and 1510 credited for what is still
+ * outstanding (remaining_amount, net of the ROT/RUT share), or the partial
+ * `paymentAmount`. A foreign invoice clears what 1510 carries when the caller
+ * read it (`carried_sek`, carriedSekOf), so nothing is stranded on a paid
+ * invoice. An exchange-rate difference is measured from the rate: the bank takes
+ * that figure plus the difference and the gap to what 1510 gives up is the
+ * 3960/7960 line (statedSettlement).
+ * Throws InvoiceFxRateMissingError for a foreign amount without a rate, like
+ * the booking itself.
  */
-export async function createInvoicePaymentJournalEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  invoice: Invoice,
-  paymentDate: string,
+export function buildInvoicePaymentLines(
+  invoice: Invoice & { carried_sek?: number | null },
+  customerName: string | undefined,
+  settlementAccountNumber: string,
   exchangeRateDifference?: number,
-  customerName?: string,
   paymentAmount?: number,
-  settlementAccountNumber: string = '1930',
-  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
-): Promise<JournalEntry | null> {
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
-  if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for payment date:', paymentDate)
-    return null
-  }
-
+): { description: string; lines: CreateJournalEntryLineInput[] } {
   const isPartial = paymentAmount != null
   const desc = buildInvoiceDescription(
     isPartial ? 'Delbetalning kundfaktura' : 'Inbetalning kundfaktura',
@@ -642,76 +255,90 @@ export async function createInvoicePaymentJournalEntry(
   // total_sek exactly as before, so legacy rows without a rate keep working.
   const outstanding = invoiceOutstandingAmount(invoice)
   const settlesFullTotal = Math.abs(outstanding - invoice.total) < 0.005
-  const bookedSekAmount = isPartial
+  const sekAtRate = isPartial
     ? headerToSekOrThrow(paymentAmount, null, invoice.currency, invoice.exchange_rate)
     : settlesFullTotal
       ? headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
       : headerToSekOrThrow(outstanding, null, invoice.currency, invoice.exchange_rate)
+  // A SEK invoice carries a ledger figure only when its issue verifikat booked
+  // the öresavrundning (carriedSekOf): the settlement of the whole remainder
+  // clears that figure, so the öre are not booked twice, while a kronor part
+  // payment clears its own kronor and never a share of it.
+  const kronorPart = isPartial && isKronorCurrency(invoice.currency) && paymentAmount < outstanding - ORE_TOLERANCE
+  const bookedSekAmount =
+    invoice.carried_sek != null && !kronorPart
+      ? clearedSek({
+          amount: paymentAmount ?? outstanding,
+          remaining: outstanding,
+          carried: invoice.carried_sek,
+          rate: invoice.exchange_rate ?? 0,
+        })
+      : sekAtRate
+  const { bankSek, gainSek } = statedSettlement({
+    cleared: bookedSekAmount,
+    sekAtRate,
+    difference: isPartial ? undefined : exchangeRateDifference,
+  })
 
-  const lines: CreateJournalEntryLineInput[] = []
-
-  if (!isPartial && exchangeRateDifference && exchangeRateDifference !== 0) {
-    // Foreign currency with exchange rate difference
-    // For receivables: positive diff = gain (received more), negative = loss (received less)
-    const actualSekReceived = bookedSekAmount + exchangeRateDifference
-
-    // Debit: settlement account (bank by default) at actual SEK received
-    lines.push({
-      account_number: settlementAccountNumber,
-      debit_amount: Math.round(actualSekReceived * 100) / 100,
-      credit_amount: 0,
-      line_description: desc,
-    })
-
-    // Credit: Clear kundfordringar at original booked SEK amount
-    lines.push({
-      account_number: '1510',
-      debit_amount: 0,
-      credit_amount: Math.round(bookedSekAmount * 100) / 100,
-      line_description: desc,
-    })
-
-    // Exchange rate difference
-    if (exchangeRateDifference > 0) {
-      // Gain: Credit 3960 (received more than booked)
-      lines.push({
-        account_number: '3960',
-        debit_amount: 0,
-        credit_amount: Math.round(exchangeRateDifference * 100) / 100,
-        line_description: 'Valutakursvinst',
-      })
-    } else {
-      // Loss: Debit 7960 (received less than booked)
-      lines.push({
-        account_number: '7960',
-        debit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
-        credit_amount: 0,
-        line_description: 'Valutakursförlust',
-      })
-    }
-  } else {
-    // Standard SEK payment or no exchange rate difference
-    lines.push(
-      {
-        account_number: settlementAccountNumber,
-        debit_amount: Math.round(bookedSekAmount * 100) / 100,
-        credit_amount: 0,
-        line_description: desc,
-      },
-      {
-        account_number: '1510',
-        debit_amount: 0,
-        credit_amount: Math.round(bookedSekAmount * 100) / 100,
-        line_description: desc,
-      }
-    )
-  }
+  // Debit the settlement account (bank by default) at the SEK received, credit
+  // kundfordringar at the SEK booked. Received more than booked is a gain
+  // (Cr 3960), less a loss (Dr 7960).
+  const lines: CreateJournalEntryLineInput[] = [
+    { account_number: settlementAccountNumber, debit_amount: bankSek, credit_amount: 0, line_description: desc },
+    { account_number: '1510', debit_amount: 0, credit_amount: roundOre(bookedSekAmount), line_description: desc },
+  ]
+  if (gainSek !== 0) lines.push(fxDifferenceLine(gainSek))
 
   if (defaultDimensions) {
     // Copy per line: a shared bag object would let one line's mutation
     // leak into every other line (same contract as proposal stamping).
     for (const line of lines) line.dimensions = { ...defaultDimensions }
   }
+
+  return { description: desc, lines }
+}
+
+/**
+ * Create journal entry when an invoice is marked as paid
+ *
+ *   Debit  1930 Företagskonto       [total]
+ *   Credit 1510 Kundfordringar      [total]
+ *
+ * `settlementAccountNumber` overrides the debit side for payments that land
+ * somewhere other than the bank account: e.g. '1686' (Fordringar för
+ * kontokort) when a Stripe payment settles into the PSP balance and only
+ * reaches 1930 with the later payout.
+ *
+ * Posting port (step 2f-2): the verifikat goes through lib/posting, which
+ * hands `input` to the engine unchanged and, while POSTING_EVENTS is shadow
+ * or strict, records the sale.payment_received event first and has the
+ * engine link it to the draft before a voucher number is drawn. `posting` is
+ * what the door saw (its link basis and the debt the payment settles),
+ * called only while the port is on: off, the engine gets the call it always
+ * did.
+ */
+export async function createInvoicePaymentJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  invoice: Invoice & { carried_sek?: number | null },
+  paymentDate: string,
+  exchangeRateDifference: number | undefined,
+  customerName: string | undefined,
+  paymentAmount: number | undefined,
+  settlementAccountNumber: string,
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
+  posting?: () => InvoicePaymentPostingContext,
+): Promise<JournalEntry | null> {
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
+  if (!fiscalPeriodId) {
+    log.warn('No open fiscal period found for payment date:', paymentDate)
+    return null
+  }
+
+  const { description: desc, lines } = buildInvoicePaymentLines(
+    invoice, customerName, settlementAccountNumber, exchangeRateDifference, paymentAmount,
+  )
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -723,7 +350,19 @@ export async function createInvoicePaymentJournalEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      invoicePaymentBusinessEvent(
+        invoice,
+        input,
+        { paymentAccount: settlementAccountNumber, generated: true, bankLine: !!bankTransaction },
+        posting?.(),
+      ),
+    input,
+  })
 }
 
 /**
@@ -747,7 +386,11 @@ export async function createCreditNoteJournalEntry(
    * to the corrected verifikation; the invoice number alone is insufficient
    * because it doesn't identify the entry in the verifikationsserie.
    */
-  originalVoucherRef?: string
+  originalVoucherRef?: string,
+  /** What the door saw, read by the posting port only while POSTING_EVENTS is on. */
+  posting?: () => InvoicePostingContext,
+  /** See buildCreditNoteLines' options.deductionBookedSek. */
+  options: { deductionBookedSek?: number | null } = {},
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
   if (!fiscalPeriodId) {
@@ -755,96 +398,10 @@ export async function createCreditNoteJournalEntry(
     return null
   }
 
-  const lines: CreateJournalEntryLineInput[] = []
-  const tag = invoiceTag(creditNote)
-  const lineSuffix = originalVoucherRef ? ` (avser ${originalVoucherRef})` : ''
-  // Dimensions PR7: the credit note's bag (copied from the original at credit
-  // time) so the reversal nets against the same dimension cells in reports.
-  const defaultDimensions = coerceDimensionsBag(creditNote.default_dimensions)
-
-  // Generate reversed revenue + VAT lines per rate group (debit side for credit notes)
-  const debitLines: CreateJournalEntryLineInput[] = []
-
-  if (creditNote.items && creditNote.items.length > 0) {
-    // Use absolute items for generatePerRateLines, then swap debit/credit
-    const creditLines = generatePerRateLines(
-      creditNote.items, creditNote.vat_treatment, entityType, tag,
-      creditNote.currency, creditNote.exchange_rate,
-      // Credit-note items carry the original's accrual fields so the reversal
-      // hits the same 29xx interim account; the original's schedule is
-      // cancelled/stornoed by the credit flow. delivery_country is copied
-      // from the original too, so goods revenue reverses on 3105 / 3108.
-      { deferAccruals: true, defaultDimensions, goodsDeliveryCountry: creditNote.delivery_country }
-    )
-    // Every caller hands us items negated with -Math.abs (build-credit-note-
-    // item.ts), so generatePerRateLines lands every line on the debit side
-    // via creditNatural. Taking |net| as the debit reproduces the pre-existing
-    // output exactly (the old column swap would now flip them back). Known
-    // gap, unchanged by this commit: an original with a NEGATIVE row (rabatt,
-    // avrundning) is credited on the same side as the original instead of
-    // the opposite one, because -Math.abs erases the row's sign upstream.
-    for (const line of creditLines) {
-      debitLines.push({
-        ...line,
-        debit_amount: Math.round(Math.abs(line.credit_amount - line.debit_amount) * 100) / 100,
-        credit_amount: 0,
-        line_description: `Kreditfaktura ${tag}${lineSuffix}`,
-      })
-    }
-  } else {
-    // Fallback: invoice-level amounts. Same strict conversion as the
-    // createInvoiceJournalEntry fallback: a rate-less foreign credit note
-    // must refuse, not reverse the receivable with a mislabelled number.
-    const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType, creditNote.delivery_country)
-    const absSubtotal = Math.abs(headerToSekOrThrow(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate))
-    const absVat = Math.abs(headerToSekOrThrow(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate))
-
-    debitLines.push({
-      account_number: revenueAccount,
-      debit_amount: absSubtotal,
-      credit_amount: 0,
-      line_description: `Kreditfaktura ${tag}`,
-      dimensions: defaultDimensions,
-    })
-
-    if (absVat > 0) {
-      const vatAccount = getOutputVatAccount(creditNote.vat_treatment)
-      debitLines.push({
-        account_number: vatAccount,
-        debit_amount: absVat,
-        credit_amount: 0,
-        line_description: `Moms kreditfaktura ${tag}${lineSuffix}`,
-        dimensions: defaultDimensions,
-      })
-    }
-  }
-
-  lines.push(...debitLines)
-
-  // ROT/RUT reverses the exact receivable split used by the original invoice:
-  // 1510 for the customer portion and 1513 for the Skatteverket portion.
-  const rotRut = creditNote.items && creditNote.items.length > 0
-    ? generateRotRutLines(
-        creditNote.items,
-        tag,
-        creditNote.currency,
-        creditNote.exchange_rate,
-        defaultDimensions,
-        'credit',
-      )
-    : { lines: [], totalSek: 0 }
-
-  // Credit: Kundfordringar, balance guarantee: 1510 + 1513 equals debits.
-  const totalDebits = debitLines.reduce((sum, l) => sum + l.debit_amount, 0)
-  const customerReceivable = roundOre(totalDebits - rotRut.totalSek)
-  lines.push({
-    account_number: '1510',
-    debit_amount: 0,
-    credit_amount: customerReceivable,
-    line_description: `Kreditfaktura ${tag}`,
-    dimensions: defaultDimensions,
-  })
-  lines.push(...rotRut.lines)
+  const lines = buildCreditNoteLines(creditNote, entityType, originalVoucherRef, options)
+  // A credit of part of the share (the customer's, and what a payout booked)
+  // takes back only that moms.
+  const partOfShare = creditNoteDeductionSplit(creditNote, options.deductionBookedSek) !== null
 
   const baseDescription = buildInvoiceDescription('Kreditfaktura', creditNote.invoice_number, customerName, creditNote.id)
   const input: CreateJournalEntryInput = {
@@ -858,106 +415,41 @@ export async function createCreditNoteJournalEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
-}
-
-/**
- * The kontantmetoden (cash method) verifikat for a received payment, pure:
- * createInvoiceCashEntry books exactly these lines and the bank-match preview
- * shows them, so the rows a user approves or edits carry what gets booked,
- * the invoice's dimensions included. Supports per-item VAT rates. Revenue +
- * VAT recognised at payment.
- *
- *   Debit  1930 Företagskonto       [total]
- *   Credit 30xx Försäljning         [subtotal per rate]
- *   Credit 26xx Utgående moms       [vat per rate]  (if applicable)
- */
-export function buildInvoiceCashLines(
-  invoice: Invoice,
-  entityType: EntityType,
-  customerName?: string,
-  settlementAccountNumber: string = '1930',
-): { description: string; lines: CreateJournalEntryLineInput[] } {
-  const lines: CreateJournalEntryLineInput[] = []
-  const isForeign = invoice.currency !== 'SEK'
-  const tag = invoiceTag(invoice)
-  // Dimensions PR7: kontantmetoden books revenue at payment, so this IS the
-  // producer path for cash-method companies: same merge rules as issuance.
-  const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
-
-  // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
-  const creditLines: CreateJournalEntryLineInput[] = []
-
-  if (invoice.items && invoice.items.length > 0) {
-    creditLines.push(...generatePerRateLines(
-      invoice.items, invoice.vat_treatment, entityType, tag,
-      invoice.currency, invoice.exchange_rate,
-      { defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
-    ))
-  } else {
-    // Fallback: invoice-level amounts. Strict conversion, same rationale as
-    // the createInvoiceJournalEntry fallback above.
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
-    const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
-
-    creditLines.push({
-      account_number: revenueAccount,
-      debit_amount: 0,
-      credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${tag}`,
-      dimensions: defaultDimensions,
-    })
-
-    if (invoice.vat_amount > 0) {
-      const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
-      const vatAccount = getOutputVatAccount(invoice.vat_treatment)
-      creditLines.push({
-        account_number: vatAccount,
-        debit_amount: 0,
-        credit_amount: vatSek,
-        line_description: `Utgående moms faktura ${tag}`,
-        dimensions: defaultDimensions,
-      })
-    }
-  }
-
-  // ROT/RUT-avdrag debit lines (1513 Skatteverket). On cash method the
-  // bank account (1930) receives only the post-deduction amount in real
-  // life; the rest comes from Skatteverket later. We model that by
-  // splitting the debit: 1930 = total - deduction, 1513 = deduction.
-  const rotRut = invoice.items && invoice.items.length > 0
-    ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate, defaultDimensions)
-    : { lines: [], totalSek: 0 }
-
-  // Debit: Företagskonto, balance guarantee: debit = sum of credit lines
-  // minus the ROT/RUT total which goes to 1513 instead.
-  // NET of the revenue/VAT lines: a negative row sits on the debit side.
-  const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
-  const cashDebit = isForeign
-    ? Math.round(totalCredits * 100) / 100
-    : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
-  const bankAmount = Math.round((cashDebit - rotRut.totalSek) * 100) / 100
-  lines.push({
-    account_number: settlementAccountNumber,
-    debit_amount: bankAmount,
-    credit_amount: 0,
-    line_description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
-    dimensions: defaultDimensions,
+  // Posting port (step 2f), as the registration: the sale.credited event is
+  // recorded and linked to the draft only while POSTING_EVENTS is on.
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => {
+      const vat = Math.abs(installmentOutputVat(input.lines))
+      return creditNoteBusinessEvent(
+        partOfShare ? { ...creditNote, vat_amount: vat, vat_amount_sek: vat } : creditNote,
+        posting?.(),
+      )
+    },
+    input,
   })
-
-  lines.push(...rotRut.lines)
-  lines.push(...creditLines)
-
-  return {
-    description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
-    lines,
-  }
 }
 
 /**
  * Create the journal entry for kontantmetoden (cash method) when payment is
  * received: the lines of buildInvoiceCashLines, booked in the open period of
  * the payment date. Returns null when no open period covers it.
+ *
+ * With a matched bank row, the bank leg is what arrived on it
+ * (invoiceCashBankSek) and a sub-krona gap goes to 3740; the mark-paid doors
+ * pass no row and book the customer share. `overpaymentAccount` books an
+ * excess of a krona or more on that row, `options.feeAccount` a payment
+ * provider's fee that left the row short of it (buildInvoiceCashLines).
+ *
+ * `options.deferDeductionShare`: kontantmetoden's two steps for a ROT/RUT
+ * or grön teknik invoice (buildInvoiceCashLines); only a kontantmetod
+ * company passes true.
+ *
+ * Posting port (step 2f-2), as createInvoicePaymentJournalEntry: the
+ * sale.payment_received event, with the moms the sale books at payment, is
+ * recorded and linked to the draft only while POSTING_EVENTS is on.
  */
 export async function createInvoiceCashEntry(
   supabase: SupabaseClient,
@@ -965,10 +457,13 @@ export async function createInvoiceCashEntry(
   userId: string,
   invoice: Invoice,
   paymentDate: string,
-  entityType: EntityType = 'enskild_firma',
-  customerName?: string,
-  settlementAccountNumber: string = '1930',
-  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
+  entityType: EntityType,
+  customerName: string | undefined,
+  settlementAccountNumber: string,
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
+  overpaymentAccount?: string,
+  posting?: () => InvoicePaymentPostingContext,
+  options: { deferDeductionShare?: boolean; feeAccount?: string } = {},
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -981,7 +476,13 @@ export async function createInvoiceCashEntry(
     entityType,
     customerName,
     settlementAccountNumber,
+    invoiceCashBankSek(bankTransaction),
+    overpaymentAccount,
+    options,
   )
+  // Bokslutsmetoden's first step books only the moms of the customer's
+  // share: the event states that, as an installment states its own.
+  const twoSteps = !!options.deferDeductionShare && splitDeductionShare(invoice.items, invoice.currency) !== null
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -993,6 +494,177 @@ export async function createInvoiceCashEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => {
+      const vat = installmentOutputVat(input.lines)
+      return invoicePaymentBusinessEvent(
+        twoSteps ? { ...invoice, vat_amount: vat, vat_amount_sek: vat } : invoice,
+        input,
+        { paymentAccount: settlementAccountNumber, generated: true, bankLine: !!bankTransaction },
+        posting?.(),
+      )
+    },
+    input,
+  })
 }
 
+
+/** What the door saw when it booked an installment, read by the posting port only while POSTING_EVENTS is on. */
+export interface InvoiceCashInstallmentPosting {
+  invoice: Pick<Invoice, 'id' | 'customer_id' | 'currency' | 'exchange_rate' | 'vat_treatment'>
+  context?: InvoicePaymentPostingContext
+}
+
+/**
+ * Book one pro-rata kontantmetoden installment: the lines
+ * buildInvoiceCashPartialLines produced, booked as they are in the open
+ * period of the payment date. The caller builds them first (and checks the
+ * earlier installments with checkPriorCashRecognition), so what was checked
+ * is what gets booked. Returns null when no open period covers the date.
+ *
+ * Posting port, as createInvoiceCashEntry: the engine gets the input
+ * unchanged; while POSTING_EVENTS is on, the sale.payment_received event is
+ * recorded and linked to the draft first. An installment states its own
+ * share of the moms (installmentOutputVat), not the invoice's, and the
+ * kronor that arrived on its one debit line, the payment leg.
+ */
+export async function createInvoiceCashPartialEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  invoiceId: string,
+  installment: { description: string; lines: CreateJournalEntryLineInput[] },
+  paymentDate: string,
+  posting: () => InvoiceCashInstallmentPosting,
+): Promise<JournalEntry | null> {
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
+  if (!fiscalPeriodId) {
+    log.warn('No open fiscal period found for payment date:', paymentDate)
+    return null
+  }
+
+  const input: CreateJournalEntryInput = {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: paymentDate,
+    description: installment.description,
+    source_type: 'invoice_cash_payment',
+    source_id: invoiceId,
+    lines: installment.lines,
+  }
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => {
+      const seen = posting()
+      const vat = installmentOutputVat(input.lines)
+      const paymentAccount = input.lines.find((line) => (line.debit_amount ?? 0) > 0)?.account_number ?? null
+      return invoicePaymentBusinessEvent(
+        { ...seen.invoice, vat_amount: vat, vat_amount_sek: vat },
+        input,
+        { paymentAccount, generated: true, bankLine: false },
+        seen.context,
+      )
+    },
+    input,
+  })
+}
+
+export type PriorCashRecognitionRefusal =
+  /** A read failed: unknown is never "matches". */
+  | 'prior_payments_unreadable'
+  /** The payment rows do not add up to paid_amount, or one has no posted voucher. */
+  | 'prior_payments_untraceable'
+  /** The vouchers recognised other revenue or moms than the pro-rata rule. */
+  | 'prior_payments_not_pro_rata'
+
+export type PriorCashRecognitionResult =
+  | { ok: true }
+  | { ok: false; reason: PriorCashRecognitionRefusal; details?: Record<string, unknown> }
+
+/**
+ * Whether the ledger holds exactly what the earlier installments of a
+ * never-booked kontantmetoden invoice should have recognised, before the next
+ * installment books on top of them.
+ *
+ * The pro-rata builder computes an installment from paid_amount alone, which
+ * is only right when every earlier payment was booked by the same rule. Some
+ * were not: an import that set paid_amount without vouchers, a voucher linked
+ * by hand, a batch voucher shared with other invoices, or a payment from
+ * before the whole-payment guard existed that booked the whole invoice on its
+ * first installment. Booking the next installment on top of those would count
+ * revenue and moms twice, or never. So: the invoice's payment rows must add
+ * up to paid_amount, each must point at a posted voucher, and those vouchers
+ * must carry, per revenue and moms account, exactly `recognisedBefore` (net
+ * credit). Struck lines of an inline rättelse are gone from the line table,
+ * so the sum is the voucher as it stands.
+ */
+export async function checkPriorCashRecognition(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceId: string,
+  priorPaid: number,
+  recognisedBefore: Record<string, number>,
+): Promise<PriorCashRecognitionResult> {
+  const { data: rows, error: rowsError } = await supabase
+    .from('invoice_payments')
+    .select('amount, journal_entry_id')
+    .eq('company_id', companyId)
+    .eq('invoice_id', invoiceId)
+  if (rowsError) return { ok: false, reason: 'prior_payments_unreadable' }
+
+  const paymentRows = (rows ?? []) as Array<{ amount: number | string | null; journal_entry_id: string | null }>
+  const rowTotal = sumOre(paymentRows.map((row) => Number(row.amount ?? 0)))
+  if (!equalOre(rowTotal, priorPaid) || paymentRows.some((row) => !row.journal_entry_id)) {
+    return {
+      ok: false,
+      reason: 'prior_payments_untraceable',
+      details: { payment_rows_total: rowTotal, paid_amount: roundOre(priorPaid) },
+    }
+  }
+
+  const entryIds = Array.from(new Set(paymentRows.map((row) => row.journal_entry_id as string)))
+  const { data: entries, error: entriesError } = await supabase
+    .from('journal_entries')
+    .select('id, status')
+    .eq('company_id', companyId)
+    .in('id', entryIds)
+  if (entriesError) return { ok: false, reason: 'prior_payments_unreadable' }
+  const postedIds = new Set(
+    ((entries ?? []) as Array<{ id: string; status: string }>)
+      .filter((entry) => entry.status === 'posted')
+      .map((entry) => entry.id),
+  )
+  if (entryIds.some((id) => !postedIds.has(id))) {
+    return { ok: false, reason: 'prior_payments_untraceable' }
+  }
+
+  const { data: lines, error: linesError } = await supabase
+    .from('journal_entry_lines')
+    .select('journal_entry_id, account_number, debit_amount, credit_amount')
+    .in('journal_entry_id', entryIds)
+  if (linesError) return { ok: false, reason: 'prior_payments_unreadable' }
+
+  const booked: Record<string, number> = {}
+  for (const line of (lines ?? []) as Array<{
+    account_number: string
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+  }>) {
+    if (!(line.account_number in recognisedBefore)) continue
+    booked[line.account_number] = roundOre(
+      (booked[line.account_number] ?? 0) + Number(line.credit_amount ?? 0) - Number(line.debit_amount ?? 0),
+    )
+  }
+
+  const mismatches = Object.entries(recognisedBefore)
+    .filter(([account, expected]) => !equalOre(booked[account] ?? 0, expected))
+    .map(([account, expected]) => ({ account, expected, booked: booked[account] ?? 0 }))
+  if (mismatches.length > 0) {
+    return { ok: false, reason: 'prior_payments_not_pro_rata', details: { accounts: mismatches } }
+  }
+  return { ok: true }
+}

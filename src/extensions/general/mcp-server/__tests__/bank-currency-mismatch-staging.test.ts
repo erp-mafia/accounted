@@ -3,10 +3,29 @@
  * bank-booking guards look the account up by the row's currency, so approval
  * failed (match_batch_allocate: BANK_BOOKING_CASH_ACCOUNT_MISSING; the link:
  * BANK_ANCHOR_CASH_ACCOUNT_CHANGED, "reload and try again") after staging had
- * shown a plausible preview. Both tools now refuse at staging, before any
- * pending operation exists.
+ * shown a plausible preview. Both operations (transactions.match-batch and
+ * transactions.link-journal-entry, the tools' source) now refuse on the dry
+ * run, so staging refuses before any pending operation exists, and v1 and
+ * the approval answer the same code.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
+// here no invoice needs its sale booked first.
+// The gate has its own door test (src/lib/transactions/__tests__/match-batch-booked-row.test.ts);
+// this suite queues what follows it.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebookingById: vi.fn(async () => ({ outcome: 'open' })),
+}))
+
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+}))
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const { mockDetectSet } = vi.hoisted(() => ({ mockDetectSet: vi.fn() }))
@@ -29,7 +48,8 @@ const JE_ID = '33333333-3333-4333-8333-333333333333'
 const actor = { type: 'api_key' } as never
 
 const bankRow = { id: TX_ID, description: 'BGGIRERING', merchant_name: null, amount: 350000, currency: 'SEK',
-  amount_sek: null, exchange_rate: null, cash_account_id: 'ca-1', date: '2026-08-31', journal_entry_id: null }
+  exchange_rate: null, cash_account_id: 'ca-1', date: '2026-08-31', journal_entry_id: null }
+const postedEntry = { id: JE_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-08-31' }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -39,8 +59,9 @@ beforeEach(() => {
 describe('bank row and cash account in different currencies', () => {
   it('match_batch_allocate refuses at staging instead of failing at approval', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // document-type check
     enqueue({ data: bankRow, error: null })
-    enqueue({ data: [{ id: INV_ID, document_type: 'invoice', currency: 'SEK', exchange_rate: null, remaining_amount: 350000, total: 350000 }], error: null })
+    enqueue({ data: [{ id: INV_ID, currency: 'SEK', exchange_rate: null, remaining_amount: 350000, total: 350000 }], error: null })
     enqueue({ data: { ledger_account: '1930', currency: 'XXX' }, error: null }) // cash_accounts
 
     await expect(allocate.execute(
@@ -53,6 +74,7 @@ describe('bank row and cash account in different currencies', () => {
   it('link_transaction_to_journal_entry refuses at staging instead of failing at approval', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: bankRow, error: null })
+    enqueue({ data: postedEntry, error: null })
     enqueue({ data: { ledger_account: '1930', currency: 'XXX' }, error: null }) // cash_accounts
 
     await expect(link.execute(
@@ -65,8 +87,12 @@ describe('bank row and cash account in different currencies', () => {
   it('link_transaction_to_journal_entry still stages a row whose account shares its currency', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: bankRow, error: null })
+    enqueue({ data: postedEntry, error: null })
     enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null }) // cash_accounts
-    enqueue({ data: { id: JE_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-08-31' }, error: null })
+    enqueue({ data: [], error: null }) // cash_accounts topology: no sibling ledgers
+    enqueue({ data: [{ account_number: '1930', debit_amount: 350000, credit_amount: 0 }], error: null }) // the voucher's bank line
+    enqueue({ data: [], error: null }) // bank_line slices other rows hold on the verifikat
+    enqueue({ data: [], error: null }) // other rows whose pointer names it
     enqueue({ data: { bookkeeping_locked_through: null }, error: null }) // company_settings
     enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null }) // fiscal_periods
     enqueue({ data: { id: 'op-link-1' }, error: null }) // pending_operations insert

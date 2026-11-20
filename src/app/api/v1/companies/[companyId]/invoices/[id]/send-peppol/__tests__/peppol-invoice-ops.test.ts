@@ -11,7 +11,7 @@
  * network accepted it, and the idempotent replay.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import { makeCompanySettings, makeCustomer, makeInvoice, isIdempotencyClaim } from '@/tests/helpers'
 import { PeppolTransportError, registerPeppolTransport, type PeppolTransport } from '@/lib/invoices/peppol-transport'
 import { createConnectorPeppolTransport } from '@/lib/invoices/transports/connector'
 
@@ -34,11 +34,16 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'active' }), isMembershipDormant: () => false }
 })
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
-// The v1 door must never reach for a cookie-bound or separate service client.
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(() => { throw new Error('no session client on the v1 door') }),
-  createServiceClient: vi.fn(() => { throw new Error('the v1 door already runs on service role') }),
-}))
+// The v1 door never reaches for a cookie-bound client. The send operation
+// takes its own service-role client on every door (it also runs as the
+// person when approved under Att göra, crm#1641): here the same mock.
+vi.mock('@/lib/supabase/server', async () => {
+  const keys = await import('@/lib/auth/api-keys')
+  return {
+    createClient: vi.fn(() => { throw new Error('no session client on the v1 door') }),
+    createServiceClient: vi.fn(() => keys.createServiceClientNoCookies()),
+  }
+})
 const markSentMock = vi.fn()
 const restoreDraftMock = vi.fn()
 const finishIssuedMock = vi.fn()
@@ -51,7 +56,10 @@ vi.mock('@/lib/invoices/issue-and-book-invoice', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as readinessRoute } from '../../peppol/route'
 import { GET as deliveriesRoute } from '../../peppol/deliveries/route'
+import { PEPPOL_OUTCOME_UNREPORTED_HINT } from '@/lib/invoices/peppol-attention'
 import { POST as sendRoute } from '../route'
+import { invoicesSendPeppol } from '@/lib/operations/peppol'
+import { createLogger } from '@/lib/logger'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -99,9 +107,9 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** withApiV1's own bookkeeping (the idempotency cache) is not the operation's. */
 const DOOR_TABLES = new Set(['idempotency_keys', 'company_members'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (!DOOR_TABLES.has(c.table) && WRITES.has(c.method)) || c.table === 'rpc')
+  client.calls.some((c) => (!DOOR_TABLES.has(c.table) && WRITES.has(c.method)) || (c.table === 'rpc' && !isIdempotencyClaim(c)))
 const rpcNames = (client: ReturnType<typeof makeClient>) =>
-  client.calls.filter((c) => c.table === 'rpc').map((c) => c.method)
+  client.calls.filter((c) => c.table === 'rpc' && !isIdempotencyClaim(c)).map((c) => c.method)
 /** The arguments of every lifecycle event the send recorded, in order. */
 const eventArgs = (client: ReturnType<typeof makeClient>) =>
   client.calls
@@ -126,6 +134,9 @@ const SELLER = { ...makeCompanySettings({
 const COMPANY_SETTINGS = { data: SELLER, error: null }
 const ACCESS = { data: { company_id: COMPANY_ID, status: 'enabled', max_sends: 50, receive_enabled: false }, error: null }
 const SENT_COUNT = { data: null, error: null, count: 3 }
+/** countPeppolSends reads twice: sends stamped this month, then unstamped ones created this month. */
+const UNSTAMPED_COUNT = { data: null, error: null, count: 0 }
+const SENT_COUNTS = [SENT_COUNT, UNSTAMPED_COUNT]
 
 function invoiceRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -239,6 +250,7 @@ afterEach(() => {
   unregister?.()
   unregister = null
   delete process.env.PEPPOL_TRANSPORT_PROVIDER
+  vi.unstubAllEnvs()
 })
 
 // ---------------------------------------------------------------------------
@@ -252,7 +264,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
       company_members: MEMBER,
       company_settings: COMPANY_SETTINGS,
       peppol_access: ACCESS,
-      peppol_deliveries: SENT_COUNT,
+      peppol_deliveries: SENT_COUNTS,
       invoices: { data: invoiceRow(), error: null },
       'rpc:stage_peppol_delivery_as_actor': { data: delivery, error: null },
       'rpc:record_peppol_delivery_event': [
@@ -324,12 +336,68 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
   })
 
   it('409 PEPPOL_SEND_LIMIT_REACHED once the sending cap is used', async () => {
-    mockServiceClient.mockReturnValue(sendClient({ peppol_deliveries: { data: null, error: null, count: 50 } }))
+    mockServiceClient.mockReturnValue(sendClient({ peppol_deliveries: [{ data: null, error: null, count: 50 }, UNSTAMPED_COUNT] }))
     const res = await send()
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error.code).toBe('PEPPOL_SEND_LIMIT_REACHED')
     expect(body.error.details).toMatchObject({ max_sends: 50, sent_count: 50 })
+  })
+
+  describe('while e-invoices above what the month includes are billed', () => {
+    /** The cap's two reads, then the month's e-invoices for the usage stop, then whether this invoice was already handed over. */
+    const atIncluded = (handed: unknown[] = []) => [SENT_COUNT, UNSTAMPED_COUNT, { data: null, error: null, count: 10 }, { data: handed, error: null }]
+    const accepted = {
+      data: [{ company_id: COMPANY_ID, kind: 'peppol_send', unit_price_ore: 100, included: 10, accepted_by: 'user-0', accepted_at: '2026-10-02T08:00:00Z' }],
+      error: null,
+    }
+    /** A subscription of its own: what lets more than what is included be accepted. */
+    const paying = { data: { status: 'active', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' }, error: null }
+
+    it('409 USAGE_LIMIT_REACHED at the included amount until the charge is open, before the invoice is read', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
+      const client = sendClient({ peppol_deliveries: atIncluded(), company_subscriptions: paying })
+      mockServiceClient.mockReturnValue(client)
+      const res = await send()
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('USAGE_LIMIT_REACHED')
+      expect(body.error.details).toMatchObject({ kind: 'peppol_send', used: 10, included: 10, unit_price_ore: 100 })
+      expect(client.calls.some((c) => c.table === 'invoices')).toBe(false)
+      expect(wrote(client)).toBe(false)
+      expect(transport.submit).not.toHaveBeenCalled()
+    })
+
+    it('sends once the charge is open', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
+      mockServiceClient.mockReturnValue(
+        sendClient({ peppol_deliveries: [SENT_COUNT, UNSTAMPED_COUNT, { data: null, error: null, count: 10 }], usage_consents: accepted, company_subscriptions: paying }),
+      )
+      const res = await send()
+      expect(res.status).toBe(201)
+      expect(transport.submit).toHaveBeenCalled()
+    })
+
+    it('409 USAGE_SUBSCRIPTION_REQUIRED for a trial at the included amount, accepted or not, before the invoice is read', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
+      const trial = { data: { status: 'trialing', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' }, error: null }
+      const client = sendClient({ peppol_deliveries: atIncluded(), usage_consents: accepted, company_subscriptions: trial })
+      mockServiceClient.mockReturnValue(client)
+      const res = await send()
+      expect(res.status).toBe(409)
+      expect((await res.json()).error.code).toBe('USAGE_SUBSCRIPTION_REQUIRED')
+      expect(client.calls.some((c) => c.table === 'invoices')).toBe(false)
+      expect(transport.submit).not.toHaveBeenCalled()
+    })
+
+    it('does not stop an invoice the network already has: sending it again is no new e-invoice', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
+      const client = sendClient({ peppol_deliveries: atIncluded([{ id: DELIVERY_ID }]) })
+      mockServiceClient.mockReturnValue(client)
+      const res = await send()
+      expect((await res.json()).error?.code).not.toBe('USAGE_LIMIT_REACHED')
+      expect(client.calls.some((c) => c.table === 'invoices')).toBe(true)
+    })
   })
 
   it.each([
@@ -419,6 +487,32 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
     expect(markSentMock).not.toHaveBeenCalled()
   })
 
+  it('approved under Att göra (the operation run as the person) counts, stages and records through service role (crm#1641)', async () => {
+    // The person's JWT reads peppol_access but reaches no peppol_deliveries
+    // row and may not call the service-role staging RPC: a count there is a
+    // HEAD refusal with an empty message, the old "Failed to count Peppol sends: ".
+    const refused = { data: null, error: { message: '', code: '42501' } }
+    const session = sendClient({
+      peppol_deliveries: refused,
+      'rpc:stage_peppol_delivery_as_actor': refused,
+      'rpc:record_peppol_delivery_event': refused,
+    })
+    const service = sendClient()
+    mockServiceClient.mockReturnValue(service)
+    const outcome = await invoicesSendPeppol.run(
+      { supabase: session as never, companyId: COMPANY_ID, userId: 'user-1', log: createLogger('test'), pendingOperationId: 'op-1' },
+      { invoice_id: INV_ID },
+      { dryRun: false },
+    )
+    expect(outcome).toMatchObject({ ok: true, data: { network_submitted: true, delivery: { provider_submission_id: 'int-1' } } })
+    expect(session.calls.filter((c) => c.table === 'peppol_deliveries' || c.table === 'rpc')).toEqual([])
+    // This month's two send counts (HEAD), then the resend check.
+    expect(service.calls.filter((c) => c.table === 'peppol_deliveries' && c.method === 'select' && (c.args[1] as { head?: boolean } | undefined)?.head)).toHaveLength(2)
+    const stage = service.calls.find((c) => c.method === 'stage_peppol_delivery_as_actor')
+    expect(stage?.args[0]).toMatchObject({ p_actor_id: 'user-1', p_company_id: COMPANY_ID, p_invoice_id: INV_ID })
+    expect(rpcNames(service).filter((n) => n === 'record_peppol_delivery_event')).toHaveLength(3)
+  })
+
   it('records a send through the connector under the connector label', async () => {
     unregister?.()
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'connector'
@@ -452,6 +546,20 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
     for (const event of events) {
       expect(event).toMatchObject({ p_provider: 'connector', p_provider_tenant_id: 'connector' })
     }
+  })
+
+  it('409 INVOICE_CUSTOMER_MISSING for a draft whose customer was deleted: no number, no network (crm#263)', async () => {
+    const client = sendClient({
+      invoices: { data: invoiceRow({ status: 'draft', invoice_number: null, customer_id: null, customer: null }), error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await send()
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CUSTOMER_MISSING')
+    expect(rpcNames(client)).not.toContain('generate_invoice_number')
+    expect(wrote(client)).toBe(false)
+    expect(transport.submit).not.toHaveBeenCalled()
   })
 
   it('numbers a draft before building the document and issues it before the network gets it', async () => {
@@ -536,7 +644,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
     /** The staging RPC's answer to a resend: a new delivery of the same document. */
     const resend = { ...delivery, id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', idempotency_key: '99999999-9999-4999-8999-999999999999' }
     /** The send count, then the invoice's latest submission to the recipient. */
-    const latestSubmission = (latest: Record<string, unknown> | null) => [SENT_COUNT, { data: latest, error: null }]
+    const latestSubmission = (latest: Record<string, unknown> | null) => [SENT_COUNT, UNSTAMPED_COUNT, { data: latest, error: null }]
     const submitted = () => (transport.submit as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>
 
     it('resends as a new delivery that replaces the failed submission', async () => {
@@ -694,7 +802,7 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/peppol', () => {
       company_members: MEMBER,
       company_settings: COMPANY_SETTINGS,
       peppol_access: ACCESS,
-      peppol_deliveries: SENT_COUNT,
+      peppol_deliveries: SENT_COUNTS,
       invoices: { data: invoiceRow(), error: null },
     })
     mockServiceClient.mockReturnValue(client)
@@ -731,12 +839,37 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/peppol', () => {
     }
   })
 
+  it('names an attachment the e-faktura cannot carry: not a PDF, too large together (crm#1545)', async () => {
+    const attachment = (file_name: string, mime_type: string, file_size_bytes: number) => ({
+      document_id: file_name,
+      created_at: '2026-08-20T10:00:00.000Z',
+      document: { file_name, mime_type, file_size_bytes, storage_path: `c/${file_name}` },
+    })
+    mockServiceClient.mockReturnValue(makeClient({
+      company_members: MEMBER,
+      company_settings: COMPANY_SETTINGS,
+      peppol_access: ACCESS,
+      peppol_deliveries: SENT_COUNTS,
+      invoices: { data: invoiceRow(), error: null },
+      invoice_attachments: {
+        data: [attachment('tidrapport.pdf', 'application/pdf', 4 * 1024 * 1024), attachment('bild.png', 'image/png', 2 * 1024 * 1024)],
+        error: null,
+      },
+    }))
+    const body = await (await readiness()).json()
+    expect(body.data.ready).toBe(false)
+    expect(body.data.blockers).toEqual([
+      expect.objectContaining({ code: 'PEPPOL_ATTACHMENT_NOT_PDF', field: 'attachments[1]', message_sv: expect.stringContaining('bild.png är ingen PDF') }),
+      expect.objectContaining({ code: 'PEPPOL_ATTACHMENTS_TOO_LARGE', field: 'attachments' }),
+    ])
+  })
+
   it('flags a credit note as not sendable', async () => {
     mockServiceClient.mockReturnValue(makeClient({
       company_members: MEMBER,
       company_settings: COMPANY_SETTINGS,
       peppol_access: ACCESS,
-      peppol_deliveries: SENT_COUNT,
+      peppol_deliveries: SENT_COUNTS,
       invoices: { data: invoiceRow({ credited_invoice_id: JE_ID }), error: null },
     }))
     const body = await (await readiness()).json()
@@ -792,5 +925,28 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/peppol/deliveries', () =
     expect(body.data.transport).toEqual({ available: true, provider: 'test-ap', reason: null })
     expect(client.calls).toContainEqual({ table: 'peppol_deliveries', method: 'eq', args: ['company_id', COMPANY_ID] })
     expect(client.calls).toContainEqual({ table: 'peppol_deliveries', method: 'eq', args: ['invoice_id', INV_ID] })
+    // A delivery with an outcome carries no unreported flag.
+    expect(body.data.deliveries[0]).not.toHaveProperty('outcome_unreported')
+    expect(body.data.deliveries[0]).not.toHaveProperty('outcome_hint')
+  })
+
+  it('flags a delivery the access point has held over a day without an outcome, and not a fresh one (crm#1803)', async () => {
+    const accepted = { ...delivery, provider: 'test-ap', provider_submission_id: 'int-1', status: 'submission_accepted' }
+    const fresh = { ...accepted, id: '99999999-9999-4999-8999-999999999999', status_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() }
+    mockServiceClient.mockReturnValue(makeClient({
+      company_members: MEMBER,
+      invoices: { data: { id: INV_ID }, error: null },
+      peppol_deliveries: { data: [fresh, accepted], error: null },
+      peppol_access: ACCESS,
+    }))
+    const res = await deliveries()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.deliveries[0]).not.toHaveProperty('outcome_unreported')
+    expect(body.data.deliveries[1]).toMatchObject({
+      status: 'submission_accepted',
+      outcome_unreported: true,
+      outcome_hint: PEPPOL_OUTCOME_UNREPORTED_HINT,
+    })
   })
 })

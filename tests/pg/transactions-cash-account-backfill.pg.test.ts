@@ -219,7 +219,7 @@ describe('transactions.cash_account_id: repair backfill (20260609120000)', () =>
   })
 
   it('CORRECTS a mis-assigned unbooked row in a single-SEK-account company', async () => {
-    // The headline Arcim regression: one SEK account; a buggy backfill bound a
+    // The headline regression: one SEK account; a buggy backfill bound a
     // SEK row to the wrong account, so per-account scoping dropped it and
     // Bankavstämning showed 0 transactions. Repair rebinds it to the sole SEK account.
     const { userId, companyId } = await seedCompany()

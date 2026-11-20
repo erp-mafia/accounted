@@ -1,0 +1,278 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createQueuedMockSupabase } from '@/tests/helpers'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { Logger } from '@/lib/logger'
+
+const readBankMatchMock = vi.fn()
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
+vi.mock('@/lib/documents/inbox-bank-match', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/documents/inbox-bank-match')>()),
+  readInboxBankMatch: (...args: unknown[]) => readBankMatchMock(...args),
+}))
+const pairingsMock = vi.fn()
+vi.mock('@/lib/operations/inbox-pairings', () => ({ readInboxPairings: (...args: unknown[]) => pairingsMock(...args) }))
+vi.mock('@/lib/bookkeeping/settlement-account', () => ({ resolveSettlementAccount: vi.fn(async () => '2890') }))
+const capabilitiesMock = vi.fn()
+vi.mock('@/lib/modules/capabilities', () => ({ loadCompanyCapabilities: (...args: unknown[]) => capabilitiesMock(...args) }))
+const matchSupplierMock = vi.fn()
+vi.mock('@/lib/suppliers/match-supplier', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suppliers/match-supplier')>()),
+  matchSupplierByIdentity: (...args: unknown[]) => matchSupplierMock(...args),
+}))
+const categoriesMock = vi.fn()
+vi.mock('@/lib/categories/inbox-purchase-category', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/categories/inbox-purchase-category')>()),
+  resolveInboxPurchaseCategories: (...args: unknown[]) => categoriesMock(...args),
+}))
+const templateMock = vi.fn()
+vi.mock('@/lib/bookkeeping/counterparty-templates', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/counterparty-templates')>()),
+  findCounterpartyTemplate: (...args: unknown[]) => templateMock(...args),
+}))
+
+const directBookingMock = vi.fn()
+vi.mock('@/lib/transactions/direct-booking-settings', () => ({
+  readDirectBookingSettings: (...args: unknown[]) => directBookingMock(...args),
+}))
+// The lookup itself is tested with its own rows (lib/supplier-invoices/__tests__/duplicate-lookup.test.ts).
+const duplicateLookupMock = vi.fn()
+vi.mock('@/lib/supplier-invoices/duplicate-lookup', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supplier-invoices/duplicate-lookup')>()),
+  lookupSupplierInvoiceDuplicates: (...args: unknown[]) => duplicateLookupMock(...args),
+}))
+
+import { readOneClickInput } from '../inkorg-one-click-read'
+
+const { supabase, enqueueMany, findCalls, reset } = createQueuedMockSupabase()
+const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as unknown as Logger
+
+const READING = {
+  documentKind: 'supplier_invoice',
+  supplier: { name: 'Wispr Flow', orgNumber: null, vatNumber: null, address: 'San Francisco, CA 94114' },
+  invoice: { invoiceNumber: 'WF-1', invoiceDate: '2026-10-13', currency: 'SEK' },
+  totals: { total: 150, vatAmount: 0 },
+  lineItems: [],
+  vatBreakdown: [],
+}
+
+const ITEM = {
+  id: 'item-1',
+  status: 'received',
+  source: 'email',
+  document_id: 'doc-1',
+  kind_hint: null,
+  extracted_data: READING,
+  routed_to_arkiv_at: null,
+  matched_supplier_id: null,
+  matched_transaction_id: null,
+  created_supplier_invoice_id: null,
+  created_journal_entry_id: null,
+  bank_match_transaction_id: 'tx-1',
+  bank_match_basis: 'rule_amount_date',
+  bank_match_evidence_level: 'stark',
+  bank_match_source_key: 'v1:x',
+  email_subject: 'Your receipt',
+}
+
+const TX = { id: 'tx-1', date: '2026-10-14', amount: -150, currency: 'SEK', amount_sek: -150, exchange_rate: null, cash_account_id: 'ca-card', journal_entry_id: null, description: 'WISPR K3667', merchant_name: null }
+
+const read = (answers = {}) => readOneClickInput(supabase as unknown as SupabaseClient, 'company-1', 'item-1', answers, log)
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  reset()
+  readBankMatchMock.mockResolvedValue({ transaction_id: 'tx-1', date: '2026-10-14', amount: -150, currency: 'SEK', counterparty: 'WISPR K3667', basis: 'rule_amount_date', evidence_level: 'stark' })
+  pairingsMock.mockResolvedValue(new Map())
+  capabilitiesMock.mockResolvedValue(null)
+  directBookingMock.mockResolvedValue({ enabled: true })
+  matchSupplierMock.mockResolvedValue(null)
+  categoriesMock.mockResolvedValue(new Map([['item-1', { code: 'expense.software.saas', source: 'lines', level: 'Trolig', version: 'pc-2026-10' }]]))
+  templateMock.mockResolvedValue(null)
+  duplicateLookupMock.mockResolvedValue({ number: null, reference: null })
+})
+
+describe('readOneClickInput', () => {
+  it('reads the item, the arrival match\'s bank row on its own settlement account, and the category', async () => {
+    enqueueMany([{ data: ITEM }, { data: TX }, { data: { vat_registered: true, accounting_method: 'accrual', entity_type: 'aktiebolag' } }])
+    const result = await read()
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.input).toMatchObject({
+      kind: 'supplier_invoice',
+      paidByReceipt: false,
+      bank: { transactionId: 'tx-1', date: '2026-10-14', amountSek: -150, settlementAccount: '2890', source: 'proposal' },
+      company: { vatRegistered: true, cashMethod: false, supplierInvoices: true },
+      category: 'expense.software.saas',
+      supplier: null,
+      sellerRegionAnswer: null,
+    })
+    expect(result.item).toMatchObject({ id: 'item-1', documentId: 'doc-1', description: 'Wispr Flow' })
+    // Every read is the company's.
+    for (const table of ['invoice_inbox_items', 'transactions', 'company_settings']) {
+      expect(findCalls(table, 'eq')).toContainEqual(['company_id', 'company-1'])
+    }
+  })
+
+  it('reads the row an item is linked to, and refuses one booked since', async () => {
+    enqueueMany([{ data: { ...ITEM, matched_transaction_id: 'tx-1' } }, { data: TX }, { data: { vat_registered: true, accounting_method: 'accrual' } }])
+    const linked = await read()
+    expect(linked.ok && linked.input.bank?.source).toBe('matched')
+    expect(readBankMatchMock).not.toHaveBeenCalled()
+
+    reset()
+    enqueueMany([{ data: { ...ITEM, matched_transaction_id: 'tx-1' } }, { data: { ...TX, journal_entry_id: 'je-1' } }])
+    expect(await read()).toEqual({ ok: false, code: 'INBOX_ITEM_ALREADY_BOOKED', details: { inbox_item_id: 'item-1' } })
+  })
+
+  it('answers not found, already booked and already registered', async () => {
+    enqueueMany([{ data: null }])
+    expect(await read()).toEqual({ ok: false, code: 'INBOX_ITEM_NOT_FOUND' })
+    enqueueMany([{ data: { ...ITEM, created_journal_entry_id: 'je-1' } }])
+    expect((await read()).ok).toBe(false)
+    enqueueMany([{ data: { ...ITEM, document_hold: { journal_entry_id: 'je-1', entry: { status: 'posted' } } } }])
+    expect(await read()).toMatchObject({ ok: false, code: 'INBOX_ITEM_ALREADY_BOOKED' })
+    enqueueMany([{ data: { ...ITEM, created_supplier_invoice_id: 'si-1' } }])
+    expect(await read()).toMatchObject({ ok: false, code: 'INBOX_ITEM_ALREADY_CONVERTED' })
+  })
+
+  it('reads an invoice paid by its receipt, with the receipt\'s date', async () => {
+    pairingsMock.mockResolvedValue(new Map([['item-1', { role: 'invoice', receipt_item_id: 'item-2', basis: 'invoice_number' }]]))
+    enqueueMany([
+      { data: ITEM },
+      { data: TX },
+      { data: { id: 'item-2', extracted_data: { invoice: { invoiceDate: '2026-10-12' } } } },
+      { data: { vat_registered: true, accounting_method: 'accrual' } },
+    ])
+    const result = await read()
+    expect(result.ok && [result.input.paidByReceipt, result.input.receiptDate]).toEqual([true, '2026-10-12'])
+  })
+
+  it('takes the person\'s answers over what the item reads as', async () => {
+    enqueueMany([{ data: ITEM }, { data: TX }, { data: { vat_registered: true, accounting_method: 'cash' } }])
+    const result = await read({ purchaseCategory: 'expense.marketing.ads', sellerRegion: 'eu' })
+    expect(result.ok && [result.input.category, result.input.sellerRegionAnswer, result.input.company.cashMethod]).toEqual(['expense.marketing.ads', 'eu', true])
+    expect(categoriesMock).not.toHaveBeenCalled()
+  })
+
+  it('finds the supplier by identity, and the account the counterparty is booked on', async () => {
+    matchSupplierMock.mockResolvedValue({ supplierId: 'sup-1', matchedOn: 'name' })
+    templateMock.mockResolvedValue({ confidence: 0.9, matchMethod: 'exact_alias', template: { debit_account: '6540', credit_account: '1930', line_pattern: null, source: 'learned' } })
+    enqueueMany([
+      { data: ITEM },
+      { data: TX },
+      { data: { vat_registered: true, accounting_method: 'accrual' } },
+      { data: { id: 'sup-1', name: 'Wispr Flow Inc', supplier_type: 'non_eu_business', default_expense_account: null, default_payment_terms: 10, archived_at: null } },
+    ])
+    const result = await read()
+    expect(result.ok && result.input.supplier).toEqual({ id: 'sup-1', name: 'Wispr Flow Inc', supplierType: 'non_eu_business', defaultExpenseAccount: null, paymentTermsDays: 10 })
+    expect(result.ok && result.input.counterpartyAccount).toBe('6540')
+    expect(result.ok && result.input.counterpartyAlwaysReview).toBe(false)
+  })
+
+  it("reads the company's one-click switch and whether the counterpart's rule always asks (accounted#130)", async () => {
+    directBookingMock.mockResolvedValue({ enabled: false })
+    templateMock.mockResolvedValue({
+      confidence: 0.9,
+      matchMethod: 'exact_alias',
+      template: { debit_account: '6540', credit_account: '1930', line_pattern: null, source: 'sie_import', always_review: true },
+    })
+    enqueueMany([{ data: ITEM }, { data: TX }, { data: { vat_registered: true, accounting_method: 'accrual' } }])
+    const result = await read()
+    expect(directBookingMock).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(result.ok && result.input.directBooking).toEqual({ enabled: false })
+    expect(result.ok && result.input.counterpartyAlwaysReview).toBe(true)
+    // An imported rule's account still informs the plan: the Inkorg never books on the history count.
+    expect(result.ok && result.input.counterpartyAccount).toBe('6540')
+  })
+
+  it('never takes a system default template as the company\'s history', async () => {
+    templateMock.mockResolvedValue({ confidence: 0.9, matchMethod: 'exact_alias', template: { debit_account: '6540', credit_account: '1930', line_pattern: null, source: 'sni_default' } })
+    enqueueMany([{ data: ITEM }, { data: TX }, { data: { vat_registered: true, accounting_method: 'accrual' } }])
+    const result = await read()
+    expect(result.ok && result.input.counterpartyAccount).toBeNull()
+  })
+
+  it('plans without a hint that cannot be read', async () => {
+    categoriesMock.mockRejectedValue(new Error('down'))
+    readBankMatchMock.mockRejectedValue(new Error('down'))
+    enqueueMany([{ data: ITEM }, { data: { vat_registered: true, accounting_method: 'accrual' } }])
+    const result = await read()
+    expect(result.ok && [result.input.category, result.input.bank]).toEqual([null, null])
+    expect(log.warn).toHaveBeenCalled()
+  })
+})
+
+describe('readOneClickInput: the payment reference on the supplier\'s other invoices', () => {
+  // An unpaid invoice of a supplier the company has a card for, with an OCR.
+  const UNPAID = {
+    ...ITEM,
+    matched_supplier_id: 'sup-1',
+    bank_match_transaction_id: null,
+    extracted_data: { ...READING, invoice: { invoiceNumber: 'F-1002', invoiceDate: '2026-10-13', dueDate: '2026-11-12', paymentReference: '1234567897', currency: 'SEK' } },
+  }
+  const SETTINGS = { vat_registered: true, accounting_method: 'accrual' }
+  const CARD = { id: 'sup-1', name: 'Konsult AB', supplier_type: 'swedish_business', default_expense_account: '6550', default_payment_terms: 30, archived_at: null }
+  const twin = { id: 'si-1', supplier_invoice_number: 'F-0990', arrival_number: 31, invoice_date: '2026-09-13', total: 1250, currency: 'SEK', ore_rounding: null, status: 'approved', voucher: null }
+
+  beforeEach(() => {
+    readBankMatchMock.mockResolvedValue(null)
+  })
+
+  it('asks the supplier card\'s live invoices for the reading\'s reference, under another number', async () => {
+    duplicateLookupMock.mockResolvedValue({ number: null, reference: { invoice: twin, count: 1, needs_acknowledgement: true } })
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const result = await read()
+    expect(result.ok && result.input.referenceToAcknowledge).toBe(true)
+    expect(duplicateLookupMock).toHaveBeenCalledWith(supabase, 'company-1', { supplierId: 'sup-1', number: 'F-1002', reference: '1234567897' })
+  })
+
+  it('has nothing to acknowledge when no other invoice carries it, or two or more do', async () => {
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const none = await read()
+    expect(none.ok && none.input.referenceToAcknowledge).toBe(false)
+
+    duplicateLookupMock.mockResolvedValue({ number: null, reference: { invoice: twin, count: 3, needs_acknowledgement: false } })
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const routine = await read()
+    expect(routine.ok && routine.input.referenceToAcknowledge).toBe(false)
+  })
+
+  it('asks for a supplier found by the reading\'s identity too', async () => {
+    matchSupplierMock.mockResolvedValue({ supplierId: 'sup-1', matchedOn: 'org_number' })
+    duplicateLookupMock.mockResolvedValue({ number: null, reference: { invoice: twin, count: 1, needs_acknowledgement: true } })
+    enqueueMany([{ data: { ...UNPAID, matched_supplier_id: null } }, { data: SETTINGS }, { data: CARD }])
+    const result = await read()
+    expect(result.ok && result.input.referenceToAcknowledge).toBe(true)
+  })
+
+  it('does not ask without a supplier card, without a reference, or for a receipt', async () => {
+    // No card: the plan creates the supplier, which has no invoices yet.
+    enqueueMany([{ data: { ...UNPAID, matched_supplier_id: null } }, { data: SETTINGS }])
+    const noCard = await read()
+    expect(noCard.ok && noCard.input.referenceToAcknowledge).toBe(false)
+
+    enqueueMany([{ data: { ...UNPAID, extracted_data: { ...UNPAID.extracted_data, invoice: { ...UNPAID.extracted_data.invoice, paymentReference: null } } } }, { data: SETTINGS }, { data: CARD }])
+    const noReference = await read()
+    expect(noReference.ok && noReference.input.referenceToAcknowledge).toBe(false)
+
+    // A receipt is booked as one verifikat: no supplier invoice, no reference stored.
+    enqueueMany([{ data: { ...UNPAID, extracted_data: { ...UNPAID.extracted_data, documentKind: 'receipt' } } }, { data: SETTINGS }, { data: CARD }])
+    const receipt = await read()
+    expect(receipt.ok && [receipt.input.kind, receipt.input.referenceToAcknowledge]).toEqual(['receipt', false])
+
+    expect(duplicateLookupMock).not.toHaveBeenCalled()
+  })
+
+  it('opens the editor when the lookup cannot be read: it is asked again there', async () => {
+    duplicateLookupMock.mockRejectedValue(new Error('down'))
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const result = await read()
+    expect(result.ok && result.input.referenceToAcknowledge).toBe(true)
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('the payment reference'), expect.anything())
+  })
+})

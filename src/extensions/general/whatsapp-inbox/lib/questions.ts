@@ -49,6 +49,11 @@ const REPRESENTATION_CATEGORIES: ReadonlySet<string> = new Set([
 
 export interface QuestionInput {
   extracted: InvoiceExtractionResult | null
+  /**
+   * The reading was skipped (extraction_skipped): nothing read the file, so
+   * its empty fields say nothing about how legible it is.
+   */
+  unread?: boolean
   caption: string | null
   mime: string | null
   filename: string | null
@@ -115,9 +120,12 @@ function isPartial(input: QuestionInput): boolean {
  * The at-most-one question this receipt warrants, or null.
  */
 export function evaluateQuestion(input: QuestionInput): QuestionCandidate | null {
-  if (isUnreadable(input)) return { type: 'resend' }
+  // An unread file is not an unreadable one: asking for it again cannot help,
+  // since the same file is skipped the same way (and a byte-identical resend
+  // is a duplicate). Only the caption can still raise representation (crm#1779).
+  if (!input.unread && isUnreadable(input)) return { type: 'resend' }
   if (isRepresentation(input)) return { type: 'representation' }
-  if (isPartial(input)) return { type: 'context' }
+  if (!input.unread && isPartial(input)) return { type: 'context' }
   return null
 }
 

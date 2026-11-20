@@ -11,8 +11,10 @@
  *   - an untagged entry touching BOTH a declaration account and 2650/1650
  *     is "shaped": excluded from totals, surfaced in
  *     settlement_shaped_entries;
- *   - opening-balance entries are exempt from shaping (carried-in 26xx
- *     balances are unsettled VAT);
+ *   - an opening-balance entry dated on the period's first day never reaches
+ *     the totals: it carries earlier periods, not the period's VAT (crm#1333,
+ *     tests/pg/vat-totals-carried-entries.pg.test.ts, which also covers one
+ *     dated inside the period);
  *   - a plain 2650 payment (no declaration account) is NOT shaped;
  *   - source_type_counts covers all posted/reversed entries in the period,
  *     including tagged settlements.
@@ -28,6 +30,12 @@ import {
   insertPostedBankJournalEntry,
   insertTransaction,
 } from './fixtures'
+import {
+  carryCustomerInvoice,
+  insertCustomerInvoice,
+  seedCashCompany,
+  stornoEntry,
+} from './kontantmetod-carry-fixtures'
 
 // Mirrors the TS call site (lib/reports/vat-declaration.ts): a small
 // representative slice of ACCOUNT_RUTA is enough since the full list is a
@@ -105,7 +113,7 @@ async function insertJournalEntry(params: {
   }
 
   const id = randomUUID()
-  // Insert directly, bypassing commit_journal_entry's voucher sequencing —
+  // Insert directly, bypassing commit_journal_entry's voucher sequencing:
   // fine for a read-side RPC that only aggregates line/account references.
   await getPool().query(
     `INSERT INTO public.journal_entries
@@ -196,13 +204,20 @@ describe('get_vat_declaration_totals RPC', () => {
 
   it('excludes draft entries and entries outside the period', async () => {
     const ctx = await seedCompany()
+    const previousYear = await insertFiscalPeriod({
+      userId: ctx.userId,
+      companyId: ctx.companyId,
+      name: '2025',
+      periodStart: '2025-01-01',
+      periodEnd: '2025-12-31',
+    })
 
     await insertJournalEntry({
       ...ctx, voucherNumber: 1, status: 'draft',
       lines: [{ account: '2611', debit: 0, credit: 999 }],
     })
     await insertJournalEntry({
-      ...ctx, voucherNumber: 2, entryDate: '2025-12-31',
+      ...ctx, fiscalPeriodId: previousYear, voucherNumber: 2, entryDate: '2025-12-31',
       lines: [
         { account: '2611', debit: 0, credit: 777 },
         { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 777, credit: 0 },
@@ -319,12 +334,13 @@ describe('get_vat_declaration_totals RPC', () => {
     expect(payload.settlement_shaped_entries[0]).toMatchObject({ source_type: 'storno' })
   })
 
-  it('keeps opening-balance entries: carried-in 26xx balances are unsettled VAT', async () => {
+  it('leaves an opening balance on the period\'s first day out: it carries earlier periods (crm#1333)', async () => {
     const ctx = await seedCompany()
 
-    // Migrating company: undeclared input VAT and a prior VAT debt carried
-    // in through the same opening-balance entry. Touches both a declaration
-    // account and 2650, but the shape rule exempts opening balances.
+    // Migrating company: input VAT and a VAT debt carried in through the same
+    // opening-balance entry. Both belong to the declaration of the period they
+    // arose in, so neither reaches this period's totals, and the IB is no
+    // momsredovisning either.
     await insertJournalEntry({
       ...ctx, voucherNumber: 1, sourceType: 'opening_balance', entryDate: '2026-01-01',
       lines: [
@@ -336,9 +352,11 @@ describe('get_vat_declaration_totals RPC', () => {
 
     const payload = await callRpc(ctx.companyId)
     const totals = totalsByAccount(payload)
-    expect(totals.get('2641')).toMatchObject({ debit: 500, credit: 0 })
-    expect(totals.get('2650')).toMatchObject({ debit: 0, credit: 300 })
+    expect(totals.has('2641')).toBe(false)
+    expect(totals.has('2650')).toBe(false)
     expect(payload.settlement_shaped_entries).toEqual([])
+    // Still a verifikat of the period.
+    expect(payload.source_type_counts).toEqual({ opening_balance: 1 })
   })
 
   it('does not shape a plain VAT payment on 2650 (no declaration account touched)', async () => {
@@ -434,6 +452,25 @@ describe('get_vat_declaration_totals RPC', () => {
 
     const payload = await callRpc(ctx.companyId)
     expect(totalsByAccount(payload).get('2618')).toMatchObject({ debit: 250, credit: 0 })
+  })
+
+  it('counts a per-invoice kontantmetod carry, and its storno nets it out (#3440)', async () => {
+    // årsomföring (20261018131100): the carry is the invoice's booking in the
+    // final period of the closed year, so its moms IS the figure; nothing in
+    // a per-invoice marker excludes it. A storno on the carry's own date
+    // takes it back out of the same period.
+    const company = await seedCashCompany()
+    const kept = await insertCustomerInvoice(company)
+    await carryCustomerInvoice(company, kept)
+    const totals = totalsByAccount(await callRpc(company.companyId))
+    expect(totals.get('3001')).toMatchObject({ debit: 0, credit: 1000 })
+    expect(totals.get('2611')).toMatchObject({ debit: 0, credit: 250 })
+
+    const undone = await insertCustomerInvoice(company)
+    const carry = await carryCustomerInvoice(company, undone)
+    await stornoEntry(company, carry)
+    const after = totalsByAccount(await callRpc(company.companyId))
+    expect(after.get('2611')).toMatchObject({ debit: 250, credit: 500 })
   })
 
   it('scopes everything to the requested company', async () => {

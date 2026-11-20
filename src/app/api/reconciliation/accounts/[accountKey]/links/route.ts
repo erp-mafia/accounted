@@ -13,6 +13,9 @@ const ReconciliationLinksBodySchema = z
   .object({
     ...reconciliationLinksBodyFields,
     dry_run: z.boolean().optional(),
+    // The page's "Koppla N föreslagna" floor for sum-matched sets (crm#1668);
+    // dashboard only, v1 and MCP keep confidence_threshold alone.
+    set_confidence_threshold: z.number().min(0).max(1).optional(),
   })
   .refine(...reconciliationLinksBodyRefinement)
 
@@ -20,8 +23,9 @@ const ReconciliationLinksBodySchema = z
  * POST /api/reconciliation/accounts/{accountKey}/links
  *
  * The page's "Koppla" and "Koppla N föreslagna": link outside rows to existing
- * verifikat (N:1), or one bank transaction to several verifikat (1:N, with
- * optional allocations). A human clicked, so this applies directly (dry_run:
+ * verifikat (N:1), one bank transaction to several verifikat (1:N, with
+ * optional allocations), or, with no outside row, verifikat on a bank account
+ * that take each other out. A human clicked, so this applies directly (dry_run:
  * true for the preview). Same service function as v1 and the MCP commit
  * executor.
  */

@@ -1,20 +1,26 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Invoice } from '@/types'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
+import type { DeductionType, Invoice } from '@/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   buildRotRutFile,
   evaluateInvoiceForFile,
+  isPastRequestDeadline,
   type BuildRotRutFileResult,
+  type ClaimProperty,
   type RotRutBlocker,
   type RotRutBlockerCode,
 } from './rot-rut-file'
-import type { DeductionType } from './rot-rut-rules'
+import { evaluateGronTeknikClaim, type GronTeknikInstallation } from './gron-teknik-claim'
+import { DEDUCTION_TYPE_LABELS, deductionKindsOf, type HusDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { uploadDocument } from '@/lib/core/documents/document-service'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Shared service behind the rot/rut payout-file API routes and the MCP tool
  * (gnubok_generate_rot_rut_file): one implementation of "which invoices can
  * go into a begäran" and "record the begäran", so the two surfaces can never
- * drift apart.
+ * drift apart. Grön teknik invoices are listed from the same fetch
+ * (listGronTeknikCandidates) but never enter a HUS file.
  */
 
 export interface RotRutCandidateSummary {
@@ -27,6 +33,27 @@ export interface RotRutCandidateSummary {
   begart_belopp: number
 }
 
+/**
+ * A paid grön teknik invoice with the figures its ärenden need (one per
+ * installation type), for the request made in Skatteverkets e-tjänst. The
+ * buyer's full personnummer is not here: it is read on the invoice page.
+ */
+export interface GronTeknikCandidateSummary {
+  invoice_id: string
+  invoice_number: string | null
+  customer_name: string | null
+  personnummer_last4: string
+  betalnings_datum: string
+  /** Fastighetsbeteckning, or lägenhetsnummer + the förening's orgnr. */
+  property: ClaimProperty
+  installations: GronTeknikInstallation[]
+  ovrig_kostnad: number
+  begart_belopp: number
+  /** 31 January after the payment year has passed: too late to request. */
+  past_deadline: boolean
+  warnings: string[]
+}
+
 export interface RotRutBlockedSummary {
   invoice_id: string
   invoice_number: string | null
@@ -34,6 +61,15 @@ export interface RotRutBlockedSummary {
   code: RotRutBlockerCode | 'ALREADY_REQUESTED'
   message: string
 }
+
+/**
+ * Invoices counted instead of listed: their deduction is a kind requested in
+ * another e-tjänst (grön teknik on a ROT/RUT list, ROT/RUT on the grön teknik
+ * list). An installer with a hundred grön teknik invoices a month would
+ * otherwise see a hundred identical pointer rows under ROT. They are never
+ * dropped: each one is listed on its own kind's list (#1884).
+ */
+export type OtherTypeCounts = Partial<Record<DeductionType, number>>
 
 type InvoiceWithCustomer = Invoice & { customer?: { name?: string | null } | null }
 
@@ -53,63 +89,97 @@ const CANDIDATE_STATUSES = ['paid', 'partially_paid']
  *  ALREADY_REQUESTED. */
 const DECIDED_REQUEST_STATUSES = ['paid', 'partially_paid']
 
+interface ActiveRequest {
+  name: string | null
+  status: string
+}
+
+interface ActiveItemRow {
+  id: string
+  invoice_id: string
+  request: { name?: string | null; status?: string } | null
+}
+
 /**
- * Deduction-carrying invoices evaluated against the file rules. Never drops
- * an invoice silently: every fetched candidate lands in `eligible` or in
- * `blocked` with the exact reason, including "the deduction is the other
- * type" (NO_DEDUCTION_OF_TYPE, so the ROT view can point at the RUT list and
- * vice versa) and "already part of an in-flight begäran" (ALREADY_REQUESTED,
- * for generated/submitted requests). The single deliberate omission is an
- * invoice whose begäran has been decided (request status paid or
- * partially_paid): that claim is finished business, visible in the request
- * history, not a drop-out anyone needs explained.
+ * Every deduction-carrying invoice a list may show, plus the begäran that
+ * holds each one. Two fetches so no candidate shape is invisible:
+ *  - by header: deduction_total > 0, the classic shape;
+ *  - by lines: invoices whose items carry deduction_type but whose header
+ *    total was never written (older imports). The header filter would miss
+ *    those entirely, which is exactly the silent drop this list must not
+ *    have; they surface as DEDUCTION_TOTAL_MISSING.
+ *
+ * Every read pages through fetchAllRows: PostgREST caps one read at 1000
+ * rows, and these sets only grow (decided invoices are still fetched and
+ * dropped in memory, and a grön teknik invoice gets no begäran row until the
+ * Begaran file exists). A capped read sorted oldest payment first silently
+ * lost the NEWEST paid invoices, the ones still to request, and a capped
+ * begäran read could make an invoice already requested look requestable.
+ * Each read orders on a unique tail (id) so pages never skip or repeat a row.
  */
-export async function listRotRutCandidates(
+async function fetchDeductionCandidates(
   supabase: SupabaseClient,
   companyId: string,
-  type: DeductionType,
-  // Europe/Stockholm, not UTC: this date gates FUTURE_PAYMENT_DATE and the
-  // 31 January begäran deadline, both defined by Swedish calendar days.
-  today = getSwedishLocalDate(),
 ): Promise<
-  | { ok: true; eligible: RotRutCandidateSummary[]; blocked: RotRutBlockedSummary[] }
+  | { ok: true; invoices: InvoiceWithCustomer[]; activeRequestByInvoice: Map<string, ActiveRequest> }
   | { ok: false; dbError: unknown }
 > {
-  // Two fetches so no candidate shape is invisible:
-  //  - by header: deduction_total > 0, the classic shape;
-  //  - by lines: invoices whose items carry deduction_type but whose header
-  //    total was never written (older imports). The header filter would miss
-  //    those entirely, which is exactly the silent drop this list must not
-  //    have; they surface as DEDUCTION_TOTAL_MISSING.
-  const { data: byHeader, error: headerError } = await supabase
-    .from('invoices')
-    .select('*, items:invoice_items(*), customer:customers(id, name)')
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .in('status', CANDIDATE_STATUSES)
-    .gt('deduction_total', 0)
-    .order('paid_at', { ascending: true })
-
-  if (headerError) return { ok: false, dbError: headerError }
-
-  const { data: byLines, error: linesError } = await supabase
-    .from('invoices')
-    .select(
-      '*, items:invoice_items(*), customer:customers(id, name), deduction_lines:invoice_items!inner(deduction_type)',
+  let byHeader: InvoiceWithCustomer[]
+  let byLines: InvoiceWithCustomer[]
+  let activeItems: ActiveItemRow[]
+  try {
+    byHeader = await fetchAllRows<InvoiceWithCustomer>(
+      ({ from, to }) =>
+        supabase
+          .from('invoices')
+          .select('*, items:invoice_items(*), customer:customers(id, name)')
+          .eq('company_id', companyId)
+          .eq('document_type', 'invoice')
+          .in('status', CANDIDATE_STATUSES)
+          .gt('deduction_total', 0)
+          .order('paid_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { dedupeBy: (row) => row.id },
     )
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .in('status', CANDIDATE_STATUSES)
-    .not('deduction_lines.deduction_type', 'is', null)
-    .order('paid_at', { ascending: true })
 
-  if (linesError) return { ok: false, dbError: linesError }
+    byLines = await fetchAllRows<InvoiceWithCustomer>(
+      ({ from, to }) =>
+        supabase
+          .from('invoices')
+          .select(
+            '*, items:invoice_items(*), customer:customers(id, name), deduction_lines:invoice_items!inner(deduction_type)',
+          )
+          .eq('company_id', companyId)
+          .eq('document_type', 'invoice')
+          .in('status', CANDIDATE_STATUSES)
+          .not('deduction_lines.deduction_type', 'is', null)
+          .order('paid_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { dedupeBy: (row) => row.id },
+    )
+
+    // The select parser types the many-to-one embed as an array; PostgREST
+    // returns the one parent row as an object, as ActiveItemRow says.
+    const activeRows = await fetchAllRows(
+      ({ from, to }) =>
+        supabase
+          .from('rot_rut_payout_request_items')
+          .select('id, invoice_id, request:rot_rut_payout_requests!inner(id, name, status, company_id)')
+          .eq('request.company_id', companyId)
+          .not('request.status', 'in', '("cancelled","rejected")')
+          .order('id', { ascending: true })
+          .range(from, to),
+      { dedupeBy: (row) => row.id },
+    )
+    activeItems = activeRows as unknown as ActiveItemRow[]
+  } catch (dbError) {
+    return { ok: false, dbError }
+  }
 
   const invoiceById = new Map<string, InvoiceWithCustomer>()
-  for (const row of [
-    ...(byHeader ?? []),
-    ...(byLines ?? []),
-  ] as unknown as InvoiceWithCustomer[]) {
+  for (const row of [...byHeader, ...byLines]) {
     if (!invoiceById.has(row.id)) invoiceById.set(row.id, row)
   }
   // Deterministic order across the merged sets: oldest payment first
@@ -120,30 +190,91 @@ export async function listRotRutCandidates(
     return aKey === bKey ? a.id.localeCompare(b.id) : aKey < bKey ? -1 : 1
   })
 
-  const { data: activeItems, error: activeError } = await supabase
-    .from('rot_rut_payout_request_items')
-    .select('invoice_id, request:rot_rut_payout_requests!inner(id, name, status, company_id)')
-    .eq('request.company_id', companyId)
-    .not('request.status', 'in', '("cancelled","rejected")')
-
-  if (activeError) return { ok: false, dbError: activeError }
-
-  const activeRequestByInvoice = new Map<string, { name: string | null; status: string }>()
-  for (const row of (activeItems ?? []) as unknown as Array<{
-    invoice_id: string
-    request: { name?: string | null; status?: string } | null
-  }>) {
+  const activeRequestByInvoice = new Map<string, ActiveRequest>()
+  for (const row of activeItems) {
     activeRequestByInvoice.set(row.invoice_id, {
       name: row.request?.name ?? null,
       status: row.request?.status ?? '',
     })
   }
 
+  return { ok: true, invoices, activeRequestByInvoice }
+}
+
+/**
+ * In-flight begäran (generated but maybe never uploaded, or awaiting
+ * beslut): the invoice is spoken for, say so instead of vanishing. A request
+ * status outside the known lifecycle gets the generic message: being held
+ * with a vague reason still beats disappearing.
+ */
+function alreadyRequested(invoice: InvoiceWithCustomer, holdingRequest: ActiveRequest): RotRutBlockedSummary {
+  const requestLabel = holdingRequest.name ? `begäran "${holdingRequest.name}"` : 'en begäran'
+  return {
+    invoice_id: invoice.id,
+    invoice_number: invoice.invoice_number ?? null,
+    customer_name: invoice.customer?.name ?? null,
+    code: 'ALREADY_REQUESTED',
+    message:
+      holdingRequest.status === 'generated'
+        ? `Fakturan ingår redan i ${requestLabel} som är skapad men inte uppladdad. Ladda upp filen hos Skatteverket, eller avbryt begäran för att ta med fakturan i en ny fil.`
+        : holdingRequest.status === 'submitted'
+          ? `Fakturan ingår redan i ${requestLabel} som väntar på Skatteverkets beslut.`
+          : `Fakturan ingår redan i ${requestLabel}.`,
+  }
+}
+
+function blockedSummary(invoice: InvoiceWithCustomer, blocker: RotRutBlocker): RotRutBlockedSummary {
+  return {
+    invoice_id: invoice.id,
+    invoice_number: invoice.invoice_number ?? null,
+    customer_name: invoice.customer?.name ?? null,
+    code: blocker.code,
+    message: blocker.message,
+  }
+}
+
+function countOtherKinds(counts: OtherTypeCounts, kinds: DeductionType[]): void {
+  for (const kind of kinds) counts[kind] = (counts[kind] ?? 0) + 1
+}
+
+/**
+ * Deduction-carrying invoices evaluated against the file rules. Never drops
+ * an invoice silently: every fetched candidate lands in `eligible` or in
+ * `blocked` with the exact reason, including "the deduction is the other
+ * type" (NO_DEDUCTION_OF_TYPE, so the ROT view can point at the RUT list and
+ * vice versa) and "already part of an in-flight begäran" (ALREADY_REQUESTED,
+ * for generated/submitted requests), or is counted in `other_type_counts`
+ * when its deduction is grön teknik (listed by listGronTeknikCandidates).
+ * The single deliberate omission is an invoice whose begäran has been
+ * decided (request status paid or partially_paid): that claim is finished
+ * business, visible in the request history, not a drop-out anyone needs
+ * explained.
+ */
+export async function listRotRutCandidates(
+  supabase: SupabaseClient,
+  companyId: string,
+  type: HusDeductionType,
+  // Europe/Stockholm, not UTC: this date gates FUTURE_PAYMENT_DATE and the
+  // 31 January begäran deadline, both defined by Swedish calendar days.
+  today = todayIsoStockholm(),
+): Promise<
+  | {
+      ok: true
+      eligible: RotRutCandidateSummary[]
+      blocked: RotRutBlockedSummary[]
+      other_type_counts: OtherTypeCounts
+    }
+  | { ok: false; dbError: unknown }
+> {
+  const fetched = await fetchDeductionCandidates(supabase, companyId)
+  if (!fetched.ok) return fetched
+
   const eligible: RotRutCandidateSummary[] = []
   const blocked: RotRutBlockedSummary[] = []
+  const otherTypeCounts: OtherTypeCounts = {}
 
-  for (const invoice of invoices) {
-    const activeRequest = activeRequestByInvoice.get(invoice.id)
+  for (const invoice of fetched.invoices) {
+    const activeRequest = fetched.activeRequestByInvoice.get(invoice.id)
     // Decided begäran (request status paid/partially_paid, enumerated
     // explicitly in DECIDED_REQUEST_STATUSES) first, before ANY
     // classification: the claim is finished business on every tab, so the
@@ -153,40 +284,26 @@ export async function listRotRutCandidates(
     if (activeRequest && DECIDED_REQUEST_STATUSES.includes(activeRequest.status)) continue
     const holdingRequest = activeRequest ?? null
 
+    // A grön teknik invoice is counted, not listed: it is requested in its
+    // own e-tjänst and appears on the grön teknik list.
+    const kinds = deductionKindsOf(invoice.items ?? [])
+    if (kinds.length > 0 && kinds.every((kind) => kind === 'gron_teknik')) {
+      countOtherKinds(otherTypeCounts, kinds)
+      continue
+    }
+
     const result = evaluateInvoiceForFile(type, invoice, { today })
 
     // Wrong-type next: even when the invoice sits in an in-flight begäran,
     // the useful fact under THIS type is that it belongs to the other list
     // (where it shows as ALREADY_REQUESTED).
     if (!result.ok && result.blocker.code === 'NO_DEDUCTION_OF_TYPE') {
-      blocked.push({
-        invoice_id: invoice.id,
-        invoice_number: invoice.invoice_number ?? null,
-        customer_name: invoice.customer?.name ?? null,
-        code: result.blocker.code,
-        message: result.blocker.message,
-      })
+      blocked.push(blockedSummary(invoice, result.blocker))
       continue
     }
 
     if (holdingRequest) {
-      // In-flight begäran (generated but maybe never uploaded, or awaiting
-      // beslut): the invoice is spoken for, say so instead of vanishing. A
-      // request status outside the known lifecycle gets the generic message:
-      // being held with a vague reason still beats disappearing.
-      const requestLabel = holdingRequest.name ? `begäran "${holdingRequest.name}"` : 'en begäran'
-      blocked.push({
-        invoice_id: invoice.id,
-        invoice_number: invoice.invoice_number ?? null,
-        customer_name: invoice.customer?.name ?? null,
-        code: 'ALREADY_REQUESTED',
-        message:
-          holdingRequest.status === 'generated'
-            ? `Fakturan ingår redan i ${requestLabel} som är skapad men inte uppladdad. Ladda upp filen hos Skatteverket, eller avbryt begäran för att ta med fakturan i en ny fil.`
-            : holdingRequest.status === 'submitted'
-              ? `Fakturan ingår redan i ${requestLabel} som väntar på Skatteverkets beslut.`
-              : `Fakturan ingår redan i ${requestLabel}.`,
-      })
+      blocked.push(alreadyRequested(invoice, holdingRequest))
       continue
     }
 
@@ -201,17 +318,94 @@ export async function listRotRutCandidates(
         begart_belopp: result.value.arende.begart_belopp,
       })
     } else {
-      blocked.push({
-        invoice_id: invoice.id,
-        invoice_number: invoice.invoice_number ?? null,
-        customer_name: invoice.customer?.name ?? null,
-        code: result.blocker.code,
-        message: result.blocker.message,
-      })
+      blocked.push(blockedSummary(invoice, result.blocker))
     }
   }
 
-  return { ok: true, eligible, blocked }
+  return { ok: true, eligible, blocked, other_type_counts: otherTypeCounts }
+}
+
+/**
+ * Grön teknik invoices evaluated with evaluateGronTeknikClaim: eligible ones
+ * carry the figures each ärende needs, blocked ones the first reason.
+ * ROT/RUT invoices are counted in `other_type_counts` (they are listed under
+ * ROT and RUT). There is no grön teknik file yet: the request is made in
+ * Skatteverkets e-tjänst for grön teknik, so no begäran row exists for these
+ * invoices and nothing here writes one. `eligible` therefore means "paid and
+ * complete", not "not yet requested": a request made in the e-tjänst is
+ * invisible here, and callers must say so (the tile and the invoice list do).
+ * The decided/in-flight begäran rules still apply, so the list is ready for
+ * the Begaran GRON_TEKNIK file.
+ *
+ * Newest payment first: the invoice to enter next in the e-tjänst is the one
+ * most recently paid, and the ones already entered sink down the list.
+ */
+export async function listGronTeknikCandidates(
+  supabase: SupabaseClient,
+  companyId: string,
+  today = todayIsoStockholm(),
+): Promise<
+  | {
+      ok: true
+      eligible: GronTeknikCandidateSummary[]
+      blocked: RotRutBlockedSummary[]
+      other_type_counts: OtherTypeCounts
+    }
+  | { ok: false; dbError: unknown }
+> {
+  const fetched = await fetchDeductionCandidates(supabase, companyId)
+  if (!fetched.ok) return fetched
+
+  const eligible: GronTeknikCandidateSummary[] = []
+  const blocked: RotRutBlockedSummary[] = []
+  const otherTypeCounts: OtherTypeCounts = {}
+
+  for (const invoice of fetched.invoices) {
+    const activeRequest = fetched.activeRequestByInvoice.get(invoice.id)
+    if (activeRequest && DECIDED_REQUEST_STATUSES.includes(activeRequest.status)) continue
+
+    const kinds = deductionKindsOf(invoice.items ?? [])
+    if (!kinds.includes('gron_teknik')) {
+      countOtherKinds(otherTypeCounts, kinds)
+      continue
+    }
+
+    if (activeRequest) {
+      blocked.push(alreadyRequested(invoice, activeRequest))
+      continue
+    }
+
+    const result = evaluateGronTeknikClaim(invoice, { today })
+    if (!result.ok) {
+      blocked.push(blockedSummary(invoice, result.blocker))
+      continue
+    }
+    eligible.push({
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number ?? null,
+      customer_name: invoice.customer?.name ?? null,
+      personnummer_last4: result.value.personnummer_last4,
+      betalnings_datum: result.value.betalnings_datum,
+      property: result.value.property,
+      installations: result.value.installations,
+      ovrig_kostnad: result.value.ovrig_kostnad,
+      begart_belopp: result.value.begart_belopp,
+      past_deadline: isPastRequestDeadline(result.value.betalnings_datum, today),
+      warnings: result.value.warnings,
+    })
+  }
+
+  // The fetch order is oldest payment first (stable, id-tied); reverse it
+  // with the same tie-break so equal dates keep a deterministic order.
+  eligible.sort((a, b) =>
+    a.betalnings_datum === b.betalnings_datum
+      ? b.invoice_id.localeCompare(a.invoice_id)
+      : a.betalnings_datum < b.betalnings_datum
+        ? 1
+        : -1,
+  )
+
+  return { ok: true, eligible, blocked, other_type_counts: otherTypeCounts }
 }
 
 export type CreateRotRutRequestResult =
@@ -234,22 +428,24 @@ export type CreateRotRutRequestResult =
  * per-invoice blockers. The DB trigger enforce_single_active_rot_rut_request
  * stays the authoritative double-request guard (surfaced as INVOICE_CONFLICT).
  *
- * Document archiving is deliberately NOT done here: it needs the storage
- * bucket and differs per surface (the API route archives, best-effort).
+ * Archiving the file is a separate step (archiveRotRutPayoutFile), because
+ * the surfaces treat a failed archive differently: the web route returns the
+ * XML inline and archives best-effort, the MCP tool can deliver the file only
+ * through the archive.
  */
 export async function createRotRutPayoutRequest(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   params: {
-    type: DeductionType
+    type: HusDeductionType
     invoiceIds: string[]
     name?: string
     today?: string
   },
 ): Promise<CreateRotRutRequestResult> {
-  const today = params.today ?? getSwedishLocalDate()
-  const name = (params.name ?? `${params.type.toUpperCase()} ${today}`).slice(0, 16)
+  const today = params.today ?? todayIsoStockholm()
+  const name = (params.name ?? `${DEDUCTION_TYPE_LABELS[params.type].short} ${today}`).slice(0, 16)
 
   const { data: invoices, error: invoicesError } = await supabase
     .from('invoices')
@@ -318,4 +514,34 @@ export async function createRotRutPayoutRequest(
   }
 
   return { ok: true, request: payoutRequest, file }
+}
+
+/**
+ * Archive a generated begäran file as räkenskapsinformation (7-year retention
+ * through the document WORM chain) and point the begäran at it, so the
+ * ROT/RUT page can download it again. Throws when the file cannot be stored.
+ * A failed pointer update does not throw: the file is archived either way,
+ * and `linked: false` says the begäran does not name it yet.
+ */
+export async function archiveRotRutPayoutFile(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  requestId: string,
+  file: { xml: string; file_name: string },
+): Promise<{ documentId: string; storagePath: string; linked: boolean }> {
+  const buffer = new TextEncoder().encode(file.xml).buffer as ArrayBuffer
+  const doc = await uploadDocument(
+    supabase,
+    userId,
+    companyId,
+    { name: file.file_name, buffer },
+    { upload_source: 'system' },
+  )
+  const { error } = await supabase
+    .from('rot_rut_payout_requests')
+    .update({ file_document_id: doc.id })
+    .eq('id', requestId)
+    .eq('company_id', companyId)
+  return { documentId: doc.id, storagePath: doc.storage_path, linked: !error }
 }

@@ -1,13 +1,13 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
+import { Skeleton } from "@/components/ui/skeleton"
 
 /**
- * DataList: unified list surface (one bordered container, hairline rows).
- *
- * Replaces the per-row Card pattern across Granskning, Transactions, and
- * similar list pages. Visual contract is flat-with-hairlines per CLAUDE.md:
- * no shadows on the container, no state-tinted borders, secondary token for
- * selected/hover.
+ * DataList: unified list surface, flat on the panel with hairline rows
+ * (Stil v3: no box inside the panel). It bleeds 16px past the gutter
+ * (LIST_BLEED_CLASS) so row text sits on the 24px gutter while the hover
+ * tint and hairlines reach past it. Replaces the per-row Card pattern
+ * across Granskning, Transactions and similar list pages.
  */
 const DataList = React.forwardRef<
   HTMLDivElement,
@@ -16,7 +16,7 @@ const DataList = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-lg border border-border bg-card text-card-foreground overflow-hidden [&>*]:border-b [&>*]:border-border [&>*:last-child]:border-b-0",
+      "-mx-2 text-card-foreground [&>*]:border-b-hairline",
       className
     )}
     {...props}
@@ -31,7 +31,7 @@ const DataListHeader = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "flex flex-wrap items-center gap-3 border-b border-border bg-secondary/40 px-4 py-2",
+      "flex min-h-8 flex-wrap items-center gap-3 px-2 py-1.5 text-xs font-medium text-muted-foreground",
       className
     )}
     {...props}
@@ -70,14 +70,14 @@ const DataListRow = React.forwardRef<HTMLDivElement, DataListRowProps>(
         ref={ref}
         className={cn(
           "transition-colors",
-          selected ? "bg-secondary/50" : "hover:bg-secondary/35",
+          selected ? "bg-secondary/60" : "hover:bg-secondary/35",
           className
         )}
         {...props}
       >
         <div
           className={cn(
-            "flex items-start gap-3 px-4 py-3",
+            "flex min-h-11 items-start gap-3 px-2 py-3",
             isInteractive && "cursor-pointer",
             rowClassName
           )}
@@ -99,7 +99,7 @@ const DataListRow = React.forwardRef<HTMLDivElement, DataListRowProps>(
             )}
           >
             <div className="overflow-hidden">
-              <div className="border-t border-border bg-secondary/20 px-4 py-3">
+              <div className="border-t-hairline px-2 py-3">
                 {expandedContent}
               </div>
             </div>
@@ -117,7 +117,7 @@ const DataListPrimary = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <p
     ref={ref}
-    className={cn("truncate text-sm font-medium leading-snug", className)}
+    className={cn("truncate text-[13px] font-medium leading-5 text-strong", className)}
     {...props}
   />
 ))
@@ -139,7 +139,7 @@ const DataListMeta = React.forwardRef<
 DataListMeta.displayName = "DataListMeta"
 
 const DataListMetaSeparator = () => (
-  <span className="text-muted-foreground/50" aria-hidden>
+  <span className="text-muted-foreground" aria-hidden>
     ·
   </span>
 )
@@ -166,32 +166,40 @@ const DataListEmpty = ({
   <div
     data-ph-unmask=""
     className={cn(
-      "flex flex-col items-center justify-center px-6 py-16 text-center",
+      "flex flex-col items-center px-2 pb-2 pt-10 text-center",
       className
     )}
   >
     {icon != null && (
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      <div className="mb-2 text-muted-foreground [&_svg]:h-5 [&_svg]:w-5">
         {icon}
       </div>
     )}
-    <p className="font-medium">{title}</p>
+    <p className="text-[15px] font-medium leading-[22px] text-strong">{title}</p>
     {description != null && (
-      <p className="mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>
+      <p className="mt-1 max-w-[560px] text-balance text-sm text-muted-foreground">{description}</p>
     )}
-    {action != null && <div className="mt-4">{action}</div>}
+    {action != null && <div className="mt-3">{action}</div>}
   </div>
 )
 DataListEmpty.displayName = "DataListEmpty"
 
-const DataListLoading = ({ className }: { className?: string }) => (
-  <div
-    className={cn(
-      "flex items-center justify-center px-6 py-16 text-muted-foreground",
-      className
-    )}
-  >
-    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent motion-reduce:animate-none" />
+/**
+ * The list's own rows as skeletons while it loads, the silhouette
+ * ListPageSkeleton paints for a route: a centred spinner made the list jump
+ * from one dot to a full table when the rows arrived.
+ */
+const DataListLoading = ({ className, rows = 4 }: { className?: string; rows?: number }) => (
+  <div className={className} aria-busy="true" aria-live="polite">
+    {Array.from({ length: rows }, (_, i) => (
+      <div key={i} className="flex items-center justify-between gap-4 border-b-hairline py-3.5 last:border-b-0">
+        <Skeleton className="h-4 w-48" />
+        <div className="flex items-center gap-6">
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-4 w-16" />
+        </div>
+      </div>
+    ))}
   </div>
 )
 DataListLoading.displayName = "DataListLoading"

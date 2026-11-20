@@ -4,7 +4,7 @@ import { isDocType, type DocType } from '@/lib/documents/classify/taxonomy'
  * The type the model's free-text guess points at, when its doc_type is only
  * "other". The classifier often knew better than its answer: a receipt
  * addressed to a person was typed "other" with the guess "payment receipt for
- * Vercel cloud services" (prod 2026-09-26), and the dialog then proposed
+ * Vercel cloud services" (seen 2026-09-26), and the dialog then proposed
  * "Övrigt". Null when the guess names nothing we recognise.
  */
 export function typeFromSuggestion(suggested: string | null | undefined): DocType | null {

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   anyAssetHasComponents,
-  buildEquityChangesNote,
   buildK3RedovisningsPrinciper,
   buildMateriellaAnlaggningsNot,
   buildUppskjutenSkattNot,
@@ -12,6 +11,7 @@ function principles(
   overrides: Partial<{
     hasComponents: boolean
     deferredTax: 'none' | 'recognized' | 'unknown'
+    deferredTaxSides: { liability: boolean; asset: boolean }
     hasCapitalizedLease: boolean
   }> = {},
 ) {
@@ -119,6 +119,13 @@ describe('buildK3RedovisningsPrinciper', () => {
     expect(note.body).toContain('Finansiella instrument')
   })
 
+  it('says mark is not depreciated when the books hold mark, and only then', () => {
+    expect(principles().body).not.toContain('Mark skrivs inte av.')
+    expect(buildK3RedovisningsPrinciper({ hasComponents: false, deferredTax: 'none', hasCapitalizedLease: false, holdsLand: true }).body).toContain(
+      'Avskrivning sker linjärt över tillgångens bedömda nyttjandeperiod. Mark skrivs inte av.',
+    )
+  })
+
   it('OMITS the komponentavskrivning paragraph when no asset has components', () => {
     const note = principles()
     expect(note.body).not.toMatch(/Komponentavskrivning/)
@@ -132,6 +139,15 @@ describe('buildK3RedovisningsPrinciper', () => {
 })
 
 describe('K3 noter: the two deferred-tax notes never contradict each other', () => {
+  it('company WITH a 1370 fordran: the policy names the posts the books carry', () => {
+    const both = principles({ deferredTax: 'recognized', deferredTaxSides: { liability: true, asset: true } })
+    expect(both.body).toContain('Uppskjuten skatteskuld redovisas på konto 2240 och uppskjuten skattefordran på konto 1370.')
+    const assetOnly = principles({ deferredTax: 'recognized', deferredTaxSides: { liability: false, asset: true } })
+    expect(assetOnly.body).toContain('Uppskjuten skattefordran redovisas på konto 1370.')
+    expect(assetOnly.body).not.toContain('2240')
+    expect(assetOnly.body).not.toContain('särredovisas inte')
+  })
+
   it('company WITHOUT a legacy 2240 balance: policy denies the split and no movement note exists', () => {
     // build-data omits buildUppskjutenSkattNot entirely when the trial
     // balance has no 2240/8940 activity, so the only deferred-tax statement
@@ -148,9 +164,9 @@ describe('K3 noter: the two deferred-tax notes never contradict each other', () 
     const policy = principles({ deferredTax: 'recognized' })
     const movement = buildUppskjutenSkattNot({
       noteNumber: 4,
-      latentTaxOpening: 50_000,
-      latentTaxChange: 20_600,
-      latentTaxClosing: 70_600,
+      liability: { opening: 50_000, change: 20_600, closing: 70_600 },
+      asset: null,
+      expense: 20_600,
     })
     // Both notes recognise the same liability on the same account, and
     // neither says where the balance came from: the caller sees 2240/8940
@@ -176,9 +192,9 @@ describe('buildUppskjutenSkattNot', () => {
   it('renders opening + change + closing line in the body', () => {
     const note = buildUppskjutenSkattNot({
       noteNumber: 4,
-      latentTaxOpening: 50_000,
-      latentTaxChange: 20_600,
-      latentTaxClosing: 70_600,
+      liability: { opening: 50_000, change: 20_600, closing: 70_600 },
+      asset: null,
+      expense: 20_600,
     })
     expect(note.number).toBe(4)
     expect(note.title).toBe('Uppskjutna skatter')
@@ -191,9 +207,9 @@ describe('buildUppskjutenSkattNot', () => {
   it('handles zero values without producing NaN strings', () => {
     const note = buildUppskjutenSkattNot({
       noteNumber: 2,
-      latentTaxOpening: 0,
-      latentTaxChange: 0,
-      latentTaxClosing: 0,
+      liability: { opening: 0, change: 0, closing: 0 },
+      asset: null,
+      expense: 0,
     })
     expect(note.body).not.toMatch(/NaN/)
     expect(note.body).toMatch(/0 kr/)
@@ -202,9 +218,9 @@ describe('buildUppskjutenSkattNot', () => {
   it('handles a negative change (återföring)', () => {
     const note = buildUppskjutenSkattNot({
       noteNumber: 3,
-      latentTaxOpening: 70_600,
-      latentTaxChange: -10_000,
-      latentTaxClosing: 60_600,
+      liability: { opening: 70_600, change: -10_000, closing: 60_600 },
+      asset: null,
+      expense: -10_000,
     })
     // Swedish locale formats negative numbers with the Unicode minus sign
     // (U+2212), not the ASCII hyphen-minus: match either to be robust.
@@ -213,12 +229,67 @@ describe('buildUppskjutenSkattNot', () => {
     expect(note.body).toMatch(/Utgående saldo.*60/)
   })
 
+  it('discloses an uppskjuten skattefordran on 1370 next to the skuld, each tying opening + change to closing', () => {
+    const note = buildUppskjutenSkattNot({
+      noteNumber: 4,
+      liability: { opening: 50_000, change: 10_000, closing: 60_000 },
+      asset: { opening: 0, change: 30_900, closing: 30_900 },
+      // 8940: the skuld grew 10 000 (a cost), the fordran 30 900 (income).
+      expense: -20_900,
+    })
+    expect(note.body).toContain('konto 2240')
+    expect(note.body).toContain('konto 1370')
+    expect(note.body).toMatch(/Uppskjuten skattefordran\nIngående saldo \(1370\): 0 kr\nÅrets förändring: 30\s900 kr\nUtgående saldo \(1370\): 30\s900 kr/)
+    expect(note.body).toMatch(/Uppskjuten skatteskuld\nIngående saldo \(2240\): 50\s000 kr\nÅrets förändring: 10\s000 kr\nUtgående saldo \(2240\): 60\s000 kr/)
+    expect(note.body).toMatch(/\(8940\): -20\s900 kr/)
+  })
+
+  it('shows what moved the posts outside the resultaträkning, such as the K3 transition voucher', () => {
+    // First K3 year: the transition voucher books a 30 900 fordran against
+    // equity on the first day; the year's 8940 then adds 5 000 to it.
+    const note = buildUppskjutenSkattNot({
+      noteNumber: 4,
+      liability: null,
+      asset: { opening: 0, change: 35_900, closing: 35_900 },
+      expense: -5_000,
+    })
+    expect(note.body).toMatch(/\(8940\): -5\s000 kr/)
+    expect(note.body).toMatch(/inte redovisats i resultaträkningen \(till exempel mot eget kapital vid övergången till K3\): -30\s900 kr/)
+  })
+
+  it('names no post when only 8940 moved within the year', () => {
+    const note = buildUppskjutenSkattNot({
+      noteNumber: 4,
+      liability: null,
+      asset: null,
+      expense: 0,
+    })
+    expect(note.body).toContain('Balansräkningen har ingen uppskjuten skatteskuld eller skattefordran')
+    expect(note.body).not.toContain('2240')
+    expect(note.body).not.toContain('inte redovisats i resultaträkningen')
+    const policy = principles({ deferredTax: 'recognized', deferredTaxSides: { liability: false, asset: false } })
+    expect(policy.body).toContain('Årets uppskjutna skatt redovisas i resultaträkningen')
+    expect(policy.body).not.toContain('2240')
+  })
+
+  it('discloses a fordran alone without inventing a skuld', () => {
+    const note = buildUppskjutenSkattNot({
+      noteNumber: 4,
+      liability: null,
+      asset: { opening: 10_000, change: -2_000, closing: 8_000 },
+      expense: 2_000,
+    })
+    expect(note.body).toContain('Posten avser uppskjuten skattefordran redovisad på konto 1370.')
+    expect(note.body).not.toContain('2240')
+    expect(note.body).not.toContain('skatteskuld')
+  })
+
   it('reports the balance without claiming a rate or an origin it cannot verify', () => {
     const note = buildUppskjutenSkattNot({
       noteNumber: 1,
-      latentTaxOpening: 50_000,
-      latentTaxChange: 0,
-      latentTaxClosing: 50_000,
+      liability: { opening: 50_000, change: 0, closing: 50_000 },
+      asset: null,
+      expense: 0,
     })
     expect(note.body).toContain('konto 2240')
     // A balance can come from the K3 disposition, a legacy posting or an SIE
@@ -229,97 +300,6 @@ describe('buildUppskjutenSkattNot', () => {
     // Same for provenance: 2240 is K3's account for every temporary
     // difference (k2-vs-k3.md:11-13), and the caller reads only the balance.
     expect(note.body).not.toContain('obeskattade reserver')
-  })
-})
-
-describe('buildEquityChangesNote', () => {
-  it('reconciles opening + changes to closing total', () => {
-    const result = buildEquityChangesNote({
-      opening: {
-        aktiekapital: 50_000,
-        bundna_reserver: 10_000,
-        balanserade_vinstmedel: 100_000,
-      },
-      changes: {
-        nyemission: 25_000,
-        utdelning: -15_000,
-        arets_resultat: 80_000,
-      },
-    })
-    // 50 000 + 10 000 + 100 000 + 25 000 - 15 000 + 80 000 = 250 000
-    expect(result.closing_total).toBe(250_000)
-  })
-
-  it('emits rows for each opening component plus changes plus closing', () => {
-    const result = buildEquityChangesNote({
-      opening: {
-        aktiekapital: 50_000,
-        bundna_reserver: 0,
-        balanserade_vinstmedel: 100_000,
-      },
-      changes: {
-        nyemission: 25_000,
-        utdelning: -15_000,
-        arets_resultat: 80_000,
-      },
-    })
-    const labels = result.rows.map((r) => r.label)
-    expect(labels).toContain('Ingående aktiekapital')
-    expect(labels).toContain('Ingående balanserade vinstmedel')
-    expect(labels).toContain('Nyemission')
-    expect(labels).toContain('Utdelning')
-    expect(labels).toContain('Årets resultat')
-    expect(labels).toContain('Summa utgående eget kapital')
-  })
-
-  it('OMITS the nyemission row when no nyemission happened (cleaner statement)', () => {
-    const result = buildEquityChangesNote({
-      opening: {
-        aktiekapital: 50_000,
-        bundna_reserver: 0,
-        balanserade_vinstmedel: 100_000,
-      },
-      changes: {
-        nyemission: 0,
-        utdelning: -15_000,
-        arets_resultat: 80_000,
-      },
-    })
-    const labels = result.rows.map((r) => r.label)
-    expect(labels).not.toContain('Nyemission')
-    // Utdelning + årets resultat still present
-    expect(labels).toContain('Utdelning')
-    expect(labels).toContain('Årets resultat')
-  })
-
-  it('OMITS the utdelning row when no utdelning happened', () => {
-    const result = buildEquityChangesNote({
-      opening: {
-        aktiekapital: 50_000,
-        bundna_reserver: 0,
-        balanserade_vinstmedel: 100_000,
-      },
-      changes: {
-        nyemission: 0,
-        utdelning: 0,
-        arets_resultat: 80_000,
-      },
-    })
-    const labels = result.rows.map((r) => r.label)
-    expect(labels).not.toContain('Nyemission')
-    expect(labels).not.toContain('Utdelning')
-    // Årets resultat always shown: even when zero: so the year-end
-    // disposition is visible in the statement.
-    expect(labels).toContain('Årets resultat')
-  })
-
-  it('handles all-zero opening + changes without crashing', () => {
-    const result = buildEquityChangesNote({
-      opening: { aktiekapital: 0, bundna_reserver: 0, balanserade_vinstmedel: 0 },
-      changes: { nyemission: 0, utdelning: 0, arets_resultat: 0 },
-    })
-    expect(result.closing_total).toBe(0)
-    expect(result.rows.length).toBeGreaterThan(0)
   })
 })
 
@@ -427,6 +407,52 @@ describe('buildMateriellaAnlaggningsNot', () => {
     // Total acquisition cost text (with sv-SE separator)
     // Just confirm 5 000 000 appears as a sub-total somewhere
     expect(note!.body).toMatch(/5\s?000\s?000/)
+  })
+
+  // F3: mark has no useful life; the filed note may never read "0 år" for it.
+  it('states that mark is not depreciated instead of giving it an avskrivningstid', () => {
+    const land = {
+      name: 'Tomt Sjövägen 12',
+      category: 'land',
+      acquisition_date: '2020-01-01',
+      acquisition_cost: 900_000,
+      k3_components: null,
+      disposed_at: null,
+      useful_life_months: 0,
+    }
+    const only = buildMateriellaAnlaggningsNot({ noteNumber: 3, assets: [land] })
+    expect(only?.body).toContain('Mark skrivs inte av.')
+    expect(only?.body).not.toMatch(/: 0 år|land|Avskrivningstider/)
+
+    const withBuilding = buildMateriellaAnlaggningsNot({
+      noteNumber: 3,
+      assets: [land, { ...land, name: 'Kontorshus', category: 'building', useful_life_months: 600 }],
+    })
+    expect(withBuilding?.body).toMatch(/Byggnader: 50 år/)
+    expect(withBuilding?.body).toContain('Mark skrivs inte av.')
+    expect(withBuilding?.body).not.toMatch(/: 0 år/)
+  })
+
+  it('gives a mark component no avskrivningstid either', () => {
+    const note = buildMateriellaAnlaggningsNot({
+      noteNumber: 3,
+      assets: [
+        {
+          name: 'Kontorshus',
+          category: 'building',
+          acquisition_date: '2020-01-01',
+          acquisition_cost: 1_000_000,
+          k3_components: [
+            { name: 'Stomme', acquisition_cost: 900_000, accumulated_depreciation: 90_000, useful_life_months: 1200 },
+            { name: 'Mark', acquisition_cost: 100_000, accumulated_depreciation: 0, useful_life_months: 0 },
+          ],
+          disposed_at: null,
+          useful_life_months: 1200,
+        },
+      ],
+    })
+    expect(note?.body).toMatch(/Mark: .*\(skrivs inte av\)/)
+    expect(note?.body).not.toMatch(/avskrivningstid 0 år/)
   })
 
   it('skips disposed assets in the calculation', () => {

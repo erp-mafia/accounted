@@ -86,8 +86,10 @@ async function insertUnpostedSchedule(seed: Seed, assetId: string, amount = 2000
   return rows[0].id
 }
 
+// Opening snapshot 0 / no date: an asset without a migrated opening balance.
 const COMMIT_SQL = `SELECT * FROM public.commit_asset_depreciation(
-  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric, NULL::text, NULL::text
+  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric,
+  0::numeric, NULL::date, NULL::text, NULL::text
 )`
 
 function commitDepreciation(
@@ -630,7 +632,7 @@ describe('opening edits and depreciation posting share the asset row lock', () =
     expect(await lastVoucherNumber(seed)).toBe(before + 1)
   })
 
-  it('legacy callers cannot omit the opening snapshot for a migrated asset', async () => {
+  it('a zero opening snapshot cannot post for a migrated asset', async () => {
     const seed = await seedCompany()
     const assetId = await insertAsset(seed)
     await getPool().query(EDIT_SQL, [assetId, 1000, '2026-03-31'])
@@ -638,6 +640,30 @@ describe('opening edits and depreciation posting share the asset row lock', () =
     await expect(commitDepreciation(getPool(), seed, assetId, entryId)).rejects.toMatchObject({
       code: 'PT409', message: 'ASSET_OPENING_CHANGED',
     })
+    expect((await entryState(entryId))?.status).toBe('draft')
+    expect(await scheduleRows(assetId)).toHaveLength(0)
+  })
+
+  it('the 7-argument wrapper without an opening snapshot is gone (20261012100800)', async () => {
+    const { rows } = await getPool().query<{ legacy: string | null; current: string | null }>(
+      `SELECT to_regprocedure('public.commit_asset_depreciation(uuid, uuid, uuid, uuid, numeric, text, text)')::text AS legacy,
+              to_regprocedure('public.commit_asset_depreciation(uuid, uuid, uuid, uuid, numeric, numeric, date, text, text, jsonb)')::text AS current`,
+    )
+    expect(rows[0].legacy).toBeNull()
+    expect(rows[0].current).not.toBeNull()
+
+    // The old call shape now finds no function instead of posting with opening 0.
+    const seed = await seedCompany()
+    const assetId = await insertAsset(seed)
+    const entryId = await insertDepreciationDraft(seed)
+    await expect(
+      getPool().query(
+        `SELECT * FROM public.commit_asset_depreciation(
+           $1::uuid, $2::uuid, $3::uuid, $4::uuid, 20000::numeric, NULL::text, NULL::text
+         )`,
+        [seed.companyId, assetId, entryId, seed.fiscalPeriodId],
+      ),
+    ).rejects.toMatchObject({ code: '42883' })
     expect((await entryState(entryId))?.status).toBe('draft')
     expect(await scheduleRows(assetId)).toHaveLength(0)
   })

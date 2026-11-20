@@ -196,14 +196,14 @@ describe('targeted fk indexes.pg', () => {
   })
 
   it('leaves already-covered foreign keys with a single leading index', async () => {
-    // These three plan as Index Cond probes on prod because their existing
+    // These three plan as Index Cond probes in production because their existing
     // partial index leads on the fk column and its predicate is implied by
     // `col = $1`. Adding a second index would be a pure duplicate, which is the
     // mistake migration 20260710101000 already had to undo on
     // journal_entry_lines, so guard against it here.
     const covered: Array<[string, string, string]> = [
       ['transactions', 'document_id', 'idx_transactions_document_id'],
-      ['invoices', 'journal_entry_id', 'idx_invoices_journal_entry_id'],
+      ['invoices', 'journal_entry_id', 'idx_invoices_journal_entry_id_unique'],
       ['invoice_payments', 'journal_entry_id', 'idx_invoice_payments_je_inv_unique'],
     ]
 

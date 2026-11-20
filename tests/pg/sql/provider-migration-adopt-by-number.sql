@@ -6,7 +6,7 @@ DECLARE
   u uuid:=gen_random_uuid(); company uuid:=gen_random_uuid(); consent uuid:=gen_random_uuid(); worker uuid:=gen_random_uuid();
   j public.migration_jobs; legacy_customer uuid; other_customer uuid; kept_customer uuid; legacy_supplier uuid;
   inv1 uuid; inv3 uuid; inv5 uuid; dup uuid; dup_party uuid; n bigint; inv_row jsonb; sup_row jsonb; items jsonb; rec jsonb;
-  cust1 uuid; cust4 uuid; ch_inv1 uuid; ch_inv2 uuid; ch_inv3 uuid; ch_inv4 uuid; ch_inv5 uuid; ch_inv9 uuid;
+  cust1 uuid; cust4 uuid; ch_inv1 uuid; ch_inv2 uuid; ch_inv3 uuid; ch_inv4 uuid; ch_inv5 uuid; ch_inv6 uuid; ch_inv9 uuid;
   ch_sup uuid; ch_si1 uuid; ch_si2 uuid; ch_si3 uuid;
 BEGIN
   INSERT INTO auth.users(id,email,instance_id) VALUES(u,u||'@test.invalid','00000000-0000-0000-0000-000000000000');
@@ -59,7 +59,8 @@ BEGIN
   PERFORM save_provider_migration_page(j.id,worker,j.attempt,'salesInvoices',1,
     '[{"source_id":"inv-1","payload":"c","payload_hash":"h"},{"source_id":"inv-2","payload":"c","payload_hash":"h"},
       {"source_id":"inv-3","payload":"c","payload_hash":"h"},{"source_id":"inv-4","payload":"c","payload_hash":"h"},
-      {"source_id":"inv-5","payload":"c","payload_hash":"h"},{"source_id":"inv-9","payload":"c","payload_hash":"h"}]',NULL);
+      {"source_id":"inv-5","payload":"c","payload_hash":"h"},{"source_id":"inv-6","payload":"c","payload_hash":"h"},
+      {"source_id":"inv-9","payload":"c","payload_hash":"h"}]',NULL);
   PERFORM save_provider_migration_page(j.id,worker,j.attempt,'supplierInvoices',1,
     '[{"source_id":"si-1","payload":"c","payload_hash":"h"},{"source_id":"si-2","payload":"c","payload_hash":"h"},
       {"source_id":"si-3","payload":"c","payload_hash":"h"}]',NULL);
@@ -71,6 +72,7 @@ BEGIN
   SELECT id INTO ch_inv3 FROM migration_job_chunks WHERE job_id=j.id AND source_id='inv-3';
   SELECT id INTO ch_inv4 FROM migration_job_chunks WHERE job_id=j.id AND source_id='inv-4';
   SELECT id INTO ch_inv5 FROM migration_job_chunks WHERE job_id=j.id AND source_id='inv-5';
+  SELECT id INTO ch_inv6 FROM migration_job_chunks WHERE job_id=j.id AND source_id='inv-6';
   SELECT id INTO ch_inv9 FROM migration_job_chunks WHERE job_id=j.id AND source_id='inv-9';
   SELECT id INTO ch_si1 FROM migration_job_chunks WHERE job_id=j.id AND source_id='si-1';
   SELECT id INTO ch_si2 FROM migration_job_chunks WHERE job_id=j.id AND source_id='si-2';
@@ -126,6 +128,15 @@ BEGIN
   ASSERT (SELECT state='needs_attention' AND error_code='MIGRATION_INVOICE_NUMBER_TAKEN' FROM migration_job_chunks
     WHERE id=ch_inv2),'number collision did not raise MIGRATION_INVOICE_NUMBER_TAKEN';
   ASSERT (SELECT total=125 FROM invoices WHERE company_id=company AND invoice_number='1002'),'collision overwrote the invoice';
+  -- 2b. The same number in another spelling (01002 next to 1002) is the same
+  -- löpnummer (20261012161600): refused like a taken number, never a second invoice.
+  rec:=jsonb_build_object('id',ch_inv6,'party_source_id','cust-1','party',jsonb_build_object('name','Consumer One'),
+    'row',inv_row||jsonb_build_object('invoice_number','01002'),'items',items);
+  PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec));
+  ASSERT (SELECT state='needs_attention' AND error_code='23505' FROM migration_job_chunks
+    WHERE id=ch_inv6),'another spelling of a taken number was not refused as a taken number';
+  ASSERT NOT EXISTS(SELECT 1 FROM invoices WHERE company_id=company AND invoice_number='01002'),
+    'another spelling of 1002 was imported as a second invoice';
 
   -- 3. A party the job never saw (invoice-scoped id) maps to the adopted
   -- invoice's customer instead of creating a new customer.

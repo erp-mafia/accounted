@@ -33,7 +33,7 @@ Returns salary runs in created-first order with their lifecycle status (draft|re
 Response `200`:
 ```ts
 {
-  data: { id: string, period_year: number, period_month: number, payment_date: string, deviation_period_start: string | null, deviation_period_end: string | null, status: "draft" | "review" | "approved" | "paid" | "booked" | "corrected", voucher_series: string, total_gross: number, total_tax: number, total_net: number, total_avgifter: number, total_employer_cost: number, agi_generated_at: string | null, agi_submitted_at: string | null, approved_at: string | null, paid_at: string | null, booked_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, period_year: number, period_month: number, payment_date: string, deviation_period_start: string | null, deviation_period_end: string | null, status: "draft" | "review" | "approved" | "paid" | "booked" | "corrected", voucher_series: string, total_gross: number, total_tax: number, total_net: number, total_avgifter: number, total_employer_cost: number, agi_generated_at: string | null, agi_submitted_at: string | null, approved_at: string | null, paid_at: string | null, booked_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -79,7 +79,7 @@ Example response `200`:
 **Create a salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Creates a draft salary run for the given period (period_year, period_month). The run starts empty: add employees via the internal /salary/runs/{id}/employees endpoints, then POST /salary-runs/{id}/calculate. Requires Idempotency-Key. Dry-runnable.
+Creates a draft salary run for the given period (period_year, period_month). The run starts empty: add employees with POST /salary-runs/{id}/employees, then POST /salary-runs/{id}/calculate. Requires Idempotency-Key. Dry-runnable.
 
 **Use when:** You are starting a new month's payroll. Use dry-run first to validate the period + voucher_series choice without committing.
 **Do not use for:** Adding employees to an existing run (POST /salary-runs/{id}/employees).
@@ -89,7 +89,7 @@ Creates a draft salary run for the given period (period_year, period_month). The
 - Duplicate (period_year, period_month) for the same company returns 409 SALARY_RUN_DUPLICATE_PERIOD.
 - Avvikelseperiod: absence and worked days are read from deviation_period_start..deviation_period_end, NOT necessarily from the pay month. Omit both to use the company setting (salary_deviation_period: same_month by default, previous_month for "innevarande månads lön, föregående månads avvikelser"), or pass both explicitly. A window that overlaps another live run returns 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (the same day would be deducted twice); one date without the other, or a span over 62 days, returns 400 SALARY_RUN_DEVIATION_PERIOD_INVALID.
 - period_month is 1-12. The DB CHECK enforces this: a 0 or 13 returns 400 VALIDATION_ERROR before reaching the DB.
-- voucher_series defaults to "A". If the company uses a dedicated salary voucher series, set it explicitly.
+- voucher_series omitted: the company's salary series (its voucher series setting for salary_payment, K on the standard set, A when the company has none), the series the dashboard and MCP use. A dry run previews it. Send a letter only to override it for this run.
 - A newly-created run has no employees: :calculate without employees returns 400 SALARY_RUN_NO_EMPLOYEES.
 
 | Parameter | In | Type | Required | Notes |
@@ -127,6 +127,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     period_year: number,
     period_month: number,
     payment_date: string,
@@ -207,6 +208,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     period_year: number,
     period_month: number,
     payment_date: string,
@@ -310,6 +312,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     period_year: number,
     period_month: number,
     payment_date: string,
@@ -393,16 +396,16 @@ Response `204`.
 **Approve a reviewed salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run`
 
-Advances a salary run from `review` to `approved` after validating every employee has the data required for the payment step (bank account + clearing number for the bank transfer) and the booking step (`calculation_breakdown` proves `:calculate` ran). Records the approving user + timestamp. Strict-mode: validation errors return a complete list rather than failing on the first one.
+Advances a salary run from `review` to `approved` after validating every employee has the data required for the payment step (bank account + clearing number for an employee with a payout) and the booking step (`calculation_breakdown` proves `:calculate` ran). Records the approving user + timestamp. Strict-mode: validation errors return a complete list rather than failing on the first one.
 
 **Use when:** You have a salary run in `review` status and want to authorize it for payment. This is the human (or agent) signoff step before money moves; the verifikation is still pending and won't exist until `:book` runs.
 **Do not use for:** Posting journal entries (use `:book` after `:mark-paid`). Reverting an approval (POST /salary-runs/{id}/unapprove while the run is unpaid and its AGI unfiled; call `:correct` once the run is booked).
 
 **Pitfalls:**
 - Run must be in `review`: non-`review` runs return 400 SALARY_RUN_APPROVE_NOT_REVIEW.
-- Every employee on the run needs a `clearing_number` + `bank_account_number` that name a payable account (clearing 4 digits, or 5 starting with 8; account 5-10 digits without the clearing number). Missing or invalid bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list; the list names employees, never account numbers.
+- Every employee with a payout (net after any tax override > 0) needs a `clearing_number` + `bank_account_number` that name a payable account (clearing 4 digits, or 5 starting with 8; account 5-10 digits without the clearing number). Missing or invalid bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list; the list names employees, never account numbers. An employee with nothing to pay out (nollkörning, or a net fully used by a nettolöneavdrag) needs none: the payment file has no line for them.
 - Every employee on the run needs `calculation_breakdown` populated. If you skipped `:calculate` somehow, approve fails.
-- Employees without email get a non-blocking warning (lönebesked can't be sent automatically).
+- Employees without email get a non-blocking warning (lönebesked can't be sent automatically), and so does an employee whose F-skatt is not verified (30% skatteavdrag and full avgifter apply).
 - No period-lock check here: that lives on `:book` where the verifikation is posted. An agent can approve a run whose payment date falls in a now-locked period; `:book` will later refuse.
 
 | Parameter | In | Type | Required | Notes |
@@ -416,6 +419,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     status: "approved",
     approved_at: string,
     approved_by: string | null,
@@ -459,17 +463,19 @@ Example response `200`:
 **Post the verifikationer for a paid salary run.**
 `scope:payroll:write · risk:high · idempotent · dry-run`
 
-Creates 1-4 journal entries (1: salary brutto/tax/net; 2 if the run has any: arbetsgivaravgifter; 3 if applicable: semesterlöneskuld accrual; 4 if applicable: pension + SLP from löneväxling), then advances status `paid` → `booked` with all the entry IDs recorded on the salary_runs row. Strict-mode: any engine failure aborts BEFORE the status flip, and all entries are validated before the first is posted, so a refusal (locked period, missing BAS account, required or archived dimension value, etc.) posts nothing: the run stays in `paid` so the caller can fix the cause and retry.
+Creates 1-4 journal entries (1 if the run pays, withholds or expenses anything: salary brutto/tax/net, so a run whose only amount is a förmånsvärde has none and keeps salary_entry_id null; 2 if the run has any: arbetsgivaravgifter; 3 if applicable: semesterlöneskuld accrual; 4 if applicable: pension + SLP from löneväxling), then advances status `paid` → `booked` with all the entry IDs recorded on the salary_runs row. Strict-mode: any engine failure aborts BEFORE the status flip, and all entries are validated before the first is posted, so a refusal (locked period, missing BAS account, required or archived dimension value, etc.) posts nothing: the run stays in `paid` so the caller can fix the cause and retry. A nollkörning (a run without amounts, or without employees) posts no entries: it is booked with salary_entry_id null and no audit block, and the AGI nolldeklaration is the period's only artefact.
 
-**Use when:** You've marked a salary run as paid and want to post the BFL-required verifikationer. This is the final lifecycle verb before AGI generation; after :book, the run can no longer be edited and corrections must use the (forthcoming) `:correct` verb.
+**Use when:** You've marked a salary run as paid and want to post the BFL-required verifikationer. This is the final lifecycle verb before AGI generation; after :book, the run can no longer be edited and corrections go through POST /salary-runs/{id}/correct (storno, then a correction run).
 **Do not use for:** Posting salary entries outside the salary-run lifecycle (use POST /journal-entries directly). Re-booking an already-booked run (returns 400 SALARY_RUN_BOOK_NOT_PAID).
 
 **Pitfalls:**
 - Run must be in `paid`: non-`paid` runs return 400 SALARY_RUN_BOOK_NOT_PAID.
 - payment_date must fall in an open fiscal period: locked period returns 400 PERIOD_LOCKED with `fiscal_period_id` and a hint of what unlock action is needed.
+- A run that pays out with a payment_date after today (Swedish calendar day) returns 422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED (details.payment_date) unless the body has confirm_payment_date_ahead: true: the salary verifikation credits the net pay to the bank account on payment_date. Confirm only when the salaries have gone out or the payment is scheduled in the bank; otherwise book on or after payment_date.
 - BFL 5 kap immutability: once `:book` succeeds the verifikationer cannot be edited or deleted. Corrections require `:correct` (Phase 5 PR-3) which does a storno-then-rebook.
 - The salary verifikation is the primary one; its voucher_number appears in the response audit block. The avgifter, vacation, and pension entries get separate voucher numbers (returned as `entry_ids`).
 - A run without arbetsgivaravgifter (only utlägg repaid, or only payees without avgifter such as F-skatt holders) posts no avgifter entry: avgifter_entry_id is null.
+- A nollkörning (every total 0, or no employees) is booked without entries: entry_ids is [], salary_entry_id is null and meta.audit is absent. No period lock applies to it, since nothing is posted.
 - Strict-mode: every entry is validated before the first is posted, so a refusal posts nothing and the run stays in `paid`. If posting stops partway on a transient failure, calling :book again adopts the entries already posted (when they match the run exactly) and posts only the missing ones, never twice. A posted entry of the run that does not match returns 409 SALARY_RUN_PARTIALLY_BOOKED with details.voucher_numbers: reverse those, then retry.
 - One booking per run at a time: while another :book call (or a dashboard or MCP booking) for the same run is in flight, this call returns 409 SALARY_RUN_BOOKING_IN_PROGRESS and posts nothing. Do not retry at once after a client timeout: wait, GET the run, and call :book again only if it is still `paid`.
 
@@ -479,15 +485,28 @@ Creates 1-4 journal entries (1: salary brutto/tax/net; 2 if the run has any: arb
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
+Request body:
+```ts
+{ confirm_payment_date_ahead?: boolean }
+```
+
+Example request:
+```json
+{
+  "confirm_payment_date_ahead": true
+}
+```
+
 Response `200`:
 ```ts
 {
   data: {
     id: string,
+    handle?: string,
     status: "booked",
     booked_at: string,
     booked_by: string | null,
-    salary_entry_id: string,
+    salary_entry_id: string | null,
     avgifter_entry_id: string | null,
     vacation_entry_id: string | null,
     pension_entry_id: string | null,
@@ -551,6 +570,7 @@ Runs the per-employee payroll calculation (tax withholding, employer contributio
 - Run must be in `draft` status: calculate on a non-draft run returns 400 SALARY_RUN_CALCULATE_NOT_DRAFT.
 - Salary run must have at least one employee: empty runs return 400 SALARY_RUN_NO_EMPLOYEES.
 - If Skatteverket's tax-table API is down and local fallback is missing the required table, calculate returns 503 SALARY_RUN_TAX_TABLE_MISSING. Retry is safe; the operation is idempotent at the helper level.
+- Vacation lines without an amount are priced here (semestertillägg, semesterlöneavdrag and semesterlön, or the deduction for unpaid days). When the days cannot be priced from the law and the data (procentregeln without the previous year in Accounted, hourly pay on sammalöneregeln, hourly förskott, vacation pay already paid as semesterersättning) calculate returns 400 SALARY_RUN_VACATION_PAY_UNDETERMINED with details.issues naming each employee and why; put the amount on the vacation line or change its category, then calculate again. Never estimate the base.
 - A run whose payment date falls in a year Accounted has no payroll rates for yet returns 409 SALARY_PAYROLL_CONFIG_MISSING (details.paymentYear). The year's rates ship once they are officially set; do not move the payment date to get around it.
 - F-skatt "not_verified" employees produce a non-blocking warning; an integrator should treat the warning as a hard signal that withholding will be wrong until F-skatt is verified.
 - Warnings about tax-table fallback or läkarintyg / FK day-15 transitions are non-blocking; the run still advances to review. Surface them to a human reviewer before calling :approve.
@@ -566,6 +586,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     status: "review",
     period_year: number,
     period_month: number,
@@ -646,7 +667,7 @@ Response `200`:
   data: {
     original_run_id: string,
     original_status: "corrected",
-    correction_run: { id: string, period_year: number, period_month: number, payment_date: string, status: "draft", is_correction: true, corrects_run_id: string, deviation_period_start: string | null, deviation_period_end: string | null },
+    correction_run: { id: string, handle?: string, period_year: number, period_month: number, payment_date: string, status: "draft", is_correction: true, corrects_run_id: string, deviation_period_start: string | null, deviation_period_end: string | null },
     reversed_entry_ids: string[]
   },
   meta: {
@@ -705,7 +726,7 @@ Returns one row per employee in the run with the calculated aggregates: gross sa
 
 **Pitfalls:**
 - Aggregates are 0 until POST /calculate has advanced the run to review.
-- tax_withheld_override / avgifter_amount_override are review-stage manual adjustments; the effective value is COALESCE(override, calculated).
+- effective is what is booked, declared and paid; the plain columns are the calculation's values. tax_withheld_override / avgifter_amount_override are review-stage manual adjustments: a tax override also moves the net payout, and an avgifter override is ignored for an F-skatt payee, so do not apply the overrides yourself.
 - personnummer is masked on all payslip-shaped responses (GDPR Art.5(1)(c)); the employee detail endpoint returns the full value.
 
 | Parameter | In | Type | Required | Notes |
@@ -718,7 +739,7 @@ Returns one row per employee in the run with the calculated aggregates: gross sa
 Response `200`:
 ```ts
 {
-  data: { salary_run_employee_id: string, employee_id: string, first_name: string, last_name: string, personnummer_masked: string, salary_type: string, employment_degree: number, monthly_salary: number | null, hours_worked: number | null, gross_salary: number, taxable_income: number, tax_withheld: number, tax_withheld_override: number | null, net_salary: number, avgifter_basis: number, avgifter_amount: number, avgifter_amount_override: number | null, avgifter_category: string | null, vacation_accrual: number, sick_days: number, vab_days: number, parental_days: number, vacation_days_taken: number, created_at: string, updated_at: string }[],
+  data: { salary_run_employee_id: string, employee_id: string, first_name: string, last_name: string, personnummer_masked: string, salary_type: string, employment_degree: number, monthly_salary: number | null, hours_worked: number | null, gross_salary: number, taxable_income: number, tax_withheld: number, tax_withheld_override: number | null, net_salary: number, avgifter_basis: number, avgifter_amount: number, avgifter_amount_override: number | null, avgifter_category: string | null, vacation_accrual: number, sick_days: number, vab_days: number, parental_days: number, vacation_days_taken: number, effective: { gross_salary: number, tax_withheld: number, extra_tax_withheld: number, net_salary: number, avgifter_amount: number, vacation_accrual: number, employer_cost: number, tax_overridden: boolean, avgifter_overridden: boolean }, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -740,7 +761,7 @@ Example response `200`:
       "employee_id": "emp_77b2…",
       "first_name": "Anna",
       "last_name": "Andersson",
-      "personnummer_masked": "YYYYMMDDXXXX",
+      "personnummer_masked": "YYYYMMDD-XXXX",
       "salary_type": "monthly",
       "gross_salary": 35000,
       "tax_withheld": -8200,
@@ -848,7 +869,7 @@ Returns the full payslip for one employee in a run: gross/tax/net aggregates, ar
 **Pitfalls:**
 - calculation_breakdown is null and aggregates are 0 until POST /calculate has run.
 - line_items include engine-derived rows (absence, benefits) that are regenerated on every :calculate; manual rows survive recalculation.
-- The effective tax is COALESCE(tax_withheld_override, tax_withheld); same for avgifter overrides.
+- effective is what is booked, declared and paid; the plain columns are the calculation's values. A tax override also moves the net payout, and an avgifter override is ignored for an F-skatt payee, so read effective instead of applying the overrides yourself.
 - personnummer is masked here (GDPR Art.5(1)(c)); GET /employees/{id} is the identity drill-in.
 
 | Parameter | In | Type | Required | Notes |
@@ -876,6 +897,7 @@ Response `200`:
     benefit_values: number,
     taxable_income: number,
     tax_withheld: number,
+    extra_tax_withheld: number,
     tax_withheld_override: number | null,
     net_deductions: number,
     net_salary: number,
@@ -898,6 +920,7 @@ Response `200`:
     ytd_gross: number,
     ytd_tax: number,
     ytd_net: number,
+    effective: { gross_salary: number, tax_withheld: number, extra_tax_withheld: number, net_salary: number, avgifter_amount: number, vacation_accrual: number, employer_cost: number, tax_overridden: boolean, avgifter_overridden: boolean },
     calculation_breakdown?: unknown,
     line_items: { salary_line_item_id: string, item_type: string, description: string, quantity: number | null, unit_price: number | null, amount: number, is_taxable: boolean, is_avgift_basis: boolean, is_vacation_basis: boolean, is_gross_deduction: boolean, is_net_deduction: boolean, account_number: string | null, sort_order: number }[],
     created_at: string,
@@ -923,7 +946,7 @@ Example response `200`:
     "employee_id": "emp_77b2…",
     "first_name": "Anna",
     "last_name": "Andersson",
-    "personnummer_masked": "YYYYMMDDXXXX",
+    "personnummer_masked": "YYYYMMDD-XXXX",
     "gross_salary": 35000,
     "tax_withheld": -8200,
     "net_salary": 26800,
@@ -1065,6 +1088,7 @@ Adds one tax-free expense_reimbursement line to the employee's payslip on a draf
 - No open claims returns 404 SALARY_RUN_NO_OPEN_EXPENSE_CLAIMS; a claim that lands on another payslip concurrently returns 409 EXPENSE_CLAIM_ALREADY_ON_PAYSLIP.
 - Adds all open claims of the employee at once; remove a line you do not want with DELETE /salary-runs/{id}/lines/{lineId}.
 - Run POST /salary-runs/{id}/calculate afterwards so the totals include the lines.
+- The claims keep status registered until the run is booked. Until then GET /expense-claims names this run in their salary_run_id: they are paid with the salary and are no payout to make.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1072,6 +1096,7 @@ Adds one tax-free expense_reimbursement line to the employee's payslip on a draf
 | `id` | path | `string` | yes |  |
 | `employeeId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts
@@ -1127,15 +1152,19 @@ Example response `200`:
 **Add a payslip line to an employee in a draft salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, ...) for one employee in a draft run. account_number auto-resolves from item_type when omitted. Amounts are rounded to whole öre. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).
+Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, text row, ...) for one employee in a draft run. account_number is an override only: omit it and the line returns account_number null and books on the default the booking resolves from item_type, the employee's employment_type and personnel_category (an arbetare's wages on 7010, a tjänsteman's on 7210, an owner's on 7220). Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). The row's flags (is_taxable, is_avgift_basis, is_vacation_basis, is_gross_deduction, is_net_deduction) follow from item_type and come back in the answer; flags in the body are ignored. A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).
 
-**Use when:** You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee. Vacation days taken: an item_type vacation line with quantity = days and, when they are not this year's paid days, vacation_category.
+**Use when:** You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee. Vacation days taken: an item_type vacation line with quantity = days and, when they are not this year's paid days, vacation_category. Words on this payslip without money (how the salary is built up): an item_type text line.
 **Do not use for:** Editing the base monthly salary (PATCH the run-employee via the internal surface; not on v1 yet). Absence: register absence days instead (PUT /employees/{id}/absence); the engine derives sick/VAB lines itself.
 
 **Pitfalls:**
 - Draft-only: returns 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced.
-- Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.
+- Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards. Until then the calculation is stale, and approve and book refuse the run.
+- A bruttolöneavdrag carries a negative amount; a positive one returns 400 VALIDATION_ERROR (details.field amount): pay handed back is a correction line. A nettolöneavdrag withholds at a negative amount and repays the employee at a positive one. A skattefri ersättning or a förmån is positive; a negative one returns 400 VALIDATION_ERROR.
+- A 0 kr line is refused with 400 VALIDATION_ERROR (details.field amount), also when the amount rounds to 0 at whole öre, and so is a line without amount: every line but a text row needs a non-zero amount, except a vacation line carrying its days in quantity. For words without money use item_type text.
+- A text row (item_type text): description is the whole row, at most 200 characters, line breaks become spaces. Omit amount (0 is accepted), quantity and unit_price, otherwise 400 VALIDATION_ERROR. account_number is ignored: the row is stored with account_number null. A standing text on every payslip is a recurring line (POST /employees/{id}/recurring-lines).
 - Engine-derived lines (absence, benefits, the semesterersättning row under vacation_rule semesterersattning) are regenerated on every :calculate; manual lines survive, including a semesterersattning line you add yourself.
+- The pay type prices the base salary itself: a monthly_salary line on a monthly-paid employee or an hourly_salary line on an hourly-paid one returns 400 VALIDATION_ERROR (details.field item_type). Extra hours at timlön on a monthly-paid employee are an hourly_salary line (quantity = hours, amount = hours × timlön), paid like an other line.
 - The calculation owns the absence types (sick_karens, sick_day2_14, sick_day15_plus, vab, parental_leave, unpaid_leave) and the shift-premium types (overtime_50, overtime_100, ob_weekday_evening, ob_weekend, ob_night, ob_holiday): a line of those types returns 400 SALARY_LINE_CALCULATED. Register absence or worked hours instead, or put a one-off övertid or OB amount on item_type overtime or other.
 - one_off_tax_percent is the percentage YOU verified against Skatteverket's engångsbelopp table for the employee's yearly income; the API never estimates it. It is refused (400) on deductions, benefits, non-taxable rows and non-positive amounts. A valid jämkning decision on the employee overrides it. Equal percentages are summed before the öre are dropped, so splitting one bonus over two rows never changes the withholding.
 - vacation_category is only valid on item_type vacation (400 VALIDATION_ERROR otherwise) and vacation_saved_year only with category saved. Omitted category = paid. The vacation ledger splits the booked run's days by category: saved consumes the named origin year, or the oldest saved year first when omitted; unpaid and advance consume their own cutover pools.
@@ -1150,16 +1179,11 @@ Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, 
 Request body:
 ```ts
 {
-  item_type: "monthly_salary" | "hourly_salary" | "overtime" | "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday" | "bonus" | "commission" | "gross_deduction_pension" | "gross_deduction_other" | "benefit_car" | "benefit_housing" | "benefit_meals" | "benefit_wellness" | "benefit_bike" | "benefit_other" | "sick_karens" | "sick_day2_14" | "sick_day15_plus" | "vab" | "parental_leave" | "vacation" | "semesterersattning" | "traktamente_taxfree" | "traktamente_taxable" | "mileage_taxfree" | "mileage_taxable" | "expense_reimbursement" | "net_deduction_advance" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "correction" | "other",
+  item_type: "monthly_salary" | "hourly_salary" | "overtime" | "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday" | "bonus" | "commission" | "gross_deduction_pension" | "gross_deduction_other" | "benefit_car" | "benefit_housing" | "benefit_meals" | "benefit_wellness" | "benefit_bike" | "benefit_other" | "sick_karens" | "sick_day2_14" | "sick_day15_plus" | "vab" | "parental_leave" | "vacation" | "semesterersattning" | "traktamente_taxfree" | "traktamente_taxable" | "mileage_taxfree" | "mileage_taxable" | "expense_reimbursement" | "net_deduction_advance" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "correction" | "other" | "text",
   description: string,
   quantity?: number,
   unit_price?: number,
-  amount: number,
-  is_taxable?: boolean,
-  is_avgift_basis?: boolean,
-  is_vacation_basis?: boolean,
-  is_gross_deduction?: boolean,
-  is_net_deduction?: boolean,
+  amount?: number,
   account_number?: string,
   sort_order?: number,
   one_off_tax_percent?: number | null,
@@ -1220,7 +1244,7 @@ Example response `200`:
     "item_type": "bonus",
     "description": "Kvartalsbonus Q2",
     "amount": 5000,
-    "account_number": "7210",
+    "account_number": null,
     "one_off_tax_percent": 30
   },
   "meta": {
@@ -1245,7 +1269,8 @@ Generates the arbetsgivardeklaration-på-individnivå XML for the run (HU sectio
 **Pitfalls:**
 - Run status must be one of review, approved, paid, booked, corrected: `draft` returns 400 AGI_GENERATE_NOT_BOOKABLE.
 - Generating AGI from a `review`-status run risks submitting figures that will change at `:approve`. The dashboard allows this for flexibility; agents should prefer `approved+` unless an early-warning workflow specifically wants the preview.
-- Subsequent calls for the same period UPDATE the agi_declarations row (is_correction=true) and overwrite the XML. The FK570 specifikationsnummer stays consistent per employee: different number = new record per Skatteverket spec.
+- Subsequent calls for the same period UPDATE the agi_declarations row (is_correction=true) and overwrite the XML, until it is filed: a run whose declaration carries its kvittens gets the stored, filed XML back and nothing is rewritten. The FK570 specifikationsnummer stays consistent per employee: different number = new record per Skatteverket spec.
+- AGI_PERIOD_CONFLICT (409): another live run is paid out in the same month, whether or not it already holds the declaration of the period. Runs are not combined into one declaration; details.other_salary_run_id names the other run. AGI_GENERATION_CONFLICT (409): the declaration changed while it was generated (another generation or a submission); retry.
 - AGI_INCOMPLETE_DATA returns 400 when company contact info is missing (org_number, contact name, phone, email). Fix via /settings/company before retrying.
 - The XML content is räkenskapsinformation: BFL 7 kap retention applies. The agi_declarations row is never auto-deleted.
 
@@ -1316,7 +1341,7 @@ Example response `200`:
 **Update a payslip line in a draft salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year's paid days.
+Updates fields on a salary_line_items row (amount, description, quantity, unit_price, item_type, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. The flags follow from item_type: flags in the patch are ignored, and a changed item_type brings its own. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year's paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no account. account_number is an override only: null drops it so the line books on the default resolved at booking (item_type, employment_type, personnel_category), and changing item_type drops a stored override unless the same PATCH sets account_number.
 
 **Use when:** You spotted a wrong amount or description on a manual line before calculating: fix it in place instead of delete + recreate.
 **Do not use for:** Post-calculation tax/avgifter adjustments (review-stage overrides are not on v1). Engine-derived lines (absence/benefits): they are regenerated by :calculate, so edits are overwritten.
@@ -1324,10 +1349,12 @@ Updates fields on a salary_line_items row (amount, description, quantity, unit_p
 **Pitfalls:**
 - Draft-only: 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced.
 - A lineId that belongs to a different run returns 404 SALARY_LINE_NOT_FOUND.
-- Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.
+- Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards. Until then the calculation is stale, and approve and book refuse the run.
 - A line the calculation owns (absence, Övertid 50/100 % and OB rows, förmån and recurring-line rows, the engine's semesterersättning and öresavrundning rows), or a patch changing item_type to such a type, returns 400 SALARY_LINE_CALCULATED: the next :calculate would overwrite the edit. Change the source (absence, worked hours, the förmån, the recurring line) instead.
-- The row is validated as it reads after the patch: flipping is_net_deduction or is_gross_deduction on, setting is_taxable false, or making the amount non-positive on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.
+- The row is validated as it reads after the patch: changing item_type to one that cannot carry engångsskatt, or making the amount non-positive, on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.
 - vacation_category (paid, extra_paid, saved, unpaid, advance) is only valid while item_type is vacation, and vacation_saved_year only with category saved; a patch that breaks either is refused with 400 VALIDATION_ERROR.
+- A patch that sets amount, quantity or item_type is checked as the line will read: a 0 kr amount is refused with 400 VALIDATION_ERROR (details.field amount) on every line but a text row, except a vacation line carrying its days in quantity, and so is a sign the type cannot mean (a positive bruttolöneavdrag, a negative skattefri ersättning or förmån). For words without money use a text row.
+- A text row (item_type text) takes description and sort_order: a non-zero amount, a quantity or a unit_price is refused with 400 VALIDATION_ERROR, and account_number in the patch is ignored (stored null). A line never changes into or out of a text row (400 VALIDATION_ERROR, details.field item_type): DELETE it and POST a new one.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1339,17 +1366,12 @@ Updates fields on a salary_line_items row (amount, description, quantity, unit_p
 Request body:
 ```ts
 {
-  item_type?: "monthly_salary" | "hourly_salary" | "overtime" | "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday" | "bonus" | "commission" | "gross_deduction_pension" | "gross_deduction_other" | "benefit_car" | "benefit_housing" | "benefit_meals" | "benefit_wellness" | "benefit_bike" | "benefit_other" | "sick_karens" | "sick_day2_14" | "sick_day15_plus" | "vab" | "parental_leave" | "vacation" | "semesterersattning" | "traktamente_taxfree" | "traktamente_taxable" | "mileage_taxfree" | "mileage_taxable" | "expense_reimbursement" | "net_deduction_advance" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "correction" | "other",
+  item_type?: "monthly_salary" | "hourly_salary" | "overtime" | "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday" | "bonus" | "commission" | "gross_deduction_pension" | "gross_deduction_other" | "benefit_car" | "benefit_housing" | "benefit_meals" | "benefit_wellness" | "benefit_bike" | "benefit_other" | "sick_karens" | "sick_day2_14" | "sick_day15_plus" | "vab" | "parental_leave" | "vacation" | "semesterersattning" | "traktamente_taxfree" | "traktamente_taxable" | "mileage_taxfree" | "mileage_taxable" | "expense_reimbursement" | "net_deduction_advance" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "correction" | "other" | "text",
   description?: string,
   quantity?: number,
   unit_price?: number,
   amount?: number,
-  is_taxable?: boolean,
-  is_avgift_basis?: boolean,
-  is_vacation_basis?: boolean,
-  is_gross_deduction?: boolean,
-  is_net_deduction?: boolean,
-  account_number?: string,
+  account_number?: string | null,
   sort_order?: number,
   one_off_tax_percent?: number | null,
   vacation_category?: "paid" | "extra_paid" | "saved" | "unpaid" | "advance" | null,
@@ -1452,6 +1474,7 @@ Advances a salary run from `approved` to `paid` and stamps `paid_at`. This is th
 **Pitfalls:**
 - Run must be in `approved`: non-`approved` runs return 400 SALARY_RUN_MARK_PAID_NOT_APPROVED.
 - paid_at is set server-side to the current UTC timestamp; the API does not accept a body-supplied date to keep BFL audit clean.
+- A run that pays out with a payment_date after today (Swedish calendar day) returns 422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED (details.payment_date) unless the body has confirm_payment_date_ahead: true. Confirm only when the salaries have already gone out or the payment is scheduled in the bank: :book then posts the net pay as paid out of the bank account on payment_date.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1459,10 +1482,22 @@ Advances a salary run from `approved` to `paid` and stamps `paid_at`. This is th
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
+Request body:
+```ts
+{ confirm_payment_date_ahead?: boolean }
+```
+
+Example request:
+```json
+{
+  "confirm_payment_date_ahead": true
+}
+```
+
 Response `200`:
 ```ts
 {
-  data: { id: string, status: "paid", paid_at: string },
+  data: { id: string, handle?: string, status: "paid", paid_at: string },
   meta: {
     request_id: string,
     api_version: string,
@@ -1504,15 +1539,17 @@ Builds the salary batch payment file for an approved (or paid / booked) run and 
 
 **Pitfalls:**
 - Run status must be one of approved, paid, booked: a draft or review run returns 409 SALARY_RUN_PAYMENT_FILE_NOT_READY. Approve the run first (:approve).
-- pain001 needs the company IBAN and a BIC (saved, or derived from the company clearing number / bank name) in company settings, plus clearing number and account number on every employee with a net payout. bg_lb needs a valid company bankgiro number. Missing company details return 422 SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS (details.problem names the field); missing employee accounts return 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING with details.employees.
+- pain001 pays from the bank account the salary is booked on: for a booked run the account its salary verifikat credits, for any other run the company's primary bank account (the one :book will credit). paying_account names it. The file uses that account's IBAN (the bank-reported one for a connected account, the entered one for a manual account) and its BIC (saved on the account, named by the bank connection, or derived from the IBAN, clearing number or bank name); a company with a single SEK bank account and no IBAN on it, or with no cash accounts, falls back to the IBAN and BIC in company settings. Every employee with a net payout needs clearing number and account number. bg_lb needs a valid company bankgiro number. Missing company details return 422 SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS (details.problem names the field, details.account the paying account for iban_missing and bic_missing); missing employee accounts return 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING with details.employees.
 - An employee account that names no payable account returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID with details.employees (employee_id, name, problem) for every affected employee at once; the response never echoes an account number. problem is clearing_format or account_format (correct the employee's bank details: clearing 4 digits or 5 starting with 8, account 5-10 digits without the clearing number). Both formats carry every account that passes entry, including a 5-digit Swedbank clearing with a 10-digit account. A dry run reports the same error, so preview before payday.
 - The file comes back inline as `content` (a string). Write it to disk under `filename` (pain001 as UTF-8, bg_lb as ISO 8859-1 with CRLF line endings, exactly as returned) and upload it in the bank's file channel. Nothing is transmitted to the bank by this call.
 - Generating the file does NOT mark the run paid and moves no money. Call :mark-paid once the bank has executed the batch, then :book to post the verifikationer.
 - Bankgirot LB is being retired by the banks during 2026: prefer pain001. `format` defaults to company_settings.preferred_payment_format, which is pain001 unless the company changed it.
 - Employees with a zero net payout (nollkörning, or net consumed by a nettolöneavdrag) are left out of the file and need no bank account; employee_count and total_amount cover only the paid lines. Regenerating is harmless: each call rebuilds the file, archives it as a new salary_payment_files row and re-stamps payment_file_generated_at.
+- A correction run (is_correction, from :correct) pays only the difference: each employee's corrected net payout minus what the run it corrects already paid them (a new employee gets the full net). An employee with no difference is left out; one the correction paid too much (a lower corrected net, or removed from the run) is never paid or deducted and is named in warnings, so the person handles it. A correction with no positive difference returns 422 SALARY_RUN_PAYMENT_FILE_NOTHING_TO_PAY with details.correction.overpaid.
 - Every generated file is archived and listable: the response carries payment_file_id (the archived row) and sha256 (over the bytes as encoded for the bank: UTF-8 for pain001, ISO 8859-1 for bg_lb). Compare it with the checksum of what you uploaded, and use GET /salary-runs/{id}/payment-files to retrieve exactly what was generated earlier instead of regenerating: a regeneration after a bank-detail change (new employee account, changed company IBAN) is a different file, and the archive is the record of what the bank actually received. An archive failure returns an error and no file.
 - The file always uses the run's payment_date as the requested execution date; the body accepts no execution date (unknown fields return 400). Change the run's payment_date (PATCH while draft) if the transfer day must move.
-- Dry run (?dry_run=true) validates every precondition and returns format, filename, payment_date, employee_count, total_amount and warnings without the content, without archiving and without stamping the run.
+- Dry run (?dry_run=true) validates every precondition and returns format, filename, payment_date, employee_count, total_amount, paying_account and warnings without the content, without archiving and without stamping the run.
+- Every call returns the run's current file version with the same MsgId and EndToEndIds, so the bank refuses a second upload of the month as a duplicate. If the bank refused or never approved the earlier pain001 file (for example a corrected bank account), send new_version: true with confirm_previous_not_approved: true: the file gets new ids and becomes the run's version from then on. Only confirm when the earlier file was NOT approved at the bank; two approved files pay the salaries twice. Without the confirmation the call returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED; bg_lb returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1522,7 +1559,7 @@ Builds the salary batch payment file for an approved (or paid / booked) run and 
 
 Request body:
 ```ts
-{ format?: "pain001" | "bg_lb" }
+{ format?: "pain001" | "bg_lb", new_version?: boolean, confirm_previous_not_approved?: boolean }
 ```
 
 Example request:
@@ -1539,6 +1576,7 @@ Response `200`:
     salary_run_id: string,
     payment_file_id: string,
     format: "pain001" | "bg_lb",
+    version: number,
     filename: string,
     content_type: "application/xml" | "text/plain",
     content: string,
@@ -1547,6 +1585,7 @@ Response `200`:
     employee_count: number,
     total_amount: number,
     currency: "SEK",
+    paying_account: { cash_account_id: string | null, name: string | null, ledger_account: string, iban_last4: string | null } | null,
     warnings: string[],
     generated_at: string
   },
@@ -1569,6 +1608,7 @@ Example response `200`:
     "salary_run_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     "payment_file_id": "f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0",
     "format": "pain001",
+    "version": 1,
     "filename": "pain001_lon_2026-05.xml",
     "content_type": "application/xml",
     "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pain.001.001.03\"><CstmrCdtTrfInitn>…</CstmrCdtTrfInitn></Document>",
@@ -1577,6 +1617,12 @@ Example response `200`:
     "employee_count": 3,
     "total_amount": 76500,
     "currency": "SEK",
+    "paying_account": {
+      "cash_account_id": "abababab-abab-4bab-8bab-abababababab",
+      "name": "Företagskonto",
+      "ledger_account": "1930",
+      "iban_last4": "0123"
+    },
     "warnings": [],
     "generated_at": "2026-05-20T08:00:00.000Z"
   },
@@ -1615,7 +1661,7 @@ Returns every payment file generated for the run (ISO 20022 pain.001 or Bankgiro
 Response `200`:
 ```ts
 {
-  data: { payment_file_id: string, format: "pain001" | "bg_lb", filename: string, content_type: "application/xml" | "text/plain", charset: "utf-8" | "iso-8859-1", sha256: string, byte_size: number, payment_date: string, employee_count: number, total_amount: number, generated_at: string, content: string }[],
+  data: { payment_file_id: string, format: "pain001" | "bg_lb", filename: string, content_type: "application/xml" | "text/plain", charset: "utf-8" | "iso-8859-1", sha256: string, byte_size: number, payment_date: string, employee_count: number, total_amount: number, generated_at: string, version: number, previous_not_approved_confirmed: boolean, content: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -1644,6 +1690,8 @@ Example response `200`:
       "employee_count": 3,
       "total_amount": 76500,
       "generated_at": "2026-05-20T08:00:00.000Z",
+      "version": 1,
+      "previous_not_approved_confirmed": false,
       "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pain.001.001.03\"><CstmrCdtTrfInitn>…</CstmrCdtTrfInitn></Document>"
     }
   ],
@@ -1664,18 +1712,21 @@ Example response `200`:
 
 Returns the rendered payslip (lönespecifikation) as application/pdf, byte-equivalent to the dashboard download. Content-Disposition is attachment with a filename derived from the period and employee name.
 
-**Use when:** You need the payslip document itself: archiving, forwarding to the employee outside the Accounted send flow, or attaching to an external HR system.
+**Use when:** You need the payslip document itself: archiving, forwarding to the employee outside the Accounted send flow (pass audience=employee), or attaching to an external HR system.
 **Do not use for:** The payslip DATA (amounts, line items): use GET /salary-runs/{id}/employees/{employeeId}, which is cheaper and structured. Emailing payslips to employees: POST /salary-runs/{id}/send-payslips sends each a secure link.
 
 **Pitfalls:**
 - The PDF renders whatever the run currently holds: for a draft run that has not been calculated, amounts are 0.
 - PDF rendering takes a few hundred milliseconds; cache on the client if requesting repeatedly.
+- Without audience the PDF is the employer view and always prints Arbetsgivarkostnad and Beräkningsunderlag. A PDF you forward to the employee should use audience=employee, so it matches the emailed payslip link and honours the company's section switches.
+- audience=employee on an approved, paid or booked run, from a key that also holds payroll:write on a company it may write, issues the payslip: the first employee copy of the run (or the payslip email, whichever comes first) fixes which sections it prints, and every later employee copy of that run prints the same sections even after the company changes its switches. A key with only payroll:read (or a read-only membership or connection) never fixes anything: it gets the sections the run was issued with, or the current switches while the run is not issued yet. On a draft or review run the employee copy follows the current switches and fixes nothing.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `employeeId` | path | `string` | yes |  |
+| `audience` | query | `"employer" \| "employee"` | no | employer (default): every section, the employer's own view. employee: the copy the employee receives; Arbetsgivarkostnad and Beräkningsunderlag follow salary_payslip_show_employer_cost / salary_payslip_show_breakdown (GET /salary/settings). |
 
 Response `200` (`application/pdf`).
 
@@ -1700,6 +1751,7 @@ Moves the run from `review` to `draft`. Nothing is deleted or booked: the calcul
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts
@@ -1735,26 +1787,43 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/salary-runs/{id}/send-payslips`
 
-**Email every employee on an approved salary run a secure link to their payslip.**
+**Email the employees on an approved salary run a secure link to their payslip.**
 `scope:payroll:write · risk:medium · idempotent · dry-run`
 
-Sends each employee on the run an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee's link, so a link emailed earlier for the run stops working. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.
+Sends each employee on the run (or only those in employee_ids) an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee's link, so a link emailed earlier for the run stops working. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.
 
-**Use when:** The run is approved (or paid/booked) and the employees should get their payslips, or a payslip should be re-sent after an employee's email address was corrected.
+**Use when:** The run is approved (or paid/booked) and the employees should get their payslips, a group paid on its own day should get theirs (employee_ids), or a payslip should be re-sent after an employee's email address was corrected.
 **Do not use for:** Fetching the payslip document yourself (GET /salary-runs/{id}/payslips/{employeeId}/pdf) or reading payslip amounts (GET /salary-runs/{id}/employees/{employeeId}).
 
 **Pitfalls:**
 - A draft or review run returns 400 SALARY_PAYSLIPS_SEND_INVALID_STATUS: approve it first.
-- Re-sending emails everyone on the run again and invalidates the links sent before.
+- Re-sending emails everyone on the run (or in employee_ids) again and invalidates their links sent before.
+- An employee_ids entry not on the run refuses the whole send with 400 SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN (details.employee_ids); nothing is sent.
 - Employees without an email address are skipped and counted in `skipped`, not an error: fix the address with PATCH /employees/{id} and send again.
 - Refused with 403 from the sandbox company (SALARY_PAYSLIPS_SEND_SANDBOX) and without the email capability (SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED).
 - Not idempotent towards the recipients: a replay with a new Idempotency-Key emails everyone again.
+- The first send (or the first employee-copy PDF, whichever comes first) fixes which payslip sections the employee copy of this run prints, from salary_payslip_show_employer_cost / salary_payslip_show_breakdown at that moment. Changing those settings afterwards never changes a payslip of this run that employees already have; re-sending keeps the fixed sections.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ employee_ids?: string[] }
+```
+
+Example request:
+```json
+{
+  "employee_ids": [
+    "emp_1…"
+  ]
+}
+```
 
 Response `200`:
 ```ts
@@ -1833,6 +1902,7 @@ Moves an approved run back to `review` and clears the approver, the AGI generati
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Response `200`:
 ```ts

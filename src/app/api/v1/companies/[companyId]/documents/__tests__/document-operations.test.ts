@@ -34,6 +34,7 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listDocuments } from '../route'
 import { GET as getDocument, DELETE as deleteDocument } from '../[id]/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -78,7 +79,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete', 'remove'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['document_attachments', 'storage', 'transactions', 'invoice_inbox_items'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const DOC_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
@@ -211,6 +212,40 @@ describe('GET /api/v1/companies/:companyId/documents/:id', () => {
       transaction_ids: [TX_ID],
       inbox_item_id: '22222222-2222-4222-8222-222222222222',
     })
+    // Metadata only without include: no part is read or answered.
+    for (const part of ['text', 'reading', 'links', 'arrivals', 'notice']) expect(body.data).not.toHaveProperty(part)
+  })
+
+  it('adds the parts named in include: page text, paged and capped, and the records that hold it', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: { data: docRow({ journal_entry_id: JE_ID, page_count: 2, pages_read_at: '2026-09-02T07:42:00Z' }), error: null },
+      document_pages: { data: [{ page_no: 1, text: 'Kvitto 349,50 kr', reader: 'pdf_text', has_text_layer: true }], error: null },
+      journal_entries: { data: { id: JE_ID, voucher_series: 'A', voucher_number: 12, entry_date: '2026-09-02', status: 'posted', description: 'Kontorsmaterial' }, error: null },
+      transactions: { data: [{ id: TX_ID }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await getDocument(request(`${BASE}/${DOC_ID}?include=text,links&max_chars=1000`, { method: 'GET' }), docParams())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.text).toMatchObject({ status: 'read', max_chars: 1000, pages_needing_vision: [2], next_page: null })
+    expect(body.data.text.pages[0].text).toContain('Kvitto 349,50 kr')
+    expect(body.data.text.hint).toContain('GET /documents/{id}/download')
+    expect(body.data.links.journal_entry).toMatchObject({ journal_entry_id: JE_ID, voucher: 'A12', status: 'posted' })
+    expect(body.data.links.transactions.map((t: { transaction_id: string }) => t.transaction_id)).toEqual([TX_ID])
+    expect(body.data.notice).toBeDefined()
+    expect(body.data.reading).toBeUndefined()
+    // The page read is the company's own.
+    expect(client.calls).toContainEqual({ table: 'document_pages', method: 'eq', args: ['company_id', COMPANY_ID] })
+  })
+
+  it('400 on an unknown include part or a max_chars out of range', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    const unknown = await getDocument(request(`${BASE}/${DOC_ID}?include=text,bytes`, { method: 'GET' }), docParams())
+    expect(unknown.status).toBe(400)
+    expect((await unknown.json()).error.code).toBe('VALIDATION_ERROR')
+    const tiny = await getDocument(request(`${BASE}/${DOC_ID}?include=text&max_chars=10`, { method: 'GET' }), docParams())
+    expect(tiny.status).toBe(400)
   })
 })
 
@@ -259,8 +294,59 @@ describe('DELETE /api/v1/companies/:companyId/documents/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.dry_run).toBe(true)
-    expect(body.data.preview).toEqual({ document_id: DOC_ID, file_name: 'kvitto.pdf', would_delete: true })
+    expect(body.data.preview).toEqual({ document_id: DOC_ID, file_name: 'kvitto.pdf', would_delete: true, inbox_item_ids_deleted_too: [] })
     expect(wrote(free)).toBe(false)
+  })
+
+  // crm#230: the v1 door (and the MCP tool behind the same operation) refuses
+  // every record that holds a document, on the commit path and in the dry run.
+  it.each<{ pin: string; tables: Record<string, TableResp>; code: string }>([
+    { pin: 'supplier invoice underlag', tables: { supplier_invoices: { data: [{ id: 'si-1' }], error: null } }, code: 'DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG' },
+    { pin: 'utlägg underlag', tables: { expense_claims: { data: [{ id: 'ec-1' }], error: null } }, code: 'DOC_DELETE_EXPENSE_CLAIM_UNDERLAG' },
+    {
+      pin: 'a booked inbox item',
+      tables: { invoice_inbox_items: { data: [{ created_journal_entry_id: JE_ID, created_supplier_invoice_id: null }], error: null } },
+      code: 'DOC_DELETE_BOOKED_INBOX_ITEM',
+    },
+    { pin: 'a bank transaction', tables: { transactions: { data: [{ id: TX_ID }], error: null } }, code: 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION' },
+  ])('409 $code for $pin, commit and dry run alike, writing nothing', async ({ tables, code }) => {
+    for (const query of ['', '?dry_run=true']) {
+      const client = makeClient({ company_members: MEMBER, document_attachments: { data: docRow(), error: null }, ...tables })
+      mockServiceClient.mockReturnValue(client)
+      const res = await del(query)
+      expect(res.status).toBe(409)
+      expect((await res.json()).error.code).toBe(code)
+      expect(wrote(client)).toBe(false)
+    }
+  })
+
+  // crm#1565: the MCP tool behind this operation deleted the document and
+  // left its inbox item waiting in Behöver dig with no underlag.
+  it('takes the unbooked inbox item the document alone stood for, and the dry run names it', async () => {
+    const INBOX_ID = '11111111-1111-4111-8111-111111111111'
+    const item = { id: INBOX_ID, document_id: DOC_ID, peppol_xml_document_id: null, matched_transaction_id: null, created_journal_entry_id: null, created_supplier_invoice_id: null }
+    const inboxReads = [{ data: [item], error: null }, { data: [], error: null }]
+
+    const preview = makeClient({ company_members: MEMBER, document_attachments: { data: docRow(), error: null }, invoice_inbox_items: inboxReads })
+    mockServiceClient.mockReturnValue(preview)
+    const dry = await del('?dry_run=true')
+    expect(dry.status).toBe(200)
+    expect((await dry.json()).data.preview.inbox_item_ids_deleted_too).toEqual([INBOX_ID])
+    expect(wrote(preview)).toBe(false)
+
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: [{ data: docRow(), error: null }, { data: null, error: null }],
+      invoice_inbox_items: [...inboxReads, { data: null, error: null }],
+      storage: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await del()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ document_id: DOC_ID, deleted: true })
+    const writes = client.calls.filter((c) => WRITES.has(c.method) && (c.table === 'document_attachments' || c.table === 'invoice_inbox_items'))
+    expect(writes.map((c) => c.table)).toEqual(['document_attachments', 'invoice_inbox_items'])
+    expect(client.calls).toContainEqual({ table: 'invoice_inbox_items', method: 'in', args: ['id', [INBOX_ID]] })
   })
 
   it('deletes an unlinked document and its stored file', async () => {

@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
@@ -12,27 +13,37 @@ import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSer
 import { VoucherSeriesPerCashAccountForm } from '@/components/settings/VoucherSeriesPerCashAccountForm'
 import { applyDefaultSeriesToMap, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
-import { MileageToggle } from '@/components/settings/MileageToggle'
-import { SalesOrdersToggle } from '@/components/settings/SalesOrdersToggle'
+import { DirectBookingToggle } from '@/components/settings/DirectBookingToggle'
+import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
+import { DevelopmentModelForm } from '@/components/settings/DevelopmentModelForm'
+import { MonthlyFxRevaluationAction } from '@/components/settings/MonthlyFxRevaluationAction'
+import { fxMonthlyRevaluationEnabled } from '@/lib/env/fx-monthly-revaluation-switch'
 import {
   SettingsGroup,
   SettingsReveal,
   SettingsRow,
   SettingsSectionHeader,
   SettingsSelect,
+  SettingsTextarea,
+  SettingsViewerScope,
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
+import { contractRevenueEnabled } from '@/lib/env/contract-revenue-switch'
 import { useCompany } from '@/contexts/CompanyContext'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
+import { financeLeaseEnabled } from '@/lib/env/finance-lease-switch'
 import type { AccountingFramework, CompanySettings } from '@/types'
 
+import { isEntityType, preparesArsredovisning, supportsAccountingFramework } from '@/lib/company/entity-type'
 const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 export function BookkeepingSettingsContent() {
   const t = useTranslations('settings_bookkeeping')
+  const tContract = useTranslations('contract_revenue')
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const tLease = useTranslations('finance_leases')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
   const { company } = useCompany()
   // Local mirror of the company-level accounting_framework so the K2/K3
@@ -46,6 +57,19 @@ export function BookkeepingSettingsContent() {
   // fakturor" only applies to faktureringsmetoden, so it folds away under
   // kontantmetoden instead of offering a choice that does nothing.
   const [pickedMethod, setPickedMethod] = useState<string | null>(null)
+  // A lock date moved back over a filed momsperiod is refused until the person
+  // has seen which periods it reopens and what that means: the save then goes
+  // again with the acknowledgment (the question the API and MCP doors ask).
+  const tCommon = useTranslations('common')
+  const { dialogProps: reopenDialogProps, confirm: confirmReopen } = useDestructiveConfirm()
+  const confirmReopeningFiledVat = (periods: string[]) =>
+    confirmReopen({
+      title: t('reopen_filed_vat_title'),
+      description: t('reopen_filed_vat_body', { periods: periods.join(', ') }),
+      confirmLabel: t('reopen_filed_vat_confirm'),
+      cancelLabel: tCommon('cancel'),
+      variant: 'warning',
+    })
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
@@ -60,6 +84,11 @@ export function BookkeepingSettingsContent() {
     // a stale flag the user set in a mode where it had no effect.
     const deferInvoiceBooking =
       accountingMethod === 'accrual' && formData.get('defer_invoice_booking') === 'true'
+    // Only a changed method carries a reason: in a fiscal year that already
+    // has posted verifikat the save records it as a correction, and refuses
+    // the change without one.
+    const correctionReason = ((formData.get('accounting_method_correction_reason') as string | null) ?? '').trim()
+    const methodChanged = accountingMethod !== (settings?.accounting_method || 'accrual')
 
     const updates: Record<string, unknown> = {
       bookkeeping_locked_through: lockedThrough,
@@ -67,6 +96,11 @@ export function BookkeepingSettingsContent() {
       accounting_method: accountingMethod,
       default_voucher_series: defaultVoucherSeries,
       defer_invoice_booking: deferInvoiceBooking,
+      ...(methodChanged && correctionReason ? { accounting_method_correction_reason: correctionReason } : {}),
+      // #523: only while the switch shows the row; otherwise untouched.
+      ...(fxMonthlyRevaluationEnabled()
+        ? { fx_revaluation_monthly: formData.get('fx_revaluation_monthly') === 'true' }
+        : {}),
     }
 
     // Write-through: the booking engine resolves the series from the
@@ -95,26 +129,32 @@ export function BookkeepingSettingsContent() {
     }
   }
 
-  // K2/K3 selector is only meaningful for AB. EF stays on EF rules and never
-  // picks a framework. Use the company row (source of truth) since
+  // K2/K3 selector is only meaningful for forms that prepare an
+  // årsredovisning (aktiebolag, ekonomisk förening). EF stays on EF rules and
+  // never picks a framework. Use the company row (source of truth) since
   // company_settings.entity_type can be stale on legacy data.
-  const isAktiebolag = company?.entity_type === 'aktiebolag'
+  const preparesAnnualReport = isEntityType(company?.entity_type) && preparesArsredovisning(company.entity_type)
+  // The selector offers K2 and K3; a form the product keeps on K2 only (an
+  // ekonomisk förening today) has nothing to choose.
+  const choosesFramework = preparesAnnualReport && supportsAccountingFramework(company.entity_type, 'K3')
 
   return (
     <div>
       <SettingsSectionHeader title={tNav('bookkeeping')} intro={tIntro('bookkeeping')} />
 
-      <SettingsFormWrapper onSave={handleSave}>
+      <SettingsFormWrapper onSave={handleSave} confirmReopeningFiledVat={confirmReopeningFiledVat}>
         {/* Grunder: framework (AB only), method, deferred booking, default
             series. The framework row saves through its own PATCH and opts out
             of this wrapper's dirty tracking; the rest read via FormData. */}
         <SettingsGroup label={t('group_basics')}>
-          {isAktiebolag && (
+          {choosesFramework && (
             <AccountingFrameworkForm
               current={framework}
               onSaved={(next) => setFramework(next)}
             />
           )}
+          {/* K3 punkt 18.7: the model for internally generated intangibles. */}
+          {choosesFramework && framework === 'k3' && <DevelopmentModelForm />}
           <SettingsRow
             label={t('method_label')}
             htmlFor="accounting_method"
@@ -130,6 +170,23 @@ export function BookkeepingSettingsContent() {
               <option value="cash">{t('method_cash')}</option>
             </SettingsSelect>
           </SettingsRow>
+          {/* A changed method asks why: mid-year it is saved as a correction
+              of a wrong setting, with the reason in the behandlingshistorik. */}
+          <SettingsReveal open={pickedMethod !== null && pickedMethod !== (settings.accounting_method || 'accrual')}>
+            <SettingsRow
+              label={t('method_correction_label')}
+              htmlFor="accounting_method_correction_reason"
+              help={t('method_correction_help')}
+              align="baseline"
+            >
+              <SettingsTextarea
+                id="accounting_method_correction_reason"
+                name="accounting_method_correction_reason"
+                maxLength={500}
+                placeholder={t('method_correction_placeholder')}
+              />
+            </SettingsRow>
+          </SettingsReveal>
           {/* #967: register/send without booking; ekonomi books in a separate
               explicit step. Only meaningful under faktureringsmetoden, so it
               sits indented under the method and folds away under kontant. */}
@@ -171,10 +228,34 @@ export function BookkeepingSettingsContent() {
               })}
             </SettingsSelect>
           </SettingsRow>
+          {/* #523: revalue foreign-currency items at every month end too, not
+              only at balansdagen. The action below books one month end. */}
+          {fxMonthlyRevaluationEnabled() && (
+            <SettingsRow
+              label={t('fx_revaluation_label')}
+              htmlFor="fx_revaluation_monthly"
+              help={t('fx_revaluation_help')}
+            >
+              <SettingsSelect
+                id="fx_revaluation_monthly"
+                name="fx_revaluation_monthly"
+                defaultValue={settings.fx_revaluation_monthly ? 'true' : 'false'}
+              >
+                <option value="false">{t('fx_revaluation_yearly')}</option>
+                <option value="true">{t('fx_revaluation_monthly')}</option>
+              </SettingsSelect>
+            </SettingsRow>
+          )}
         </SettingsGroup>
 
         <PeriodLockingSettings settings={settings} />
       </SettingsFormWrapper>
+      {/* Outside the form: its buttons must never count as the form's own. */}
+      <DestructiveConfirmDialog {...reopenDialogProps} />
+
+      {/* Company settings that save on their own: locked for a read-only member. */}
+      <SettingsViewerScope>
+      {fxMonthlyRevaluationEnabled() && settings.fx_revaluation_monthly && <MonthlyFxRevaluationAction />}
 
       <VoucherSeriesPerSourceTypeForm
         settings={settings}
@@ -184,8 +265,11 @@ export function BookkeepingSettingsContent() {
       <VoucherSeriesPerCashAccountForm settings={settings} />
 
       <VoucherSeriesManager settings={settings} onSettingsUpdated={updateSettings} />
+      </SettingsViewerScope>
 
       <SettingsGroup label={t('group_automation')}>
+        {/* accounted#130: whether a settled suggestion books with one click. */}
+        <DirectBookingToggle />
         {/* Periodisering is a review-gated wizard step, not an automation
             that can be switched on or off, so this row is a plain link. The
             old toggle here wrote a localStorage preference nothing read. */}
@@ -194,13 +278,36 @@ export function BookkeepingSettingsContent() {
             href="/bookkeeping/year-end/periodisering"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             {t('periodisering_open_wizard')}
           </Link>
         </SettingsRow>
+        {/* K3 kapitel 20: the lessee's register and the opt-in live on their own page. */}
+        {financeLeaseEnabled() && (
+          <SettingsRow label={tLease('settings_label')} help={tLease('settings_help')}>
+            <Link
+              href="/bookkeeping/year-end/leasing"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+              {tLease('settings_open')}
+            </Link>
+          </SettingsRow>
+        )}
         <DimensionsToggle />
-        <MileageToggle />
-        <SalesOrdersToggle />
+        <NavGateToggle setting="mileage_enabled" namespace="mileage" href="/mileage" />
+        {/* K3 kapitel 23: pågående arbeten live on their own page under bokslut. */}
+        {contractRevenueEnabled() && (
+          <SettingsRow label={tContract('settings_label')} help={tContract('settings_help')}>
+            <Link
+              href="/bookkeeping/year-end/pagaende-arbeten"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+              {tContract('settings_open')}
+            </Link>
+          </SettingsRow>
+        )}
       </SettingsGroup>
 
       <SettingsGroup>
@@ -209,7 +316,7 @@ export function BookkeepingSettingsContent() {
             href="/chart-of-accounts"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             {t('related_chart_of_accounts')}
           </Link>
         </SettingsRow>

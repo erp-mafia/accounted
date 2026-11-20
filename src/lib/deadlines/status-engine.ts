@@ -14,6 +14,8 @@
 
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 
 const log = createLogger('deadline-status')
 
@@ -23,34 +25,34 @@ const log = createLogger('deadline-status')
 export const ACTION_NEEDED_THRESHOLD_DAYS = 14
 
 /**
- * Calculate days until a deadline
+ * Whole calendar days from today (the Swedish calendar day) to a deadline.
+ * Counted on dates, not clock time: a millisecond difference rounded up
+ * counted 14 days as 15 when the autumn DST change fell in between.
  */
-export function daysUntilDeadline(dueDate: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const deadline = new Date(dueDate)
-  deadline.setHours(0, 0, 0, 0)
-  return Math.ceil((deadline.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+export function daysUntilDeadline(dueDate: string, now: Date = new Date()): number {
+  return daysBetweenIso(todayIsoStockholm(now), dueDate.slice(0, 10))
 }
 
 /**
- * Update deadline statuses automatically (called by daily cron)
+ * Update deadline statuses automatically (called by daily cron).
+ *
+ * Both updates are always tried. When either fails this throws after the
+ * second one, so the cron run answers an error: logged and answered 200, a
+ * run that moved no deadline to overdue looked like a quiet day.
  */
 export async function updateDeadlineStatuses(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  now: Date = new Date()
 ): Promise<{ updated: number; newlyOverdue: number; newlyActionNeeded: number }> {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const todayStr = today.toISOString().split('T')[0]
-
-  // Calculate the action_needed threshold date
-  const thresholdDate = new Date(today)
-  thresholdDate.setDate(thresholdDate.getDate() + ACTION_NEEDED_THRESHOLD_DAYS)
-  const thresholdStr = thresholdDate.toISOString().split('T')[0]
+  // Both bounds are Swedish calendar days: a deadline due today turns
+  // overdue on the Swedish day after, whatever the UTC date says.
+  const todayStr = todayIsoStockholm(now)
+  const thresholdStr = addDaysIso(todayStr, ACTION_NEEDED_THRESHOLD_DAYS)
 
   let updated = 0
   let newlyOverdue = 0
   let newlyActionNeeded = 0
+  const failed: string[] = []
 
   // 1. Mark overdue: past deadline, not completed, not submitted/confirmed
   const { data: overdueDeadlines, error: overdueError } = await supabase
@@ -67,6 +69,7 @@ export async function updateDeadlineStatuses(
 
   if (overdueError) {
     log.error('Error updating overdue deadlines:', overdueError)
+    failed.push(`overdue: ${overdueError.message}`)
   } else {
     newlyOverdue = overdueDeadlines?.length || 0
     updated += newlyOverdue
@@ -88,9 +91,14 @@ export async function updateDeadlineStatuses(
 
   if (actionNeededError) {
     log.error('Error updating action_needed deadlines:', actionNeededError)
+    failed.push(`action_needed: ${actionNeededError.message}`)
   } else {
     newlyActionNeeded = actionNeededDeadlines?.length || 0
     updated += newlyActionNeeded
+  }
+
+  if (failed.length > 0) {
+    throw new Error(`Deadline status update failed (${failed.join('; ')}); ${updated} deadlines were updated`)
   }
 
   return { updated, newlyOverdue, newlyActionNeeded }
@@ -106,12 +114,12 @@ export async function getDeadlinesNeedingAttention(
   actionNeeded: Array<{ id: string; title: string; due_date: string; tax_deadline_type: string | null }>
   overdue: Array<{ id: string; title: string; due_date: string; tax_deadline_type: string | null }>
 }> {
-  const { data: deadlines, error } = await supabase
-    .from('deadlines')
-    .select('id, title, due_date, tax_deadline_type, status')
-    .eq('company_id', companyId)
-    .eq('is_completed', false)
-    .is('dismissed_at', null)
+  const { data: deadlines, error } = await filterOpenDeadlines(
+    supabase
+      .from('deadlines')
+      .select('id, title, due_date, tax_deadline_type, status')
+      .eq('company_id', companyId),
+  )
     .in('status', ['action_needed', 'overdue'])
     .order('due_date', { ascending: true })
 

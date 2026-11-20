@@ -18,16 +18,41 @@
  *   2. run status is approved, paid or booked
  *   3. company row exists
  *   4. company_settings row (pain.001) / bankgiro (LB) present and valid
- *   5. company IBAN present and BIC present or derivable (pain.001)
+ *   5. the paying account (pain.001, lib/payments/paying-account.ts): the
+ *      cash account the salary verifikat credits (a booked run's posted
+ *      entry, else the primary bank account), with an IBAN and a BIC saved
+ *      or derivable, and for a Swedbank debtor Swedbank's SignerID and
+ *      Corporate Pay id, for a Nordea debtor Nordea's Signer ID and CCM
+ *      agreement id
  *   6. the run has employees
  *   7. every employee with a positive payout has clearing + account
  *   8. every one of those accounts names a payable account
  *      (payeeAccountProblem, the same verdict the generators apply): all
  *      affected employees are named at once, never the account number
+ *   9. on a live call, no bank payment of the run is live: the archive
+ *      refuses the file (IN_BANK_PAYMENT), since the file and the bank
+ *      payments would each pay the month (lib/salary/payment/pay-via-bank.ts)
  *
  * Employees whose effective net payout is 0 (nollkörning, net fully consumed
  * by a nettolöneavdrag) are left out of the file, so their bank details are
  * not required (see lib/salary/payment/effective-net.ts).
+ *
+ * Every amount is the run's payable amount (lib/salary/payment/payable.ts),
+ * the same rule the bank payments follow: the effective net for an ordinary
+ * run, and for a correction run (rättelsekörning) only the difference
+ * against what the corrected run already paid. The chain a correction
+ * replaces is read after the run's employees, so an ordinary run makes
+ * exactly the queries it made before. An employee a correction overpaid is
+ * left out of the file and named (`correction.overpaid` and a warning); a
+ * correction with no positive difference has no file (NOTHING_TO_PAY).
+ *
+ * Versions (crm#1219). A pain.001 carries the run's payment file version in
+ * its ids (salaryPaymentMessageId). Every download returns the run's current
+ * version, so a re-download is the same message to the bank and its duplicate
+ * check refuses a second upload of the month. A new version (newVersion) gets
+ * new ids so the bank takes a corrected file; it is refused unless the person
+ * confirms the earlier file was not approved at the bank, and the archive
+ * trigger (20261015230000) raises the run only with that confirmation.
  *
  * Per BFL 7 kap. 1 § the generated file is räkenskapsinformation (underlag)
  * linked to the salary journal entry and subject to 7-year retention, so on a
@@ -41,24 +66,58 @@
 import { createHash, randomUUID } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
+import { formatCurrency } from '@/lib/utils'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
-import { generatePain001 } from './pain001-generator'
+import { bankFileIdOrg, effectiveOrgNumber } from '@/lib/company/org-number'
+import { formatOrgNumberDisplay, orgNumberKey } from '@/lib/invariants/org-number'
+import { generatePain001, pain001TransactionId } from './pain001-generator'
 import type { Pain001CompanyData, Pain001Employee } from './pain001-generator'
-import { generateBgLb } from './bg-lb-generator'
+import { generateBgLb, utbetalningsnummer } from './bg-lb-generator'
 import type { BgLbCompanyData, BgLbEmployee } from './bg-lb-generator'
-import { effectiveNetPayout } from './effective-net'
+import {
+  CORRECTION_DIFFERENCE_ONLY_SV,
+  loadCorrectionPaidBefore,
+  overpaidEmployees,
+  overpaidSentenceSv,
+  payableAmount,
+  type OverpaidEmployee,
+} from './payable'
+import { isSalaryInBankPaymentError } from './in-bank-payment'
+import { resolveBankFileIds } from '@/lib/payments/initiating-party'
+import { NORDEA_AGREEMENT_ID_MISSING_SV, NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
+import { tolerateMissingNordeaAgreementId } from '@/lib/payments/nordea-agreement-read'
 import {
   checkEmployeeAccountChecksum,
   describePayeeAccountProblems,
-  lookupBicByBankName,
-  lookupBicByClearing,
-  normalizeBankNumber,
+  maskPayeeAccount,
   payeeAccountProblem,
-} from './bank-account'
+} from '@/lib/payments/bank-account'
+import {
+  derivedBicWarningSv,
+  payingAccountMissingEn,
+  payingAccountMissingSv,
+  payingAccountSummary,
+  resolvePayingAccount,
+  type PayingAccountResolution,
+  type PayingAccountSummary,
+} from '@/lib/payments/paying-account'
+import { bookedNetPayAccount } from '@/lib/salary/posted-run-entries'
 
-export const SALARY_PAYMENT_FILE_FORMATS = ['pain001', 'bg_lb'] as const
-export type SalaryPaymentFileFormat = (typeof SALARY_PAYMENT_FILE_FORMATS)[number]
+import { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat } from './payment-format'
+
+export { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat }
+
+const log = createLogger('salary/payment/build-payment-file')
+
+/**
+ * The company_settings columns a payment file reads, but nordea_agreement_id,
+ * which the builder reads beside them while its migration may still be on
+ * its way (tolerateMissingNordeaAgreementId).
+ */
+const PAYMENT_FILE_SETTINGS_COLUMNS =
+  'company_name, org_number, iban, bic, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id'
 
 /** Run statuses a payment file may be generated from. */
 export const SALARY_PAYMENT_FILE_ALLOWED_STATUSES = ['approved', 'paid', 'booked'] as const
@@ -76,6 +135,18 @@ export interface BuildSalaryPaymentFileInput {
    * stamp the run.
    */
   dryRun?: boolean
+  /**
+   * Make the next version of the run's pain.001: new MsgId, PmtInfId and
+   * EndToEndIds, so the bank takes the file although an earlier one for the
+   * run reached it. pain.001 only.
+   */
+  newVersion?: boolean
+  /**
+   * The person's confirmation that the earlier file was NOT approved at the
+   * bank. Required with newVersion: two approved files pay the month twice,
+   * and the bank's duplicate check no longer stops a new version.
+   */
+  confirmPreviousNotApproved?: boolean
 }
 
 export type SalaryPaymentFileErrorCode =
@@ -85,6 +156,9 @@ export type SalaryPaymentFileErrorCode =
   | 'SETTINGS_MISSING'
   | 'IBAN_MISSING'
   | 'BIC_MISSING'
+  | 'SWEDBANK_IDS_MISSING'
+  | 'NORDEA_SIGNER_ID_MISSING'
+  | 'NORDEA_AGREEMENT_ID_MISSING'
   | 'BANKGIRO_MISSING'
   | 'BANKGIRO_INVALID'
   | 'NO_EMPLOYEES'
@@ -93,8 +167,45 @@ export type SalaryPaymentFileErrorCode =
   | 'GENERATOR_FAILED'
   | 'ARCHIVE_FAILED'
   | 'DB_ERROR'
+  | 'NEW_VERSION_UNCONFIRMED'
+  | 'NEW_VERSION_UNSUPPORTED'
+  | 'IN_BANK_PAYMENT'
+  | 'NOTHING_TO_PAY'
 
-export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'employees'
+export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'account' | 'employees' | 'correction'
+
+/**
+ * One payment the file carries, in file order: the banklista line. Built from
+ * the same payee array the generator wrote, so the list and the file cannot
+ * disagree.
+ */
+export interface SalaryPaymentFilePayee {
+  employeeId: string
+  name: string
+  /** Clearing number and the last four digits of the account (maskPayeeAccount). */
+  maskedAccount: string
+  /** The amount in the file, rounded to öre. */
+  amount: number
+  /**
+   * What ties the line to its record in the file: the EndToEndId (pain.001)
+   * or the utbetalningsnummer on the TK40/TK14 pair (Bankgirot LB).
+   */
+  reference: string
+}
+
+/** The payer as the file names it. */
+export interface SalaryPaymentFilePayer {
+  name: string
+  orgNumber: string | null
+  /** The debtor IBAN (pain.001) or the sender bankgiro (LB), as written in the file. */
+  account: string
+  /**
+   * The cash account the pain.001 pays from, the one the salary verifikat
+   * credits (lib/payments/paying-account.ts); null for an LB file, which is
+   * sent from the company bankgiro.
+   */
+  cashAccount: PayingAccountSummary | null
+}
 
 export interface SalaryPaymentFileError {
   ok: false
@@ -128,7 +239,11 @@ export interface SalaryPaymentFileOk {
   periodLabel: string
   /** Employees that appear in the file (positive payout). */
   employeeCount: number
+  /** Sum of `payees[].amount`: the file's control sum (pain.001 CtrlSum, LB TK29). */
   totalAmount: number
+  /** The payments the file carries, in file order (the banklista). */
+  payees: SalaryPaymentFilePayee[]
+  payer: SalaryPaymentFilePayer
   /** Non-blocking Swedish annotations the caller should surface. */
   warnings: string[]
   /** Value written to payment_file_generated_at; null on a dry run. */
@@ -137,6 +252,20 @@ export interface SalaryPaymentFileOk {
   stamped: boolean
   /** Id of the archived salary_payment_files row; null on a dry run (nothing is archived). */
   paymentFileId: string | null
+  /** The payment file version the file carries (1 for Bankgirot LB). */
+  version: number
+  /**
+   * Set for a correction run (rättelsekörning): every amount is the
+   * difference against what the corrected run already paid, and an employee
+   * it overpaid is left out and named with the amount. Null for an ordinary run.
+   */
+  correction: SalaryPaymentFileCorrection | null
+}
+
+/** A correction run's file: what it corrects and whom it overpaid. */
+export interface SalaryPaymentFileCorrection {
+  correctsRunId: string
+  overpaid: OverpaidEmployee[]
 }
 
 export type SalaryPaymentFileResult = SalaryPaymentFileOk | SalaryPaymentFileError
@@ -147,16 +276,27 @@ interface RunRow {
   period_year: number
   period_month: number
   payment_date: string
+  /** The run's pain.001 version (20261015230000); absent before the column existed. */
+  payment_file_version?: number | null
+  /** The posted salary verifikat of a booked run: its net pay credit names the paying account. */
+  salary_entry_id?: string | null
+  /** The run a correction run corrects (salary_runs.corrects_run_id); null for an ordinary run. */
+  corrects_run_id?: string | null
 }
 
 interface SettingsRow {
   company_name: string | null
+  org_number: string | null
+  /** The legacy payer columns: borrowed only by an account without an IBAN of its own (paying-account.ts). */
   iban: string | null
   bic: string | null
-  clearing_number: string | null
-  bank_name: string | null
   bankgiro: string | null
   preferred_payment_format: string | null
+  city: string | null
+  swedbank_signer_id: string | null
+  swedbank_corporate_pay_id: string | null
+  nordea_signer_id: string | null
+  nordea_agreement_id: string | null
 }
 
 interface RunEmployeeRow {
@@ -171,6 +311,8 @@ interface RunEmployeeRow {
     bank_account_number: string | null
     /** AGI specification number: the base of the LB utbetalningsnummer. */
     specification_number: number | null
+    /** Town for Cdtr/PstlAdr in Swedbank's pain.001 form. */
+    city: string | null
   } | null
 }
 
@@ -182,6 +324,14 @@ function fail(
 ): SalaryPaymentFileError {
   return { ok: false, code, format, details, ...extra }
 }
+
+/**
+ * Why a Swedbank debtor's pain.001 cannot be made, in Swedish: Swedbank
+ * identifies the sender and the agreement by ids it assigns, and refuses a
+ * file without them at upload ("Aktivt id för fullmaktshavare saknas").
+ */
+export const SWEDBANK_IDS_MISSING_SV =
+  'Swedbank kräver företagets SignerID och avtals-id (Corporate Pay) i betalfilen. Du får dem av Swedbank. Fyll i dem under Inställningar → Fakturor.'
 
 /** A builder refusal in the structured-errors catalogue (lib/errors/structured-errors.ts). */
 export interface SalaryPaymentFileRefusal {
@@ -210,6 +360,9 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
     case 'SETTINGS_MISSING':
     case 'IBAN_MISSING':
     case 'BIC_MISSING':
+    case 'SWEDBANK_IDS_MISSING':
+    case 'NORDEA_SIGNER_ID_MISSING':
+    case 'NORDEA_AGREEMENT_ID_MISSING':
     case 'BANKGIRO_MISSING':
     case 'BANKGIRO_INVALID':
       return {
@@ -236,10 +389,47 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
         reason: String(result.details.message ?? ''),
         details: { format: result.format, ...result.details },
       }
+    case 'NEW_VERSION_UNCONFIRMED':
+      return { code: 'SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED' }
+    case 'NEW_VERSION_UNSUPPORTED':
+      return { code: 'SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED', details: { format: result.format } }
+    case 'IN_BANK_PAYMENT':
+      return { code: 'SALARY_RUN_IN_BANK_PAYMENT', details: { format: result.format } }
+    case 'NOTHING_TO_PAY':
+      return { code: 'SALARY_RUN_PAYMENT_FILE_NOTHING_TO_PAY', details: { format: result.format, ...result.details } }
     case 'ARCHIVE_FAILED':
     case 'DB_ERROR':
       return null
   }
+}
+
+/** The bank-list line for one payee the generator wrote. */
+function payeeLine(
+  e: { employeeId: string; name: string; clearingNumber: string; bankAccountNumber: string; netSalary: number },
+  reference: string,
+): SalaryPaymentFilePayee {
+  return {
+    employeeId: e.employeeId,
+    name: e.name,
+    maskedAccount: maskPayeeAccount(e.clearingNumber, e.bankAccountNumber),
+    amount: e.netSalary,
+    reference,
+  }
+}
+
+/**
+ * The pain.001 MsgId of a run's payment file at a version. Version 1 is the
+ * id every salary file has carried, `<BRAND>-<org>-<period>`, unchanged so a
+ * re-download stays the same message to the bank. A later version is
+ * `LON-<org>-<period>-V<n>`: 25 characters for V2-V9, so PmtInfId and every
+ * InstrId/EndToEndId keep the period and the version after the generator's
+ * -PMT and -TX0001 suffixes (Max35Text). Danske Bank refuses a repeated MsgId
+ * and a repeated EndToEndId for at least three months (MIG v3.6, 1.1 and
+ * 2.30); Swedbank an EndToEndId within 90 days. A new version repeats neither.
+ */
+export function salaryPaymentMessageId(brand: string, org: string, periodLabel: string, version: number): string {
+  if (version <= 1) return `${brand}-${org}-${periodLabel}`
+  return `LON-${org}-${periodLabel}-V${version}`
 }
 
 function resolveFormat(
@@ -257,6 +447,12 @@ export async function buildSalaryPaymentFile(
 ): Promise<SalaryPaymentFileResult> {
   const { companyId, runId } = input
   const requestedFormat = input.format ?? null
+
+  // A new version without the confirmation is refused before anything is
+  // read: it is the guard against paying the month twice.
+  if (input.newVersion && input.confirmPreviousNotApproved !== true) {
+    return fail('NEW_VERSION_UNCONFIRMED', requestedFormat)
+  }
 
   // 1 + 2. The run and its status gate.
   const { data: run, error: runErr } = await supabase
@@ -284,55 +480,86 @@ export async function buildSalaryPaymentFile(
     .maybeSingle()
   if (companyErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'company', cause: companyErr })
 
-  // 4. Settings: the sender's bank details live here, not on companies.
-  const { data: settingsData, error: settingsErr } = await supabase
-    .from('company_settings')
-    .select('company_name, iban, bic, clearing_number, bank_name, bankgiro, preferred_payment_format')
-    .eq('company_id', companyId)
-    .maybeSingle()
+  // 4. Settings: the sender's name, town, bankgiro and bank-assigned file
+  // ids live here, not on companies. The paying account is step 5.
+  const { data: settingsData, error: settingsErr } = await tolerateMissingNordeaAgreementId(
+    () =>
+      supabase
+        .from('company_settings')
+        .select(`${PAYMENT_FILE_SETTINGS_COLUMNS}, nordea_agreement_id`)
+        .eq('company_id', companyId)
+        .maybeSingle(),
+    () => supabase.from('company_settings').select(PAYMENT_FILE_SETTINGS_COLUMNS).eq('company_id', companyId).maybeSingle(),
+  )
   if (settingsErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'settings', cause: settingsErr })
 
   if (!company) return fail('COMPANY_NOT_FOUND', requestedFormat)
 
   const settings = (settingsData as SettingsRow | null) ?? null
   const format = resolveFormat(input.format, settings)
+  // Bankgirot LB has no message id the bank deduplicates on: no versions.
+  if (input.newVersion && format !== 'pain001') return fail('NEW_VERSION_UNSUPPORTED', format)
   const companyRow = company as { name: string; org_number: string | null }
+  const orgNumber = orgNumberKey(effectiveOrgNumber(settings?.org_number, companyRow.org_number))
   const warnings: string[] = []
 
   let pain001Company: Pain001CompanyData | null = null
   let bgLbCompany: BgLbCompanyData | null = null
+  let payingCashAccount: PayingAccountSummary | null = null
 
   if (format === 'pain001') {
     if (!settings) return fail('SETTINGS_MISSING', format)
 
-    // Debtor account: the company's own IBAN, the canonical payer form every
-    // Swedish bank accepts. Set under Inställningar → Fakturering.
-    const senderIban = (settings.iban ?? '').replace(/\s/g, '').toUpperCase()
-    if (!senderIban) return fail('IBAN_MISSING', format, { field: 'iban' })
+    // 5. The debtor account: the cash account the salary verifikat credits
+    // (a booked run's posted entry, else the primary bank account the booking
+    // will credit), never the customer-invoice IBAN (crm#1483). Its IBAN is
+    // the canonical payer form every Swedish bank accepts; its BIC is saved,
+    // named by the bank connection or looked up, so most accounts need no BIC.
+    let paying: PayingAccountResolution
+    try {
+      const bookedLedgerAccount = await bookedNetPayAccount(supabase, companyId, runRow)
+      paying = await resolvePayingAccount(supabase, companyId, log, { settings, bookedLedgerAccount })
+    } catch (err) {
+      return fail('DB_ERROR', format, {}, { stage: 'account', cause: err })
+    }
+    if (!paying.ok) {
+      return fail(paying.missing === 'iban' ? 'IBAN_MISSING' : 'BIC_MISSING', format, {
+        field: paying.missing,
+        account: payingAccountSummary(paying.account),
+        message: payingAccountMissingSv(paying.missing, paying.account),
+        message_en: payingAccountMissingEn(paying.missing, paying.account),
+      })
+    }
+    const debtor = paying.account
+    if (debtor.bic_derived) warnings.push(derivedBicWarningSv(debtor))
 
-    // Debtor bank BIC: the saved BIC, otherwise derived from the clearing
-    // number (or bank name) the company already entered, so most users only
-    // need to fill in the IBAN. Required by the receiving bank.
-    const savedBic = settings.bic?.trim() || null
-    const senderBic =
-      savedBic ||
-      lookupBicByClearing(normalizeBankNumber(settings.clearing_number)) ||
-      lookupBicByBankName(settings.bank_name)
-    if (!senderBic) return fail('BIC_MISSING', format, { field: 'bic' })
-    if (!savedBic) {
-      warnings.push(
-        `BIC (${senderBic}) härleddes från företagets clearingnummer eller banknamn. Spara BIC under Inställningar → Fakturering om banken avvisar filen.`,
-      )
+    // Swedbank (savings banks included) and Nordea identify the sender by ids
+    // they assign, never the org number, and refuse a file without them
+    // (lib/payments/initiating-party.ts).
+    const fileIds = resolveBankFileIds(debtor.bic, settings)
+    if (!fileIds.ok) {
+      const refusal = {
+        swedbank_ids: ['SWEDBANK_IDS_MISSING', SWEDBANK_IDS_MISSING_SV],
+        nordea_signer_id: ['NORDEA_SIGNER_ID_MISSING', NORDEA_SIGNER_ID_MISSING_SV],
+        nordea_agreement_id: ['NORDEA_AGREEMENT_ID_MISSING', NORDEA_AGREEMENT_ID_MISSING_SV],
+      } as const satisfies Record<typeof fileIds.missing, readonly [SalaryPaymentFileErrorCode, string]>
+      const [code, message] = refusal[fileIds.missing]
+      return fail(code, format, { fields: fileIds.fields, message })
     }
 
     pain001Company = {
       // Sender name follows the current company name (company_settings.company_name),
       // not the frozen onboarding companies.name.
       name: settings.company_name || companyRow.name,
-      orgNumber: companyRow.org_number || '',
-      iban: senderIban,
-      bic: senderBic,
+      orgNumber: orgNumber ?? '',
+      iban: debtor.iban,
+      bic: debtor.bic,
+      city: settings.city,
+      swedbank: fileIds.ids.swedbank,
+      nordeaSignerId: fileIds.ids.nordeaSignerId,
+      nordeaAgreementId: fileIds.ids.nordeaAgreementId,
     }
+    payingCashAccount = payingAccountSummary(debtor)
   } else {
     // The settings overview shows a bankgiro from the Bolagsverket snapshot,
     // which is display data only; the file reads company_settings.bankgiro.
@@ -352,19 +579,50 @@ export async function buildSalaryPaymentFile(
   // 6. Employees on the run.
   const { data: runEmployeesData, error: employeesErr } = await supabase
     .from('salary_run_employees')
-    .select('*, employee:employees(first_name, last_name, clearing_number, bank_account_number, specification_number)')
+    .select('*, employee:employees(first_name, last_name, clearing_number, bank_account_number, specification_number, city)')
     .eq('salary_run_id', runId)
   if (employeesErr) return fail('DB_ERROR', format, {}, { stage: 'employees', cause: employeesErr })
 
   const runEmployees = (runEmployeesData as RunEmployeeRow[] | null) ?? []
   if (runEmployees.length === 0) return fail('NO_EMPLOYEES', format)
 
+  // A correction pays only the difference against what the run it corrects
+  // already paid (payable.ts). An ordinary run reads nothing more.
+  const chain = await loadCorrectionPaidBefore(supabase, companyId, { id: runRow.id, corrects_run_id: runRow.corrects_run_id })
+  if (!chain.ok) return fail('DB_ERROR', format, {}, { stage: 'correction', cause: chain.error })
+  const paidBefore = chain.paidBefore
+
   // 7. Bank details, but only for employees who actually appear in the file
   // (positive payout). A zero-net employee is filtered out below, so missing
   // bank details for them must not block the file.
-  const withNet = runEmployees.map((sre) => ({ sre, effectiveNet: effectiveNetPayout(sre) }))
+  // Rounded to öre here, once: this is the amount every generator writes
+  // and the bank list shows, so the per-line amounts and the control sum are
+  // computed from the same numbers.
+  const withNet = runEmployees.map((sre) => ({
+    sre,
+    effectiveNet: payableAmount(sre, sre.employee_id, paidBefore),
+  }))
   const paid = withNet.filter(({ effectiveNet }) => effectiveNet > 0)
-  const skipped = withNet.length - paid.length
+  // A correction's overpaid employee is named below, not counted as a zero payout.
+  const skipped = withNet.filter(({ effectiveNet }) => (paidBefore ? effectiveNet === 0 : effectiveNet <= 0)).length
+  const correction: SalaryPaymentFileCorrection | null = paidBefore
+    ? {
+        correctsRunId: paidBefore.correctsRunId,
+        overpaid: overpaidEmployees(
+          runEmployees.map((sre) => ({
+            ...sre,
+            name: sre.employee ? `${sre.employee.first_name} ${sre.employee.last_name}`.trim() : '',
+          })),
+          paidBefore,
+        ),
+      }
+    : null
+  // A correction that raises nobody's net has nothing for a file to pay.
+  if (correction && paid.length === 0) {
+    return fail('NOTHING_TO_PAY', format, {
+      correction: { corrects_run_id: correction.correctsRunId, overpaid: correction.overpaid },
+    })
+  }
 
   const missingBank = paid.filter(({ sre }) => !sre.employee?.clearing_number || !sre.employee?.bank_account_number)
   if (missingBank.length > 0) {
@@ -396,7 +654,14 @@ export async function buildSalaryPaymentFile(
     })
   }
 
-  if (skipped > 0) {
+  if (correction) {
+    warnings.push(CORRECTION_DIFFERENCE_ONLY_SV)
+    if (skipped > 0) {
+      warnings.push(`${skipped} anställd(a) utan skillnad mot den tidigare körningen ingår inte i filen.`)
+    }
+    const overpaidSentence = overpaidSentenceSv(correction.overpaid, (amount) => formatCurrency(amount))
+    if (overpaidSentence) warnings.push(overpaidSentence)
+  } else if (skipped > 0) {
     warnings.push(
       `${skipped} anställd(a) med 0 kr i nettoutbetalning ingår inte i filen.`,
     )
@@ -414,11 +679,22 @@ export async function buildSalaryPaymentFile(
     }
     // The LB file ties account to amount with an utbetalningsnummer built on
     // the employee's specification number; pain.001 ignores it.
-    return { name, clearingNumber, bankAccountNumber, payeeNumber: emp.specification_number ?? 0, netSalary: effectiveNet }
+    return {
+      employeeId: sre.employee_id,
+      name,
+      clearingNumber,
+      bankAccountNumber,
+      payeeNumber: emp.specification_number ?? 0,
+      netSalary: effectiveNet,
+      city: emp.city ?? null,
+    }
   })
 
   const totalAmount = Math.round(employees.reduce((sum, e) => sum + e.netSalary, 0) * 100) / 100
   const periodLabel = `${runRow.period_year}-${String(runRow.period_month).padStart(2, '0')}`
+  // The run's current version, or the next one for a confirmed new version.
+  const currentVersion = Math.max(1, runRow.payment_file_version ?? 1)
+  const version = format === 'pain001' ? currentVersion + (input.newVersion ? 1 : 0) : 1
 
   // Generate. Both generators are pure; they run on a dry run too so a preview
   // that passes means the real call passes (invalid clearing, oversize field).
@@ -426,17 +702,24 @@ export async function buildSalaryPaymentFile(
   let filename: string
   let contentType: SalaryPaymentFileOk['contentType']
   let charset: SalaryPaymentFileOk['charset']
+  let payees: SalaryPaymentFilePayee[]
   try {
     if (format === 'pain001') {
-      const messageId = `${getBranding().appName.toUpperCase()}-${companyRow.org_number?.replace('-', '')}-${periodLabel}`
+      const messageId = salaryPaymentMessageId(
+        getBranding().appName.toUpperCase(),
+        bankFileIdOrg(companyRow.org_number, orgNumber),
+        periodLabel,
+        version,
+      )
       content = generatePain001(pain001Company as Pain001CompanyData, employees as Pain001Employee[], {
         messageId,
         paymentDate: runRow.payment_date,
         periodLabel,
       })
-      filename = `pain001_lon_${periodLabel}.xml`
+      filename = version > 1 ? `pain001_lon_${periodLabel}_v${version}.xml` : `pain001_lon_${periodLabel}.xml`
       contentType = 'application/xml'
       charset = 'utf-8'
+      payees = employees.map((e, i) => payeeLine(e, pain001TransactionId(messageId, i)))
     } else {
       const result = generateBgLb(bgLbCompany as BgLbCompanyData, employees as BgLbEmployee[], {
         paymentDate: runRow.payment_date,
@@ -446,6 +729,9 @@ export async function buildSalaryPaymentFile(
       filename = result.filename
       contentType = 'text/plain'
       charset = 'iso-8859-1'
+      // The generator has already accepted every payee number, so this
+      // cannot throw here; it is the number the TK40/TK14 pair carries.
+      payees = employees.map((e) => payeeLine(e, utbetalningsnummer(e.payeeNumber)))
     }
   } catch (err) {
     return fail(
@@ -474,8 +760,24 @@ export async function buildSalaryPaymentFile(
     byteSize,
     paymentDate: runRow.payment_date,
     periodLabel,
+    version,
     employeeCount: employees.length,
     totalAmount,
+    payees,
+    correction,
+    payer: pain001Company
+      ? {
+          name: pain001Company.name,
+          orgNumber: orgNumber && formatOrgNumberDisplay(orgNumber),
+          account: pain001Company.iban,
+          cashAccount: payingCashAccount,
+        }
+      : {
+          name: (bgLbCompany as BgLbCompanyData).name,
+          orgNumber: orgNumber && formatOrgNumberDisplay(orgNumber),
+          account: (bgLbCompany as BgLbCompanyData).senderBankgiro,
+          cashAccount: null,
+        },
     warnings,
   }
 
@@ -505,8 +807,20 @@ export async function buildSalaryPaymentFile(
     employee_count: employees.length,
     total_amount: totalAmount,
     generated_at: generatedAt,
+    // The version and, on a new version, the person's confirmation: the row
+    // is the audit of who made which version when (20261015230000).
+    version,
+    previous_not_approved_confirmed: input.newVersion === true,
   })
-  if (archiveErr) return fail('ARCHIVE_FAILED', format, {}, { cause: archiveErr })
+  if (archiveErr) {
+    // The archive refuses a file while a bank payment of the run is live
+    // (refuse_salary_payment_file_in_bank_payment, 20261027100000): the file
+    // and the bank payments would each pay the month.
+    if (isSalaryInBankPaymentError(archiveErr)) {
+      return fail('IN_BANK_PAYMENT', format)
+    }
+    return fail('ARCHIVE_FAILED', format, {}, { cause: archiveErr })
+  }
 
   // Stamp the run. The archive row above is the record; the stamp is
   // bookkeeping about the run, so a failed UPDATE never withholds the file;

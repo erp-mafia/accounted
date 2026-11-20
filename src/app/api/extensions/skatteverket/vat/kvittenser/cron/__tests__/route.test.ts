@@ -5,6 +5,22 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
 }))
 
+// The route logs through '@/lib/logger' (accounted#115): its warn/error lines
+// are observed through these recorders.
+const { warnRecorder, errorRecorder } = vi.hoisted(() => ({
+  warnRecorder: vi.fn(),
+  errorRecorder: vi.fn(),
+}))
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: vi.fn(),
+    warn: warnRecorder,
+    error: errorRecorder,
+    child: (): unknown => logger,
+  }
+  return { createLogger: () => logger }
+})
+
 vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
@@ -33,7 +49,10 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
 
 vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
   getConnection: vi.fn().mockResolvedValue(null),
-  markGrantRevoked: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/extensions/general/skatteverket/lib/grant-probe', () => ({
+  recordGrantRefusal: vi.fn().mockResolvedValue('withdrawn'),
 }))
 
 vi.mock('@/extensions/general/skatteverket/lib/token-store', () => ({
@@ -62,6 +81,12 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
   hasCapability: vi.fn().mockResolvedValue(true),
 }))
 
+// The company's own redovisare: the cron reads it, never the stored state's.
+vi.mock('@/lib/company/org-number', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/company/org-number')>()),
+  companyRedovisare: vi.fn().mockResolvedValue('165560000000'),
+}))
+
 import { GET } from '../route'
 import { createClient } from '@supabase/supabase-js'
 import { verifyCronSecret } from '@/lib/auth/cron'
@@ -70,7 +95,7 @@ import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { recordVatFilingConfirmed } from '@/lib/vat/filing-record-store'
 import { markNeedsReconsent } from '@/extensions/general/skatteverket/lib/token-store'
-import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
@@ -79,7 +104,7 @@ const mockSendKvittensNotification = vi.mocked(sendKvittensNotification)
 const mockCompleteTaxDeadline = vi.mocked(completeTaxDeadline)
 const mockRecordVatFilingConfirmed = vi.mocked(recordVatFilingConfirmed)
 const mockMarkNeedsReconsent = vi.mocked(markNeedsReconsent)
-const mockMarkGrantRevoked = vi.mocked(markGrantRevoked)
+const mockRecordGrantRefusal = vi.mocked(recordGrantRefusal)
 
 function makeRequest() {
   return new Request('http://localhost/api/extensions/skatteverket/vat/kvittenser/cron', {
@@ -98,7 +123,7 @@ const LOCKED_STATE = {
 }
 
 function makeSupabaseStub(
-  tables: Record<string, { data: unknown; error?: unknown; updateError?: unknown }>,
+  tables: Record<string, { data: unknown; error?: unknown; updateError?: unknown; updated?: unknown[] }>,
 ) {
   return {
     from: vi.fn((table: string) => {
@@ -106,7 +131,7 @@ function makeSupabaseStub(
       const resolved = { data: result.data, error: result.error ?? null }
       const chain: any = {}
       let isUpdate = false
-      for (const method of ['select', 'eq', 'in', 'like', 'order', 'limit', 'delete', 'insert']) {
+      for (const method of ['select', 'eq', 'is', 'in', 'like', 'order', 'limit', 'range', 'delete', 'insert']) {
         chain[method] = vi.fn(() => chain)
       }
       chain.update = vi.fn(() => {
@@ -115,8 +140,16 @@ function makeSupabaseStub(
       })
       chain.maybeSingle = vi.fn().mockResolvedValue(resolved)
       chain.single = vi.fn().mockResolvedValue(resolved)
+      // An update answers the rows it changed (`updated`, one row unless a
+      // test says the compare-and-set missed) or `updateError`.
       chain.then = (resolve: (v: unknown) => void) =>
-        resolve(isUpdate && result.updateError ? { data: null, error: result.updateError } : resolved)
+        resolve(
+          !isUpdate
+            ? resolved
+            : result.updateError
+              ? { data: null, error: result.updateError }
+              : { data: result.updated ?? [{ id: 'row-1' }], error: null },
+        )
       return chain
     }),
   } as any
@@ -143,13 +176,18 @@ describe('VAT kvittenser cron', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
     mockVerifyCronSecret.mockReturnValue(null)
     mockMarkNeedsReconsent.mockResolvedValue(undefined)
-    mockMarkGrantRevoked.mockResolvedValue(undefined)
+    mockRecordGrantRefusal.mockResolvedValue('withdrawn')
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // A run on the schedule that does not open a six-hour window, so the
+    // standing-failure report is a warning unless a test says otherwise
+    // (cron-error-slot.ts decides on the run's start time alone).
+    vi.useFakeTimers({ now: new Date('2026-07-01T08:30:00Z'), toFake: ['Date'] })
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     errorSpy.mockRestore()
     logSpy.mockRestore()
     warnSpy.mockRestore()
@@ -172,6 +210,32 @@ describe('VAT kvittenser cron', () => {
     expect(mockCreateClient).not.toHaveBeenCalled()
   })
 
+  it('finds a locked draft behind more than 200 signed and saved states', async () => {
+    // Signed and saved states are kept for good and sort first by updated_at:
+    // a window over the oldest 200 rows never reached the locked one.
+    const settled = Array.from({ length: 250 }, (_, i) => ({
+      company_id: `comp-${i}`,
+      key: 'submission_202605',
+      value: JSON.stringify({ ...LOCKED_STATE, status: i % 2 ? 'signed' : 'draft_saved' }),
+    }))
+    mockCreateClient.mockReturnValueOnce(makeSupabaseStub({
+      extension_data: {
+        data: [...settled, { company_id: 'comp-late', key: 'submission_202609', value: JSON.stringify({ ...LOCKED_STATE, redovisningsperiod: '202609', period: 9 }) }],
+      },
+      skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+    }))
+    mockSkvRequest.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ kvittensnummer: 'KV-9', tidpunkt: '2026-10-12T10:00:00Z' }),
+    } as any)
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(mockSkvRequest).toHaveBeenCalledTimes(1)
+    expect(body.results).toEqual([expect.objectContaining({ companyId: 'comp-late', period: '202609', status: 'signed' })])
+  })
+
   it('marks the filing signed, records it on the moms deadline, and notifies', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
     mockSkvRequest.mockResolvedValueOnce({
@@ -186,6 +250,17 @@ describe('VAT kvittenser cron', () => {
     expect(body.signed).toBe(1)
     expect(body.errors).toBe(0)
     expect(body.results[0]).toMatchObject({ companyId: 'comp-1', period: '202606', status: 'signed' })
+    // One audited read; nobody asked, so the row names the token owner whose
+    // personal token made the call (a system-credential call would name no one).
+    expect(mockSkvRequest).toHaveBeenCalledTimes(1)
+    expect(mockSkvRequest.mock.calls[0][3]).toEqual({
+      endpoint: 'inlamnat',
+      companyId: 'comp-1',
+      userId: 'user-1',
+      agRegistreradId: '165560000000',
+      redovisningsperiod: '202606',
+      okStatuses: [404],
+    })
 
     expect(mockRecordVatFilingConfirmed).toHaveBeenCalledWith(expect.anything(), 'comp-1', {
       periodType: 'monthly',
@@ -202,7 +277,7 @@ describe('VAT kvittenser cron', () => {
         kvittensnummer: 'KV-123',
       }),
     )
-    expect(errorSpy).not.toHaveBeenCalled()
+    expect(errorRecorder).not.toHaveBeenCalled()
   })
 
   it('quarterly picker params record the quarter', async () => {
@@ -238,11 +313,11 @@ describe('VAT kvittenser cron', () => {
 
     expect(body.signed).toBe(1)
     expect(mockSendKvittensNotification).toHaveBeenCalled()
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[vat-kvittenser-cron] Failed to record filing on the moms deadline',
+    expect(errorRecorder).toHaveBeenCalledWith(
+      'Failed to record filing on the moms deadline',
       expect.objectContaining({ companyId: 'comp-1', message: 'insert failed' }),
     )
-    errorSpy.mockClear()
+    errorRecorder.mockClear()
   })
 
   it('yearly picker params record the filing through the same store as the other cadences', async () => {
@@ -299,6 +374,31 @@ describe('VAT kvittenser cron', () => {
     expect(mockSendKvittensNotification).not.toHaveBeenCalled()
   })
 
+  it("a locked draft naming another company's number is never asked about", async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables({ ...LOCKED_STATE, redovisare: '165599999999' }))
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(mockSkvRequest).not.toHaveBeenCalled()
+    expect(body.signed).toBe(0)
+    expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
+  })
+
+  it("the read names the company's own number in its 12-digit form", async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables({ ...LOCKED_STATE, redovisare: '556000-0000' }))
+    mockSkvRequest.mockResolvedValueOnce({ ok: false, status: 404 } as any)
+
+    await GET(makeRequest())
+
+    expect(mockSkvRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'GET',
+      `/inlamnat/165560000000/${LOCKED_STATE.redovisningsperiod}`,
+      expect.objectContaining({ agRegistreradId: '165560000000' })
+    )
+  })
+
   it('skips rows that are not draft_locked', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables({ ...LOCKED_STATE, status: 'draft_saved' }))
 
@@ -311,16 +411,54 @@ describe('VAT kvittenser cron', () => {
 
   it('flags reconsent codes as expired_token and marks the connection', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
-    mockSkvRequest.mockRejectedValueOnce(
-      new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'),
-    )
+    // The verdict names the token it is about: whose, and which stored row.
+    const expired = new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED')
+    expired.tokenRow = { userId: 'user-7', version: { rowId: 'row-7', refreshCount: 3 } }
+    mockSkvRequest.mockRejectedValueOnce(expired)
 
     const res = await GET(makeRequest())
     const body = await res.json()
 
     expect(body.expired).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
+    // That user's row, not one picked again, and only while it is that token.
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-7', 'comp-1', 'SESSION_EXPIRED', {
+      rowId: 'row-7',
+      refreshCount: 3,
+    })
+
+    // A verdict that names no token flags nothing: there is no row it is about.
+    mockMarkNeedsReconsent.mockClear()
+    mockCreateClient.mockReturnValueOnce(stubHappyTables())
+    mockSkvRequest.mockRejectedValueOnce(new SkatteverketAuthError('Saknar behörighet.', 'MISSING_SCOPE'))
+    await GET(makeRequest())
+    expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
+  })
+
+  it('starts at a random point in id order and wraps round, so a draft behind one still waiting is reached', async () => {
+    // Oldest updated_at first, stopped by the budget, and a still-pending row
+    // is never written: the same head was asked about on every run.
+    const draft = (id: string, companyId: string) => ({ id, company_id: companyId, key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) })
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        extension_data: {
+          data: [
+            draft('11111111-0000-4000-8000-000000000000', 'comp-a'),
+            draft('55555555-0000-4000-8000-000000000000', 'comp-b'),
+            draft('99999999-0000-4000-8000-000000000000', 'comp-c'),
+          ],
+        },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+      }),
+    )
+    mockSkvRequest.mockResolvedValue({ ok: false, status: 404 } as any)
+    const pivot = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue('44444444-0000-4000-8000-000000000000')
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body.results.map((r: { companyId: string }) => r.companyId)).toEqual(['comp-b', 'comp-c', 'comp-a'])
+    pivot.mockRestore()
+    mockSkvRequest.mockReset()
   })
 
   it('records error for generic failures without aborting the run', async () => {
@@ -335,7 +473,16 @@ describe('VAT kvittenser cron', () => {
       status: 'error',
       error: 'Något gick fel. Försök igen.',
     })
-    expect(errorSpy).toHaveBeenCalledTimes(1)
+    // Into the run's report by name, never by message; 08:30 opens no
+    // six-hour window, so it is a warning (it was an error every run).
+    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(warnRecorder).toHaveBeenCalledWith('vat kvittens: filings could not be checked at Skatteverket (kinds: Error)', {
+      skatteverketErrors: {},
+      grantRefused: 0,
+      authErrors: {},
+      thrown: { Error: 1 },
+      companyIds: ['comp-1'],
+    })
   })
 
   it('a failing signed-state update yields an error row and skips deadline + notification', async () => {
@@ -368,7 +515,100 @@ describe('VAT kvittenser cron', () => {
     expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
     expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
     expect(mockSendKvittensNotification).not.toHaveBeenCalled()
-    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
+  })
+
+  it('flips the state only if the row is still the one it read, and leaves a state changed meanwhile alone', async () => {
+    const READ_AT = '2026-07-01T09:00:00.123456+00:00'
+    const SIGNED = { ok: true, status: 200, json: async () => ({ kvittensnummer: 'KV-123' }) } as any
+    const stub = (updated?: unknown[]) =>
+      makeSupabaseStub({
+        extension_data: {
+          data: [{ company_id: 'comp-1', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE), updated_at: READ_AT }],
+          ...(updated ? { updated } : {}),
+        },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+      })
+    const updateChain = (client: any) =>
+      client.from.mock.results.map((r: any) => r.value).find((chain: any) => chain.update.mock.calls.length > 0)
+
+    // Unchanged since the read: the write goes through, guarded on updated_at.
+    const untouched = stub()
+    mockCreateClient.mockReturnValueOnce(untouched)
+    mockSkvRequest.mockResolvedValueOnce(SIGNED)
+    const first = await (await GET(makeRequest())).json()
+    expect(first.results[0]).toMatchObject({ status: 'signed' })
+    expect(updateChain(untouched).eq.mock.calls).toContainEqual(['updated_at', READ_AT])
+
+    // The user locked a new draft (or the panel stored the kvittens) after
+    // the read: the write matches no row, and nothing is completed or mailed
+    // from the old snapshot.
+    vi.clearAllMocks()
+    mockVerifyCronSecret.mockReturnValue(null)
+    mockCreateClient.mockReturnValueOnce(stub([]))
+    mockSkvRequest.mockResolvedValueOnce(SIGNED)
+    const second = await (await GET(makeRequest())).json()
+    expect(second.results[0]).toMatchObject({ companyId: 'comp-1', status: 'state_changed' })
+    expect(second.signed).toBe(0)
+    expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
+    expect(mockSendKvittensNotification).not.toHaveBeenCalled()
+    expect(errorRecorder).not.toHaveBeenCalled()
+  })
+
+  it('reports the reads Skatteverket failed or refused once per run with counts, not in the response body alone', async () => {
+    const row = (companyId: string) => ({ company_id: companyId, key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) })
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        extension_data: { data: ['comp-1', 'comp-2', 'comp-3', 'comp-4'].map(row) },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+      }),
+    )
+    mockSkvRequest
+      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'upstream' } as any)
+      .mockRejectedValueOnce(new SkatteverketAuthError('Ombud saknas.', 'OMBUD_GRANT_MISSING'))
+      .mockRejectedValueOnce(new SkatteverketAuthError('Nekad.', 'ACCESS_DENIED'))
+      // The user revoked the token at Skatteverket: a state, not a failure.
+      .mockRejectedValueOnce(new SkatteverketAuthError('Återkallad.', 'TOKEN_REVOKED'))
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body.results.map((r: { status: string }) => r.status)).toEqual(['error', 'error', 'expired_token', 'expired_token'])
+    // The kinds in the message, sorted: error tracking groups by it.
+    const report = ['vat kvittens: filings could not be checked at Skatteverket (kinds: ACCESS_DENIED, OMBUD_GRANT_MISSING, http_500)', {
+      skatteverketErrors: { '500': 1 },
+      grantRefused: 1,
+      authErrors: { ACCESS_DENIED: 1 },
+      thrown: {},
+      companyIds: ['comp-1', 'comp-2', 'comp-3'],
+    }]
+    // 08:30 opens no six-hour window: a warning, which reaches nobody.
+    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(warnRecorder).toHaveBeenCalledWith(...report)
+  })
+
+  it('raises the same failures at error level in the run that opens a six-hour window, not in every run', async () => {
+    // A declaration that keeps failing stays locked: at error level on every
+    // run it was twelve identical reports a day.
+    const row = (companyId: string) => ({ company_id: companyId, key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) })
+    vi.setSystemTime(new Date('2026-07-01T06:30:00Z'))
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        extension_data: { data: [row('comp-1')] },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+      }),
+    )
+    mockSkvRequest.mockResolvedValueOnce({ ok: false, status: 400, text: async () => 'bad request' } as any)
+
+    await GET(makeRequest())
+
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
+    expect(errorRecorder).toHaveBeenCalledWith('vat kvittens: filings could not be checked at Skatteverket (kinds: http_400)', {
+      skatteverketErrors: { '400': 1 },
+      grantRefused: 0,
+      authErrors: {},
+      thrown: {},
+      companyIds: ['comp-1'],
+    })
   })
 
   function stubTwoCompanyTables() {
@@ -383,7 +623,20 @@ describe('VAT kvittenser cron', () => {
     })
   }
 
-  it('a throwing markGrantRevoked does not abort the remaining companies', async () => {
+  it('a refused moms read asks the register about the grant instead of revoking it (#115)', async () => {
+    mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
+    mockSkvRequest
+      .mockRejectedValueOnce(new SkatteverketAuthError('Ombud saknas.', 'OMBUD_GRANT_MISSING'))
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ kvittensnummer: 'KV-123' }) } as any)
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(mockRecordGrantRefusal).toHaveBeenCalledTimes(1)
+    expect(mockRecordGrantRefusal).toHaveBeenCalledWith('comp-1', 'moms_ombud')
+    expect(body.results[0]).toMatchObject({ companyId: 'comp-1', status: 'error', error: 'OMBUD_GRANT_MISSING' })
+  })
+
+  it('a throwing recordGrantRefusal does not abort the remaining companies', async () => {
     mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
     mockSkvRequest
       .mockRejectedValueOnce(new SkatteverketAuthError('Ombud saknas.', 'OMBUD_GRANT_MISSING'))
@@ -392,7 +645,7 @@ describe('VAT kvittenser cron', () => {
         status: 200,
         json: async () => ({ kvittensnummer: 'KV-123' }),
       } as any)
-    mockMarkGrantRevoked.mockRejectedValueOnce(new Error('db outage'))
+    mockRecordGrantRefusal.mockRejectedValueOnce(new Error('db outage'))
 
     const res = await GET(makeRequest())
     const body = await res.json()
@@ -404,14 +657,33 @@ describe('VAT kvittenser cron', () => {
       error: 'OMBUD_GRANT_MISSING',
     })
     expect(body.results[1]).toMatchObject({ companyId: 'comp-2', status: 'signed' })
-    expect(mockMarkGrantRevoked).toHaveBeenCalledTimes(1)
-    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(mockRecordGrantRefusal).toHaveBeenCalledTimes(1)
+    expect(warnRecorder).toHaveBeenCalledWith('Failed to record the grant refusal', expect.objectContaining({ companyId: 'comp-1' }))
+  })
+
+  it('starts no row after 30 s, so the slowest one (refresh 10 s, second look 1 s, call 15 s, writes, mail) ends inside the 60 s limit', async () => {
+    // The first read takes `ms` of the run's clock.
+    const slowRead = (ms: number) => async () => {
+      vi.setSystemTime(Date.now() + ms)
+      return { ok: false, status: 404 } as any
+    }
+
+    mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
+    mockSkvRequest.mockImplementationOnce(slowRead(29_999)).mockImplementationOnce(slowRead(0))
+    expect((await (await GET(makeRequest())).json()).processed).toBe(2)
+
+    mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
+    mockSkvRequest.mockImplementationOnce(slowRead(30_001))
+    expect((await (await GET(makeRequest())).json()).processed).toBe(1)
+    expect(mockSkvRequest).toHaveBeenCalledTimes(3)
   })
 
   it('a throwing markNeedsReconsent does not abort the remaining companies', async () => {
     mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
+    const expired = new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED')
+    expired.tokenRow = { userId: 'user-1' }
     mockSkvRequest
-      .mockRejectedValueOnce(new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'))
+      .mockRejectedValueOnce(expired)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -429,6 +701,6 @@ describe('VAT kvittenser cron', () => {
       error: 'SESSION_EXPIRED',
     })
     expect(body.results[1]).toMatchObject({ companyId: 'comp-2', status: 'signed' })
-    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnRecorder).toHaveBeenCalledTimes(1)
   })
 })

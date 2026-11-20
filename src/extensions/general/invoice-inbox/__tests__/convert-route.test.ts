@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import {
   createQueuedMockSupabase,
@@ -7,8 +14,25 @@ import {
   makeInvoiceInboxItem,
   makeSupplier,
   makeCompanySettings,
+  testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+
+// suggestion_log records each inbox decision; its reads and writes are
+// covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/inbox')>()),
+  snapshotInboxExtraction: vi.fn(async (_supabase: unknown, companyId: string, item: { id: string; document_id?: string | null }) => ({
+    companyId,
+    inboxItemId: item.id,
+    documentId: item.document_id ?? null,
+    extraction: null,
+    model: null,
+  })),
+  loadEntryLines: vi.fn(async () => []),
+  recordInboxDecision: vi.fn(async () => undefined),
+}))
 
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
   createSupplierInvoiceRegistrationEntry: vi.fn().mockResolvedValue({ id: 'je-1' }),
@@ -26,7 +50,7 @@ vi.mock('@/lib/currency/riksbanken', async () => {
 // ── Helpers ──────────────────────────────────────────────────
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path
   )!
 }
@@ -39,7 +63,6 @@ function buildCtx(supabase: unknown, overrides: Partial<ExtensionContext> = {}):
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
     ...overrides,
@@ -62,17 +85,6 @@ const VALID_CONVERT_BODY = {
 
 describe('POST /items/:id/convert', () => {
   const route = findRoute('POST', '/items/:id/convert')
-
-  it('returns 401 when no context', async () => {
-    const request = createMockRequest('/items/item-1/convert', {
-      method: 'POST',
-      body: VALID_CONVERT_BODY,
-      searchParams: { _id: 'item-1' },
-    })
-    const res = await route.handler(request, undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
-  })
 
   it('returns 404 when item not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -107,6 +119,24 @@ describe('POST /items/:id/convert', () => {
     const res = await route.handler(request, ctx)
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(409)
+  })
+
+  it('refuses to register an invoice whose receipt is booked already, naming that verifikat, before anything is written', async () => {
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: 'item-1', sibling_item_id: 'item-receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'The receipt from the same purchase is booked already on voucher A66. Add this document there instead, so the purchase is not booked twice.',
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    const request = createMockRequest('/items/item-1/convert', { method: 'POST', body: VALID_CONVERT_BODY, searchParams: { _id: 'item-1' } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await route.handler(request, buildCtx(supabase)))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INBOX_ITEM_PAIR_ALREADY_BOOKED')
+    expect(body.error.message).toContain('A66')
+    expect(findCalls('supplier_invoices', 'insert')).toEqual([])
   })
 
   it('refuses a credit note with 409 INBOX_ITEM_IS_CREDIT_NOTE and the invoice it credits (issue #2980)', async () => {
@@ -263,6 +293,21 @@ describe('POST /items/:id/convert', () => {
     expect(status).toBe(200)
     expect(body.data.id).toBe('invoice-1')
     expect(body.data.inbox_item_id).toBe('item-1')
+    // The model's reading is taken before the invoice is written, and the
+    // registration is recorded against it afterwards.
+    expect(vi.mocked(snapshotInboxExtraction).mock.invocationCallOrder[0]).toBeLessThan(
+      supabase.rpc.mock.invocationCallOrder[0],
+    )
+    expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ inboxItemId: inboxItem.id, documentId: 'doc-1' }),
+      expect.objectContaining({
+        supplier_invoice_id: 'invoice-1',
+        fields: expect.objectContaining({ invoice_number: 'F-2024-001', invoice_date: VALID_CONVERT_BODY.invoice_date }),
+      }),
+      'user-1',
+      [{ id: 'already_booked', result: 'pass', detail: null }, { id: 'payee_alert', result: 'pass', detail: null }],
+    )
   })
 
   it('defaults the supplier invoice notes to the rendered WhatsApp channel context', async () => {
@@ -644,6 +689,8 @@ describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
     const { supabase, enqueue, captured } = setup()
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
     enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    // The settings row is read (and must be readable, #58) before the rate.
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     mockFetchExchangeRate.mockResolvedValue(null)
 
     const res = await route.handler(request({ currency: 'USD' }), buildCtx(supabase))
@@ -665,16 +712,6 @@ describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
 
 describe('DELETE /items/:id', () => {
   const route = findRoute('DELETE', '/items/:id')
-
-  it('returns 401 when no context', async () => {
-    const request = createMockRequest('/items/item-1', {
-      method: 'DELETE',
-      searchParams: { _id: 'item-1' },
-    })
-    const res = await route.handler(request, undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
-  })
 
   it('returns 404 when item not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -758,10 +795,8 @@ describe('POST /items/:id/convert honours defer_invoice_booking (#967)', () => {
 describe('GET /items/:id/credit-target', () => {
   const route = findRoute('GET', '/items/:id/credit-target')
 
-  it('returns 401 without a context and 404 for an unknown item', async () => {
+  it('returns 404 for an unknown item', async () => {
     const request = createMockRequest('/items/item-1/credit-target', { searchParams: { _id: 'item-1' } })
-    expect((await route.handler(request, undefined)).status).toBe(401)
-
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null })
     expect((await route.handler(request, buildCtx(supabase))).status).toBe(404)

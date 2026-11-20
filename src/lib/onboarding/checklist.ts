@@ -1,4 +1,4 @@
-import type { InitialSetupPath, MomsPeriod } from '@/types'
+import type { DocumentUploadSource, InitialSetupPath, MomsPeriod, UserUiState } from '@/types'
 
 /**
  * What the Skatteverket checklist step should say about VAT deadlines.
@@ -28,6 +28,34 @@ export function vatDeadlineLine(input: {
   if (!input.momsPeriod) return { kind: 'missing_period' }
   if (!input.nextVatDueDate) return null
   return { kind: 'date', dueDate: input.nextVatDueDate }
+}
+
+/**
+ * Whether bank rows can reach the company: an active bank connection, or rows
+ * that already arrived another way (a bank file, an import). The setup
+ * checklist's bank step and the empty Att göra list on Hem read this one
+ * answer, so the two can never disagree on whether the bank is in.
+ */
+export function hasBankFeed(input: { activeBankConnections: number; transactionCount: number }): boolean {
+  return input.activeBankConnections > 0 || input.transactionCount > 0
+}
+
+/**
+ * What an empty Att göra list says.
+ *
+ * - 'new_ledger': the getting-started steps are still open and nothing is
+ *   booked: the steps above the list are what fills it.
+ * - 'no_bank_feed': the steps are closed, nothing is booked and no bank row
+ *   can arrive. Finishing the books act without a bank lands here, and
+ *   "all done" would tell a brand-new company that its bookkeeping is in
+ *   hand when it has no way to get a first row to book.
+ * - 'all_done': everything on the list is handled.
+ */
+export type AttGoraEmptyState = 'new_ledger' | 'no_bank_feed' | 'all_done'
+
+export function attGoraEmptyState(input: { emptyLedger: boolean; noBankFeed: boolean }): AttGoraEmptyState {
+  if (input.emptyLedger) return 'new_ledger'
+  return input.noBankFeed ? 'no_bank_feed' : 'all_done'
 }
 
 /**
@@ -89,20 +117,6 @@ export function canRecordInitialSetup(role: string | null | undefined): boolean 
 }
 
 /**
- * Done-state for the "Anslut till Claude" step. The only thing that means
- * "connected" is a live API key minted by the MCP OAuth token route: it
- * exists exactly when a client (claude.ai, Claude Desktop, Claude Code)
- * completed the first-call sign-in. `oauthKeyCount` is the head count of
- * that user's unrevoked rows named by OAUTH_MCP_KEY_NAME (lib/auth/api-keys).
- * Before issue #2133 the step ticked on the in-app AI-profile flag, which
- * has nothing to do with Claude; the step could show done for a user who
- * never connected and stay open for one who had.
- */
-export function claudeStepDone(input: { oauthKeyCount: number | null | undefined }): boolean {
-  return (input.oauthKeyCount ?? 0) > 0
-}
-
-/**
  * The MCP server URL we hand to a client. `tool_namespace` is load-bearing
  * (without it the server hands out legacy `gnubok_` tool names), `client`
  * is a telemetry-only distribution marker, and the origin comes from the
@@ -153,3 +167,41 @@ export function claudeConnectorLink(input: { origin: string; appName: string }):
     `&connectorUrl=${encodeURIComponent(serverUrl)}`
   )
 }
+
+/**
+ * Kom igång steps a user may skip. Books and bank are what "the bookkeeping
+ * is running" means, so they never skip (books already has "Starta från
+ * början"). The other three depend on the company: no Skatteverket
+ * connection wanted yet, no receipts at hand, no AI client. Before skipping
+ * existed, one of them left open was the usual reason the checklist never
+ * finished: only Dölj ended it, and Dölj records no completion.
+ */
+export const SKIPPABLE_SETUP_STEPS = ['skatteverket', 'receipts', 'claude'] as const
+export type SkippableSetupStep = (typeof SKIPPABLE_SETUP_STEPS)[number]
+
+/** The steps this user skipped for `companyId` (ui_state.setup_skipped), unknown ids dropped. */
+export function skippedSetupSteps(
+  uiState: UserUiState | null | undefined,
+  companyId: string,
+): SkippableSetupStep[] {
+  const stored = uiState?.setup_skipped?.[companyId]
+  if (!Array.isArray(stored)) return []
+  return SKIPPABLE_SETUP_STEPS.filter((step) => stored.includes(step))
+}
+
+/**
+ * Upload sources that mean a person put an underlag into the company: the
+ * receipts step's goal. The inbox is one way in, uploading or photographing
+ * straight onto a transaction or verifikat is another, and so are mailed,
+ * WhatsApp'd and mail-hunted documents and e-invoices. 'api' is left out because a provider
+ * migration imports old documents under it, and 'system' is generated.
+ */
+export const RECEIPT_UPLOAD_SOURCES = [
+  'camera',
+  'file_upload',
+  'scan',
+  'email',
+  'whatsapp',
+  'mail_hunt',
+  'e_invoice',
+] as const satisfies readonly DocumentUploadSource[]

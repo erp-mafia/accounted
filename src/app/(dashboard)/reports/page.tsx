@@ -1,55 +1,42 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
+import { useEmployees } from '@/lib/reference-data/hooks'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCompanySettings } from '@/components/settings/useSettings'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { ReportLibrary } from '@/components/reports/ReportLibrary'
 import { useRecentReports } from '@/components/reports/useRecentReports'
 import { getReport } from '@/lib/reports/catalog'
-import { createClient } from '@/lib/supabase/client'
 
 /**
  * Reports catalog landing (concept "Tabellen"): one dry table grouped by
  * accounting taxonomy, with a "Senast öppnad" column instead of a separate
  * recents shelf. Selecting a report opens the focused /reports/[slug] route.
- * The fiscal year picked here persists (FyPicker localStorage) and is
- * restored on the focused page, so the choice carries across without URL
- * plumbing.
+ * The fiscal year is app-wide context (the sidebar chip, useFiscalScope),
+ * so the focused page shows the same year without URL plumbing.
  */
 export default function ReportsPage() {
   const router = useRouter()
-  const [selectedPeriod, setSelectedPeriod] = useState('')
   // The catalog itself is static; only the "no fiscal year" empty state has
-  // to wait for the picker to finish restoring its scope (one effect tick
-  // when the periods are seeded, see FyPicker).
-  const [fyReady, setFyReady] = useState(false)
+  // to wait for the app-wide scope to restore.
+  const { periodId, ready: fyReady } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const selectedPeriod = periodId ?? ''
   const { company } = useCompany()
   const { settings } = useCompanySettings()
   const t = useTranslations('reports')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
   const { openedAt, pushRecent } = useRecentReports(company?.id)
   // Payroll reports (catalog needsEmployees) show only for a company that
-  // has employees. Best effort: a failed read keeps them hidden.
-  const [hasEmployees, setHasEmployees] = useState(false)
-  useEffect(() => {
-    if (!company?.id) return
-    let cancelled = false
-    createClient()
-      .from('employees')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', company.id)
-      .then(({ count }) => {
-        if (!cancelled) setHasEmployees((count ?? 0) > 0)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [company?.id])
+  // has employees, former ones included. Best effort: a failed read keeps
+  // them hidden.
+  const { employees } = useEmployees({ includeInactive: true })
+  const hasEmployees = employees.length > 0
 
   // Open a report. Route-owning reports (cash flow, annual report, KPI, SIE)
   // navigate to their own page; the rest open the focused /reports/[slug] route.
@@ -70,7 +57,7 @@ export default function ReportsPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title={t('title')}
+        title={tNav('v3_more_reports')}
         help={
           <HelpPopover>
             <p>{t('help_text')}</p>
@@ -78,15 +65,6 @@ export default function ReportsPage() {
                 (convention 7), not in the page flow. */}
             <p className="mt-2">{t('catalog_footnote')}</p>
           </HelpPopover>
-        }
-        action={
-          <FyPicker
-            value={selectedPeriod || null}
-            onChange={(id) => setSelectedPeriod(id || '')}
-            includeAllOption={false}
-            hideFuturePeriods
-            onReady={() => setFyReady(true)}
-          />
         }
       />
 

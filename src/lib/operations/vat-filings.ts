@@ -19,19 +19,26 @@
  * Every cadence goes through the same path. A yearly (helårsmoms) period is
  * the räkenskapsår, named by the calendar year it ends in with period 1; the
  * store places it from the company's fiscal-year settings.
+ *
+ * booksLockOffer is the offer the tools that record or report a filing pass
+ * on to the agent (the mark here, and the submit and status tools of the MCP
+ * server): lock the books through the period's last day.
  */
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { MarkVatFilingSchema, VatFilingPeriodSchema } from '@/lib/api/schemas'
 import { formatPeriodLabel } from '@/lib/reports/period-dates'
 import {
-  listVatFilings,
   markVatPeriodFiled,
   previewMarkVatPeriodFiled,
   previewUnmarkVatPeriodFiled,
   unmarkVatPeriodFiled,
 } from '@/lib/vat/filing-record-store'
+import { listVatFilingsWithChanges, VatFilingChangeSchema } from '@/lib/vat/filed-period-changes'
+import { readFiledPeriodLock } from '@/lib/vat/filed-period-lock'
 import type { VatFilingPeriodType } from '@/lib/vat/filing-record'
-import { defineOperation } from './types'
+import { settingsUpdateBookkeepingLock } from './company-settings'
+import { defineOperation, type OperationStageExtras } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
 
@@ -75,6 +82,68 @@ function stageLabel(input: Record<string, unknown>): string {
   )
 }
 
+/**
+ * What the lock offer rests on: the day to lock through (the filed period's
+ * last day, still open for writes), and the last day of the newest
+ * räkenskapsår that ends on or before it and is not closed yet, whose bokslut
+ * the lock would stop (null when there is none). The mark's dry run carries it
+ * in its preview, so the names are the preview's.
+ */
+interface LockOffer {
+  through: string
+  open_year_end: string | null
+}
+
+/**
+ * The offer for a filed period, or null when there is none to make: the
+ * period's last day is already shut for writes, or how the books stand on it
+ * could not be read (lib/vat/filed-period-lock.ts has the rule).
+ */
+async function readLockOffer(supabase: SupabaseClient, companyId: string, periodEnd: string): Promise<LockOffer | null> {
+  const lock = await readFiledPeriodLock(supabase, companyId, periodEnd)
+  return lock?.state === 'open' ? { through: lock.lockThrough, open_year_end: lock.openYearEnd } : null
+}
+
+/** When the agent asks: the filing is a fact now, or will be once something else has happened. */
+const LOCK_OFFER_MOMENT = {
+  filed: 'The declaration is filed: ask the user whether',
+  once_filed: 'Once the declaration is filed, ask the user whether',
+  once_approved: 'Once this is approved the period is on record as filed: then ask the user whether',
+} as const
+
+/**
+ * The follow-up an agent is handed where a momsdeklaration is filed: ask the
+ * person whether to lock the books through the period's last day, and stage
+ * the existing lock (settings.update-bookkeeping-lock: staged, high risk,
+ * approved by the person as ever) only on a yes. Filing freezes nothing, so
+ * this is what keeps the filed period as it was declared.
+ */
+function lockOfferHint(
+  { through, open_year_end }: LockOffer,
+  moment: keyof typeof LOCK_OFFER_MOMENT,
+): NonNullable<OperationStageExtras['next']> {
+  const tool = settingsUpdateBookkeepingLock.mcp!.name
+  const openYear = open_year_end
+    ? ` Say too that the räkenskapsår ending ${open_year_end} is not closed, so its bokslut cannot be booked until the lock date is moved back.`
+    : ''
+  return {
+    description: `Filing locks nothing, and the books are open through the period's last day. ${LOCK_OFFER_MOMENT[moment]} to lock the books through ${through}, after which verifikat dated on or before it can no longer be created or changed (the lock date is moved back under Inställningar > Bokföring).${openYear} Only on a yes, stage ${tool}; it is high risk and the user approves it.`,
+    tool,
+    args: { bookkeeping_locked_through: through },
+  }
+}
+
+/** The lock offer as the `next` hint of an MCP tool that reports a filing, or null when there is none to make. */
+export async function booksLockOffer(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodEnd: string,
+  moment: keyof typeof LOCK_OFFER_MOMENT,
+): Promise<NonNullable<OperationStageExtras['next']> | null> {
+  const offer = await readLockOffer(supabase, companyId, periodEnd)
+  return offer ? lockOfferHint(offer, moment) : null
+}
+
 export const vatFilingsList = defineOperation({
   id: 'vat-filings.list',
   kind: 'read',
@@ -92,11 +161,20 @@ export const vatFilingsList = defineOperation({
     pitfalls: [
       'An empty list means nothing is recorded, not that nothing was filed: a declaration filed by hand on skatteverket.se is only on record once it is marked (gnubok_mark_vat_period_filed).',
       'A yearly period is the räkenskapsår: year is the year it ends in, tax_period is 2025/2026 for a broken fiscal year.',
+      'changed_after_filing is not null when verifikat posted, corrected or re-dated after the filing moved the declared period: that change does not reach Skatteverket by itself.',
     ],
-    example: { response: { data: { filings: [EXAMPLE_RECORD] }, meta: META } },
+    example: { response: { data: { filings: [{ ...EXAMPLE_RECORD, changed_after_filing: null }] }, meta: META } },
   },
   input: z.object({}),
-  output: z.object({ filings: z.array(VatFilingRecordSchema) }),
+  output: z.object({
+    filings: z.array(
+      VatFilingRecordSchema.extend({
+        changed_after_filing: VatFilingChangeSchema.nullable().describe(
+          'What moved in the declared period since it was filed, per ruta and verifikat; null when the books still read as filed.',
+        ),
+      }),
+    ),
+  }),
   mcp: {
     name: 'gnubok_list_vat_filings',
     title: 'List Filed VAT Periods',
@@ -104,7 +182,7 @@ export const vatFilingsList = defineOperation({
       'Which momsdeklaration periods (monthly, quarterly, helårsmoms) are on record as filed, via a Skatteverket kvittens or marked by hand, with the dates each covers. Local record, not a Skatteverket read.',
     keywords: ['inlämnad', 'inlämnade momsdeklarationer', 'momsperiod', 'helårsmoms', 'deklarerad', 'kvittens'],
   },
-  run: async (ctx) => ({ ok: true, data: { filings: await listVatFilings(ctx.supabase, ctx.companyId) } }),
+  run: async (ctx) => ({ ok: true, data: { filings: await listVatFilingsWithChanges(ctx.supabase, ctx.companyId) } }),
 })
 
 export const vatFilingsMark = defineOperation({
@@ -125,6 +203,7 @@ export const vatFilingsMark = defineOperation({
       'The period must have ended, and filed_on must fall after its last day and no later than today: otherwise VAT_FILING_PERIOD_NOT_ENDED, VAT_FILING_DATE_BEFORE_PERIOD_END or VAT_FILING_DATE_IN_FUTURE.',
       'Yearly: year is the year the räkenskapsår ends in and period is 1; a broken fiscal year ends in its own month, not December.',
       'Omitting reference keeps a stored one; null clears it.',
+      "Marking locks nothing. While verifikat can still be posted on the period's last day the preview carries lock_offer (the day to lock through, and open_year_end when a räkenskapsår that is not closed ends on or before it) and the staged answer offers the lock in next.",
     ],
     example: {
       request: { period_type: 'yearly', year: 2026, period: 1, filed_on: '2026-08-20', reference: 'ABC123' },
@@ -151,6 +230,8 @@ export const vatFilingsMark = defineOperation({
     stage: {
       pendingType: 'mark_vat_period_filed',
       title: (input) => `Markera momsdeklaration ${stageLabel(input)} som inlämnad`,
+      extras: (_input, preview) =>
+        preview.lock_offer ? { next: lockOfferHint(preview.lock_offer as LockOffer, 'once_approved') } : {},
     },
   },
   run: async (ctx, input, { dryRun }) => {
@@ -159,7 +240,10 @@ export const vatFilingsMark = defineOperation({
       const preview = await previewMarkVatPeriodFiled(ctx.supabase, ctx.companyId, markInput)
       if (!preview.ok) return { ok: false, code: preview.code }
       const { would_mark, effect, current } = preview
-      return { ok: true, dryRun: true, preview: { would_mark, effect, current } }
+      // Marking locks nothing: while the period's last day is open for writes
+      // the preview says what a lock through it would rest on.
+      const lock_offer = await readLockOffer(ctx.supabase, ctx.companyId, would_mark.period_end)
+      return { ok: true, dryRun: true, preview: { would_mark, effect, current, lock_offer } }
     }
     const result = await markVatPeriodFiled(ctx.supabase, ctx.companyId, { ...markInput, userId: ctx.userId })
     if (!result.ok) return { ok: false, code: result.code }

@@ -67,6 +67,36 @@ describe('resolveDefaultSeriesForSource', () => {
     ).toBe('C')
   })
 
+  it('resolves tax_account from the company map and defaults to A', () => {
+    expect(resolveDefaultSeriesForSource({ default_voucher_series_per_source_type: { tax_account: 'S' } }, 'tax_account')).toBe('S')
+    expect(resolveDefaultSeriesForSource(null, 'tax_account')).toBe('A')
+    expect(resolveDefaultSeriesForSource({ default_voucher_series_per_source_type: { manual: 'B' } }, 'tax_account')).toBe('A')
+  })
+
+  it('resolves tax_account to the system letter for a map saved before tax_account existed', () => {
+    // Skattekonto bookings were 'system' until #172: a company that moved
+    // system to S keeps its skattekonto in S after the deploy.
+    const legacy = { default_voucher_series_per_source_type: { manual: 'A', system: 'S' } }
+    expect(resolveDefaultSeriesForSource(legacy, 'tax_account')).toBe('S')
+    expect(resolveDefaultSeriesForSource({ manual: 'A', system: 'S' }, 'tax_account')).toBe('S')
+    // An own Skattekonto letter wins over the system one.
+    expect(
+      resolveDefaultSeriesForSource({ default_voucher_series_per_source_type: { system: 'S', tax_account: 'T' } }, 'tax_account'),
+    ).toBe('T')
+    // An invalid own letter falls through to system, an invalid system letter to A.
+    expect(
+      resolveDefaultSeriesForSource({ default_voucher_series_per_source_type: { system: 'S', tax_account: 'x' } }, 'tax_account'),
+    ).toBe('S')
+    expect(resolveDefaultSeriesForSource({ default_voucher_series_per_source_type: { system: 'ss' } }, 'tax_account')).toBe('A')
+  })
+
+  it('does not let other source types inherit the system letter', () => {
+    const legacy = { default_voucher_series_per_source_type: { system: 'S' } }
+    expect(resolveDefaultSeriesForSource(legacy, 'manual')).toBe('A')
+    expect(resolveDefaultSeriesForSource(legacy, 'vat_settlement')).toBe('A')
+    expect(resolveDefaultSeriesForSource(legacy, 'system')).toBe('S')
+  })
+
   it('accepts a bare map (no settings wrapper)', () => {
     expect(
       resolveDefaultSeriesForSource(
@@ -165,6 +195,12 @@ describe('formatVoucher', () => {
 
   it('uppercases the series', () => {
     expect(formatVoucher({ voucher_series: 'b', voucher_number: 3 })).toBe('B3')
+  })
+
+  it('gives the hyphenated form only when asked, for the v1 fields documented as "A-12"', () => {
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: 12 }, { separator: '-' })).toBe('A-12')
+    expect(formatVoucher({ voucher_series: null, voucher_number: 7 }, { separator: '-' })).toBe('A-7')
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: 0 }, { separator: '-' })).toBe('-')
   })
 })
 

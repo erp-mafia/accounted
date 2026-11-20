@@ -3,9 +3,6 @@ import type { InvoiceFontFamily } from '@/types'
 export const LOGO_UPLOAD_MAX_MB = 10
 export const LOGO_UPLOAD_MAX_BYTES = LOGO_UPLOAD_MAX_MB * 1024 * 1024
 
-export const INVOICE_LOGO_MAX_WIDTH_PT = 240
-export const INVOICE_LOGO_MAX_HEIGHT_PT = 80
-
 export const INVOICE_FONT_FAMILIES = [
   'Helvetica',
   'Times-Roman',

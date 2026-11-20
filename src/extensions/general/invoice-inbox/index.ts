@@ -1,4 +1,3 @@
-import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { routeClassifiedDocument } from './lib/route-from-arkiv'
 import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
@@ -6,11 +5,10 @@ import type { EventPayload } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 const extensionLog = createLogger('invoice-inbox')
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
 import {
-  uploadDocument,
   createPendingDocumentUpload,
   completePendingDocumentUpload,
 } from '@/lib/core/documents/document-service'
@@ -19,24 +17,45 @@ import { validateBody } from '@/lib/api/validate'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { dbError } from '@/lib/errors/db-error'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import { extractInvoiceFields, ExtractionSchema, emptyResult, fetchOwnCompanyIdentity } from './lib/extract-invoice-fields'
-import { mirrorExtractionToDocument } from './lib/mirror-extraction'
+import { fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
+import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
+import { loadDocumentReading } from '@/lib/documents/reading/load'
+import { peppolReader } from '@/lib/invoices/peppol-reading'
+import { checkNeverCheckedInboxItems, neverChecked, neverCheckedToCheck, proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import type { InboxPairing } from '@/lib/inkorg/pairs'
+import { nothingRead } from '@/lib/inkorg/decision'
+import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
+import type { InkorgItem, ReadingRetry } from '@/lib/inkorg/items'
+import { readingRetryOf } from './lib/provider-retry'
+import { readInboxPairings, type ListedItem } from '@/lib/operations/inbox-pairings'
+import { sameInvoiceItems, type SameInvoiceItem } from '@/lib/inkorg/same-invoice'
+import { readInboxBankMatch, readInboxBankMatches, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
+import { readCardKnown, readCardOf, readKnownCards } from '@/lib/documents/bank-match/known-cards'
+import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
+import type { DocumentReading } from '@/lib/documents/reading/types'
 import {
   uploadAndExtract,
   processArchivedDocument,
   sanitiseFilename,
   sanitiseMime,
   isSandboxCompany,
-  countPdfPages,
-  slicePdfForExtraction,
   MAX_FILE_SIZE,
-  maxPagesForAutoExtract,
   UPLOAD_ALLOWED_MIME_TYPES,
   EMAIL_ALLOWED_MIME_TYPES,
   ensureHtmlDocument,
 } from './lib/upload-and-extract'
-import { isSignatureImage, renderEmailBodyUnderlag } from './lib/email-body-underlag'
+import {
+  contentIdsReferencedByHtml,
+  emailBodyToText,
+  isSignatureImage,
+  isSubstantiveBody,
+  normaliseContentId,
+  renderEmailBodyUnderlag,
+} from './lib/email-body-underlag'
+import { fileInboxDelivery } from './lib/inbox-delivery'
 import type { RenderedEmailBodyUnderlag } from './lib/email-body-underlag'
+import { recordInboundMailArrivals } from './lib/inbound-arrival'
+import { recordDocumentArrival } from '@/lib/intake/arrivals'
 import {
   verifyInboundWebhook,
   fetchReceivingEmail,
@@ -46,73 +65,75 @@ import {
   resolveKindHintForTags,
   splitKnownInboxTags,
   type InboxKindHint,
-  parseRecipients,
   isEmailReceivedEvent,
+  baseContentType,
+  isMailMachineryPart,
+  isPlainTextPart,
+  mayRedeliverOverMinuteCap,
   ResendSignatureError,
 } from './lib/resend-inbound'
 import {
   rotateCompanyInbox,
+  renameCompanyInbox,
+  InboxRenameRefused,
   getActiveInbox,
+  listPreviousInboxes,
+  stopPreviousInbox,
+  inboxReceivesMail,
   composeInboxAddress,
 } from './lib/inbox-provisioning'
-import {
-  claimCustomDomain,
-  checkCustomDomainVerification,
-  removeCustomDomain,
-  getCustomDomain,
-  findCompanyForRecipientDomains,
-  applyDomainStatusFromWebhook,
-} from './lib/custom-domains'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { inboxAddressCarriesName } from '@/lib/documents/inbox-address'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { roundOre } from '@/lib/money'
-import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
-import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
+import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, DashboardBulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
-import {
-  resolveBookedJournalEntryIds,
-  resolveUnderlagAnchoring,
-  type UnderlagAnchoring,
-} from '@/lib/transactions/inbox-underlag'
-
-/**
- * Per-item underlag status on the wire (#1548): the anchoring verdict, or
- * 'unknown' when the document row could not be read. Absence is never
- * reported as anchored; the UI keeps 'unknown' out of the booked bucket.
- */
-type UnderlagStatus = UnderlagAnchoring | 'unknown'
+import { filedPeriodCategorizeWarning } from '@/lib/transactions/filed-vat-categorize'
+import { recordVoucherWarningsAcknowledged } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
 import { buildFallbackKonteringLines } from './lib/fallback-kontering'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import type { Transaction, EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
-import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
+import { fetchPurchasesWithoutUnderlag } from '@/lib/receipt-hunt/purchases-without-underlag'
+import { vendorLogoUrls } from '@/lib/vendor-logos/read'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { matchInboxItemSupplier, matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import { matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import { documentFitGate } from '@/lib/documents/bank-match/fit'
+import { bookInboxItemDirectly } from '@/lib/operations/inbox-book-direct'
 import type { OperationContext } from '@/lib/operations/types'
 import {
   deleteInboxItem,
+  resolveInboxBookedState,
   unmatchInboxItemTransaction,
   updateInboxItemFields,
   UpdateInboxItemFieldsSchema,
   type UpdateInboxItemFieldsInput,
 } from '@/lib/documents/inbox-item-actions'
-import { convertInboxItemToSupplierInvoice } from '@/lib/documents/inbox-convert'
+import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-convert'
+import { setInboxItemPurchaseCategory, SetInboxPurchaseCategorySchema } from '@/lib/documents/inbox-purchase-category'
+import { resolveInboxPurchaseCategoryChoices } from '@/lib/categories/inbox-purchase-category'
+import { carriedPersonFields, keepPersonChoices } from '@/lib/documents/person-corrections'
+import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
-import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
+import { resolvePortal } from '@/lib/receipt-hunt/company-portals'
+import { readCompanyPortals } from '@/lib/receipt-hunt/company-portals-read'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
-import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
-import { simpleParser } from 'mailparser'
-import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import { checkInboxUploadRateLimit, type InboxLimitResult } from '@/lib/rate-limits/inbox'
+import type { InvoiceExtractionResult } from '@/types'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
+
+/** POST /inbox/rotate: an empty body rotates; keep_previous renames. */
+const RotateInboxSchema = z.object({ keep_previous: z.boolean().optional() }).strict()
+/** POST /inbox/previous/stop: one earlier address, as GET /inbox/address lists it. */
+const StopPreviousInboxSchema = z.object({ address: z.string().trim().min(1).max(320) }).strict()
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
 // week"; the hard cap keeps the query bounded.
 const INBOUND_HISTORY_DEFAULT_DAYS = 30
@@ -135,13 +156,6 @@ function operationContext(ctx: ExtensionContext): OperationContext {
   return { supabase: ctx.supabase, companyId: ctx.companyId, userId: ctx.userId, log: extensionLog }
 }
 
-// Claim body for POST /inbox/domain. Length-capped only: real validation
-// (punycode, hostname shape, blocklist) lives in normalizeInboundDomain /
-// validateClaimableDomain so the same rules apply to every caller.
-const ClaimDomainSchema = z.object({
-  domain: z.string().trim().min(1).max(255),
-})
-
 // Direct-to-storage upload (signed URL, see the /upload/create route).
 // size_bytes is the browser's own report: the server re-measures the object
 // on completion, so this only refuses the obviously oversized before a URL
@@ -157,8 +171,6 @@ const CompleteSignedUploadSchema = z.object({
   upload_id: z.string().uuid(),
   file_name: z.string().trim().min(1).max(255),
   mime_type: z.string().trim().min(1).max(120),
-  matched_transaction_id: z.string().uuid().nullable().optional(),
-  skip_extraction: z.boolean().optional(),
 })
 
 /**
@@ -236,20 +248,6 @@ function signedUploadFailureResponse(
   return errorResponseFromCode('INBOX_UPLOAD_FAILED', ctx.log, { requestId: ctx.requestId, reason })
 }
 
-// Custom inbound domains are fully built but deliberately not exposed,
-// product decision 2026-07-02: the default is the Fortnox-style shared
-// address (+ user-side forwarding); own-domain inbound waits for real demand.
-// Flip INBOX_CUSTOM_DOMAINS_ENABLED=true to re-enable the /inbox/domain
-// routes. The globe entry point in InvoiceInboxWorkspace was removed at the
-// same time. Restore it when re-enabling.
-const customDomainsEnabled = () => process.env.INBOX_CUSTOM_DOMAINS_ENABLED === 'true'
-
-const customDomainsDisabledResponse = () =>
-  NextResponse.json(
-    { error: 'Egen domän är inte tillgänglig.', code: 'FEATURE_DISABLED' },
-    { status: 403 }
-  )
-
 // ── Admin/owner check helper ──────────────────────────────────
 
 async function isCompanyAdmin(
@@ -273,24 +271,31 @@ export const invoiceInboxExtension: Extension = {
   name: 'Dokumentinkorg',
   version: '3.0.0',
 
+  // Registry-resolved services for core callers (core cannot import
+  // @/extensions). Contract: lib/intake/partner-delivery.ts.
+  services: {
+    // The v1 partner door, POST /api/v1/companies/{id}/inbox-items.
+    fileInboxDelivery,
+  },
+
   eventHandlers: [
     {
-      // Arkiv said what a document is: queue a receipt or invoice that came in another way, release what is not booked from here.
+      // Arkiv said what a document is: queue a receipt or invoice that came in another way, release what is not booked
+      // from here, and carry a person's type onto the item already queued.
       eventType: 'document.classified',
+      // A failure throws to the event bus, which logs it as an error with the
+      // event type and this consumer's name and keeps it from the classifier (lib/events/bus.ts).
       handler: async (payload: EventPayload<'document.classified'>) => {
-        try {
-          const outcome = await routeClassifiedDocument(createServiceClientNoCookies(), {
-            documentId: payload.document.id,
-            companyId: payload.companyId,
-            userId: payload.userId,
-            docType: payload.docType,
-            admission: payload.admission,
-          })
-          if (outcome === 'queued' || outcome === 'requeued' || outcome === 'routed_to_arkiv') {
-            extensionLog.info('routed classified document', { doc: payload.document.id, docType: payload.docType, outcome })
-          }
-        } catch (err) {
-          extensionLog.warn('routing classified document failed', { doc: payload.document.id, reason: err instanceof Error ? err.message : String(err) })
+        const outcome = await routeClassifiedDocument(createServiceClientNoCookies(), {
+          documentId: payload.document.id,
+          companyId: payload.companyId,
+          userId: payload.userId,
+          docType: payload.docType,
+          admission: payload.admission,
+          decidedBy: payload.decidedBy,
+        })
+        if (outcome === 'queued' || outcome === 'requeued' || outcome === 'retyped' || outcome === 'routed_to_arkiv' || outcome === 'duplicate_of_queued_or_booked') {
+          extensionLog.info('routed classified document', { doc: payload.document.id, docType: payload.docType, outcome })
         }
       },
     },
@@ -300,9 +305,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/upload',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         // Per-company rate limit (30/min, 500/day). Defense against script
         // floods and compromised sessions; never hit by real users in normal
         // monthly receipt-clearing.
@@ -329,17 +332,6 @@ export const invoiceInboxExtension: Extension = {
 
         const formData = await request.formData()
         const file = formData.get('file') as File | null
-        const matchedTransactionIdRaw = formData.get('matched_transaction_id')
-        const matchedTransactionId =
-          typeof matchedTransactionIdRaw === 'string' && matchedTransactionIdRaw.length > 0
-            ? matchedTransactionIdRaw
-            : null
-        // Opt-out of the built-in Claude/Bedrock OCR. Agents with their own
-        // extraction pipeline upload the document, get the inbox row, then
-        // PUT /items/:id/extracted-data with their parsed fields.
-        const skipExtraction =
-          formData.get('skip_extraction') === 'true' ||
-          formData.get('skip_extraction') === '1'
 
         if (!file) return errorResponseFromCode('INBOX_UPLOAD_NO_FILE', ctx.log)
         if (file.size > MAX_FILE_SIZE) {
@@ -355,34 +347,13 @@ export const invoiceInboxExtension: Extension = {
           })
         }
 
-        // Validate matched_transaction_id belongs to this company before we
-        // spend the AI extraction budget. RLS would also catch a mismatch on
-        // the insert, but failing fast gives a clearer error and lets the
-        // caller distinguish "your context_ref pointed at a tx you don't own"
-        // from a generic upload failure.
-        if (matchedTransactionId) {
-          const { data: tx, error: txErr } = await ctx.supabase
-            .from('transactions')
-            .select('id')
-            .eq('id', matchedTransactionId)
-            .eq('company_id', ctx.companyId)
-            .maybeSingle()
-          if (txErr) {
-            return NextResponse.json({ error: txErr.message }, { status: 500 })
-          }
-          if (!tx) {
-            return errorResponseFromCode('INBOX_UPLOAD_TX_NOT_IN_COMPANY', ctx.log)
-          }
-        }
-
         try {
           const buffer = await file.arrayBuffer()
           // Staged upload: the row lands as 'processing' and the response
           // returns before Bedrock runs; the deferred worker (or the sweep
           // cron) flips it to 'received'. Only this web route defers: email
           // and WhatsApp ingestion already run in background contexts and
-          // consume the returned item synchronously. When skipExtraction is
-          // set the call stays synchronous (see uploadAndExtract).
+          // consume the returned item synchronously.
           const result = await uploadAndExtract(
             ctx.supabase,
             ctx.userId,
@@ -390,9 +361,17 @@ export const invoiceInboxExtension: Extension = {
             { name: file.name, buffer, type: file.type },
             'upload',
             undefined,
-            matchedTransactionId,
-            { skipExtraction, deferExtraction: true },
+            null,
+            { deferExtraction: true },
           )
+          // How it came in (best effort, never fails the upload).
+          await recordDocumentArrival(ctx.supabase, {
+            companyId: ctx.companyId,
+            source: 'upload',
+            documentId: result.document_id,
+            inboxItemId: result.inbox_item_id,
+            fetchedBy: { type: 'user', user_id: ctx.userId },
+          })
           return NextResponse.json({ data: result })
         } catch (error) {
           console.error('[invoice-inbox/upload] Failed:', error)
@@ -428,9 +407,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/upload/create',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
         if (!limit.ok) {
           return NextResponse.json(
@@ -481,7 +458,7 @@ export const invoiceInboxExtension: Extension = {
             fileName,
           )
           // The RAW Storage URL, deliberately not the same-origin proxy the
-          // MCP tools hand out (toSameOriginStorageUrl): that proxy buffers
+          // MCP tools hand out (toSameOriginStorageRequest): that proxy buffers
           // the PUT body inside a function and so sits under the very
           // ceiling this route exists to get around. CSP connect-src
           // already allows the Storage host.
@@ -501,14 +478,10 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/upload/complete',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const parsed = await validateBody(request, CompleteSignedUploadSchema)
         if (!parsed.success) return parsed.response
         const { upload_id: uploadId, file_name: fileName, mime_type: mimeType } = parsed.data
-        const matchedTransactionId = parsed.data.matched_transaction_id ?? null
-        const skipExtraction = parsed.data.skip_extraction === true
 
         // The declared type drives the magic-byte check on completion, so
         // it is gated exactly like the multipart route's file.type.
@@ -518,25 +491,6 @@ export const invoiceInboxExtension: Extension = {
             messageSv: `Filtypen stöds inte: ${mimeType}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
             messageEn: `Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
           })
-        }
-
-        // Same ownership check as /upload: fail fast with a clear code
-        // rather than letting RLS reject the insert after extraction.
-        if (matchedTransactionId) {
-          const { data: tx, error: txErr } = await ctx.supabase
-            .from('transactions')
-            .select('id')
-            .eq('id', matchedTransactionId)
-            .eq('company_id', ctx.companyId)
-            .maybeSingle()
-          if (txErr) {
-            return errorResponse(txErr, ctx.log, { requestId: ctx.requestId })
-          }
-          if (!tx) {
-            return errorResponseFromCode('INBOX_UPLOAD_TX_NOT_IN_COMPANY', ctx.log, {
-              requestId: ctx.requestId,
-            })
-          }
         }
 
         try {
@@ -573,9 +527,16 @@ export const invoiceInboxExtension: Extension = {
             { name: fileName, buffer: completed.buffer, type: mimeType },
             'upload',
             undefined,
-            matchedTransactionId,
-            { skipExtraction, deferExtraction: true },
+            null,
+            { deferExtraction: true },
           )
+          await recordDocumentArrival(ctx.supabase, {
+            companyId: ctx.companyId,
+            source: 'upload',
+            documentId: result.document_id,
+            inboxItemId: result.inbox_item_id,
+            fetchedBy: { type: 'user', user_id: ctx.userId },
+          })
           return NextResponse.json({ data: result })
         } catch (error) {
           return signedUploadFailureResponse(error, ctx, 'upload/complete')
@@ -587,45 +548,54 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/items',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const status = url.searchParams.get('status')
-        // Cap raised from 50 → 500: the inbox is a workqueue and booked items
-        // now drop out of the default view client-side, so a low cap silently
-        // hid active underlag behind older booked ones. 500 covers realistic
-        // single-company volumes; pagination is the next step beyond that.
-        const limit = Math.min(Math.max(1, Number(url.searchParams.get('limit')) || 50), 500)
+        // The inbox is a workqueue and booked items drop out of the view
+        // client-side, so any cap on the read hides open underlag behind
+        // older booked ones (it was 50, then 500). Without ?limit every item
+        // is read, paged; ?limit asks for the newest N only (at most 1,000).
+        const limitParam = Number(url.searchParams.get('limit'))
+        const limit = Number.isInteger(limitParam) && limitParam >= 1 ? Math.min(limitParam, 1000) : null
 
-        let query = ctx.supabase
-          .from('invoice_inbox_items')
-          .select(`
-            id, status, source, created_at, extracted_data,
-            matched_supplier_id, document_id, email_from, email_subject,
-            email_received_at, email_body_text, error_message,
-            created_supplier_invoice_id,
-            matched_transaction_id, created_journal_entry_id,
-            resend_email_id, extraction_skipped, channel_context, kind_hint,
-            routed_to_arkiv_at, routed_doc_type
-          `)
-          .eq('company_id', ctx.companyId)
-          .order('created_at', { ascending: false })
-          .limit(limit)
+        const itemsQuery = () => {
+          let query = ctx.supabase
+            .from('invoice_inbox_items')
+            .select(`
+              id, status, source, created_at, extracted_data,
+              matched_supplier_id, document_id, email_from, email_subject,
+              email_received_at, email_body_text, error_message,
+              created_supplier_invoice_id,
+              matched_transaction_id, created_journal_entry_id,
+              resend_email_id, extraction_skipped, channel_context, kind_hint,
+              routed_to_arkiv_at, routed_doc_type,
+              bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key,
+              bank_match_checked_at, ${INBOX_ITEM_DOCUMENT_HOLD}
+            `)
+            .eq('company_id', ctx.companyId)
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: true })
+          if (status) query = query.eq('status', status)
+          return query
+        }
 
-        if (status) query = query.eq('status', status)
+        let data: unknown[]
+        try {
+          if (limit === null) {
+            data = await fetchAllRows<unknown>(({ from, to }) => itemsQuery().range(from, to))
+          } else {
+            const { data: page, error } = await itemsQuery().range(0, limit - 1)
+            if (error) throw error
+            data = page ?? []
+          }
+        } catch (error) {
+          return NextResponse.json({ error: (error as { message?: string }).message ?? String(error) }, { status: 500 })
+        }
 
-        const { data, error } = await query
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-        // Enrich matched-but-unstamped items with the verifikat that anchors
-        // their transaction, when it is already booked. The stamp
-        // (created_journal_entry_id) is UNIQUE per verifikat, so on a
-        // samlingsverifikat only one of N items can carry it: deriving
-        // "booked" from the transaction's own state is what lets the rest
-        // leave the active inbox (2026-08-12 report: booked items stuck in
-        // "Att göra" pointing at a transaction no longer in the work list).
-        type ItemRow = {
+        // Matched-but-unstamped items carry the verifikat that books their
+        // transaction, and whether this item's underlag reached it: the same
+        // enrichment as v1 (resolveInboxBookedState in inbox-item-actions).
+        type ItemRow = DocumentHoldRow & {
           id: string
           document_id: string | null
           matched_transaction_id: string | null
@@ -633,116 +603,145 @@ export const invoiceInboxExtension: Extension = {
           created_supplier_invoice_id: string | null
           extracted_data: Record<string, unknown> | null
           extraction_skipped: boolean | null
+          created_at: string
         }
-        const rows = (data ?? []) as ItemRow[]
-        const unresolved = rows.filter(
-          (r) =>
-            r.matched_transaction_id &&
-            !r.created_journal_entry_id &&
-            !r.created_supplier_invoice_id,
-        )
-        const unresolvedTxIds = Array.from(
-          new Set(unresolved.map((r) => r.matched_transaction_id as string)),
-        )
-        const bookedByTx = await resolveBookedJournalEntryIds(
-          ctx.supabase,
-          ctx.companyId,
-          unresolvedTxIds,
-        )
-        // Per-item honesty (#1548): the transaction being booked says a
-        // verifikat exists, not that THIS item's underlag reached it. A
-        // document whose link failed, or that is anchored to another
-        // verifikat, must keep the item in "Att göra" instead of reading as
-        // booked on the transaction's word alone.
-        const anchoring = await resolveUnderlagAnchoring(
-          ctx.supabase,
-          ctx.companyId,
-          unresolved
-            .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
-            .map((r) => ({
-              id: r.id,
-              document_id: r.document_id,
-              journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
-            })),
-        )
-        const items = rows.map((r) => {
-          const derivedEntryId = r.matched_transaction_id
-            ? bookedByTx.get(r.matched_transaction_id) ?? null
-            : null
-          // Absent from the anchoring map means the document row could not
-          // be read: 'unknown', which the UI treats like a divergent item
-          // (stays in Att göra, no booking bridge). Never booked on a guess.
-          // Only unstamped items were sent to the anchoring read; a stamped
-          // sibling is booked by its own column and gets no verdict here.
-          const unstamped = !r.created_journal_entry_id && !r.created_supplier_invoice_id
-          const underlagStatus: UnderlagStatus | null =
-            derivedEntryId && unstamped ? anchoring.get(r.id)?.status ?? 'unknown' : null
-          return {
-            ...r,
-            matched_transaction_journal_entry_id: derivedEntryId,
-            underlag_status: underlagStatus,
+        const rows = ((data ?? []) as ItemRow[]).map(withDocumentHold)
+        const bookedState = await resolveInboxBookedState(ctx.supabase, ctx.companyId, rows)
+
+        // Match on arrival, for the whole list in a few reads (never one per
+        // item): the bank row each open item looks already paid by, checked
+        // again now, as the detail read below does. Read from the rows as
+        // stored, before the document's reading stands in.
+        let bankMatches = new Map<string, BankMatch>()
+        try {
+          bankMatches = await readInboxBankMatches(ctx.supabase, ctx.companyId, rows as unknown as BankMatchItemRow[])
+        } catch (err) {
+          extensionLog.warn('inbox list bank match read failed', { err: err instanceof Error ? err.message : String(err) })
+        }
+
+        // Items filed before match on arrival existed (or whose bank rows
+        // came before it) were never checked: the newest few are checked
+        // after this answer, at most one batch per company per cooldown, so
+        // old items heal as the list is read, without a backfill. Their
+        // writes reach the page as realtime changes and the next read shows
+        // the proposals. Never part of this answer, never its failure.
+        const neverCheckedIds = neverCheckedToCheck(rows as unknown as Parameters<typeof neverCheckedToCheck>[0], new Date())
+        if (neverCheckedIds.length > 0) {
+          try {
+            after(() => checkNeverCheckedInboxItems(ctx.supabase, ctx.companyId, neverCheckedIds, extensionLog).then(() => undefined))
+          } catch (err) {
+            extensionLog.warn('inbox list never-checked items not scheduled', { err: err instanceof Error ? err.message : String(err) })
           }
-        })
+        }
+
+        const items = rows.map((r) => ({
+          ...r,
+          matched_transaction_journal_entry_id: bookedState.get(r.id)?.journalEntryId ?? null,
+          underlag_status: bookedState.get(r.id)?.underlag ?? null,
+          bank_match: bankMatches.get(r.id) ?? null,
+          reading_retry: null as ReadingRetry | null,
+        }))
 
         // A receipt dropped into Dokument is routed here the moment the
         // classifier types it, before its reading has landed: the item was
         // created with none and stayed "Inte AI-tolkad" although the document
-        // row got the reading seconds later (prod 2026-09-24). The document's
+        // row got the reading seconds later (seen 2026-09-24). The document's
         // own reading stands in for the item's.
-        const unread = items.filter((i) => i.extracted_data == null && i.document_id).map((i) => i.document_id as string)
-        if (unread.length > 0) {
-          const { data: docs, error: docsError } = await ctx.supabase.from('document_attachments').select('id, extracted_data').in('id', unread)
-          if (docsError) return NextResponse.json({ error: docsError.message }, { status: 500 })
-          const readingOf = new Map(
-            ((docs ?? []) as Array<{ id: string; extracted_data: Record<string, unknown> | null }>).filter((d) => d.extracted_data).map((d) => [d.id, d.extracted_data]),
+        //
+        // The same read gives an open item whose reading came back empty its
+        // document's stamp: when the AI provider could not take the call
+        // (failed:provider_unavailable), reading_retry says whether the sweep
+        // reads it again, so the Inkorg shows an outage as one instead of as
+        // a document nobody read (2026-10-26).
+        const unread = items
+          .filter(
+            (i) =>
+              i.document_id &&
+              (i.extracted_data == null ||
+                (i.extraction_skipped !== true &&
+                  !i.created_supplier_invoice_id &&
+                  !i.created_journal_entry_id &&
+                  nothingRead(i.extracted_data as unknown as InkorgItem['extracted_data']))),
           )
+          .map((i) => i.document_id as string)
+        if (unread.length > 0) {
+          // In slices: the list is no longer capped, so the id list is not either.
+          const docs: Array<{ id: string; extracted_data: Record<string, unknown> | null; extraction_model: string | null }> = []
+          for (const ids of chunk(unread, 200)) {
+            const { data: part, error: docsError } = await ctx.supabase.from('document_attachments').select('id, extracted_data, extraction_model').in('id', ids)
+            if (docsError) return NextResponse.json({ error: docsError.message }, { status: 500 })
+            docs.push(...((part ?? []) as typeof docs))
+          }
+          const readingOf = new Map(
+            docs.filter((d) => d.extracted_data).map((d) => [d.id, d.extracted_data]),
+          )
+          const stampOf = new Map(docs.map((d) => [d.id, d.extraction_model]))
+          const now = Date.now()
           for (const item of items) {
-            if (item.extracted_data == null && item.document_id && readingOf.has(item.document_id)) {
+            if (!item.document_id) continue
+            if (item.extracted_data == null && readingOf.has(item.document_id)) {
               item.extracted_data = readingOf.get(item.document_id) ?? null
               item.extraction_skipped = false
             }
+            item.reading_retry = readingRetryOf(stampOf.get(item.document_id), item.created_at, now)
           }
         }
 
-        // arkiv_section: whether the Dokument section is open for this company, so the
-        // "routed to the archive" line links there only when the link leads somewhere.
-        return NextResponse.json({ data: { items, count: items.length, arkiv_section: isArkivSectionEnabled(ctx.companyId) } })
-      },
-    },
+        // The vendor's own icon, when the logo cron stored one (lib/vendor-logos): resolved from
+        // the supplier as read and the sender, served from our bucket. No icon is no logo_url.
+        const logos = await vendorLogoUrls(
+          items.map((i) => {
+            const supplier = (i.extracted_data as { supplier?: { name?: unknown } } | null)?.supplier?.name
+            const row = i as { email_from?: string | null; email_subject?: string | null }
+            return {
+              key: i.id,
+              name: (typeof supplier === 'string' && supplier.trim()) || row.email_subject || null,
+              emails: [row.email_from],
+            }
+          }),
+        )
 
-    // ── Get processing_history timeline for an inbox item ───
-    {
-      method: 'GET',
-      path: '/items/:id/history',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        const url = new URL(request.url)
-        const id = url.searchParams.get('_id')
-        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-
-        const { data: item } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, correlation_id, company_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-        if (!item.correlation_id) {
-          return NextResponse.json({ data: { events: [] } })
+        // An invoice and its receipt from the same arrival are one purchase
+        // (lib/inkorg/pairs.ts): each row says which one it came with, read
+        // after the documents' readings stand in. An invoice registered and
+        // still unpaid keeps its receipt with it, and an open half whose
+        // other half is booked already is that booking's companion, with its
+        // verifikat (lib/operations/inbox-pairings.ts). A pairing that cannot
+        // be read is none: the rows stand alone.
+        let pairings = new Map<string, InboxPairing>()
+        try {
+          pairings = await readInboxPairings(ctx.supabase, ctx.companyId, items as unknown as ListedItem[])
+        } catch (err) {
+          extensionLog.warn('inbox list pairing read failed', { err: err instanceof Error ? err.message : String(err) })
         }
 
-        const { data: events, error } = await ctx.supabase
-          .from('processing_history')
-          .select('event_id, event_type, occurred_at, payload, actor, causation_id')
-          .eq('company_id', ctx.companyId)
-          .eq('correlation_id', item.correlation_id)
-          .order('occurred_at', { ascending: true })
-          .limit(100)
+        // A card number read off a receipt is a reading, not a fact (crm#1534):
+        // each row says whether it is one of the company's own cards, after
+        // the documents' readings stand in. A check that cannot be read is
+        // none known: the number shows as read.
+        let knownCards = new Set<string>()
+        try {
+          knownCards = await readKnownCards(ctx.supabase, ctx.companyId, items.map((i) => readCardOf(i.extracted_data)))
+        } catch (err) {
+          extensionLog.warn('inbox list known cards read failed', { err: err instanceof Error ? err.message : String(err) })
+        }
 
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-        return NextResponse.json({ data: { events: events ?? [] } })
+        // A multi-page paper invoice photographed a page at a time is one
+        // item per page: each open row names the others read as the same
+        // supplier invoice, so it is registered once (lib/inkorg/same-invoice.ts).
+        const sameInvoice = sameInvoiceItems(items as unknown as SameInvoiceItem[])
+
+        const withLogos = items.map((i) => ({
+          ...i,
+          logo_url: logos.get(i.id) ?? null,
+          pairing: pairings.get(i.id) ?? null,
+          same_invoice: sameInvoice.get(i.id) ?? null,
+          payment_card_known: readCardKnown(i.extracted_data, knownCards),
+        }))
+
+        // arkiv_section: whether the Dokument section is open for this company, so the
+        // "routed to the archive" line links there only when the link leads somewhere.
+        return NextResponse.json({ data: { items: withLogos, count: withLogos.length, arkiv_section: isArkivSectionEnabled(ctx.companyId) } })
       },
     },
 
@@ -754,9 +753,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/items/:id/credit-target',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -793,26 +790,25 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/items/:id',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        const { data, error } = await ctx.supabase
+        const { data: stored, error } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('*')
+          .select(`*, ${INBOX_ITEM_DOCUMENT_HOLD}`)
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .single()
 
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-        if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        if (!stored) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        const data = withDocumentHold(stored as unknown as DocumentHoldRow) as Record<string, unknown>
 
         // Same enrichment as the list: the detail rail must not offer to
         // book a matched transaction that is already booked.
-        const row = data as {
+        const row = data as unknown as {
           id: string
           document_id: string | null
           matched_transaction_id: string | null
@@ -821,27 +817,47 @@ export const invoiceInboxExtension: Extension = {
           extracted_data: Record<string, unknown> | null
           extraction_skipped: boolean | null
         }
-        let matchedTransactionJournalEntryId: string | null = null
-        let underlagStatus: UnderlagStatus | null = null
-        if (
-          row.matched_transaction_id &&
-          !row.created_journal_entry_id &&
-          !row.created_supplier_invoice_id
-        ) {
-          const bookedByTx = await resolveBookedJournalEntryIds(ctx.supabase, ctx.companyId, [
-            row.matched_transaction_id,
-          ])
-          matchedTransactionJournalEntryId = bookedByTx.get(row.matched_transaction_id) ?? null
-          if (matchedTransactionJournalEntryId) {
-            const anchoring = await resolveUnderlagAnchoring(ctx.supabase, ctx.companyId, [
-              {
-                id: row.id,
-                document_id: row.document_id,
-                journalEntryId: matchedTransactionJournalEntryId,
-              },
-            ])
-            underlagStatus = anchoring.get(row.id)?.status ?? 'unknown'
+        const bookedState = (await resolveInboxBookedState(ctx.supabase, ctx.companyId, [row])).get(row.id)
+        const matchedTransactionJournalEntryId = bookedState?.journalEntryId ?? null
+        const underlagStatus = bookedState?.underlag ?? null
+
+        // ?include=reading: the one reading (lib/documents/reading), each
+        // field with its source and evidence level. Read from the row as
+        // stored, before the document's reading stands in below.
+        let documentReading: DocumentReading | null = null
+        if (url.searchParams.get('include') === 'reading') {
+          try {
+            documentReading = await loadDocumentReading(ctx.supabase, ctx.companyId, { item: { ...(data as unknown as ReadingItemRow) } }, peppolReader)
+          } catch (err) {
+            extensionLog.warn('inbox item reading failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
+            return NextResponse.json({ error: 'Kunde inte läsa underlagets fält' }, { status: 500 })
           }
+        }
+
+        // Match on arrival: the bank row it looks already paid by, checked
+        // again now (lib/documents/inbox-bank-match.ts). A proposal, never a
+        // booking; read from the row as stored, before the stand-in below.
+        // An item the bank was never checked for is checked now, before the
+        // read below, so the focus view opens with what the bank says. Once:
+        // the check stamps bank_match_checked_at whatever it finds.
+        if (neverChecked(data as unknown as Parameters<typeof neverChecked>[0])) {
+          const checked = await checkNeverCheckedInboxItems(ctx.supabase, ctx.companyId, [id], extensionLog)
+          if (checked.includes(id)) {
+            const { data: fresh } = await ctx.supabase
+              .from('invoice_inbox_items')
+              .select('bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_checked_at, bank_match_source_key')
+              .eq('id', id)
+              .eq('company_id', ctx.companyId)
+              .maybeSingle()
+            if (fresh) Object.assign(data as Record<string, unknown>, fresh)
+          }
+        }
+
+        let bankMatch: BankMatch | null = null
+        try {
+          bankMatch = await readInboxBankMatch(ctx.supabase, ctx.companyId, { ...(data as unknown as BankMatchItemRow) })
+        } catch (err) {
+          extensionLog.warn('inbox item bank match read failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
         }
 
         // Same stand-in as the list: the document's reading when the item has none.
@@ -854,11 +870,31 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
+        // What the underlag bought, computed at read time (null when ambiguous),
+        // and what else the evidence points to for the picker.
+        const purchaseCategory = await resolveInboxPurchaseCategoryChoices(ctx.supabase, ctx.companyId, row)
+
+        // As the list: whether the card number read off it is one of the company's own cards (crm#1534).
+        let paymentCardKnown: boolean | null = null
+        if (readCardOf(row.extracted_data)) {
+          try {
+            paymentCardKnown = readCardKnown(row.extracted_data, await readKnownCards(ctx.supabase, ctx.companyId, [readCardOf(row.extracted_data)]))
+          } catch (err) {
+            paymentCardKnown = false
+            extensionLog.warn('inbox item known cards read failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
+          }
+        }
+
         return NextResponse.json({
           data: {
             ...row,
+            payment_card_known: paymentCardKnown,
             matched_transaction_journal_entry_id: matchedTransactionJournalEntryId,
             underlag_status: underlagStatus,
+            purchase_category: purchaseCategory.proposal,
+            purchase_category_alternatives: purchaseCategory.alternatives,
+            bank_match: bankMatch,
+            ...(documentReading ? { reading: documentReading } : {}),
           },
         })
       },
@@ -871,9 +907,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'PATCH',
       path: '/items/:id/fields',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -892,320 +926,36 @@ export const invoiceInboxExtension: Extension = {
         const outcome = await updateInboxItemFields(operationContext(ctx), id, body)
         if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
         if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        // A corrected amount, OCR or giro can pair another bank row, or none.
+        await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, id, extensionLog)
         return NextResponse.json({ data: outcome.data })
       },
     },
 
-    // ── Replace extracted_data wholesale (BYO extraction) ────
-    // Used by agents that ran their own OCR/extraction pipeline. Validates
-    // the full InvoiceExtractionResult shape via the same Zod schema that
-    // gates Bedrock output, so downstream consumers (UI, supplier-invoice
-    // creation) cannot tell apart agent-supplied from AI-extracted data.
+    // ── Set or clear the purchase category (a person's choice) ────
+    // Rules in lib/documents/inbox-purchase-category.ts, shared with the v1
+    // operation inbox-items.set-purchase-category. every_time makes it the
+    // matched supplier's instruction ("varje gång"). Books nothing.
     {
       method: 'PUT',
-      path: '/items/:id/extracted-data',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      path: '/items/:id/purchase-category',
+      // A viewer is refused by the dispatcher with a clear 403, not by RLS
+      // matching zero rows.
+      requireWrite: true,
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
-        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+        if (!id) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, reason: 'missing id' })
 
-        // Rate-limit BYO extraction the same way fresh uploads are limited:
-        // both paths inject extracted_data into invoice_inbox_items, so an
-        // unbounded BYO loop is the same abuse surface as an upload flood
-        // (ISO 27001 A.8.12, data-injection guard).
-        const rl = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
-        if (!rl.ok) {
-          return NextResponse.json(
-            { error: `För många förfrågningar, försök igen om en stund.` },
-            {
-              status: 429,
-              headers: rl.retryAfterSec ? { 'Retry-After': String(rl.retryAfterSec) } : undefined,
-            }
-          )
+        const parsed = SetInboxPurchaseCategorySchema.safeParse(await request.json().catch(() => undefined))
+        if (!parsed.success) {
+          return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, reason: 'invalid purchase category' })
         }
 
-        let extracted: InvoiceExtractionResult
-        try {
-          const json = await request.json()
-          // ExtractionSchema doesn't include `confidence` (the AI path tacks
-          // it on after parsing). BYO data gets 0.95 so downstream UI can
-          // distinguish it from a perfect AI parse: financial-data
-          // provenance per ISO 27001 A.8.12.
-          const parsed = ExtractionSchema.parse(json)
-          extracted = { ...parsed, confidence: 0.95 }
-        } catch (err) {
-          return NextResponse.json(
-            { error: err instanceof Error ? err.message : 'Invalid extracted_data shape' },
-            { status: 400 }
-          )
-        }
-
-        const { data: item } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, company_id, created_supplier_invoice_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-        // Explicit tenant boundary assertion alongside the .eq filter
-        // (V4.5.1 defense-in-depth). Surfaces any future change that
-        // accidentally bypasses the where-clause.
-        if (item.company_id !== ctx.companyId) {
-          return NextResponse.json({ error: 'Not found' }, { status: 404 })
-        }
-        if (item.created_supplier_invoice_id) {
-          return NextResponse.json(
-            { error: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.' },
-            { status: 409 }
-          )
-        }
-
-        // Re-run supplier match so the agent's parsed fields trigger the
-        // same auto-link the AI path uses. Skipped if no key is present.
-        const matchedSupplierId = await matchSupplierId(
-          ctx.supabase,
-          ctx.companyId,
-          extracted.supplier,
-        )
-
-        const { data: updated, error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({
-            extracted_data: extracted as unknown as Record<string, unknown>,
-            matched_supplier_id: matchedSupplierId,
-          })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .select('id, extracted_data, matched_supplier_id')
-          .single()
-
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-
-        // Audit the BYO override so financial-data provenance is traceable
-        // (GDPR Art. 5(1)(f), SOC 2 CC9.2). Failure logged but never blocks
-        // the response: the override has already happened.
-        try {
-          await appendProcessingHistory({
-            companyId: ctx.companyId,
-            correlationId: id,
-            aggregateType: 'Document',
-            aggregateId: id,
-            eventType: 'DocumentExtractionOverridden',
-            payload: {
-              inbox_item_id: id,
-              channel: 'rest_api',
-              has_supplier_org_number: extracted.supplier.orgNumber != null,
-              has_invoice_number: extracted.invoice.invoiceNumber != null,
-              extracted_total: extracted.totals.total,
-              matched_supplier_id: matchedSupplierId,
-            },
-            actor: { type: 'user', id: ctx.userId },
-            occurredAt: new Date(),
-          })
-        } catch (auditErr) {
-          console.error('[invoice-inbox] Failed to append DocumentExtractionOverridden:', auditErr)
-        }
-
-        return NextResponse.json({ data: updated })
-      },
-    },
-
-    // ── Attach a source document to an existing inbox item ──
-    {
-      method: 'POST',
-      path: '/items/:id/attach-document',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        const url = new URL(request.url)
-        const id = url.searchParams.get('_id')
-        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-
-        const formData = await request.formData()
-        const file = formData.get('file') as File | null
-        if (!file) return errorResponseFromCode('INBOX_UPLOAD_NO_FILE', ctx.log)
-        if (file.size > MAX_FILE_SIZE) {
-          return errorResponseFromCode('INBOX_UPLOAD_TOO_LARGE', ctx.log, {
-            messageSv: `Filen är för stor. Maxstorlek är ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
-            messageEn: `File exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB size limit.`,
-          })
-        }
-        if (!UPLOAD_ALLOWED_MIME_TYPES.has(file.type)) {
-          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
-            messageSv: `Filtypen stöds inte: ${file.type || 'okänd'}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
-            messageEn: `Unsupported file type: ${file.type || 'unknown'}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
-          })
-        }
-
-        const { data: item } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, document_id, status, correlation_id, created_supplier_invoice_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (!item) return NextResponse.json({ error: 'Inbox item not found' }, { status: 404 })
-        if (item.created_supplier_invoice_id) {
-          return NextResponse.json({ error: 'Redan bokfört, kan inte ersätta bilden.' }, { status: 409 })
-        }
-        if (item.document_id) {
-          return NextResponse.json({ error: 'Posten har redan en bilaga.' }, { status: 409 })
-        }
-
-        try {
-          const buffer = await file.arrayBuffer()
-          const doc = await uploadDocument(ctx.supabase, ctx.userId, ctx.companyId, {
-            name: file.name,
-            buffer,
-            type: file.type,
-          }, {
-            upload_source: 'file_upload',
-            // This route extracts below and mirrors the outcome onto the
-            // document row; the document-extraction extension must not race it.
-            extractionOwner: 'invoice-inbox',
-          })
-
-          // Same page handling as /upload (issue #553): long PDFs extract
-          // from a slice (first pages + the last page); the skip only remains
-          // for unsliceable (encrypted/malformed) PDFs. Sandbox companies
-          // skip Bedrock unconditionally.
-          const mimeType = doc.mime_type ?? file.type
-          const maxAutoExtractPages = maxPagesForAutoExtract()
-          const pageCount =
-            mimeType === 'application/pdf' ? await countPdfPages(buffer) : null
-          const gatedByPageCount =
-            pageCount != null && pageCount > maxAutoExtractPages
-          const sandbox = await isSandboxCompany(ctx.supabase, ctx.companyId)
-          // Paid-tier gate: no `ai` capability → no Bedrock OCR (seed empty
-          // skeleton; the attached document is still stored). Same paywall as
-          // the shared upload path above.
-          const hasAiEntitlement = await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai)
-          const slicedBuffer =
-            gatedByPageCount && hasAiEntitlement && !sandbox
-              ? await slicePdfForExtraction(buffer, maxAutoExtractPages)
-              : null
-          const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'sandbox' | null =
-            !hasAiEntitlement
-              ? 'no_ai_entitlement'
-              : sandbox
-                ? 'sandbox'
-                : gatedByPageCount && slicedBuffer == null
-                  ? 'too_many_pages'
-                  : null
-          const skipExtraction = skipReason !== null
-
-          const extraction = skipExtraction
-            ? { data: emptyResult(), rawText: null, model: null, skipped: null }
-            : await extractInvoiceFields({
-                buffer: Buffer.from(slicedBuffer ?? buffer),
-                mimeType,
-                fileName: file.name,
-                ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
-              })
-          const { data: extracted } = extraction
-          if (!skipExtraction && slicedBuffer != null && pageCount != null) {
-            extracted.pages = { total: pageCount, analyzed: maxAutoExtractPages }
-          }
-          await mirrorExtractionToDocument(doc.id, {
-            data: extracted,
-            rawText: extraction.rawText,
-            model: extraction.model ?? null,
-            skipped: skipReason ?? extraction.skipped ?? null,
-          })
-
-          const { error: linkError } = await ctx.supabase
-            .from('invoice_inbox_items')
-            .update({
-              document_id: doc.id,
-              extracted_data: extracted as unknown as Record<string, unknown>,
-              extraction_skipped: skipExtraction,
-            })
-            .eq('id', id)
-            .eq('company_id', ctx.companyId)
-          if (linkError) {
-            return NextResponse.json({ error: linkError.message }, { status: 500 })
-          }
-
-          if (item.correlation_id) {
-            try {
-              await appendProcessingHistory({
-                companyId: ctx.companyId,
-                correlationId: item.correlation_id,
-                aggregateType: 'Document',
-                aggregateId: doc.id,
-                eventType: 'DocumentIngested',
-                payload: {
-                  channel: 'upload',
-                  document_id: doc.id,
-                  inbox_item_id: id,
-                  mime_type: mimeType,
-                  size_bytes: file.size,
-                  attached_to_existing: true,
-                },
-                actor: { type: 'user', id: ctx.userId },
-                occurredAt: new Date(),
-              })
-            } catch (err) {
-              console.error('[invoice-inbox/attach-document] appendProcessingHistory failed:', err)
-            }
-          }
-
-          return NextResponse.json({
-            data: {
-              document_id: doc.id,
-              inbox_item_id: id,
-              extracted_data: extracted,
-              extraction_skipped: skipExtraction,
-              skip_reason: skipReason,
-              page_count: pageCount,
-            },
-          })
-        } catch (error) {
-          console.error('[invoice-inbox/attach-document] Failed:', error)
-          // Same pass-through rationale as the /upload catch above.
-          const message = error instanceof Error && error.message.trim() ? error.message : null
-          return NextResponse.json(
-            {
-              error: {
-                code: 'INBOX_ATTACH_FAILED',
-                message: message ?? 'Bilagan kunde inte kopplas. Försök igen.',
-                message_en: message ?? 'Failed to attach the document.',
-              },
-            },
-            { status: 500 }
-          )
-        }
-      },
-    },
-
-    // ── Match a supplier to an inbox item ───────────────────
-    // Rules in lib/documents/inbox-match.ts (v1: inbox-items.match-supplier).
-    {
-      method: 'POST',
-      path: '/items/:id/match-supplier',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        const url = new URL(request.url)
-        const id = url.searchParams.get('_id')
-        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-
-        let body: { supplier_id?: string }
-        try {
-          body = await request.json()
-        } catch {
-          return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
-        }
-        if (!body.supplier_id || typeof body.supplier_id !== 'string') {
-          return NextResponse.json({ error: 'supplier_id required' }, { status: 400 })
-        }
-
-        const outcome = await matchInboxItemSupplier(operationContext(ctx), id, body.supplier_id)
+        const outcome = await setInboxItemPurchaseCategory(operationContext(ctx), id, parsed.data.code, {
+          via: 'dashboard',
+          everyTime: parsed.data.every_time,
+        })
         if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
         if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
         return NextResponse.json({ data: outcome.data })
@@ -1220,14 +970,12 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/match-transaction',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        let body: { transaction_id?: string }
+        let body: { transaction_id?: string; check_fit?: boolean; mismatch_reason?: string }
         try {
           body = await request.json()
         } catch {
@@ -1237,7 +985,13 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'transaction_id required' }, { status: 400 })
         }
 
-        const outcome = await matchInboxItemTransaction(operationContext(ctx), id, body.transaction_id)
+        // check_fit: the Inkorg's drop on a purchase, where the person never
+        // sees the document's amount and seller next to the row (crm#1479);
+        // mismatch_reason is their confirmation after DOC_ROW_MISMATCH. The
+        // pickers that show both sides call without it.
+        const outcome = await matchInboxItemTransaction(operationContext(ctx), id, body.transaction_id, {
+          fitCheck: body.check_fit === true ? documentFitGate(ctx.supabase, ctx.companyId, body.mismatch_reason) : undefined,
+        })
         if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
         if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
         return NextResponse.json({ data: outcome.data })
@@ -1250,9 +1004,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/unmatch-transaction',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -1260,6 +1012,8 @@ export const invoiceInboxExtension: Extension = {
         const outcome = await unmatchInboxItemTransaction(operationContext(ctx), id)
         if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
         if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        // Open again: look in the bank for its payment.
+        await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, id, extensionLog)
         return NextResponse.json({ data: { id: outcome.data.id, matched_transaction_id: null } })
       },
     },
@@ -1268,9 +1022,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/retry-extraction',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         // Retry runs pdfjs extraction synchronously and is CPU-heavy; counts
         // against the same per-company quota as a fresh upload so an
         // attacker can't burn server CPU by repeatedly re-extracting one doc.
@@ -1294,7 +1046,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, correlation_id, created_supplier_invoice_id')
+          .select('id, document_id, correlation_id, created_supplier_invoice_id, extracted_data, email_subject, email_received_at')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -1357,19 +1109,17 @@ export const invoiceInboxExtension: Extension = {
 
         try {
           const buffer = Buffer.from(await blob.arrayBuffer())
-          const extraction = await extractInvoiceFields({
+          const extraction = await extractAndMirror(item.document_id, {
             buffer,
             mimeType: doc.mime_type,
             fileName: doc.file_name,
             ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
+            // Read again with the mail it came with, as on arrival (crm#1749).
+            emailContext: { subject: item.email_subject ?? null, receivedAt: item.email_received_at ?? null },
           })
-          const { data: extracted } = extraction
-          await mirrorExtractionToDocument(item.document_id, {
-            data: extracted,
-            rawText: extraction.rawText,
-            model: extraction.model ?? null,
-            skipped: extraction.skipped ?? null,
-          })
+          // What a person decided is final: the new reading carries their
+          // corrected fields and their purchase category.
+          const extracted = keepPersonChoices(item.extracted_data, extraction.data)
 
           // Re-running the extraction has to re-run the match too, or the one
           // affordance the user reaches for when an item failed to auto-link
@@ -1415,6 +1165,16 @@ export const invoiceInboxExtension: Extension = {
             return NextResponse.json({ error: updateError.message }, { status: 500 })
           }
 
+          // extractAndMirror wrote the model's fresh reading onto the document;
+          // a person's carried corrections follow it there, as after an edit.
+          if (carriedPersonFields(item.extracted_data)) {
+            await mirrorCorrectedReadingToDocument({
+              documentId: item.document_id,
+              companyId: ctx.companyId,
+              reading: extracted as unknown as Record<string, unknown>,
+            })
+          }
+
           if (item.correlation_id) {
             try {
               await appendProcessingHistory({
@@ -1435,6 +1195,9 @@ export const invoiceInboxExtension: Extension = {
             }
           }
 
+          // The new reading may be paid by another bank row, or by none.
+          await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, id, extensionLog)
+
           return NextResponse.json({ data: { extracted_data: extracted } })
         } catch (error) {
           console.error('[invoice-inbox/retry-extraction] extraction failed:', error)
@@ -1453,9 +1216,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/inbox/address',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const domain = process.env.RESEND_INBOUND_DOMAIN
         if (!domain) {
           return NextResponse.json({ error: 'RESEND_INBOUND_DOMAIN not configured' }, { status: 503 })
@@ -1466,12 +1227,23 @@ export const invoiceInboxExtension: Extension = {
           if (!inbox) {
             return NextResponse.json({ error: 'No active inbox' }, { status: 404 })
           }
+          // Read alongside, never a reason to fail the address: null when unread.
+          const [previous, company] = await Promise.all([
+            listPreviousInboxes(ctx.supabase, ctx.companyId).catch(() => null),
+            ctx.supabase.from('companies').select('name').eq('id', ctx.companyId).maybeSingle(),
+          ])
+          const companyName = (company.data as { name?: string } | null)?.name
           return NextResponse.json({
             data: {
               address: composeInboxAddress(inbox.local_part, domain),
               local_part: inbox.local_part,
               status: inbox.status,
               created_at: inbox.created_at,
+              // A rename leaves the address alone (suppliers send to it): false
+              // once it no longer carries the company's name (crm#1334).
+              carries_company_name: companyName ? inboxAddressCarriesName(inbox.local_part, companyName) : null,
+              // Earlier addresses a rename kept: they still receive.
+              previous: previous?.map((localPart) => composeInboxAddress(localPart, domain)) ?? null,
             },
           })
         } catch (err) {
@@ -1484,22 +1256,39 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Rotate inbox address (admin/owner only) ─────────────
+    // No body: a new address, every old one stops (410). keep_previous: a new
+    // address with the company's current name while the old one keeps
+    // receiving (rename_company_inbox, crm#1334); refused with 409 when the
+    // address already carries the name.
     {
       method: 'POST',
       path: '/inbox/rotate',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const domain = process.env.RESEND_INBOUND_DOMAIN
         if (!domain) {
           return NextResponse.json({ error: 'RESEND_INBOUND_DOMAIN not configured' }, { status: 503 })
         }
 
+        const raw = await request.text().catch(() => '')
+        let body: unknown = {}
+        if (raw.trim()) {
+          try {
+            body = JSON.parse(raw)
+          } catch {
+            return NextResponse.json({ error: 'Ogiltig begäran.' }, { status: 400 })
+          }
+        }
+        const parsed = RotateInboxSchema.safeParse(body)
+        if (!parsed.success) return NextResponse.json({ error: 'Ogiltig begäran.' }, { status: 400 })
+        const keepPrevious = parsed.data.keep_previous === true
+
         const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
         if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
 
         try {
-          const newInbox = await rotateCompanyInbox(ctx.supabase, ctx.companyId)
+          const newInbox = keepPrevious
+            ? await renameCompanyInbox(ctx.supabase, ctx.companyId)
+            : await rotateCompanyInbox(ctx.supabase, ctx.companyId)
           return NextResponse.json({
             data: {
               address: composeInboxAddress(newInbox.local_part, domain),
@@ -1508,6 +1297,11 @@ export const invoiceInboxExtension: Extension = {
             },
           })
         } catch (err) {
+          if (err instanceof InboxRenameRefused) {
+            return err.reason === 'unchanged'
+              ? NextResponse.json({ error: 'Inkorgsadressen har redan bolagets namn.' }, { status: 409 })
+              : NextResponse.json({ error: 'Bolaget har ingen inkorgsadress att byta.' }, { status: 404 })
+          }
           console.error('[invoice-inbox/inbox/rotate] Failed:', err)
           return NextResponse.json(
             { error: err instanceof Error ? err.message : 'Rotation failed' },
@@ -1517,120 +1311,35 @@ export const invoiceInboxExtension: Extension = {
       },
     },
 
-    // ── Custom inbound domain: read current state ────────────
-    {
-      method: 'GET',
-      path: '/inbox/domain',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
-
-        try {
-          const row = await getCustomDomain(ctx.supabase, ctx.companyId)
-          // null when the company has no custom domain: the UI renders the
-          // claim form in that case.
-          return NextResponse.json({ data: row })
-        } catch (err) {
-          return NextResponse.json(
-            { error: err instanceof Error ? err.message : 'Failed to load domain' },
-            { status: 500 }
-          )
-        }
-      },
-    },
-
-    // ── Custom inbound domain: claim (admin/owner only) ──────
+    // ── Stop an earlier address (admin/owner only, crm#1209) ─
+    // One address a rename kept stops receiving (410 from then on) and leaves
+    // the list; what came in through it stays. The active address is never
+    // stopped here: rotation is the tool for that.
     {
       method: 'POST',
-      path: '/inbox/domain',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
+      path: '/inbox/previous/stop',
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const parsed = await validateBody(request, StopPreviousInboxSchema)
+        if (!parsed.success) return parsed.response
 
         const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
         if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
 
-        // Sandbox companies are anonymous 24h demo accounts: letting them
-        // register domains in our Resend account is a pure abuse vector.
-        if (await isSandboxCompany(ctx.supabase, ctx.companyId)) {
-          return NextResponse.json(
-            { error: 'Egen domän är inte tillgänglig i sandlådan.' },
-            { status: 403 }
-          )
-        }
+        // The list shows full addresses; the row holds the part before the @.
+        const address = parsed.data.address.toLowerCase()
+        const at = address.lastIndexOf('@')
+        const localPart = at === -1 ? address : address.slice(0, at)
 
-        // Claiming hits the Resend domains API: share the per-company inbox
-        // quota so a claim/delete loop can't burn the provider budget.
-        const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
-        if (!limit.ok) {
-          return NextResponse.json(
-            { error: 'För många förfrågningar, försök igen om en stund.', retry_after: limit.retryAfterSec },
-            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
-          )
-        }
-
-        let body: z.infer<typeof ClaimDomainSchema>
         try {
-          body = ClaimDomainSchema.parse(await request.json())
+          const stopped = await stopPreviousInbox(ctx.supabase, ctx.companyId, localPart)
+          if (!stopped) {
+            return NextResponse.json({ error: 'Adressen finns inte bland bolagets tidigare adresser.' }, { status: 404 })
+          }
+          return NextResponse.json({ data: { stopped: true } })
         } catch (err) {
-          return NextResponse.json(
-            { error: err instanceof Error ? err.message : 'Invalid request body' },
-            { status: 400 }
-          )
+          console.error('[invoice-inbox/inbox/previous/stop] Failed:', err)
+          return NextResponse.json({ error: 'Adressen kunde inte stängas.' }, { status: 500 })
         }
-
-        const result = await claimCustomDomain(ctx.supabase, ctx.companyId, body.domain)
-        if (!result.ok) {
-          return NextResponse.json({ error: result.error }, { status: result.status })
-        }
-        return NextResponse.json({ data: result.data })
-      },
-    },
-
-    // ── Custom inbound domain: re-check verification ─────────
-    {
-      method: 'POST',
-      path: '/inbox/domain/verify',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
-
-        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
-        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
-
-        // verify() triggers a DNS check at Resend: rate-limit the button.
-        const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
-        if (!limit.ok) {
-          return NextResponse.json(
-            { error: 'För många kontroller, försök igen om en stund.', retry_after: limit.retryAfterSec },
-            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
-          )
-        }
-
-        const result = await checkCustomDomainVerification(ctx.supabase, ctx.companyId)
-        if (!result.ok) {
-          return NextResponse.json({ error: result.error }, { status: result.status })
-        }
-        return NextResponse.json({ data: result.data })
-      },
-    },
-
-    // ── Custom inbound domain: remove (admin/owner only) ─────
-    {
-      method: 'DELETE',
-      path: '/inbox/domain',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
-
-        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
-        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
-
-        const result = await removeCustomDomain(ctx.supabase, ctx.companyId)
-        if (!result.ok) {
-          return NextResponse.json({ error: result.error }, { status: result.status })
-        }
-        return NextResponse.json({ data: result.data })
       },
     },
 
@@ -1659,23 +1368,6 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Verification failed' }, { status: 500 })
         }
 
-        // Resend pushes domain.* lifecycle events to the same webhook. Apply
-        // domain.updated to custom-domain rows so verification flips without
-        // the user pressing "Kontrollera igen" (requires the event type to be
-        // subscribed on the Resend webhook; harmless when it isn't).
-        if (event.type === 'domain.updated') {
-          const domainServiceSupabase = createServiceRoleClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
-          )
-          const matched = await applyDomainStatusFromWebhook(domainServiceSupabase, {
-            id: event.data.id,
-            status: event.data.status,
-            records: event.data.records,
-          })
-          return NextResponse.json({ data: { domain_updated: matched } })
-        }
-
         if (!isEmailReceivedEvent(event)) {
           return NextResponse.json({ data: { ignored: event.type } }, { status: 200 })
         }
@@ -1690,16 +1382,10 @@ export const invoiceInboxExtension: Extension = {
         // Recipient → company resolution. Every shared-domain recipient is
         // read (#2181): one mail can name the same inbox under two tags, or
         // two inboxes at once, and reading only the first lost the rest with
-        // no trace. Per-company verified custom domains come after, and only
-        // when no shared address resolved. Custom domains are catch-all by
-        // design: MX routing is per-domain, and a supplier typing fakturor@
-        // instead of faktura@ must land in the inbox rather than silently
-        // vanish (Resend has already accepted the message; there is no
-        // bounce path).
+        // no trace.
         interface InboundTarget {
           companyId: string
           inboxId: string | null
-          customDomain: boolean
           /** The documented tags (+lev / +ver) that reached this inbox. */
           tags: string[]
           /** Tags outside the documented set: counted, never stored. */
@@ -1710,7 +1396,6 @@ export const invoiceInboxExtension: Extension = {
         const targets: InboundTarget[] = []
         let sharedInboxStatus: string | null = null
         let localPart: string | null = null
-        const domainLower = domain.toLowerCase()
 
         const sharedRecipients = extractSharedRecipientsForDomain(to, domain)
         for (const group of groupSharedRecipientsByInbox(sharedRecipients)) {
@@ -1721,48 +1406,28 @@ export const invoiceInboxExtension: Extension = {
             .eq('local_part', group.localPart)
             .maybeSingle()
           if (!inbox) continue
-          if (inbox.status !== 'active') {
+          // The active address, or an earlier one a rename kept (crm#1334).
+          if (!inboxReceivesMail(inbox.status)) {
             sharedInboxStatus ??= inbox.status
             continue
           }
-          // Two active addresses of one company file once.
+          // Two receiving addresses of one company (old and new, or one under
+          // two tags) file once.
           if (targets.some((t) => t.companyId === inbox.company_id)) continue
           // Sender-declared kind from the +lev / +ver tag. Set only from the
           // addresses that resolved this company: a tag on an unknown or
-          // retired shared address must not ride along onto a custom-domain
-          // match further down. Custom domains are catch-all and stay
-          // unhinted. Contradicting tags on one mail resolve to no hint.
+          // retired shared address must not ride along. Contradicting tags on
+          // one mail resolve to no hint.
           const { kindHint, conflict } = resolveKindHintForTags(group.tags)
           const { known, unknownCount } = splitKnownInboxTags(group.tags)
           targets.push({
             companyId: inbox.company_id,
             inboxId: inbox.id,
-            customDomain: false,
             tags: known,
             unknownTagCount: unknownCount,
             kindHint,
             tagConflict: conflict,
           })
-        }
-
-        if (targets.length === 0) {
-          const customDomains = parseRecipients(to)
-            .map((r) => r.domain)
-            .filter((d) => d !== domainLower)
-          if (customDomains.length > 0) {
-            const match = await findCompanyForRecipientDomains(serviceSupabase, customDomains)
-            if (match) {
-              targets.push({
-                companyId: match.companyId,
-                inboxId: null,
-                customDomain: true,
-                tags: [],
-                unknownTagCount: 0,
-                kindHint: null,
-                tagConflict: false,
-              })
-            }
-          }
         }
 
         // Fan-out cap: the first targets in recipient order are processed,
@@ -1829,8 +1494,28 @@ export const invoiceInboxExtension: Extension = {
         // filed and extracted, the body was never looked at. They are ignored
         // next to real documents, and the mail is filed by its body when they
         // are all it carries.
-        const signatureImages = attachments.filter((att) => isSignatureImage(att))
-        const documentAttachments = attachments.filter((att) => !isSignatureImage(att))
+        //
+        // Inline means the body shows the image, not what its disposition
+        // says: Booking.com marks its logos `attachment` and embeds them by
+        // content id, which filed each logo and lost the receipt text. The
+        // HTML above has those references rewritten to data: URIs (the form
+        // the body document embeds), so the references are read from the cid
+        // form, fetched only when a small image with a content id is not
+        // already inline.
+        let embeddedIds = new Set<string>()
+        if (attachments.some((att) => !!att.content_id && !isSignatureImage(att) && isSignatureImage({ ...att, embedded: true }))) {
+          try {
+            embeddedIds = contentIdsReferencedByHtml((await fetchReceivingEmail(email_id, { htmlFormat: 'cid' })).html)
+          } catch (err) {
+            // The images are then classified by disposition alone: filed as
+            // documents the user can discard, never lost.
+            console.warn('[invoice-inbox/inbound] cid-form fetch failed:', err)
+          }
+        }
+        const isSignature = (att: (typeof attachments)[number]) =>
+          isSignatureImage({ ...att, embedded: embeddedIds.has(normaliseContentId(att.content_id)) })
+        const signatureImages = attachments.filter(isSignature)
+        const documentAttachments = attachments.filter((att) => !isSignature(att))
 
         // The body rendering does not depend on the receiving inbox: one mail
         // addressed to several inboxes renders once.
@@ -1856,7 +1541,9 @@ export const invoiceInboxExtension: Extension = {
          * What became of one attachment, for the mail's history event. Codes
          * only: the free-text error and the filename stay out of
          * processing_history (append-only, outside the erasure path).
-         * 'ignored' is a signature image: never downloaded, never a row.
+         * 'ignored' is a signature image, or a text/plain part or a part the
+         * mail carries for its own sake (an invite, a mail signature) next to
+         * other parts (reason says which): never downloaded, never a row.
          */
         type AttachmentOutcome = {
           id: string
@@ -1875,15 +1562,41 @@ export const invoiceInboxExtension: Extension = {
           attachments: AttachmentOutcome[]
         }
 
+        // Per-company rate limit (30/min, 500/day), every inbox before any is
+        // processed. Same Postgres-backed RPC as /upload; a refused call takes
+        // its increment back, so a redelivery spends no budget.
+        const limits = new Map<string, InboxLimitResult>()
+        for (const target of targets) {
+          limits.set(target.companyId, await checkInboxUploadRateLimit(serviceSupabase, target.companyId))
+        }
+        // Over the minute cap, a young mail goes back to Resend (429), whose
+        // next attempt lands after the window has turned. Dropping it lost 12
+        // of 42 receipts an agent forwarded in 20 seconds, with nothing in the
+        // Inkorg to show for them (crm#1783). The whole mail goes back, for
+        // every inbox, so the redelivery files it once each with one record;
+        // nothing is recorded for this attempt. Past the redelivery window,
+        // and on the day cap, the mail is dropped and recorded as before.
+        const redeliverAfter = [...limits.values()].find(
+          (limit) => !limit.ok && limit.scope === 'minute' && mayRedeliverOverMinuteCap(created_at),
+        )
+        if (redeliverAfter) {
+          const retryAfterSec = redeliverAfter.retryAfterSec ?? 60
+          console.warn('[invoice-inbox/inbound] Minute cap reached, asking Resend to redeliver', {
+            targets: targets.length,
+            retryAfterSec,
+          })
+          return NextResponse.json(
+            { error: 'Rate limited', data: { reason: 'rate_limited_redelivery', retry_after: retryAfterSec } },
+            { status: 429, headers: { 'Retry-After': String(retryAfterSec) } },
+          )
+        }
+
         const processForTarget = async (target: InboundTarget): Promise<TargetOutcome> => {
           const { companyId, kindHint } = target
           const userId = owners.get(companyId)!
           const attachmentOutcomes: AttachmentOutcome[] = []
 
-          // Per-company rate limit (30/min, 500/day). Same Postgres-backed
-          // RPC as /upload. Acknowledge + drop on cap: returning 429 to
-          // Resend would just consume more budget via their retry.
-          const limit = await checkInboxUploadRateLimit(serviceSupabase, companyId)
+          const limit = limits.get(companyId) ?? { ok: true }
           if (!limit.ok) {
             try {
               await appendProcessingHistory({
@@ -1940,57 +1653,76 @@ export const invoiceInboxExtension: Extension = {
             mime: sanitiseMime(att.content_type),
           }))
 
-          if (documentAttachments.length === 0) {
-            // Body-only mail: for app-store, SaaS and travel receipts the body
-            // IS the receipt, and often the only underlag the user has. Render
-            // it to a PDF with the received parts embedded and run the normal
-            // extract pipeline instead of dead-ending in an error row. An
-            // empty body, or a mail-client note next to signature images,
-            // keeps the error row: there is nothing to archive.
+          // The mail body as its own underlag: rendered to a PDF with the
+          // received parts embedded and run through the normal extract
+          // pipeline. Null when there is nothing to file (an empty body, a
+          // mail-client note next to signature images, a render or upload
+          // failure): the caller decides what stays behind then.
+          const fileEmailBody = async (): Promise<{ inbox_item_id: string; duplicate: boolean } | null> => {
             let bodyDoc: RenderedEmailBodyUnderlag | null = null
             try {
               bodyDoc = await renderBodyUnderlag()
             } catch (err) {
               console.error('[invoice-inbox/inbound] Email-body rendering failed:', err)
             }
-            if (bodyDoc && bodyDoc.buffer.byteLength <= MAX_FILE_SIZE) {
-              // Resend retries the webhook on failure: a retry after success
-              // must not duplicate the body document. Body items carry the
-              // email_id with a NULL attachment id. Scoped to the company:
-              // one mail to two inboxes files once per inbox (#2181).
-              const { data: existingBody } = await serviceSupabase
-                .from('invoice_inbox_items')
-                .select('id')
-                .eq('company_id', companyId)
-                .eq('resend_email_id', email_id)
-                .is('resend_attachment_id', null)
-                .maybeSingle()
-              if (existingBody) {
-                return { processed: 0, reason: 'email_body_duplicate', inbox_item_id: existingBody.id, attachments: [] }
-              }
-              try {
-                const result = await uploadAndExtract(
-                  serviceSupabase,
-                  userId,
-                  companyId,
-                  bodyDoc,
-                  'email',
-                  {
-                    from,
-                    subject,
-                    receivedAt: created_at,
-                    messageId: message_id,
-                    bodyText,
-                    resendEmailId: email_id,
-                    kindHint,
-                  }
-                )
-                return { processed: 1, reason: 'email_body', inbox_item_id: result.inbox_item_id, attachments: ignoredOutcomes }
-              } catch (err) {
-                // Fall through to the error row so the mail never vanishes.
-                console.error('[invoice-inbox/inbound] Email-body document failed:', err)
-              }
+            if (!bodyDoc || bodyDoc.buffer.byteLength > MAX_FILE_SIZE) return null
+            // Resend retries the webhook on failure: a retry after success
+            // must not duplicate the body document. Body items carry the
+            // email_id with a NULL attachment id. Scoped to the company:
+            // one mail to two inboxes files once per inbox (#2181).
+            // limit(1), not maybeSingle: a NULL attachment id is outside the
+            // unique index, so two overlapping deliveries can each file a
+            // body, and maybeSingle then errored on every later delivery,
+            // read as "none" and filed one more copy each time. A lookup
+            // that fails, fails closed: the 500 makes Resend redeliver.
+            const { data: existingBodies, error: existingBodyError } = await serviceSupabase
+              .from('invoice_inbox_items')
+              .select('id')
+              .eq('company_id', companyId)
+              .eq('resend_email_id', email_id)
+              .is('resend_attachment_id', null)
+              .limit(1)
+            if (existingBodyError) throw new Error(`Body dedupe lookup failed: ${existingBodyError.message}`)
+            const existingBody = (existingBodies as Array<{ id: string }> | null)?.[0]
+            if (existingBody) return { inbox_item_id: existingBody.id, duplicate: true }
+            try {
+              const result = await uploadAndExtract(
+                serviceSupabase,
+                userId,
+                companyId,
+                bodyDoc,
+                'email',
+                {
+                  from,
+                  subject,
+                  receivedAt: created_at,
+                  messageId: message_id,
+                  bodyText,
+                  resendEmailId: email_id,
+                  kindHint,
+                }
+              )
+              return { inbox_item_id: result.inbox_item_id, duplicate: false }
+            } catch (err) {
+              console.error('[invoice-inbox/inbound] Email-body document failed:', err)
+              return null
             }
+          }
+
+          if (documentAttachments.length === 0) {
+            // Body-only mail: for app-store, SaaS and travel receipts the body
+            // IS the receipt, and often the only underlag the user has. Filed
+            // instead of dead-ending in an error row. An empty body, or a
+            // mail-client note next to signature images, keeps the error row:
+            // there is nothing to archive.
+            const body = await fileEmailBody()
+            if (body?.duplicate) {
+              return { processed: 0, reason: 'email_body_duplicate', inbox_item_id: body.inbox_item_id, attachments: [] }
+            }
+            if (body) {
+              return { processed: 1, reason: 'email_body', inbox_item_id: body.inbox_item_id, attachments: ignoredOutcomes }
+            }
+            // Fall through to the error row so the mail never vanishes.
             await serviceSupabase.from('invoice_inbox_items').insert({
               company_id: companyId,
               user_id: userId,
@@ -2013,6 +1745,33 @@ export const invoiceInboxExtension: Extension = {
 
           const results: AttachmentResult[] = []
           attachmentOutcomes.push(...ignoredOutcomes)
+
+          // What one upload became. 'duplicate_delivery' is an overlapping
+          // delivery of this mail that filed the attachment first (Resend
+          // redelivers while a slow run is still extracting): already
+          // received, not a failure, and the rest of the mail goes on.
+          // 'duplicate_content' is a file the company already had: it joined
+          // that earlier item (often booked long ago) and nothing new was
+          // filed, so the mail's history must not say it was (PH 225).
+          const recordUpload = (
+            attachmentId: string,
+            result: { inbox_item_id: string; skip_reason?: string | null },
+            replacedItemId?: string,
+          ) => {
+            const duplicate = result.skip_reason === 'duplicate_delivery' || result.skip_reason === 'duplicate_content'
+            results.push({
+              attachment_id: attachmentId,
+              inbox_item_id: result.inbox_item_id,
+              ...(duplicate ? { duplicate: true } : {}),
+            })
+            attachmentOutcomes.push({
+              id: attachmentId,
+              outcome: duplicate ? 'duplicate' : 'filed',
+              inbox_item_id: result.inbox_item_id,
+              ...(result.skip_reason === 'duplicate_content' ? { reason: 'duplicate_content' } : {}),
+              ...(replacedItemId ? { replaced_item_id: replacedItemId } : {}),
+            })
+          }
 
           // Persist a "rejected" inbox row so the user has visibility into the drop.
           // Without this, attachments that fail MIME validation vanish silently,
@@ -2063,7 +1822,32 @@ export const invoiceInboxExtension: Extension = {
             }
           }
 
+          // A text/plain part next to any other part of the mail is the mail's
+          // plain-text alternative (or an ATT00001.txt). The inbox never takes
+          // it, and the rejection row it got was one line of noise per
+          // forwarded mail (crm#1783). Every other part leaves a row of its
+          // own (filed, duplicate, rejected or failed), so the mail stays
+          // visible; a text/plain part alone keeps its rejection row.
+          const hasNonTextPart = documentAttachments.some((att) => !isPlainTextPart(att.content_type))
+          // The same for the parts a mail carries for its own sake (a calendar
+          // invite, an S/MIME signature, a contact card): never a document,
+          // and next to a part that can be one, their rejection row was a
+          // "could not be read" line beside the invoice that was read
+          // (crm#1809). That other part leaves a row whatever becomes of it,
+          // so the mail stays visible; alone, they keep their rejection row.
+          const hasDocumentPart = documentAttachments.some(
+            (att) => !isPlainTextPart(att.content_type) && !isMailMachineryPart(att.content_type),
+          )
+
           for (const att of documentAttachments) {
+            if (hasNonTextPart && isPlainTextPart(att.content_type)) {
+              attachmentOutcomes.push({ id: att.id, outcome: 'ignored', reason: 'text_part', mime: 'text/plain' })
+              continue
+            }
+            if (hasDocumentPart && isMailMachineryPart(att.content_type)) {
+              attachmentOutcomes.push({ id: att.id, outcome: 'ignored', reason: 'mail_part', mime: sanitiseMime(baseContentType(att.content_type)) })
+              continue
+            }
             let replacedItemId: string | undefined
             try {
               // Scoped to the company so one mail to two inboxes files once
@@ -2100,12 +1884,18 @@ export const invoiceInboxExtension: Extension = {
               // Unwrap it and process the inner attachments as if they had arrived
               // directly, carrying the inner email's subject/from into our metadata.
               if (download.contentType === 'message/rfc822') {
+                // mailparser loads here, on a forwarded mail, not with every
+                // route that loads the extension registry.
+                const { simpleParser } = await import('mailparser')
                 const parsed = await simpleParser(Buffer.from(download.buffer))
                 const innerAttachments = parsed.attachments || []
                 const innerFrom = parsed.from?.text || from
                 const innerSubject = parsed.subject || subject
                 // Same signature-image rule as the outer mail: mailparser
                 // lists the forwarded mail's inline logos as attachments too.
+                // `related` is mailparser's "embedded in the body" (a part
+                // with a content id inside multipart/related), the signal
+                // the outer mail reads from the cid references.
                 // Ids keep their position in the full list so a redelivery
                 // dedupes against the same keys.
                 const innerIsSignature = innerAttachments.map((inner) =>
@@ -2114,6 +1904,7 @@ export const invoiceInboxExtension: Extension = {
                     content_disposition: inner.contentDisposition,
                     content_id: inner.contentId,
                     size: inner.size,
+                    embedded: inner.related,
                   }),
                 )
                 const innerSignatureCount = innerIsSignature.filter(Boolean).length
@@ -2162,8 +1953,7 @@ export const invoiceInboxExtension: Extension = {
                         kindHint,
                       }
                     )
-                    results.push({ attachment_id: att.id, inbox_item_id: innerBodyResult.inbox_item_id })
-                    attachmentOutcomes.push({ id: att.id, outcome: 'filed', inbox_item_id: innerBodyResult.inbox_item_id })
+                    recordUpload(att.id, innerBodyResult)
                     continue
                   }
                   const rejectedId = await logRejection(att.id, download.filename, download.contentType, 'Det vidarebefordrade meddelandet innehöll inga bilagor')
@@ -2171,6 +1961,34 @@ export const invoiceInboxExtension: Extension = {
                   attachmentOutcomes.push({ id: att.id, outcome: 'rejected', reason: 'eml_no_inner_attachments', inbox_item_id: rejectedId })
                   continue
                 }
+                // The parts are filed under their own ids (att#i), never under
+                // the .eml's, so the redelivery check above cannot see them.
+                // Without this a redelivery extracted every part again, the
+                // first one already filed hit the unique index, and the rest
+                // of the .eml was skipped behind a false error row. A failed
+                // lookup only costs that check: the index still holds.
+                const innerPartIds = innerAttachments.flatMap((_, i) => (innerIsSignature[i] ? [] : [`${att.id}#${i}`]))
+                const filedParts = new Map<string, string>()
+                if (innerPartIds.length > 0) {
+                  const { data: partRows } = await serviceSupabase
+                    .from('invoice_inbox_items')
+                    .select('id, resend_attachment_id')
+                    .eq('company_id', companyId)
+                    .eq('resend_email_id', email_id)
+                    .in('resend_attachment_id', innerPartIds)
+                  for (const row of (partRows as Array<{ id: string; resend_attachment_id: string }> | null) ?? []) {
+                    filedParts.set(row.resend_attachment_id, row.id)
+                  }
+                }
+                // Same text/plain rule as the outer mail, among the forwarded
+                // mail's own parts.
+                const innerHasNonTextPart = innerAttachments.some(
+                  (inner, i) => !innerIsSignature[i] && !isPlainTextPart(inner.contentType),
+                )
+                const innerHasDocumentPart = innerAttachments.some(
+                  (inner, i) =>
+                    !innerIsSignature[i] && !isPlainTextPart(inner.contentType) && !isMailMachineryPart(inner.contentType),
+                )
                 for (let i = 0; i < innerAttachments.length; i++) {
                   const inner = innerAttachments[i]
                   const innerType = sanitiseMime(inner.contentType)
@@ -2180,6 +1998,20 @@ export const invoiceInboxExtension: Extension = {
                   const innerId = `${att.id}#${i}`
                   if (innerIsSignature[i]) {
                     attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'signature_image', mime: innerType })
+                    continue
+                  }
+                  if (innerHasNonTextPart && isPlainTextPart(inner.contentType)) {
+                    attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'text_part', mime: 'text/plain' })
+                    continue
+                  }
+                  if (innerHasDocumentPart && isMailMachineryPart(inner.contentType)) {
+                    attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'mail_part', mime: sanitiseMime(baseContentType(inner.contentType)) })
+                    continue
+                  }
+                  const filedPartId = filedParts.get(innerId)
+                  if (filedPartId) {
+                    results.push({ attachment_id: innerId, inbox_item_id: filedPartId, duplicate: true })
+                    attachmentOutcomes.push({ id: innerId, outcome: 'duplicate', inbox_item_id: filedPartId })
                     continue
                   }
                   if (!EMAIL_ALLOWED_MIME_TYPES.has(innerType)) {
@@ -2215,8 +2047,7 @@ export const invoiceInboxExtension: Extension = {
                       kindHint,
                     }
                   )
-                  results.push({ attachment_id: innerId, inbox_item_id: innerResult.inbox_item_id })
-                  attachmentOutcomes.push({ id: innerId, outcome: 'filed', inbox_item_id: innerResult.inbox_item_id })
+                  recordUpload(innerId, innerResult)
                 }
                 continue
               }
@@ -2258,13 +2089,7 @@ export const invoiceInboxExtension: Extension = {
                   kindHint,
                 }
               )
-              results.push({ attachment_id: att.id, inbox_item_id: result.inbox_item_id })
-              attachmentOutcomes.push({
-                id: att.id,
-                outcome: 'filed',
-                inbox_item_id: result.inbox_item_id,
-                ...(replacedItemId ? { replaced_item_id: replacedItemId } : {}),
-              })
+              recordUpload(att.id, result, replacedItemId)
             } catch (err) {
               console.error('[invoice-inbox/inbound] Attachment processing failed:', err)
               const message = err instanceof Error ? err.message : 'Unknown error'
@@ -2305,6 +2130,30 @@ export const invoiceInboxExtension: Extension = {
             }
           }
 
+          // Every attachment was refused (a calendar invite, a type outside
+          // the allowlist, too large) and none was filed: the body is then
+          // filed the way a body-only mail is. A booking confirmation whose
+          // only attachment was an .ics left an error row and no document
+          // at all, though its body was the receipt (agent feedback seq
+          // 957595). Only for a substantive body, so a "see attached" note
+          // next to a refused file does not become a document, and not when
+          // an attachment failed on our side: that one is the likelier
+          // receipt and its error row asks for it again. Filing the body next
+          // to attachments that WERE filed is a separate design call.
+          const onlyRefused = attachmentOutcomes.every((o) => o.outcome === 'rejected' || o.outcome === 'ignored')
+          if (onlyRefused && isSubstantiveBody(emailBodyToText(fullEmail.html, fullEmail.text))) {
+            const body = await fileEmailBody()
+            if (body) {
+              return {
+                processed: results.length + (body.duplicate ? 0 : 1),
+                reason: body.duplicate ? 'email_body_duplicate' : 'email_body',
+                inbox_item_id: body.inbox_item_id,
+                results,
+                attachments: attachmentOutcomes,
+              }
+            }
+          }
+
           return { processed: results.length, results, attachments: attachmentOutcomes }
         }
 
@@ -2331,7 +2180,6 @@ export const invoiceInboxExtension: Extension = {
               eventType: 'InboundMailReceived',
               payload: {
                 inbox_id: target.inboxId,
-                custom_domain: target.customDomain,
                 tags: target.tags,
                 unknown_tag_count: target.unknownTagCount,
                 kind_hint: target.kindHint,
@@ -2359,7 +2207,6 @@ export const invoiceInboxExtension: Extension = {
               eventType: 'InboundMailReceived',
               payload: {
                 inbox_id: target.inboxId,
-                custom_domain: target.customDomain,
                 tags: target.tags,
                 unknown_tag_count: target.unknownTagCount,
                 kind_hint: target.kindHint,
@@ -2376,6 +2223,22 @@ export const invoiceInboxExtension: Extension = {
             console.error('[invoice-inbox/inbound] InboundMailReceived (capped) append failed:', err)
           }
         }
+
+        // The mail itself, per company that took it in: sender, text,
+        // headers and the whole .eml. After the filing so what it produced is
+        // known; best effort, it never changes the answer below.
+        await recordInboundMailArrivals(serviceSupabase, {
+          email: fullEmail,
+          event: { email_id, from, to, subject, message_id, created_at },
+          targets: outcomes.map(({ target, outcome }) => ({
+            companyId: target.companyId,
+            inboxId: target.inboxId,
+            tags: target.tags,
+            reason: outcome.reason,
+            inbox_item_id: outcome.inbox_item_id,
+            attachments: outcome.attachments,
+          })),
+        })
 
         if (outcomes.length === 1 && deferredTargets.length === 0) {
           const { processed, reason, inbox_item_id, results } = outcomes[0].outcome
@@ -2415,9 +2278,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/inbound-history',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const rawDays = url.searchParams.get('days')
         const days = rawDays === null ? INBOUND_HISTORY_DEFAULT_DAYS : Number(rawDays)
@@ -2481,9 +2342,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'DELETE',
       path: '/items/:id',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -2496,14 +2355,12 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Convert inbox item to supplier invoice ─────────────
-    // Rules in lib/documents/inbox-convert.ts, shared with the v1 operation
+    // Rules in lib/operations/inbox-convert.ts, shared with the v1 operation
     // inbox-items.convert-to-supplier-invoice.
     {
       method: 'POST',
       path: '/items/:id/convert',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -2529,6 +2386,8 @@ export const invoiceInboxExtension: Extension = {
             registration_journal_entry_id: outcome.data.registration_journal_entry_id,
             inbox_item_id: outcome.data.inbox_item_id,
           },
+          // A non-blocking note, e.g. bank details the supplier card lacks (lib/payments/payee-alerts.ts).
+          ...(outcome.warnings?.length ? { warnings: outcome.warnings.map((w) => ({ code: w.code, message: w.message_sv })) } : {}),
         })
       },
     },
@@ -2542,9 +2401,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/book-direct',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -2560,173 +2417,20 @@ export const invoiceInboxExtension: Extension = {
           )
         }
 
-        const { data: item, error: fetchError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (fetchError) {
-          // Surface the real DB error instead of masking as 404. Common cause:
-          // the migration adding `created_journal_entry_id` hasn't been
-          // applied to this database (e.g. local dev DB lagging staging).
-          console.error('[invoice-inbox/book-direct] Item lookup failed:', fetchError)
-          return NextResponse.json(
-            { error: `Kunde inte slå upp posten: ${fetchError.message}` },
-            { status: 500 }
-          )
-        }
-        if (!item) {
-          return NextResponse.json({ error: 'Inbox item not found' }, { status: 404 })
-        }
-        if (item.created_supplier_invoice_id) {
-          return NextResponse.json(
-            { error: 'Posten är redan kopplad till en leverantörsfaktura.' },
-            { status: 409 }
-          )
-        }
-        if (item.created_journal_entry_id) {
-          return NextResponse.json(
-            { error: 'Posten är redan bokförd.' },
-            { status: 409 }
-          )
-        }
-
-        // If a transaction is provided, validate it before booking.
-        let transaction: Pick<Transaction, 'id' | 'journal_entry_id' | 'cash_account_id' | 'date' | 'amount' | 'currency'> | null = null
-        const sourceTransactionId = body.transaction_id ?? item.matched_transaction_id
-        if (sourceTransactionId) {
-          const { data: tx, error: txError } = await ctx.supabase
-            .from('transactions')
-            .select('id, journal_entry_id, cash_account_id, date, amount, currency')
-            .eq('id', sourceTransactionId)
-            .eq('company_id', ctx.companyId)
-            .maybeSingle()
-          if (txError || !tx) {
-            return NextResponse.json({ error: 'Transaktion hittades inte' }, { status: 404 })
-          }
-          if (tx.journal_entry_id) {
-            return NextResponse.json(
-              { error: 'Transaktionen är redan bokförd' },
-              { status: 409 }
-            )
-          }
-          transaction = tx
-        }
-
-        // WhatsApp-sourced items: when the request carries NO notes field at
-        // all, default to the rendered chat context (representation deltagare
-        // + syfte, sender note) so the audit text reaches the verifikat even
-        // through clients that never saw the chat (MCP, older UI).
-        //
-        // Presence decides, not truthiness: `notes: ""` is the UI saying the
-        // user emptied the field, and resurrecting the prefill there would
-        // write text onto an immutable verifikat against an explicit user
-        // action (removable only via rättelse). So an empty string clears,
-        // and only an absent field defaults. The caption is excluded: this
-        // path can run without a human ever seeing the string.
-        const effectiveNotes =
-          body.notes === undefined
-            ? renderChannelContextNotes(
-                (item as { channel_context?: InboxChannelContext | null }).channel_context,
-              ) ?? undefined
-            : body.notes.trim() || undefined
-
-        // Create the journal entry via the engine. Source-tracks back to
-        // the inbox item so the audit trail is preserved even when no
-        // transaction is involved.
-        let journalEntry
-        try {
-          journalEntry = await createJournalEntry(ctx.supabase, ctx.companyId, ctx.userId, {
-            fiscal_period_id: body.fiscal_period_id,
-            entry_date: body.entry_date,
-            description: body.description,
-            source_type: body.transaction_id ? 'bank_transaction' : 'inbox_item',
-            source_id: body.transaction_id ? transaction!.id : item.id,
-            ...(transaction ? { bank_booking_context: [bankBookingContext(transaction,
-              await resolveSettlementAccount(ctx.supabase, ctx.companyId, transaction.cash_account_id,
-                createLogger('invoice-inbox.book-direct'), transaction.currency),
-            )] } : {}),
-            notes: effectiveNotes,
-            lines: body.lines,
-          })
-        } catch (err) {
-          const typed = bookkeepingErrorResponse(err)
-          if (typed) return typed
-          return NextResponse.json(
-            { error: err instanceof Error ? err.message : 'Kunde inte skapa verifikation' },
-            { status: 400 }
-          )
-        }
-
-        // Link the source document to the new entry. Best-effort: the
-        // entry itself is already posted; surfacing the failure shouldn't
-        // roll it back, but log so support can re-link manually.
-        if (item.document_id) {
-          try {
-            await linkToJournalEntry(
-              ctx.supabase,
-              ctx.companyId,
-              item.document_id,
-              journalEntry.id
-            )
-          } catch (err) {
-            console.error('[invoice-inbox/book-direct] Document link failed:', err)
-          }
-        }
-
-        // The transaction this verifikat settles: the one the caller named, or
-        // the one the item was already matched to. Preserving the match without
-        // booking it was half a fix, and the worse half: the item then looked
-        // resolved while the bank line stayed open forever. The fallback needs
-        // no ownership check because it was read off a company-scoped item.
-        const bookedTransactionId = transaction?.id ?? item.matched_transaction_id ?? null
-
-        if (bookedTransactionId) {
-          const { error: txUpdateError } = await ctx.supabase
-            .from('transactions')
-            .update({
-              journal_entry_id: journalEntry.id,
-              is_business: true,
-              category: 'uncategorized',
-            })
-            .eq('id', bookedTransactionId)
-            .eq('company_id', ctx.companyId)
-          if (txUpdateError) {
-            console.error('[invoice-inbox/book-direct] Transaction link failed:', txUpdateError)
-          }
-        }
-
-        // Mark the inbox item as resolved by writing the FK. The status
-        // column is intentionally left at 'received': terminal state is
-        // encoded via created_journal_entry_id / matched_transaction_id
-        // (see migration 20260504180000_invoice_inbox_remove_ai_columns).
-        const { error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({
-            created_journal_entry_id: journalEntry.id,
-            // Keep the existing match when the caller sent no transaction_id.
-            // Overwriting with null let a caller that merely forgot the field
-            // silently unpick a match somebody had already made, and left the
-            // bank line unbooked with nothing on screen saying so.
-            matched_transaction_id: bookedTransactionId,
-          })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-
-        // The engine already emits journal_entry.committed: no need to
-        // re-emit. Transaction categorization is implicit: the entry is
-        // already source-linked to the transaction via source_type.
+        // Rules in lib/operations/inbox-book-direct.ts, shared with the
+        // Inkorg's one click (POST /api/inkorg/items/:id/book).
+        const outcome = await bookInboxItemDirectly(
+          { ...operationContext(ctx), requestId: ctx.requestId },
+          id,
+          body,
+        )
+        if (!outcome.ok) return outcome.response
 
         return NextResponse.json({
           data: {
-            journal_entry: journalEntry,
+            journal_entry: outcome.journalEntry,
             inbox_item_id: id,
-            transaction_id: transaction?.id ?? null,
+            transaction_id: outcome.transactionId,
           },
         })
       },
@@ -2740,16 +2444,20 @@ export const invoiceInboxExtension: Extension = {
     // supplier-invoice-linked items are skipped, not errored, so the batch is
     // resilient. Reuses the same categorize core as the single-item agent flow,
     // so reverse-charge moms on foreign services is handled correctly.
+    //
+    // An underlag whose booking changes the underlag for a momsdeklaration
+    // already filed is held back (skipped, reason filed_vat_period, with the
+    // warning) until the same items come back with confirm_filed_vat_period:
+    // the dialog asks once for all of them
+    // (lib/transactions/filed-vat-categorize.ts).
     {
       method: 'POST',
       path: '/items/bulk-book',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        let body: z.infer<typeof BulkBookInboxSchema>
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        let body: z.infer<typeof DashboardBulkBookInboxSchema>
         try {
           const json = await request.json()
-          body = BulkBookInboxSchema.parse(json)
+          body = DashboardBulkBookInboxSchema.parse(json)
         } catch (err) {
           return NextResponse.json(
             { error: err instanceof Error ? err.message : 'Invalid request body' },
@@ -2757,11 +2465,33 @@ export const invoiceInboxExtension: Extension = {
           )
         }
 
+        const { confirm_filed_vat_period: confirmedFiledVat, ...booking } = body
+        const bulkLog = createLogger('invoice-inbox.bulk-book')
         const { booked, skipped } = await bulkBookMatchedInboxItems(
           ctx.supabase,
           ctx.userId,
           ctx.companyId,
-          body,
+          booking,
+          {
+            filedVat: {
+              confirmed: confirmedFiledVat === true,
+              ask: (transactionId, input, options) =>
+                filedPeriodCategorizeWarning(ctx.supabase, ctx.userId, ctx.companyId, transactionId, input, {
+                  ...options,
+                  subject: 'booking',
+                  log: bulkLog,
+                }),
+              record: (journalEntryId, warning) =>
+                recordVoucherWarningsAcknowledged({
+                  companyId: ctx.companyId,
+                  userId: ctx.userId,
+                  journalEntryId,
+                  warnings: [warning],
+                  door: 'dashboard_inbox_bulk_book',
+                  log: bulkLog,
+                }),
+            },
+          },
         )
 
         return NextResponse.json({
@@ -2779,7 +2509,7 @@ export const invoiceInboxExtension: Extension = {
     //
     // Read-only. Nothing here writes, and nothing here is authoritative: the
     // answer is a suggestion the user approves, edits or ignores, and the
-    // actual posting still goes through book-direct → createJournalEntry.
+    // actual posting still goes through book-direct → the posting port.
     //
     // Derived on demand rather than stored on the row, so it cannot go stale
     // against a corrected amount, a re-matched transaction or a template the
@@ -2793,9 +2523,9 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/suggest-booking',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      // Computes a proposal from reads only; nothing is written.
+      viewerMay: true,
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -3040,20 +2770,25 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/purchases',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         try {
-          const purchases = await fetchPurchasesWithoutUnderlag(ctx.supabase, ctx.companyId)
+          const [purchases, companyPortals] = await Promise.all([
+            fetchPurchasesWithoutUnderlag(ctx.supabase, ctx.companyId),
+            readCompanyPortals(ctx.supabase, ctx.companyId),
+          ])
+          const logos = await vendorLogoUrls(
+            purchases.map((p) => ({ key: p.id, name: p.merchant_name || p.description, texts: [p.description] })),
+          )
 
           return NextResponse.json({
             data: {
               count: purchases.length,
               purchases: purchases.map((p) => {
-                // Where the invoice lives, when the supplier does not send one.
-                // lookupPortal answers null for salary and tax, which have no
-                // invoice to fetch: a link there would be worse than silence.
-                const portal = lookupPortal(p.merchant_name || p.description)
+                // Where the invoice lives, when the supplier does not send one:
+                // the company's own portal for the supplier first, then the
+                // directory. Null for salary and tax, which have no invoice to
+                // fetch: a link there would be worse than silence.
+                const portal = resolvePortal(companyPortals, p.merchant_name || p.description)
                 return {
                   id: p.id,
                   date: p.date,
@@ -3062,7 +2797,8 @@ export const invoiceInboxExtension: Extension = {
                   amount: p.amount,
                   currency: p.currency,
                   amount_sek: p.amount_sek,
-                  portal: portal ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null } : null,
+                  portal,
+                  logo_url: logos.get(p.id) ?? null,
                 }
               }),
             },

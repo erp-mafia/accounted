@@ -2,8 +2,9 @@
  * The registry-resolved services behind the v1 AGI pre-validation and the
  * skattekonto sync (lib/core-actions.ts): the SKATTEVERKET_ENABLED and paid
  * capability gate a direct service call must apply itself, schema
- * re-validation before anything is sent, the SKV status mapping, the audit
- * row, and a sync preview that never reaches Skatteverket.
+ * re-validation before anything is sent, the SKV status mapping, that the
+ * service writes no audit row of its own (the transport does, once per call),
+ * and a sync preview that never reaches Skatteverket.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -37,6 +38,7 @@ vi.mock('@/lib/extensions/context-factory', () => ({
 }))
 
 import { SkatteverketAuthError } from '../lib/api-client'
+import { SkatteverketSkattekontoError } from '../lib/skattekonto-client'
 import { previewSkattekontoSync, syncSkattekontoNow, validateAgiUppgift } from '../lib/core-actions'
 
 const supabase = {} as never
@@ -73,14 +75,14 @@ describe('validateAgiUppgift', () => {
     expect(huMock).not.toHaveBeenCalled()
   })
 
-  it('answers the kontrollsvar and writes an ok audit row', async () => {
+  it('answers the kontrollsvar and leaves the audit row to the transport', async () => {
     huMock.mockResolvedValue({ ok: true, status: 200, data: { status: 'OK', fel: [] } })
     const result = await validateAgiUppgift(supabase, 'u', 'c', { uppgift: 'huvuduppgift', payload: HU })
     expect(result).toEqual({ ok: true, data: { status: 'OK', fel: [] } })
-    expect(auditMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ endpoint: 'agi.kontrollera.hu', outcome: 'ok', skvStatus: 'OK', agRegistreradId: HU.agRegistreradId }),
-    )
+    expect(huMock).toHaveBeenCalledWith(supabase, 'u', 'c', HU)
+    // agiKontrolleraHU's transport call writes the one row; a second one here
+    // would double-count the call.
+    expect(auditMock).not.toHaveBeenCalled()
   })
 
   it('maps an SKV 403 to SKATTEVERKET_ACCESS_DENIED with SKV\'s status and felkod', async () => {
@@ -92,7 +94,7 @@ describe('validateAgiUppgift', () => {
       http_status: 403,
       details: { skv_status: 403, skv_kod: 'E403' },
     })
-    expect(auditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ outcome: 'auth_error' }))
+    expect(auditMock).not.toHaveBeenCalled()
   })
 
   it('maps a thrown auth error (no connection) to SKATTEVERKET_NOT_CONNECTED', async () => {
@@ -117,12 +119,37 @@ describe('skattekonto sync services', () => {
     expect(syncMock).not.toHaveBeenCalled()
   })
 
+  // B07: a company too new to have a skattekonto made "Synkronisera nu"
+  // answer an unhandled 500 ("Skatteverket svarade med 404").
+  it('no skattekonto at Skatteverket answers its own status and sentence, not a 500', async () => {
+    resolveReadAuthMock.mockResolvedValue({ ok: true, auth: { mode: 'system' }, source: 'system', tokenUserId: null })
+    syncMock.mockRejectedValue(
+      new SkatteverketSkattekontoError('Inget skattekonto är registrerat hos Skatteverket.', null, 404),
+    )
+    const result = await syncSkattekontoNow(supabase, 'u', 'c')
+    expect(result).toEqual({
+      ok: false,
+      code: 'SKATTEVERKET_API_ERROR',
+      http_status: 502,
+      error: 'Inget skattekonto är registrerat hos Skatteverket.',
+      details: { skv_status: 404 },
+    })
+  })
+
+  it('any other skattekonto failure still throws', async () => {
+    resolveReadAuthMock.mockResolvedValue({ ok: true, auth: { mode: 'system' }, source: 'system', tokenUserId: null })
+    const internal = new SkatteverketSkattekontoError('Internt fel hos Skatteverket.', 4, 500)
+    syncMock.mockRejectedValue(internal)
+    await expect(syncSkattekontoNow(supabase, 'u', 'c')).rejects.toBe(internal)
+  })
+
   it('syncs on the resolved company auth', async () => {
     const auth = { mode: 'user', userId: 'owner' }
     resolveReadAuthMock.mockResolvedValue({ ok: true, auth, source: 'user', tokenUserId: 'owner' })
     syncMock.mockResolvedValue({ booked: 1, upcoming: 0, skipped: 0, saldoSkatteverket: 0, saldoKronofogden: 0, syncedAt: 'now' })
     const result = await syncSkattekontoNow(supabase, 'u', 'c')
     expect(result).toMatchObject({ ok: true, data: { booked: 1 } })
-    expect(syncMock).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'c' }), auth)
+    // The audit rows name the member who asked, not the token owner.
+    expect(syncMock).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'c' }), auth, 'u')
   })
 })

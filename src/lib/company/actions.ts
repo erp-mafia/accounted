@@ -5,11 +5,13 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import {
   BOOKS_GATE_COOKIE,
   BOOKS_GATE_MAX_AGE_SECONDS,
-  booksGateEnabled,
+  shouldArmBooksGate,
 } from '@/lib/onboarding/books-gate'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
+import { httpOnlyCookieOptions } from '@/lib/supabase/cookie-options'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
+import { profilesApplyOnSignup } from '@/lib/modules/signup-profile'
 import { isEntityType, isEntityTypeCreatable } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
@@ -75,17 +77,16 @@ export async function createCompanyFromOnboarding(params: {
   // (specialized accountant agent composer, MCP briefing) can read the same
   // Bolagsverket-sourced data the form used. Empty for manual entry paths.
   ticLookup?: CompanyLookupResult | null
-  // First company of a fresh account (journey mode='first'): arm the books
-  // gate so the dashboard stays closed until act two ran or was skipped
-  // (issue #2438). Adding a company from inside the app never arms it.
-  booksGate?: boolean
-}): Promise<{ companyId?: string; error?: string }> {
+  // No books-gate flag: whether the first-session gate arms is decided
+  // server-side from the user's memberships (shouldArmBooksGate), because
+  // "Lägg till företag" reaches the same journey page a new account does.
+}): Promise<{ companyId?: string; registeredOffice?: string | null; error?: string }> {
   try {
     return await createCompanyFromOnboardingImpl(params)
   } catch (err) {
     // Defensive top-level catch: a thrown error escapes to the client as
     // an opaque Next.js server-action exception with no message in dev
-    // and a redacted message in prod. Logging the full error here gives
+    // and a redacted message in production. Logging the full error here gives
     // us a server-side trace and returns a localized fallback to the UI.
     console.error('[createCompanyFromOnboarding] unexpected error', err)
     return { error: getErrorMessage(err, { context: 'settings' }) }
@@ -97,8 +98,7 @@ async function createCompanyFromOnboardingImpl(params: {
   settings: Record<string, unknown>
   fiscalPeriod: { startDate: string; endDate: string; name: string }
   ticLookup?: CompanyLookupResult | null
-  booksGate?: boolean
-}): Promise<{ companyId?: string; error?: string }> {
+}): Promise<{ companyId?: string; registeredOffice?: string | null; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -194,6 +194,17 @@ async function createCompanyFromOnboardingImpl(params: {
     }
   }
 
+  // Read before the create: afterwards the new company is itself a live
+  // membership and every user would look like a returning one. teamKind is
+  // the team the caller asked for: a byrå team there is the cockpit's
+  // new-client flow. The brand-signup homing above moves a user's own first
+  // company onto the brand's byrå team, and that user keeps the first session
+  // the journey gave them before the gate moved server-side.
+  const armBooksGate = shouldArmBooksGate({
+    teamKind: (teamRow as { kind?: string } | null)?.kind,
+    hasLiveCompany: await hasLiveCompany(supabase, user.id),
+  })
+
   // Steps 1-5 (company + owner via RPC, org number, TIC snapshot, chart,
   // settings, fiscal period, tax deadlines, with rollback) are shared with
   // the MCP and v1 creation paths: lib/company/create-company.ts.
@@ -206,6 +217,11 @@ async function createCompanyFromOnboardingImpl(params: {
       settings: params.settings,
       fiscalPeriod: params.fiscalPeriod,
       ticLookup: params.ticLookup,
+      // Public signup (any team but a byrå's) takes the profile derived from
+      // the legal form only while PROFILES_APPLY_ON_SIGNUP is on; until then
+      // it is recorded as a suggestion and the company keeps Standard. A
+      // byrå's client company picks its profile in the byrå's invite form.
+      applyDerivedProfile: (teamRow as { kind?: string } | null)?.kind !== 'byra' && profilesApplyOnSignup(),
     },
     createCompanyRow,
     rollbackClient,
@@ -223,24 +239,41 @@ async function createCompanyFromOnboardingImpl(params: {
     console.error('[createCompanyFromOnboarding] setActiveCompany failed', err)
   }
 
-  // 7. Arm the first-session books gate. Non-fatal: without the cookie the
-  // user simply lands on Hem with the checklist, exactly as before.
-  if (params.booksGate && booksGateEnabled()) {
+  // 7. Arm the first-session books gate for a first company only. Non-fatal:
+  // without the cookie the user simply lands on Hem with the checklist.
+  if (armBooksGate) {
     try {
       const cookieStore = await cookies()
-      cookieStore.set(BOOKS_GATE_COOKIE, newCompanyId, {
-        path: '/',
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: BOOKS_GATE_MAX_AGE_SECONDS,
-      })
+      cookieStore.set(
+        BOOKS_GATE_COOKIE,
+        newCompanyId,
+        httpOnlyCookieOptions(BOOKS_GATE_MAX_AGE_SECONDS),
+      )
     } catch (err) {
       console.error('[createCompanyFromOnboarding] books gate cookie failed', err)
     }
   }
 
   revalidatePath('/')
-  return { companyId: newCompanyId }
+  // The säte the register gave (SCB Säteskommun): the journey's summary card
+  // shows it as "Säte", never the postal town.
+  return { companyId: newCompanyId, registeredOffice: created.registeredOffice }
 }
 
+/**
+ * Whether the user is a member of at least one non-archived company. null
+ * when the read failed, so the caller can tell "none" from "unknown".
+ */
+async function hasLiveCompany(supabase: SupabaseClient, userId: string): Promise<boolean | null> {
+  const { data, error } = await supabase
+    .from('company_members')
+    .select('company_id, companies!inner(archived_at)')
+    .eq('user_id', userId)
+    .is('companies.archived_at', null)
+    .limit(1)
+  if (error) {
+    console.error('[createCompanyFromOnboarding] membership read failed', error)
+    return null
+  }
+  return (data ?? []).length > 0
+}

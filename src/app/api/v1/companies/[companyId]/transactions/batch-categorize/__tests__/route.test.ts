@@ -15,6 +15,14 @@ beforeAll(() => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'
 })
 
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/auth/api-keys', async () => {
   const actual = await vi.importActual<typeof import('@/lib/auth/api-keys')>('@/lib/auth/api-keys')
   return { ...actual, validateApiKey: vi.fn(), createServiceClientNoCookies: vi.fn() }
@@ -32,7 +40,9 @@ const { createTxJE, findMissingAccountsMock, reverseEntryMock } = vi.hoisted(() 
   reverseEntryMock: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
+// The real line builder: a dry run previews the lines the booking posts.
+vi.mock('@/lib/bookkeeping/transaction-entries', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/transaction-entries')>()),
   createTransactionJournalEntry: createTxJE,
 }))
 vi.mock('@/lib/bookkeeping/engine', () => ({
@@ -48,6 +58,22 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
   }
 })
 // category mapping is real: gives the route real BAS accounts to validate.
+// One test swaps in a fixed mapping (a plain 2440 supplier payment, which no
+// category or booking template produces today) through this override; every
+// other test delegates to the real builder.
+const { categoryMappingOverride } = vi.hoisted(() => ({
+  categoryMappingOverride: { current: null as null | ((...args: unknown[]) => unknown) },
+}))
+vi.mock('@/lib/bookkeeping/category-mapping', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/bookkeeping/category-mapping')>()
+  return {
+    ...actual,
+    buildMappingResultFromCategory: (...args: Parameters<typeof actual.buildMappingResultFromCategory>) =>
+      categoryMappingOverride.current
+        ? categoryMappingOverride.current(...args)
+        : actual.buildMappingResultFromCategory(...args),
+  }
+})
 
 // Underlag propagation: mocked to assert the wiring (called once per item
 // that actually booked); behavior is unit-tested in
@@ -58,45 +84,30 @@ const { propagateUnderlagMock } = vi.hoisted(() => ({
 vi.mock('@/lib/transactions/inbox-underlag', () => ({
   propagateUnderlagForBookedTransaction: propagateUnderlagMock,
 }))
+// Booking-time duplicate guard: the DB-backed detector is stubbed ("no
+// duplicate" by default) so it never consumes the queued `transactions`
+// results the tests below script; the detection queries are unit-tested in
+// lib/transactions/__tests__/booking-duplicate-detection.test.ts.
+const { detectDupMock, appendHistoryMock } = vi.hoisted(() => ({
+  detectDupMock: vi.fn(),
+  appendHistoryMock: vi.fn(),
+}))
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
+  detectBookingDuplicate: detectDupMock,
+}))
+vi.mock('@/lib/processing-history/append', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/processing-history/append')>()),
+  appendProcessingHistory: appendHistoryMock,
+}))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 import { POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  // Insert payloads are recorded verbatim: the proxy would happily accept a
-  // phantom column, so assertions have to inspect the object itself.
-  const inserts: Record<string, unknown[]> = {}
-  const updates: Record<string, unknown[]> = {}
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          if (prop === 'insert') (inserts[table] ??= []).push(args[0])
-          if (prop === 'update') (updates[table] ??= []).push(args[0])
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { supabase: { from: vi.fn((table: string) => buildChain(table)) }, inserts, updates }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_A = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -122,6 +133,9 @@ beforeEach(() => {
   findMissingAccountsMock.mockResolvedValue([])
   reverseEntryMock.mockResolvedValue(undefined)
   createTxJE.mockResolvedValue({ id: 'je-fresh' })
+  detectDupMock.mockReset().mockResolvedValue(null)
+  appendHistoryMock.mockReset().mockResolvedValue('evt-1')
+  categoryMappingOverride.current = null
   mockValidate.mockResolvedValue({
     userId: 'user-1',
     companyId: COMPANY_ID,
@@ -133,7 +147,7 @@ beforeEach(() => {
 
 describe('POST batch-categorize', () => {
   it('atomically unignores ignored rows when categorizing them as private', async () => {
-    const { supabase, updates } = makeFlexibleSupabase({
+    const { supabase, payloads } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -153,7 +167,13 @@ describe('POST batch-categorize', () => {
         { data: [{ id: TX_A }], error: null },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -170,7 +190,7 @@ describe('POST batch-categorize', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.summary).toEqual({ total: 1, succeeded: 1, failed: 0 })
-    expect(updates.transactions).toContainEqual(
+    expect(payloads('transactions', 'update')).toContainEqual(
       expect.objectContaining({
         is_business: false,
         category: 'private',
@@ -181,7 +201,7 @@ describe('POST batch-categorize', () => {
   })
 
   it('maps the ignored-row constraint to a typed per-item error', async () => {
-    const { supabase } = makeFlexibleSupabase({
+    const { supabase } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -208,7 +228,13 @@ describe('POST batch-categorize', () => {
         },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -238,7 +264,7 @@ describe('POST batch-categorize', () => {
   })
 
   it('answers a private marking in a locked period with TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED, a business one with PERIOD_LOCKED (issue #1661)', async () => {
-    const { supabase, updates } = makeFlexibleSupabase({
+    const { supabase, payloads } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: {
         data: {
@@ -253,7 +279,11 @@ describe('POST batch-categorize', () => {
         error: null,
       },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock, and a refused item reads no more.
+        { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+        { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -286,11 +316,11 @@ describe('POST batch-categorize', () => {
     expect(body.data.summary).toEqual({ total: 2, succeeded: 0, failed: 2 })
     // Neither item reached the engine or the CAS write.
     expect(createTxJE).not.toHaveBeenCalled()
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('returns a per-item NO_OPEN_PERIOD_FOR_DATE and writes nothing when the engine finds no covering period', async () => {
-    const { supabase, updates } = makeFlexibleSupabase({
+    const { supabase, payloads } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: {
         data: {
@@ -305,7 +335,13 @@ describe('POST batch-categorize', () => {
         error: null,
       },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
     createTxJE.mockResolvedValueOnce(null)
@@ -326,12 +362,12 @@ describe('POST batch-categorize', () => {
     expect(body.data.results[0].error.details.transaction_date).toBe('2026-05-12')
     expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
     // Refused before the CAS write (issue #1947): no update, no orphan, no storno.
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
     expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 
   it('keeps unrelated transaction update errors mapped to INTERNAL_ERROR', async () => {
-    const { supabase } = makeFlexibleSupabase({
+    const { supabase } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -353,7 +389,13 @@ describe('POST batch-categorize', () => {
         },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -374,7 +416,7 @@ describe('POST batch-categorize', () => {
 
   it('uses the linked cash account in validation and the posted mapping', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: {
@@ -391,7 +433,13 @@ describe('POST batch-categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         cash_accounts: { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
       }).supabase,
     )
 
@@ -419,6 +467,9 @@ describe('POST batch-categorize', () => {
       'user-1',
       expect.objectContaining({ id: TX_A, cash_account_id: 'cash-1' }),
       expect.objectContaining({ credit_account: '1931' }),
+      undefined,
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 
@@ -437,7 +488,7 @@ describe('POST batch-categorize', () => {
       error: null,
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: [
           txRow(TX_A, null), // item A fetch: unbooked
@@ -446,7 +497,13 @@ describe('POST batch-categorize', () => {
           { data: null, error: null }, // item B flags-flip update
         ],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
       }).supabase,
     )
 
@@ -477,7 +534,7 @@ describe('POST batch-categorize', () => {
 
   it('isolates a settlement lookup failure to its item and continues the batch', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: [
           {
@@ -510,7 +567,13 @@ describe('POST batch-categorize', () => {
           { data: null, error: { message: 'temporary lookup failure' } },
           { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
         ],
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
       }).supabase,
     )
 
@@ -530,7 +593,8 @@ describe('POST batch-categorize', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.results[0].ok).toBe(false)
-    expect(body.data.results[0].error.code).toBe('INTERNAL_ERROR')
+    // The thrown failure keeps its structured code, as on :categorize.
+    expect(body.data.results[0].error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
     expect(body.data.results[1].ok).toBe(true)
     expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
     expect(createTxJE).toHaveBeenCalledTimes(1)
@@ -540,12 +604,15 @@ describe('POST batch-categorize', () => {
       'user-1',
       expect.objectContaining({ id: TX_B }),
       expect.objectContaining({ credit_account: '1931' }),
+      undefined,
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 
   it('returns per-item ACCOUNTS_NOT_IN_CHART for items whose mapping references inactive accounts; clean items still succeed', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         // Each `transactions` lookup returns the same shape; the flexible
         // proxy serves both items from this single result. amount is < 0 so
@@ -562,7 +629,13 @@ describe('POST batch-categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
       }).supabase,
     )
 
@@ -601,7 +674,7 @@ describe('POST batch-categorize', () => {
 
   it('returns ACCOUNTS_NOT_IN_CHART when the engine throws AccountsNotInChartError mid-flight (defense in depth)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: {
@@ -615,7 +688,13 @@ describe('POST batch-categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
       }).supabase,
     )
     // Pre-validation passes: race where an account got deactivated between
@@ -646,7 +725,7 @@ describe('POST batch-categorize', () => {
   })
 
   it('refuses the item and writes nothing when the journal entry cannot be created, while a clean sibling still books (issue #1947)', async () => {
-    const { supabase, updates } = makeFlexibleSupabase({
+    const { supabase, payloads } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         // 1: item A fetch. 2: item B fetch. 3: item B CAS update (item A
@@ -676,7 +755,13 @@ describe('POST batch-categorize', () => {
         { data: [{ id: TX_B }], error: null },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
     const { BookkeepingDatabaseError } = await import('@/lib/bookkeeping/errors')
@@ -713,8 +798,8 @@ describe('POST batch-categorize', () => {
 
     // Only the clean sibling reached the transactions update: the refused
     // item stays uncategorized so it remains in the unbooked queue.
-    expect(updates.transactions).toHaveLength(1)
-    expect(updates.transactions[0]).toEqual(
+    expect(payloads('transactions', 'update')).toHaveLength(1)
+    expect(payloads('transactions', 'update')[0]).toEqual(
       expect.objectContaining({ is_business: true, journal_entry_id: 'je-fresh' }),
     )
     expect(propagateUnderlagMock).toHaveBeenCalledTimes(1)
@@ -722,7 +807,7 @@ describe('POST batch-categorize', () => {
   })
 
   it('documents the stranded voucher with the real voucher_gap_explanations columns when the CAS-race storno fails', async () => {
-    const { supabase, inserts } = makeFlexibleSupabase({
+    const { supabase, payloads } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         // 1: item fetch. 2: the CAS update, which matches no row because a
@@ -741,11 +826,18 @@ describe('POST batch-categorize', () => {
         { data: [], error: null },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-      journal_entries: {
-        data: { fiscal_period_id: 'period-1', voucher_series: 'B', voucher_number: 42 },
-        error: null,
-      },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
+      journal_entries: [
+        // The gate: no posted verifikat booked from the row (#203).
+        { data: [], error: null },
+        { data: { fiscal_period_id: 'period-1', voucher_series: 'B', voucher_number: 42 }, error: null },
+      ],
       voucher_gap_explanations: { data: null, error: null },
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -775,7 +867,7 @@ describe('POST batch-categorize', () => {
     const body = await res.json()
     expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_RACE')
 
-    const gaps = inserts['voucher_gap_explanations'] as Record<string, unknown>[]
+    const gaps = payloads('voucher_gap_explanations', 'insert') as Record<string, unknown>[]
     expect(gaps).toHaveLength(1)
     // Exhaustive: no gap_number, no created_by, and every NOT NULL column set.
     expect(gaps[0]).toEqual({
@@ -799,7 +891,7 @@ describe('POST batch-categorize', () => {
   ])(
     'books a company with vat_registered = $vat_registered with $vatLineCount moms line(s)',
     async ({ vat_registered, vatLineCount }) => {
-      const { supabase } = makeFlexibleSupabase({
+      const { supabase } = createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: [
           {
@@ -819,7 +911,13 @@ describe('POST batch-categorize', () => {
           { data: [{ id: TX_A }], error: null },
         ],
         company_settings: { data: { entity_type: 'ideell_forening', vat_registered }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
       })
       mockServiceClient.mockReturnValue(supabase)
 
@@ -838,4 +936,485 @@ describe('POST batch-categorize', () => {
       expect(mapping.vat_lines).toHaveLength(vatLineCount)
     },
   )
+})
+
+// crm#1096: a reverse-charge purchase on an account whose momskod reports
+// ruta 20-24 itself gets no 45xx/4598 pair. The batch reads the company's
+// momskoder once, however many reverse-charge items it books.
+describe('POST batch-categorize reverse-charge basis pair', () => {
+  it('settles every item on the company momskoder, read once for the whole batch', async () => {
+    const txRow = (id: string) => ({
+      data: {
+        id, company_id: COMPANY_ID, date: '2026-05-12', amount: -1000, currency: 'SEK',
+        merchant_name: 'SAAS', cash_account_id: null, journal_entry_id: null,
+      },
+      error: null,
+    })
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        txRow(TX_A), { data: [{ id: TX_A }], error: null },
+        txRow(TX_B), { data: [{ id: TX_B }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
+      chart_of_accounts: { data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const categorization = { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge' }
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        { items: [{ transaction_id: TX_A, categorization }, { transaction_id: TX_B, categorization }] },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(createTxJE).toHaveBeenCalledTimes(2)
+    for (const call of createTxJE.mock.calls) {
+      const mapping = call[4] as { debit_account: string; vat_lines: Array<{ account_number: string }> }
+      expect(mapping.debit_account).toBe('5420')
+      expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    }
+    expect(supabase.from.mock.calls.filter(([table]) => table === 'chart_of_accounts')).toHaveLength(1)
+  })
+
+  it('books the basis box an item names: a service from outside the EU is ruta 22 (crm#1028)', async () => {
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_A, company_id: COMPANY_ID, date: '2026-05-12', amount: -1000, currency: 'SEK',
+            merchant_name: 'SAAS', cash_account_id: null, journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_A }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [
+        // ensureFiscalPeriod, then checkPeriodLock.
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
+      chart_of_accounts: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const categorization = {
+      is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services',
+    }
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        { items: [{ transaction_id: TX_A, categorization }] },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const mapping = createTxJE.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+    expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4531', '4598'])
+  })
+})
+
+describe('POST batch-categorize double-booking guards (parity with :categorize and the dashboard route)', () => {
+  const URL = `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`
+  const EXISTING_JE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const candidate = {
+    transaction_id: null,
+    journal_entry_id: EXISTING_JE,
+    voucher_label: 'A12',
+    entry_date: '2026-05-12',
+    description: 'Leverantörsfaktura 100 betald',
+    amount: -100,
+    account_number: '1930',
+    currency: null,
+    amount_in_currency: null,
+    amount_verified: true,
+    unverified_reason: null,
+  }
+  const txRow = (id: string, overrides: Record<string, unknown> = {}) => ({
+    data: {
+      id,
+      company_id: COMPANY_ID,
+      date: '2026-05-12',
+      amount: -100,
+      currency: 'SEK',
+      merchant_name: 'ICA',
+      cash_account_id: null,
+      journal_entry_id: null,
+      ...overrides,
+    },
+    error: null,
+  })
+
+  it('returns 401 without a valid bearer token', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [{ transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } }],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(401)
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for an item with force=true but no reviewed candidate id', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }).supabase,
+    )
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [
+          {
+            transaction_id: TX_A,
+            categorization: { is_business: true, category: 'expense_office', force: true },
+          },
+        ],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(400)
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('refuses an already-booked bank line per item with TRANSACTION_BOOK_POSSIBLE_DUPLICATE while a clean sibling books', async () => {
+    const { supabase, payloads } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        txRow(TX_A), // item A fetch: its bank line is already booked by a voucher
+        txRow(TX_B), // item B fetch: clean
+        { data: [{ id: TX_B }], error: null }, // item B CAS update: owned
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    detectDupMock.mockResolvedValueOnce(candidate).mockResolvedValueOnce(null)
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [
+          { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+          { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+        ],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
+    expect(body.data.results[0]).toEqual(
+      expect.objectContaining({
+        ok: false,
+        transaction_id: TX_A,
+        error: expect.objectContaining({
+          code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE',
+          details: { candidate: expect.objectContaining({ journal_entry_id: EXISTING_JE }) },
+        }),
+      }),
+    )
+    expect(body.data.results[1]).toEqual(expect.objectContaining({ ok: true, transaction_id: TX_B }))
+    // Only item B reached the engine and the transaction write.
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+    expect(payloads('transactions', 'update')).toHaveLength(1)
+  })
+
+  it('never dedupes an item against a verifikat booked earlier in the same batch', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          txRow(TX_A),
+          { data: [{ id: TX_A }], error: null },
+          txRow(TX_B),
+          { data: [{ id: TX_B }], error: null },
+        ],
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
+      }).supabase,
+    )
+    createTxJE.mockResolvedValueOnce({ id: 'je-a' }).mockResolvedValueOnce({ id: 'je-b' })
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [
+          { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+          { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+        ],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(detectDupMock).toHaveBeenCalledTimes(2)
+    expect(detectDupMock.mock.calls[0][3]).toEqual({ excludeTransactionIds: [], excludeJournalEntryIds: [] })
+    expect(detectDupMock.mock.calls[1][3]).toEqual({
+      excludeTransactionIds: [TX_A],
+      excludeJournalEntryIds: ['je-a'],
+    })
+  })
+
+  it('books an item over its candidate with a bound force and records the dismissal', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [txRow(TX_A), { data: [{ id: TX_A }], error: null }],
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
+      }).supabase,
+    )
+    detectDupMock.mockResolvedValue(candidate)
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [
+          {
+            transaction_id: TX_A,
+            categorization: {
+              is_business: true,
+              category: 'expense_office',
+              force: true,
+              expected_duplicate_journal_entry_id: EXISTING_JE,
+            },
+          },
+        ],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.summary).toEqual({ total: 1, succeeded: 1, failed: 0 })
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+    expect(appendHistoryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'BankTransactionDuplicateDismissed',
+        aggregateId: TX_A,
+        payload: expect.objectContaining({
+          dismissed_journal_entry_id: EXISTING_JE,
+          via: 'api_force',
+        }),
+      }),
+    )
+  })
+
+  it('refuses a plain 244x supplier payment an open supplier invoice covers, unless confirm_no_match', async () => {
+    const supplierSupabase = () =>
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          txRow(TX_A, { amount: -1250, merchant_name: 'Kontorsbolaget' }),
+          { data: [{ id: TX_A }], error: null },
+        ],
+        company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+        suppliers: { data: [{ id: 'sup-1' }], error: null },
+        supplier_invoices: {
+          data: [
+            {
+              id: 'si-1',
+              supplier_invoice_number: 'F-100',
+              invoice_date: '2026-04-30',
+              remaining_amount: 1250,
+              total: 1250,
+              currency: 'SEK',
+              total_sek: 1250,
+              exchange_rate: null,
+              supplier: { name: 'Kontorsbolaget AB' },
+            },
+          ],
+          error: null,
+        },
+        fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
+      })
+    categoryMappingOverride.current = () => ({
+      rule: null,
+      debit_account: '2440',
+      credit_account: '1930',
+      risk_level: 'NONE',
+      confidence: 1,
+      requires_review: false,
+      default_private: false,
+      vat_lines: [],
+      description: 'Leverantörsbetalning',
+    })
+    const categorization = { is_business: true, category: 'expense_other' }
+
+    mockServiceClient.mockReturnValue(supplierSupabase().supabase)
+    const refused = await POST(
+      makeRequest(URL, { items: [{ transaction_id: TX_A, categorization }] }),
+      batchParams(),
+    )
+    const refusedBody = await refused.json()
+    expect(refusedBody.data.results[0].error.code).toBe('TX_CATEGORIZE_SUGGEST_SI_MATCH')
+    expect(refusedBody.data.results[0].error.details.candidates[0].supplier_invoice_id).toBe('si-1')
+    expect(createTxJE).not.toHaveBeenCalled()
+
+    mockServiceClient.mockReturnValue(supplierSupabase().supabase)
+    const confirmed = await POST(
+      makeRequest(URL, {
+        items: [{ transaction_id: TX_A, categorization: { ...categorization, confirm_no_match: true } }],
+      }),
+      batchParams(),
+    )
+    expect((await confirmed.json()).data.summary).toEqual({ total: 1, succeeded: 1, failed: 0 })
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('POST batch-categorize already-booked guard', () => {
+  it('refuses a link-only item with TRANSACTION_ALREADY_CATEGORIZED and creates no verifikat', async () => {
+    // A bulk-booked samlingsverifikat (N>1) anchors the row through a bank_line
+    // voucher link only: journal_entry_id stays NULL.
+    const { supabase, payloads } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_A,
+          company_id: COMPANY_ID,
+          date: '2026-05-12',
+          amount: -349.5,
+          currency: 'SEK',
+          merchant_name: 'ICA',
+          cash_account_id: null,
+          journal_entry_id: null,
+          // The junction rows ride along on the transaction read.
+          transaction_voucher_links: [{ journal_entry_id: 'je-samling', role: 'bank_line' }],
+        },
+        error: null,
+      },
+      journal_entries: { data: [{ id: 'je-samling', status: 'posted' }], error: null },
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: [
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`, {
+        items: [{ transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } }],
+      }),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    expect(body.data.results[0].error).toEqual(
+      expect.objectContaining({
+        code: 'TRANSACTION_ALREADY_CATEGORIZED',
+        details: { journal_entry_id: 'je-samling', via: 'link' },
+      }),
+    )
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(payloads('transactions', 'update')).toEqual([])
+  })
+})
+
+describe('POST batch-categorize counter-leg guard (as on :categorize)', () => {
+  it('refuses an item whose override counter is a stale twin of a live bank ledger', async () => {
+    const { supabase, payloads } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_A,
+          company_id: COMPANY_ID,
+          date: '2026-05-12',
+          amount: 500,
+          currency: 'SEK',
+          merchant_name: 'Kund AB',
+          cash_account_id: null,
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      cash_accounts: [
+        // resolveSettlementAccount: no enabled cash account in SEK -> 1930
+        { data: [], error: null },
+        // The guard's topology: 1931 is held by a revoked connection and shares
+        // its (IBAN, currency) with the live 1940 row, a stale twin.
+        {
+          data: [
+            { id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-live', iban: 'SE455', enabled: true, currency: 'SEK' },
+            { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE455', enabled: true, currency: 'SEK' },
+          ],
+          error: null,
+        },
+      ],
+      bank_connections: {
+        data: [
+          { id: 'conn-live', status: 'active' },
+          { id: 'conn-old', status: 'revoked' },
+        ],
+        error: null,
+      },
+      chart_of_accounts: { data: { account_number: '1931', account_class: 1, is_active: true }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`, {
+        items: [
+          {
+            transaction_id: TX_A,
+            categorization: { is_business: true, category: 'income_services', vat_treatment: 'exempt', account_override: '1931' },
+          },
+        ],
+      }),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.data.results[0].error.details).toEqual({ accountNumber: '1931' })
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(payloads('transactions', 'update')).toEqual([])
+  })
 })

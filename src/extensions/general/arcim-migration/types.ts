@@ -6,6 +6,8 @@
  */
 
 import type { HydrationReport } from '@/lib/providers/provider-data-fetcher'
+import type { ProviderName } from '@/lib/providers/types'
+import { MIGRATION_PROVIDERS } from '@/lib/providers/catalog'
 
 // Re-export the canonical DTOs used by arcim-client (entity-mapper imports
 // its DTOs straight from '@/lib/providers/dto')
@@ -21,23 +23,11 @@ export type {
 
 // ── Supported providers ─────────────────────────────────────────────
 
-export type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | 'wint'
-
-// `sieViaApi`: the provider serves its general ledger as SIE over the API, so
-// the wizard imports bookkeeping automatically: no manual SIE upload needed.
-// Mirrored in ArcimMigrationWorkspace.tsx (deliberate duplication: core code
-// must not import from @/extensions/: CI enforces it). Keep both in sync.
-export const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
-  { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
-  { id: 'visma', name: 'Visma eEkonomi', authType: 'oauth', sieViaApi: false },
-  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
-  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
-  { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
-  // WINT's "token" is the user's WINT login exchanged once for a JWT pair
-  // (WINT has no API keys or OAuth). Gated behind WINT_MIGRATION_ENABLED in
-  // index.ts until verified against a live account.
-  { id: 'wint', name: 'WINT', authType: 'token', sieViaApi: true },
-]
+// The providers and their catalog (name, auth, sieViaApi) are core's:
+// lib/providers/catalog.ts, one list for the workspace, this extension and
+// the MCP connect card.
+export type ArcimProvider = ProviderName
+export const ARCIM_PROVIDERS = MIGRATION_PROVIDERS
 
 // ── Migration state ─────────────────────────────────────────────────
 
@@ -55,8 +45,9 @@ export interface SkipReasons {
   failed?: number
   noMatch?: number
   /**
-   * Invoices both issued and settled before the fiscal years the SIE import
-   * covers. Never fetched in detail, never inserted: their ledger is not here.
+   * Invoices outside the fiscal years the SIE import covers: issued and
+   * settled before them, or issued after them (crm#1660). Never fetched in
+   * detail, never inserted: their ledger is not here.
    */
   outsideFiscalYears?: number
   /**
@@ -67,6 +58,13 @@ export interface SkipReasons {
    * is declined and counted rather than imported.
    */
   zeroTotal?: number
+  /**
+   * Skipped records whose reason the result does not carry. The provider
+   * migration job reports state 'skipped' per resource without grouping it by
+   * the chunk's receipt reason (provider_migration_counts), so the wizard can
+   * count them but not say which reason each had (agent feedback seq 939430).
+   */
+  reasonUnknown?: number
 }
 
 /**
@@ -123,6 +121,11 @@ export interface InvoiceStepResult {
    */
   rowsMismatch?: number
   /**
+   * Supplier invoices with a provider row that named no account. They are
+   * imported without rows: no account is guessed for a row.
+   */
+  rowsUnaccounted?: number
+  /**
    * Credit notes imported without a credited_invoice_id: the provider named
    * no credited invoice, or the one it named is not among the company's
    * invoices. The amounts are reversed and the record is complete, but the
@@ -133,6 +136,11 @@ export interface InvoiceStepResult {
   creditNotesLinked?: number
   hydration?: HydrationReport
   errorSample?: string
+  /**
+   * The run listed Fortnox's paid supplier invoices too, on the member's
+   * request, so the "unpaid only" note does not apply (crm#1114).
+   */
+  paidIncluded?: boolean
 }
 
 export interface MigrationResults {

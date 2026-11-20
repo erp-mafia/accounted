@@ -1,23 +1,31 @@
 /**
  * K3 framework integration test for the dispositions builder.
  *
- * Since 2026-08-05 (founder decision, K3 29.37) the builder books NO
+ * Since 2026-08-05 (product decision, K3 29.37) the builder books NO
  * uppskjuten skatt on obeskattade reserver: in juridisk person the reserves
  * stay at gross and the 79.4/20.6 split belongs to koncernredovisning.
  * These tests pin that the proposal chain is framework-independent and that
  * no uppskjuten_skatt proposal ever appears, alongside the disposition math
  * that remains (periodiseringsfond, overavskrivningar, bolagsskatt).
  *
- * Mocks generateIncomeStatement directly so the test can drive numeric
+ * Since 2026-10-26 (K3 plan phase 2) a K3 year may carry deferred tax on
+ * real temporary differences and a recognised loss (K3 29.19), under its own
+ * kind uppskjuten_skatt_kap29: never on the reserves, and nothing at all
+ * until the user has stated a difference or recognised a loss.
+ *
+ * Mocks readYearResult directly so the test can drive numeric
  * inputs without touching the database.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/reports/income-statement', () => ({
-  generateIncomeStatement: vi.fn(),
+vi.mock('@/lib/bokslut/tax-provision/result-before-tax', () => ({
+  readYearResult: vi.fn(),
 }))
 
-vi.mock('@/lib/reports/trial-balance', () => ({
+// Partial: the KPI rows and the year-end exclusion use the module's real
+// helpers (buildTrialBalanceRows).
+vi.mock('@/lib/reports/trial-balance', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/trial-balance')>()),
   generateTrialBalance: vi.fn(),
 }))
 
@@ -26,7 +34,7 @@ vi.mock('@/lib/bokslut/reserves/overavskrivningar-calculator', () => ({
 }))
 
 import { buildDispositionsProposal } from '../dispositions-proposal-builder'
-import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { readYearResult } from '@/lib/bokslut/tax-provision/result-before-tax'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
 
@@ -40,6 +48,8 @@ function makeSupabase(opts: {
   periodEnd?: string
   /** Existing periodiseringsfond rows the builder queries. */
   periodiseringsfondRows?: Array<{ account_number: string; cohort_year: number; balance: number; must_return_this_year: boolean }>
+  /** The K3 deferred tax inputs of the year. */
+  deferredTaxAssessment?: { loss_recognised: boolean; loss_reason: string | null; manual_items: unknown[] }
 }): ChainableMock {
   const periodEnd = opts.periodEnd ?? '2026-12-31'
   // The builder makes several .from(...) queries. We respond per-table.
@@ -60,9 +70,7 @@ function makeSupabase(opts: {
                   },
                   error: null,
                 }),
-              // sumPostedYearEndDispositions reads closing_entry_id with
-              // .eq('id').eq('company_id').maybeSingle() to exclude the final
-              // bokslutsverifikation from the add-back (#1051).
+              // The deferred tax step reads the year's period the same way.
               maybeSingle: () =>
                 Promise.resolve({ data: { closing_entry_id: null }, error: null }),
             }),
@@ -95,6 +103,14 @@ function makeSupabase(opts: {
           }),
         }),
       }
+    }
+    if (table === 'deferred_tax_assessments') {
+      const chain = {
+        select: () => chain,
+        eq: () => chain,
+        maybeSingle: () => Promise.resolve({ data: opts.deferredTaxAssessment ?? null, error: null }),
+      }
+      return chain
     }
     if (table === 'journal_entry_lines') {
       // Used by listExistingPeriodiseringsfonder and calculateSarskildLoneskatt.
@@ -156,9 +172,7 @@ beforeEach(() => {
   // Zero result so the builder doesn't propose a new avsättning: keeps the
   // 21xx balance stable at the trial-balance value, which makes the latent
   // tax math testable in isolation.
-  vi.mocked(generateIncomeStatement).mockResolvedValue({
-    net_result: 0,
-  } as Awaited<ReturnType<typeof generateIncomeStatement>>)
+  vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 0, beforeTax: 0 })
   vi.mocked(generateTrialBalance).mockResolvedValue({
     rows: [
       // 100 000 in periodiseringsfond → 20 600 latent tax target.
@@ -206,9 +220,7 @@ describe('buildDispositionsProposal: K3 framework', () => {
     //   avsättning   = 25 % × 1,000,000          = 250,000
     //   skattem. res = 1,000,000 − 250,000        = 750,000
     //   bolagsskatt  = 20.6 % × 750,000           = 154,500  (NOT 206,000)
-    vi.mocked(generateIncomeStatement).mockResolvedValue({
-      net_result: 1_000_000,
-    } as Awaited<ReturnType<typeof generateIncomeStatement>>)
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 1_000_000, beforeTax: 1_000_000 })
 
     const supabase = makeSupabase({ entityType: 'aktiebolag', accountingFramework: 'k2' })
     const result = await buildDispositionsProposal(
@@ -224,9 +236,7 @@ describe('buildDispositionsProposal: K3 framework', () => {
   })
 
   it('includes excess depreciation in the periodiseringsfond and tax bases', async () => {
-    vi.mocked(generateIncomeStatement).mockResolvedValue({
-      net_result: 1_000_000,
-    } as Awaited<ReturnType<typeof generateIncomeStatement>>)
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 1_000_000, beforeTax: 1_000_000 })
     vi.mocked(calculateOveravskrivningar).mockResolvedValue({
       status: 'ready',
       proposal: {
@@ -259,6 +269,24 @@ describe('buildDispositionsProposal: K3 framework', () => {
     const bolagsskatt = result.proposals.find((p) => p.kind === 'bolagsskatt')
     expect(avsattning?.amount).toBe(225_000)
     expect(bolagsskatt?.amount).toBe(139_050)
+  })
+
+  it('proposes K3 deferred tax on a recognised loss only, on 8940/1370, never on the reserves', async () => {
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: -100_000, beforeTax: -100_000 })
+    const supabase = makeSupabase({
+      entityType: 'aktiebolag',
+      accountingFramework: 'k3',
+      deferredTaxAssessment: { loss_recognised: true, loss_reason: 'Ny storkund från januari.', manual_items: [] },
+    })
+    const result = await buildDispositionsProposal(
+      supabase as unknown as Parameters<typeof buildDispositionsProposal>[0],
+      'co',
+      'fp1',
+    )
+    const deferred = result.proposals.find((p) => p.kind === 'uppskjuten_skatt_kap29')
+    expect(deferred?.amount).toBe(20_600)
+    expect(deferred?.lines.map((l) => l.account_number).sort()).toEqual(['1370', '8940'])
+    expect(result.deferredTax?.items.map((item) => item.kind)).toEqual(['loss_carryforward'])
   })
 
   it('does NOT add an uppskjuten_skatt proposal for K2 aktiebolag', async () => {

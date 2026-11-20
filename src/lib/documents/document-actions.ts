@@ -5,21 +5,30 @@
  * (DELETE /api/documents/[id]), the v1 operations and any MCP tool
  * (lib/operations/documents.ts), so every door applies the same rule:
  *
- *   - a document linked to a verifikat (journal_entry_id set, whatever the
- *     entry's status) is räkenskapsinformation under BFL 7 kap 2 § and is
+ *   - a document linked to a verifikat (journal_entry_id or
+ *     journal_entry_line_id set, whatever the entry's status;
+ *     canDeleteDocument) is räkenskapsinformation under BFL 7 kap 2 § and is
  *     never deleted; the DB trigger block_document_deletion() is the
  *     backstop, deleteDocument() the application check. Correcting one means
  *     a new version, never a delete.
+ *   - a document another registered record holds (a supplier invoice or an
+ *     utlägg with it as underlag, a booked inbox item with it as its file or
+ *     received Peppol XML, a bank transaction) is refused too, each with its
+ *     own code (documentDeleteRefusal, lib/documents/deletion.ts).
  *
- * Reads return metadata only: never the file bytes (GET .../download) and
- * never the extracted text (the Arkiv reading tools serve that).
+ * Reads return metadata, never the file bytes (GET .../download). The page
+ * text, the reading, the links and the arrivals come only when asked for
+ * (include, lib/documents/read/document-detail.ts).
  *
  * A dry run reads and checks; it writes nothing.
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/pagination'
 import { deleteDocument } from '@/lib/core/documents/document-service'
+import { canDeleteDocument, documentDeleteRefusal, inboxItemsLeftEmpty, readDocumentDeletePins } from '@/lib/documents/deletion'
 import { UUID_RE } from '@/lib/invariants/uuid'
+import { toSameOriginStorageRequest } from '@/lib/core/documents/storage-proxy'
+import type { DocumentDetail, DocumentDetailPart, readDocumentDetail } from '@/lib/documents/read/document-detail'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -47,6 +56,14 @@ interface DocumentDetailRow extends DocumentRow {
   original_id: string | null
   superseded_by_id: string | null
   digitization_date: string | null
+  page_count: number | null
+  pages_read_at: string | null
+  read_error: string | null
+  doc_type: string | null
+  admission_state: string | null
+  extracted_data: unknown
+  extracted_at: string | null
+  extraction_model: string | null
 }
 
 export interface DocumentPublic {
@@ -64,12 +81,25 @@ export interface DocumentPublic {
   created_at: string
 }
 
-export interface DocumentDetailPublic extends DocumentPublic {
+export interface DocumentDetailPublic extends DocumentPublic, DocumentDetail {
   original_id: string | null
   superseded_by_id: string | null
   digitization_date: string | null
   transaction_ids: string[]
   inbox_item_id: string | null
+}
+
+/** The opt-in parts of one document's read (lib/documents/read/document-detail.ts). */
+export interface DocumentDetailRequest {
+  include?: readonly DocumentDetailPart[]
+  fromPage?: number
+  maxChars?: number
+  /**
+   * The reader of those parts, passed in by the caller: it reads Arkiv's
+   * pages and flag (the inbox block), which the ledger kernel may not import.
+   * Required whenever include names a part.
+   */
+  readDetail?: typeof readDocumentDetail
 }
 
 function toPublic(row: DocumentRow): DocumentPublic {
@@ -155,11 +185,12 @@ export async function listDocumentsPage(
 export async function getDocumentMetadata(
   ctx: OperationContext,
   documentId: string,
+  request: DocumentDetailRequest = {},
 ): Promise<OperationOutcome<DocumentDetailPublic>> {
   if (!UUID_RE.test(documentId)) return NOT_FOUND
   const { data, error } = await ctx.supabase
     .from('document_attachments')
-    .select('id, file_name, mime_type, file_size_bytes, sha256_hash, version, is_current_version, upload_source, journal_entry_id, journal_entry_line_id, created_at, original_id, superseded_by_id, digitization_date')
+    .select('id, file_name, mime_type, file_size_bytes, sha256_hash, version, is_current_version, upload_source, journal_entry_id, journal_entry_line_id, created_at, original_id, superseded_by_id, digitization_date, page_count, pages_read_at, read_error, doc_type, admission_state, extracted_data, extracted_at, extraction_model')
     .eq('id', documentId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -183,6 +214,40 @@ export async function getDocumentMetadata(
   if (txError) return failed(txError)
   if (inboxError) return failed(inboxError)
 
+  let detail: DocumentDetail = {}
+  if (request.include?.length && request.readDetail) {
+    try {
+      detail = await request.readDetail(
+        ctx.supabase,
+        ctx.companyId,
+        {
+          id: row.id,
+          original_id: row.original_id ?? null,
+          mime_type: row.mime_type ?? null,
+          page_count: row.page_count ?? null,
+          pages_read_at: row.pages_read_at ?? null,
+          read_error: row.read_error ?? null,
+          doc_type: row.doc_type ?? null,
+          admission_state: row.admission_state ?? null,
+          extracted_data: row.extracted_data ?? null,
+          extracted_at: row.extracted_at ?? null,
+          extraction_model: row.extraction_model ?? null,
+          journal_entry_id: row.journal_entry_id ?? null,
+          journal_entry_line_id: row.journal_entry_line_id ?? null,
+        },
+        {
+          include: request.include,
+          fromPage: request.fromPage,
+          maxChars: request.maxChars,
+          toRequest: toSameOriginStorageRequest,
+          hints: { file: 'the file (GET /documents/{id}/download)' },
+        },
+      )
+    } catch (err) {
+      return failed(err)
+    }
+  }
+
   return {
     ok: true,
     data: {
@@ -192,15 +257,20 @@ export async function getDocumentMetadata(
       digitization_date: row.digitization_date ?? null,
       transaction_ids: ((txs ?? []) as Array<{ id: string }>).map((t) => t.id),
       inbox_item_id: ((inbox ?? []) as Array<{ id: string }>)[0]?.id ?? null,
+      ...detail,
     },
   }
 }
 
 /**
- * Delete a document that is not linked to a verifikat. The rule is
- * deleteDocument()'s (the dashboard's): any journal_entry_id refuses, with the
- * BFL 7 kap 2 § explanation. The dry run reads the same row and applies the
- * same rule.
+ * Delete a document nothing holds. The rule is deleteDocument()'s (the
+ * dashboard's), documentDeleteRefusal() in lib/documents/deletion.ts: a link
+ * to a verifikat or one of its lines answers DOC_DELETE_LINKED with the BFL
+ * 7 kap 2 § explanation; the underlag of a registered supplier invoice or
+ * utlägg, the file or received Peppol XML of a booked inbox item and a bank
+ * transaction's underlag each answer their own code. The dry run reads the
+ * same row and pins and applies the same rule, and names the inbox items
+ * that go with the document (inboxItemsLeftEmpty) so the approver sees them.
  */
 export async function removeDocument(
   ctx: OperationContext,
@@ -211,19 +281,32 @@ export async function removeDocument(
     // A failed read answers 404, as deleteDocument() does on the commit path.
     const { data, error } = await ctx.supabase
       .from('document_attachments')
-      .select('id, file_name, journal_entry_id')
+      .select('id, file_name, journal_entry_id, journal_entry_line_id')
       .eq('id', documentId)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
     if (error || !data) return NOT_FOUND
-    const row = data as { id: string; file_name: string; journal_entry_id: string | null }
-    if (row.journal_entry_id) {
-      return { ok: false, code: 'DOC_DELETE_LINKED', details: { journal_entry_id: row.journal_entry_id } }
+    const row = data as { id: string; file_name: string; journal_entry_id: string | null; journal_entry_line_id: string | null }
+    if (!canDeleteDocument(row)) {
+      return { ok: false, code: 'DOC_DELETE_LINKED', details: { journal_entry_id: row.journal_entry_id, journal_entry_line_id: row.journal_entry_line_id } }
     }
+    let pins: Awaited<ReturnType<typeof readDocumentDeletePins>>
+    try {
+      pins = await readDocumentDeletePins(ctx.supabase, ctx.companyId, documentId)
+    } catch (err) {
+      return failed(err)
+    }
+    const refusal = documentDeleteRefusal(row, pins)
+    if (refusal) return { ok: false, code: refusal.code, details: { blocked_by: refusal.block } }
     return {
       ok: true,
       dryRun: true,
-      preview: { document_id: row.id, file_name: row.file_name, would_delete: true },
+      preview: {
+        document_id: row.id,
+        file_name: row.file_name,
+        would_delete: true,
+        inbox_item_ids_deleted_too: inboxItemsLeftEmpty(documentId, pins.inboxItems),
+      },
     }
   }
 
@@ -236,7 +319,7 @@ export async function removeDocument(
   }
   if (!result.ok) {
     if (result.reason === 'not_found') return NOT_FOUND
-    return { ok: false, code: 'DOC_DELETE_LINKED', messageSv: result.message }
+    return { ok: false, code: result.code, messageSv: result.message, details: { blocked_by: result.block } }
   }
   return { ok: true, data: { id: result.document.id, file_name: result.document.file_name, deleted: true } }
 }

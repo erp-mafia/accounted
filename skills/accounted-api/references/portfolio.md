@@ -15,10 +15,11 @@ are in SKILL.md and are not repeated per endpoint.
 One read over many companies: for every company in scope, the unbooked bank transactions, the unconsumed inbox documents, the next open deadline with its urgency, the latest booked date and the open deadlines (earliest first, at most 10). Rows are urgency-sorted: overdue deadline first, then the largest unbooked pile. The scope is every non-archived company the key user is a member of (default), the key user's byrå team (team=true), or an explicit comma-separated companies list; exclude removes ids from any of them. The scope is capped at 25 companies per call: scope.truncated says so and scope.remaining_company_ids lists the rest so the next call can pass them as companies. The filters (deadline_kind, deadline_within_days, min_unbooked, min_inbox) narrow the rows; summary.companies is the scope size and summary.matched the rows left.
 
 **Use when:** The key reaches several companies and you need to know where to work first: which companies have VAT due this week, who has unbooked transactions piling up, whose inbox is waiting.
-**Do not use for:** A single company (GET /api/v1/companies/{companyId} plus its per-resource lists), or discovering company ids: GET /api/v1/companies lists them without the numbers.
+**Do not use for:** A single company (its per-resource lists, and GET /api/v1/companies/{companyId}/settings for its settings), or discovering company ids: GET /api/v1/companies lists them without the numbers.
 
 **Pitfalls:**
 - Unknown, archived or non-member ids in companies do not fail the call: they come back in scope.unresolved with a 200. Check it before trusting an empty result.
+- A company paused for the key user (multi-user plan lapsed, the user is not its owner) is left out of the rows and listed in scope.dormant; its per-company endpoints answer 403 for the same key.
 - team=true with no byrå team returns an empty scope and team: null, not an error. A byrå member without client companies also gets an empty scope, with team set.
 - More than 25 companies in scope: the response is truncated (scope.truncated) and scope.remaining_company_ids carries the ids beyond the cap. Call again with companies=<those ids>.
 - deadline_kind matches deadlines.tax_deadline_type, so custom deadlines (no tax type) never match a kind; deadline_within_days alone looks at the next deadline of any kind, custom included.
@@ -39,10 +40,10 @@ Response `200`:
 ```ts
 {
   data: {
-    team: { id: string, name: string } | null,
-    scope: { truncated: boolean, remaining_company_ids: string[], unresolved: string[] },
+    team: { id: string, handle?: string, name: string } | null,
+    scope: { truncated: boolean, remaining_company_ids: string[], unresolved: string[], dormant: string[] },
     summary: { companies: number, matched: number, unbooked_total: number, inbox_total: number, overdue: number, action_needed: number },
-    companies: { company_id: string, name: string, org_number: string | null, entity_type: string | null, role: "owner" | "admin" | "member" | "viewer", team_id: string | null, unbooked_count: number, inbox_count: number, next_deadline: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" } | null, last_booked_date: string | null, deadlines: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" }[] }[]
+    companies: { company_id: string, name: string, org_number: string | null, client_number: string | null, entity_type: string | null, role: "owner" | "admin" | "member" | "viewer", team_id: string | null, unbooked_count: number, inbox_count: number, next_deadline: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" } | null, last_booked_date: string | null, deadlines: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" }[] }[]
   },
   meta: {
     request_id: string,
@@ -67,7 +68,8 @@ Example response `200`:
     "scope": {
       "truncated": false,
       "remaining_company_ids": [],
-      "unresolved": []
+      "unresolved": [],
+      "dormant": []
     },
     "summary": {
       "companies": 2,
@@ -82,6 +84,7 @@ Example response `200`:
         "company_id": "8fd5b1f4-0000-4000-8000-000000000001",
         "name": "Acme AB",
         "org_number": "556677-8899",
+        "client_number": "K-1042",
         "entity_type": "aktiebolag",
         "role": "member",
         "team_id": "2a7a9e8c-4c2e-4a68-9a1a-4f0f6f3f2a10",
@@ -113,6 +116,7 @@ Example response `200`:
         "company_id": "8fd5b1f4-0000-4000-8000-000000000002",
         "name": "Beta Konsult",
         "org_number": null,
+        "client_number": null,
         "entity_type": "enskild_firma",
         "role": "member",
         "team_id": "2a7a9e8c-4c2e-4a68-9a1a-4f0f6f3f2a10",

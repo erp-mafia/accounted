@@ -16,7 +16,7 @@ describe('contentDisposition', () => {
 
   it('produces a ByteString-safe value for an NFD Swedish filename', () => {
     // macOS/iOS NFD upload: base letter + combining diaeresis U+0308 (776),
-    // the exact shape that crashed the inline route in prod.
+    // the exact shape that crashed the inline route in production.
     const nfd = 'kvitto fo\u0308rvaring.pdf'
     expect(nfd.charCodeAt(9)).toBe(776)
 

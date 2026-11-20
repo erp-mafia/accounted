@@ -1,20 +1,27 @@
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
-import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
 
 /**
- * Shared resolution of "posted verifikat that lack underlag", scoped by the
- * journal list's filters. Single TS mirror of the verifikat_without_documents
- * RPC predicate (posted + document-requiring source type, no current-version
- * document, no BFL 5 kap 7 § hänvisning via a supplier invoice whose retained
- * document is anchored to a journal entry or via a customer invoice that
- * points at the entry, no journal_entry_no_doc_required exemption). Used by
- * the bulk "Inget underlag krävs" route and the journal list's
- * missing_underlag filter so the two can never disagree.
+ * "Posted verifikat that lack underlag", scoped by the journal list's filters.
+ *
+ * Resolved by the list_verifikat_missing_underlag RPC (migration
+ * 20261023001000) in ONE statement: the verifikat_without_documents predicate
+ * (posted + document-requiring source type, no current-version document, no
+ * BFL 5 kap 7 § hänvisning via a supplier invoice whose retained document is
+ * anchored or via an issued customer invoice that points at the entry, no
+ * journal_entry_no_doc_required exemption), narrowed by the list's filters,
+ * sorted and paged in SQL. Used by the journal list's missing_underlag filter
+ * and the bulk "Inget underlag krävs" route, so the two can never disagree,
+ * and pinned to the dashboard badge's RPC by
+ * tests/pg/list-verifikat-missing-underlag.pg.test.ts.
+ *
+ * The set used to be resolved here in TypeScript: every candidate verifikat
+ * read into the server, then probed 150 ids at a time against five tables, one
+ * chunk after the other. That cost grew with the ledger rather than with the
+ * answer, and a ten-year ledger waited through hundreds of round trips before
+ * the first page showed (crm#1390).
  */
 
 export interface MissingUnderlagFilters {
@@ -23,30 +30,83 @@ export interface MissingUnderlagFilters {
   series?: string | null
   dateFrom?: string | null
   dateTo?: string | null
-  /** Free-text ilike over the voucher description. */
+  /** Free-text ilike over the voucher description; a voucher label also matches series + number. */
   search?: string | null
 }
 
-/**
- * The candidate columns carried through resolution: enough for the caller to
- * sort the full missing set without a second round-trip. total_amount is the
- * computed column from migration 20260811100000 (sum of debit lines).
- */
-export interface MissingUnderlagEntry {
-  id: string
-  /** Sort columns; absent when the caller asked for ids only. */
-  entry_date?: string
-  voucher_series?: string | null
-  voucher_number?: number | null
-  description?: string | null
-  total_amount?: number | null
+/** A column the RPC can order the missing set by (its p_order allowlist). */
+export type MissingUnderlagOrderColumn =
+  | 'entry_date'
+  | 'voucher_series'
+  | 'voucher_number'
+  | 'description'
+  | 'display_amount'
+  | 'id'
+
+export interface MissingUnderlagOrderTerm {
+  column: MissingUnderlagOrderColumn
+  ascending: boolean
+}
+
+/** The journal list's sort keys, as the list route parses `sort_by`. */
+export interface JournalListSortKey {
+  column: 'date' | 'voucher' | 'total' | 'description'
+  ascending: boolean
 }
 
 /**
- * Sub-query failure. `userMessage` is already mapped through getErrorMessage()
+ * The complete order of the missing set for the list's sort, with the same
+ * key semantics as the list's direct query: the sort stack in priority order,
+ * a series+number tiebreak in the last key's direction unless voucher is
+ * already a key, and a final id tiebreak so pages never overlap. Amount keys
+ * order by display_amount, the amount the Belopp column shows (crm#1280). No
+ * keys: the legacy `sort_date` (date, series, number, id in that direction),
+ * else series+number ascending.
+ */
+export function missingUnderlagOrder(
+  sortKeys: readonly JournalListSortKey[],
+  legacySortDate: string | null,
+): MissingUnderlagOrderTerm[] {
+  const keys: JournalListSortKey[] =
+    sortKeys.length > 0
+      ? [...sortKeys]
+      : legacySortDate === 'asc' || legacySortDate === 'desc'
+        ? [{ column: 'date', ascending: legacySortDate === 'asc' }]
+        : []
+  const terms: MissingUnderlagOrderTerm[] = []
+  for (const { column, ascending } of keys) {
+    switch (column) {
+      case 'date':
+        terms.push({ column: 'entry_date', ascending })
+        break
+      case 'voucher':
+        terms.push({ column: 'voucher_series', ascending }, { column: 'voucher_number', ascending })
+        break
+      case 'total':
+        terms.push({ column: 'display_amount', ascending })
+        break
+      case 'description':
+        terms.push({ column: 'description', ascending })
+        break
+    }
+  }
+  const lastAscending = keys.length > 0 ? keys[keys.length - 1].ascending : true
+  if (!keys.some((k) => k.column === 'voucher')) {
+    terms.push(
+      { column: 'voucher_series', ascending: lastAscending },
+      { column: 'voucher_number', ascending: lastAscending },
+    )
+  }
+  terms.push({ column: 'id', ascending: lastAscending })
+  return terms
+}
+
+/**
+ * Query failure. `userMessage` is already mapped through getErrorMessage()
  * (user-facing Swedish), never a raw driver message. `cause` is the raw
- * PostgREST error for the server log: the mapped text alone hid a gateway 414
- * behind "Något gick fel" for a whole evening of proxy-log reading (#2395).
+ * PostgREST error (or the RPC's refusal code) for the server log: the mapped
+ * text alone hid a gateway 414 behind "Något gick fel" for a whole evening of
+ * proxy-log reading (#2395).
  */
 export class MissingUnderlagQueryError extends Error {
   constructor(
@@ -57,202 +117,85 @@ export class MissingUnderlagQueryError extends Error {
   }
 }
 
-/**
- * Ids per PostgREST .in() filter. Ids travel in the GET query string; 150
- * UUIDs is about 5.6 KB, under the 8 KB header buffer that nginx/Kong ship
- * with and that self-hosted Supabase inherits. Every lookup below carries the
- * chunk exactly ONCE: a filter that repeats it (one .or() over two FK columns)
- * doubles the URL and is answered 414 before PostgREST ever sees it (#2395).
- */
-const LOOKUP_CHUNK = 150
+/** Most ids one call returns: the RPC clamps p_limit to the same ceiling. */
+export const MISSING_UNDERLAG_PAGE_MAX = 1000
+
+export interface MissingUnderlagPage {
+  /** The full filtered total, over every page. */
+  total: number
+  /** One page of verifikat ids, in the requested order. */
+  ids: string[]
+}
 
 /**
- * Resolve every posted, document-requiring journal entry matching the filters
- * that currently has neither an underlag nor an exemption. Returns the full
- * missing set (bounded by the tenant's ledger size), ordered by id for
- * stability; callers sort/page as needed.
+ * One page of the missing set plus its full total, in one RPC call.
  *
- * `idOnly` skips the sort columns, notably total_amount, a computed column
- * evaluated per candidate row. The bulk-exempt route (built for post-import
- * floods of thousands of entries) doesn't sort, so it must not pay that
- * per-row aggregate on its full candidate scan.
- *
- * @throws MissingUnderlagQueryError when a sub-query fails.
+ * @throws MissingUnderlagQueryError when the RPC fails or refuses.
  */
-export async function resolveMissingUnderlagEntries(
+export async function listMissingUnderlagPage(
   supabase: SupabaseClient,
   companyId: string,
-  filters: MissingUnderlagFilters = {},
-  { idOnly = false }: { idOnly?: boolean } = {},
-): Promise<MissingUnderlagEntry[]> {
-  const periodId = filters.periodId ?? null
-  const series = filters.series ?? null
-  const dateFrom = filters.dateFrom ?? null
-  const dateTo = filters.dateTo ?? null
+  filters: MissingUnderlagFilters,
+  {
+    order = [],
+    limit,
+    offset = 0,
+  }: { order?: readonly MissingUnderlagOrderTerm[]; limit: number; offset?: number },
+): Promise<MissingUnderlagPage> {
   const search = filters.search?.trim() || null
+  // This path reads the needle itself, as text and as a voucher label: a
+  // label-shaped needle ("A209") also matches series+number, so searching
+  // for a voucher by its own label works with the filter on. The journal
+  // list's direct query reads more (an account number, an amount, a
+  // bokföringsdatum: lib/bookkeeping/verifikat-search.ts). The RPC takes
+  // none of those, so the list's search box names only the text and the
+  // label while the filter is on.
+  const voucher = search ? parseVoucher(search) : null
 
-  // Candidate entries: posted, document-requiring, matching the active
-  // filters. Built from LITERAL select strings and literal column filters
-  // only: tests/schema/no-phantom-columns.test.ts statically resolves every
-  // query expression against the schema, and a runtime-built select() or
-  // .or() string counts against its unresolvable ceiling. That is also why a
-  // voucher-label search runs as two separate queries below instead of one
-  // .or().
-  // Named only for its return TYPE below; called solely in the idOnly branch
-  // so exactly one query is ever built per invocation.
-  const idSelect = () => supabase.from('journal_entries').select('id')
-  const buildCandidateQuery = () => {
-    // Two separate literal select() calls (never one call with a computed
-    // string). The cast unifies the two builder generics: supabase-js types
-    // the select string at the type level, and rows are typed by
-    // fetchAllRows<MissingUnderlagEntry> either way.
-    let q = idOnly
-      ? idSelect()
-      : (supabase
-          .from('journal_entries')
-          .select(
-            'id, entry_date, voucher_series, voucher_number, description, total_amount',
-          ) as unknown as ReturnType<typeof idSelect>)
-    q = q
-      .eq('company_id', companyId)
-      .eq('status', 'posted')
-      .in('source_type', [...NEEDS_DOC_SOURCE_TYPES])
-    if (periodId) q = q.eq('fiscal_period_id', periodId)
-    if (series) q = q.eq('voucher_series', series)
-    if (dateFrom) q = q.gte('entry_date', dateFrom)
-    if (dateTo) q = q.lte('entry_date', dateTo)
-    return q
+  const { data, error } = await supabase.rpc('list_verifikat_missing_underlag', {
+    p_company_id: companyId,
+    p_period_id: filters.periodId ?? null,
+    p_series: filters.series ?? null,
+    p_date_from: filters.dateFrom ?? null,
+    p_date_to: filters.dateTo ?? null,
+    p_search_pattern: search ? `%${escapeLikePattern(search)}%` : null,
+    p_search_voucher_series: voucher?.series ?? null,
+    p_search_voucher_number: voucher?.number ?? null,
+    p_order: order.map((t) => `${t.column}.${t.ascending ? 'asc' : 'desc'}`),
+    p_limit: limit,
+    p_offset: offset,
+  })
+  if (error) throw new MissingUnderlagQueryError(getUserErrorMessage(error), error)
+
+  const result = data as { ok?: boolean; code?: string; total_count?: number; ids?: string[] } | null
+  if (!result?.ok) {
+    const code = result?.code ?? 'LIST_VERIFIKAT_MISSING_UNDERLAG_NO_RESULT'
+    throw new MissingUnderlagQueryError(getUserErrorMessage(new Error(code)), code)
   }
-  type CandidateQuery = ReturnType<typeof buildCandidateQuery>
-  const fetchCandidates = (refine: (q: CandidateQuery) => CandidateQuery) =>
-    fetchAllRows<MissingUnderlagEntry>(({ from, to }) =>
-      refine(buildCandidateQuery()).order('id').range(from, to),
-    )
+  return { total: Number(result.total_count ?? 0), ids: result.ids ?? [] }
+}
 
-  let candidates: MissingUnderlagEntry[]
-  if (search) {
-    // Same search semantics as the journal list's direct query: a
-    // voucher-label-shaped needle ("A209") also matches series+number, so
-    // searching for a voucher by its own label works with the filter on.
-    const needle = `%${escapeLikePattern(search)}%`
-    const voucher = parseVoucher(search)
-    if (voucher) {
-      const [byDescription, byLabel] = await Promise.all([
-        fetchCandidates((q) => q.ilike('description', needle)),
-        fetchCandidates((q) =>
-          q.eq('voucher_series', voucher.series).eq('voucher_number', voucher.number),
-        ),
-      ])
-      // Union, deduped by id, restored to the id order fetchAllRows pages by.
-      const seen = new Set<string>()
-      const merged: MissingUnderlagEntry[] = []
-      for (const entry of [...byDescription, ...byLabel]) {
-        if (seen.has(entry.id)) continue
-        seen.add(entry.id)
-        merged.push(entry)
-      }
-      merged.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-      candidates = merged
-    } else {
-      candidates = await fetchCandidates((q) => q.ilike('description', needle))
-    }
-  } else {
-    candidates = await fetchCandidates((q) => q)
+/**
+ * Every id in the missing set, for the bulk action that marks them all. Pages
+ * through the RPC in id order at its ceiling, so the call count follows the
+ * size of the answer (one call per 1,000 missing verifikat), not the ledger.
+ *
+ * @throws MissingUnderlagQueryError when a page fails.
+ */
+export async function listAllMissingUnderlagIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  filters: MissingUnderlagFilters,
+): Promise<string[]> {
+  const order: MissingUnderlagOrderTerm[] = [{ column: 'id', ascending: true }]
+  const ids: string[] = []
+  for (;;) {
+    const page = await listMissingUnderlagPage(supabase, companyId, filters, {
+      order,
+      limit: MISSING_UNDERLAG_PAGE_MAX,
+      offset: ids.length,
+    })
+    ids.push(...page.ids)
+    if (page.ids.length < MISSING_UNDERLAG_PAGE_MAX || ids.length >= page.total) return ids
   }
-
-  if (candidates.length === 0) return []
-
-  // Resolve which candidates already have a document or an exemption by
-  // querying ONLY for the candidate ids (chunked), rather than loading the
-  // company's full document_attachments + journal_entry_no_doc_required tables
-  // into memory. Data minimisation + bounded memory for large migrations.
-  const candidateIds = candidates.map((e) => e.id)
-  const withDoc = new Set<string>()
-  const exempt = new Set<string>()
-  for (let i = 0; i < candidateIds.length; i += LOOKUP_CHUNK) {
-    const chunk = candidateIds.slice(i, i + LOOKUP_CHUNK)
-    // BFL 5 kap 7 § hänvisning: an entry referenced by a supplier invoice
-    // whose source document is retained AND anchored to a journal entry
-    // is NOT missing underlag (only anchored docs sit behind the WORM
-    // deletion guards). Mirrors the verifikat_without_documents RPC.
-    // One query per FK column, never one .or() over both: the chunk must
-    // appear once per URL (see LOOKUP_CHUNK), and a literal .in() keeps the
-    // filter resolvable for tests/schema/no-phantom-columns.test.ts.
-    const supplierInvoiceRefs = () =>
-      supabase
-        .from('supplier_invoices')
-        .select(
-          'registration_journal_entry_id, payment_journal_entry_id, document:document_attachments(journal_entry_id)',
-        )
-        .eq('company_id', companyId)
-        .not('document_id', 'is', null)
-    const [docRes, siRegRes, siPayRes, sipRefRes, exemptRes] = await Promise.all([
-      supabase
-        .from('document_attachments')
-        .select('journal_entry_id')
-        .eq('company_id', companyId)
-        .eq('is_current_version', true)
-        .in('journal_entry_id', chunk),
-      supplierInvoiceRefs().in('registration_journal_entry_id', chunk),
-      supplierInvoiceRefs().in('payment_journal_entry_id', chunk),
-      supabase
-        .from('supplier_invoice_payments')
-        .select(
-          'journal_entry_id, supplier_invoice:supplier_invoices(document_id, document:document_attachments(journal_entry_id))',
-        )
-        .eq('company_id', companyId)
-        .in('journal_entry_id', chunk),
-      supabase
-        .from('journal_entry_no_doc_required')
-        .select('journal_entry_id')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', chunk),
-    ])
-    for (const res of [docRes, siRegRes, siPayRes, sipRefRes, exemptRes]) {
-      if (res.error) {
-        throw new MissingUnderlagQueryError(getUserErrorMessage(res.error), res.error)
-      }
-    }
-    for (const r of (docRes.data ?? []) as { journal_entry_id: string }[]) {
-      withDoc.add(r.journal_entry_id)
-    }
-    // Both lookups return the same row shape; an invoice matched by both
-    // columns lands twice, harmlessly, in the set.
-    for (const r of [...(siRegRes.data ?? []), ...(siPayRes.data ?? [])] as unknown as {
-      registration_journal_entry_id: string | null
-      payment_journal_entry_id: string | null
-      document: { journal_entry_id: string | null } | null
-    }[]) {
-      if (!r.document?.journal_entry_id) continue // unanchored: not underlag
-      if (r.registration_journal_entry_id) withDoc.add(r.registration_journal_entry_id)
-      if (r.payment_journal_entry_id) withDoc.add(r.payment_journal_entry_id)
-    }
-    for (const r of (sipRefRes.data ?? []) as unknown as {
-      journal_entry_id: string | null
-      supplier_invoice: {
-        document_id: string | null
-        document: { journal_entry_id: string | null } | null
-      } | null
-    }[]) {
-      if (r.journal_entry_id && r.supplier_invoice?.document?.journal_entry_id) {
-        withDoc.add(r.journal_entry_id)
-      }
-    }
-    for (const r of (exemptRes.data ?? []) as { journal_entry_id: string }[]) {
-      exempt.add(r.journal_entry_id)
-    }
-    // BFL 5 kap 7 § hänvisning, customer side (#2298): an entry a register
-    // invoice points at (registration link or invoice_payments row, e.g. a
-    // SIE-imported sale matched to its invoice afterwards) is backed by that
-    // invoice. Mirrors the verifikat_without_documents RPC's customer arm.
-    let invoiceRefs: Map<string, string[]>
-    try {
-      invoiceRefs = await getInvoiceReferencesForJournalEntries(supabase, companyId, chunk)
-    } catch (err) {
-      throw new MissingUnderlagQueryError(getUserErrorMessage(err), err)
-    }
-    for (const journalEntryId of invoiceRefs.keys()) withDoc.add(journalEntryId)
-  }
-
-  return candidates.filter((e) => !withDoc.has(e.id) && !exempt.has(e.id))
 }

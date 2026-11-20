@@ -29,7 +29,9 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { eventBus } from '@/lib/events/bus'
 import { POST as matchPayout } from '../route'
+import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -72,7 +74,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['expense_claims', 'expense_payout_batches', 'journal_entries', 'journal_entry_lines', 'transactions'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -162,19 +164,26 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
   })
 
   it.each([
-    ['an incoming row', txRow({ amount: 1596 }), 'EXPENSE_PAYOUT_MATCH_NOT_EXPENSE'],
-    ['a EUR row', txRow({ currency: 'EUR' }), 'EXPENSE_PAYOUT_MATCH_CURRENCY'],
-    ['a row in a samlingsverifikat', txRow({ transaction_voucher_links: [{ journal_entry_id: JE_ID, role: 'bank_line' }] }), 'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED'],
-  ])('400 for %s, writing nothing', async (_label, row, code) => {
-    const client = makeClient({ company_members: MEMBER, transactions: { data: row, error: null } })
+    ['an incoming row', txRow({ amount: 1596 }), 'EXPENSE_PAYOUT_MATCH_NOT_EXPENSE', 400],
+    ['a EUR row', txRow({ currency: 'EUR' }), 'EXPENSE_PAYOUT_MATCH_CURRENCY', 400],
+    ['a row in a samlingsverifikat', txRow({ transaction_voucher_links: [{ journal_entry_id: JE_ID, role: 'bank_line' }] }), 'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED', 400],
+    ['an ignored row', txRow({ is_ignored: true }), 'BANK_ROW_IGNORED', 409],
+  ])('refuses %s, writing nothing', async (_label, row, code, status) => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: { data: row, error: null },
+      journal_entries: { data: [{ id: JE_ID, status: 'posted' }], error: null },
+    })
     mockServiceClient.mockReturnValue(client)
     const res = await matchPayout(request(), params)
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(status)
     expect((await res.json()).error.code).toBe(code)
     expect(wrote(client)).toBe(false)
   })
 
   it('books the payout from the bank row: its date, its cash account, linked in the RPC', async () => {
+    const emit = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+    const posted = { id: JE_ID, company_id: COMPANY_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, lines: [] }
     const client = makeClient({
       company_members: MEMBER,
       transactions: { data: txRow(), error: null },
@@ -183,6 +192,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
         data: { ok: true, batch_id: BATCH_ID, journal_entry_id: JE_ID, voucher_number: 12, total_sek: 1596, claim_count: 2 },
         error: null,
       },
+      // The gate: no posted verifikat booked from the row (#203); then the posted payout.
+      journal_entries: [{ data: [], error: null }, { data: posted, error: null }],
     })
     mockServiceClient.mockReturnValue(client)
     const res = await matchPayout(request(), params)
@@ -203,6 +214,14 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
       p_notes: null,
       p_user_id: 'user-1',
       p_transaction_id: TX_ID,
+      // The payout verifikat records the API key that booked it (20261016005100).
+      p_actor_type: 'api_key',
+      p_actor_label: 'CI key',
+    })
+    // The payout verifikat is announced like any commit.
+    expect(emit).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: posted, userId: 'user-1', companyId: COMPANY_ID },
     })
   })
 
@@ -221,6 +240,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
   })
 
   it('a dry run previews the booking on the row\'s account and writes nothing', async () => {
+    const emit = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
     const client = makeClient({
       company_members: MEMBER,
       transactions: { data: txRow(), error: null },
@@ -239,8 +259,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
       { account_number: '2893', debit_amount: 1596, credit_amount: 0 },
       { account_number: '1920', debit_amount: 0, credit_amount: 1596 },
     ])
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(wrote(client)).toBe(false)
+    expect(emit).not.toHaveBeenCalled()
   })
 
   it('a dry run refuses claims that do not sum to the transfer', async () => {

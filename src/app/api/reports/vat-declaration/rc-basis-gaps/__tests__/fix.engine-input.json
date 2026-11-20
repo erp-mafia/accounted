@@ -1,0 +1,213 @@
+[
+  {
+    "name": "an EU service at 25 % gets its basis pair",
+    "corrections": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0001",
+        [
+          {
+            "account_number": "6540",
+            "debit_amount": 10000,
+            "credit_amount": 0,
+            "line_description": "Hosting",
+            "dimensions": {
+              "6": "P001"
+            }
+          },
+          {
+            "account_number": "2440",
+            "debit_amount": 0,
+            "credit_amount": 10000
+          },
+          {
+            "account_number": "2645",
+            "debit_amount": 2500,
+            "credit_amount": 0,
+            "line_description": "Beräknad ingående moms"
+          },
+          {
+            "account_number": "2614",
+            "debit_amount": 0,
+            "credit_amount": 2500,
+            "line_description": "Beräknad utgående moms"
+          },
+          {
+            "account_number": "4535",
+            "debit_amount": 10000,
+            "credit_amount": 0,
+            "line_description": "Basbelopp omvänd skattskyldighet 25%"
+          },
+          {
+            "account_number": "4598",
+            "debit_amount": 0,
+            "credit_amount": 10000,
+            "line_description": "Motkonto beräknad omvänd moms 25%"
+          }
+        ]
+      ]
+    ],
+    "outcome": {
+      "status": 200,
+      "body": {
+        "reversalId": "storno-00000000-0000-4000-8000-0000000e0001",
+        "correctedId": "correction-00000000-0000-4000-8000-0000000e0001",
+        "basis": [
+          {
+            "rate": 0.25,
+            "account": "4535",
+            "amount": 10000
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "EU goods at 12 % and an EU service at 25 %, classified per momssats",
+    "corrections": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0002",
+        [
+          {
+            "account_number": "4010",
+            "debit_amount": 1000,
+            "credit_amount": 0
+          },
+          {
+            "account_number": "6540",
+            "debit_amount": 2000,
+            "credit_amount": 0
+          },
+          {
+            "account_number": "2440",
+            "debit_amount": 0,
+            "credit_amount": 3000
+          },
+          {
+            "account_number": "2645",
+            "debit_amount": 620,
+            "credit_amount": 0
+          },
+          {
+            "account_number": "2624",
+            "debit_amount": 0,
+            "credit_amount": 120
+          },
+          {
+            "account_number": "2614",
+            "debit_amount": 0,
+            "credit_amount": 500
+          },
+          {
+            "account_number": "4535",
+            "debit_amount": 2000,
+            "credit_amount": 0,
+            "line_description": "Basbelopp omvänd skattskyldighet 25%"
+          },
+          {
+            "account_number": "4598",
+            "debit_amount": 0,
+            "credit_amount": 2000,
+            "line_description": "Motkonto beräknad omvänd moms 25%"
+          },
+          {
+            "account_number": "4516",
+            "debit_amount": 1000,
+            "credit_amount": 0,
+            "line_description": "Basbelopp omvänd skattskyldighet 12%"
+          },
+          {
+            "account_number": "4598",
+            "debit_amount": 0,
+            "credit_amount": 1000,
+            "line_description": "Motkonto beräknad omvänd moms 12%"
+          }
+        ]
+      ]
+    ],
+    "outcome": {
+      "status": 200,
+      "body": {
+        "reversalId": "storno-00000000-0000-4000-8000-0000000e0002",
+        "correctedId": "correction-00000000-0000-4000-8000-0000000e0002",
+        "basis": [
+          {
+            "rate": 0.25,
+            "account": "4535",
+            "amount": 2000
+          },
+          {
+            "rate": 0.12,
+            "account": "4516",
+            "amount": 1000
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "the storno service refuses",
+    "corrections": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0003",
+        [
+          {
+            "account_number": "6540",
+            "debit_amount": 10000,
+            "credit_amount": 0,
+            "line_description": "Hosting",
+            "dimensions": {
+              "6": "P001"
+            }
+          },
+          {
+            "account_number": "2440",
+            "debit_amount": 0,
+            "credit_amount": 10000
+          },
+          {
+            "account_number": "2645",
+            "debit_amount": 2500,
+            "credit_amount": 0,
+            "line_description": "Beräknad ingående moms"
+          },
+          {
+            "account_number": "2614",
+            "debit_amount": 0,
+            "credit_amount": 2500,
+            "line_description": "Beräknad utgående moms"
+          },
+          {
+            "account_number": "4535",
+            "debit_amount": 10000,
+            "credit_amount": 0,
+            "line_description": "Basbelopp omvänd skattskyldighet 25%"
+          },
+          {
+            "account_number": "4598",
+            "debit_amount": 0,
+            "credit_amount": 10000,
+            "line_description": "Motkonto beräknad omvänd moms 25%"
+          }
+        ]
+      ]
+    ],
+    "outcome": {
+      "status": 409,
+      "body": {
+        "error": "CORRECTION_CHAIN_TOO_DEEP"
+      }
+    }
+  }
+]

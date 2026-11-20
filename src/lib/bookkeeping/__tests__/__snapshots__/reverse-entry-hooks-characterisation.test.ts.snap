@@ -1,0 +1,704 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`correctEntry: runs no reversal hook (characterisation) > invoice_paid 1`] = `
+[
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "assertStornoTarget",
+  "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "insert journal_entries correction_of_id=entry-1 source_type=correction status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "update journal_entries reversed_by_id=reversal-1 status=reversed",
+  "update transactions journal_entry_id=corrected-1",
+  "update transaction_voucher_links journal_entry_id=corrected-1",
+  "update invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoices payment_journal_entry_id=corrected-1",
+  "rpc relink_documents_to_correction",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
+  "emit journal_entry.corrected",
+]
+`;
+
+exports[`correctEntry: runs no reversal hook (characterisation) > rot_rut_reclaim 1`] = `
+[
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "assertStornoTarget",
+  "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "insert journal_entries correction_of_id=entry-1 source_type=correction status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "update journal_entries reversed_by_id=reversal-1 status=reversed",
+  "update transactions journal_entry_id=corrected-1",
+  "update transaction_voucher_links journal_entry_id=corrected-1",
+  "rpc relink_documents_to_correction",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
+  "emit journal_entry.corrected",
+]
+`;
+
+exports[`correctEntry: runs no reversal hook (characterisation) > rot_rut_reclassification 1`] = `
+[
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "assertStornoTarget",
+  "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "insert journal_entries correction_of_id=entry-1 source_type=correction status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "update journal_entries reversed_by_id=reversal-1 status=reversed",
+  "update transactions journal_entry_id=corrected-1",
+  "update transaction_voucher_links journal_entry_id=corrected-1",
+  "rpc relink_documents_to_correction",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
+  "emit journal_entry.corrected",
+]
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > accrual 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > bank_transaction 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > collection_settlement 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > correction 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > counterparty_setoff 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > credit_note 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > currency_revaluation 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > customer_loss 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > expense_claim 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > expense_payout 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > import 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > inbox_item 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > invoice_cash_payment 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncInvoiceStatusFromPaymentEntry(<client>, "company-1", <original>)",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > invoice_created 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > invoice_paid 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncInvoiceStatusFromPaymentEntry(<client>, "company-1", <original>)",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > manual 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > opening_balance 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "update fiscal_periods opening_balances_set=false",
+    "update fiscal_periods opening_balance_entry_id=null",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > pos_daily_sales 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > reminder_fee 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > result_appropriation 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > rot_rut_payout 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > rot_rut_reclaim 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncRotRutReclaimAfterReversal(<client>, "company-1", "entry-1")",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > rot_rut_reclassification 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertMigratedDeductionReversible(<client>, "company-1", <original>)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncMigratedDeductionAfterReversal(<client>, "company-1", <original>)",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > runs the migrated-deduction check after the chain-depth guard, before the storno target check and any write 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertMigratedDeductionReversible(<client>, "company-1", <original>)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncMigratedDeductionAfterReversal(<client>, "company-1", <original>)",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > salary_payment 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > storno 1`] = `
+{
+  "error": "CannotReverseStornoError: Cannot reverse a storno entry",
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > stripe_payout 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > supplier_credit_note 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > supplier_invoice_cash_payment 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncInvoiceStatusFromPaymentEntry(<client>, "company-1", <original>)",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > supplier_invoice_paid 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncInvoiceStatusFromPaymentEntry(<client>, "company-1", <original>)",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > supplier_invoice_privately_paid 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > supplier_invoice_registered 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > system 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > tax_account 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > vat_settlement 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > webshop_order 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: reversal hooks per source type (characterisation) > year_end 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "update depreciation_schedules journal_entry_id=null posted_at=null",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;

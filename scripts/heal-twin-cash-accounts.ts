@@ -30,7 +30,7 @@
  *   --inspect-history   read-only reports for historical started-only events
  *   --started-event <uuid> inspect a specific historical event, with --company
  *
- * Never run by a loop: the founder decides per company.
+ * Never run by a loop: an operator decides per company.
  */
 
 import { config } from 'dotenv'

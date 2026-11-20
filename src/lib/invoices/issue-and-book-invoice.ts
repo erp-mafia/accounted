@@ -1,24 +1,30 @@
-import { renderToBuffer } from '@react-pdf/renderer'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
-import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
-import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
-import { eventBus } from '@/lib/events'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import {
+  ACCRUAL_RELEASE_FAILED_WARNING,
+  createSchedulesForCustomerInvoice,
+} from '@/lib/bookkeeping/accruals/from-invoices'
+import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
+import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
+import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { roundOre } from '@/lib/money'
 import type { Logger } from '@/lib/logger'
 import type {
   CompanySettings,
@@ -27,6 +33,7 @@ import type {
   Invoice,
   InvoiceItem,
 } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export interface IssuePartialFailure {
   step: string
@@ -39,13 +46,86 @@ export type IssuableInvoice = Invoice & {
   items?: InvoiceItem[] | null
 }
 
+/** Why a door refuses, as a code of the error registry. */
+export interface IssueRefusal {
+  code: string
+  details?: Record<string, unknown>
+}
+
+/**
+ * Whether this draft can be issued, the one answer of mark-sent, the email
+ * send, bulk Bokför and the digital mailboxes. Each door asks before a number
+ * is taken, and after the payee snapshot: the payment account reads the
+ * frozen payee. A linked credit note has its own issue step, so a door routes
+ * it there first (a door without one refuses it); what reaches this question
+ * with a total below zero has no original to name (ML 17 kap 22 §).
+ */
+export function issuable(
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type' | 'total'> & Partial<Pick<Invoice, 'payment_details'>>,
+  settings: CompanySettings,
+): IssueRefusal | null {
+  if (isCreditNoteDocument(invoice)) return { code: 'INVOICE_CREDIT_NOTE_NOT_ISSUABLE' }
+  if (!hasRequiredInvoicePaymentAccount(settings, invoice)) {
+    return { code: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', details: { currency: invoice.currency } }
+  }
+  if (!hasRequiredSellerVatNumber(settings, invoice)) return { code: 'INVOICE_SEND_VAT_NUMBER_MISSING' }
+  return null
+}
+
+/**
+ * Whether a document can go out by email. A följesedel travels with the goods:
+ * it is marked sent, never emailed (emailBlockReason, the editor's reading).
+ */
+export function emailRefusal(invoice: Pick<Invoice, 'document_type'>): IssueRefusal | null {
+  return invoice.document_type === 'delivery_note' ? { code: 'INVOICE_SEND_DELIVERY_NOTE' } : null
+}
+
+/**
+ * A draft with no moms_ruta that is not a momsfri sale: an imported draft, as
+ * every write path stamps one. A momsfri sale is the one sale with no ruta to
+ * state, a seller outside the VAT register and no VAT on the row:
+ * deriveInvoiceVatHeader writes null for it, and recreating it writes null
+ * again. The treatment alone does not say that: `exempt` also comes from an
+ * imported 0 % line, which the mapper cannot tell from reverse charge or
+ * export, and from a seller leaving the register with a VAT-bearing draft
+ * open. PATCH with items re-derives the header, so those have a way out.
+ *
+ * v1 mark-sent and v1 send refuse it. No other door reads the column (nor do
+ * the books or the declaration, which follow the accounts), so it is not part
+ * of issuable.
+ */
+export function lacksMomsRuta(
+  invoice: Pick<Invoice, 'moms_ruta' | 'vat_amount' | 'vat_treatment'>,
+  settings: Pick<CompanySettings, 'vat_registered'>,
+): boolean {
+  if (invoice.moms_ruta) return false
+  const momsfriSale = settings.vat_registered === false
+    && invoice.vat_treatment === 'exempt'
+    && Number(invoice.vat_amount) === 0
+  return !momsfriSale
+}
+
 export type IssueAndBookResult =
   | {
       ok: true
       journalEntryId: string | null
       partialFailures: IssuePartialFailure[]
     }
-  | { ok: false; errorCode: string; details?: Record<string, unknown> }
+  | {
+      ok: false
+      errorCode: string
+      details?: Record<string, unknown>
+      /** A sentence written for the user (the series refusal names its numbers). */
+      messageSv?: string
+      messageEn?: string
+      /**
+       * INVOICE_MARK_SENT_BOOK_FAILED only: why no verifikat was posted, in
+       * Swedish, and the engine's thrown refusal (see MarkSentAndBookResult),
+       * so a door can answer with the engine's own code.
+       */
+      reason?: string
+      bookingError?: unknown
+    }
 
 export interface IssueAndBookOptions {
   supabase: SupabaseClient
@@ -64,6 +144,17 @@ export interface IssueAndBookOptions {
    * generated lines book as-is.
    */
   customLines?: CustomIssuanceLine[] | null
+  /**
+   * The kontantfaktura (crm#1281, lib/invoices/paid-at-issue.ts): the invoice
+   * is paid when it is issued, to this 19xx account on the fakturadatum.
+   * The issue books no registration verifikat; the payment books the one
+   * cash verifikat, in either accounting method. issueAndBookInvoice refuses
+   * it (INVOICE_PAID_AT_ISSUE_NOT_ALLOWED, paidAtIssueBlockReason) before
+   * anything changes; the account is a 19xx one (MarkInvoiceSentPaidAtIssueSchema,
+   * checked where the request is parsed). The dashboard and v1 mark-sent and
+   * the MCP mark_invoice_sent approval all pass it here.
+   */
+  paidAtIssue?: { settlementAccountNumber: string } | null
 }
 
 /**
@@ -91,25 +182,23 @@ export async function archiveIssuedInvoicePdf(args: {
     // The DB status flip already happened, but the in-memory `invoice` is
     // stale and still reads 'draft': override here so the archived underlag
     // isn't stamped "UTKAST".
-    const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
-    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
-    const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-      settings,
-      renderableInvoice.currency,
-      { paymentAccountRequired, payee: renderableInvoice.payment_details ?? null },
-    )
-    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-    const pdfBuffer = await renderToBuffer(
-      InvoicePDF({
-        invoice: renderableInvoice,
-        customer: invoice.customer as Customer,
-        items,
-        company: renderCompany,
-        originalInvoiceNumber: args.originalInvoiceNumber,
-        branding,
-        swishQrDataUrl,
-      }),
-    )
+    // A kontantfaktura (crm#1281) was settled at issue: its underlag is the
+    // paid receipt, BETALD with the date.
+    const renderableInvoice = {
+      ...(invoice as Invoice),
+      status: invoice.status === 'paid' ? ('paid' as const) : ('sent' as const),
+    }
+    // The same render entry point as the send route, so the archived
+    // underlag carries the same QR code as the document the customer holds
+    // (and the preview): it used to archive no payment-link code at all.
+    const { buffer: pdfBuffer } = await renderInvoicePdfBuffer({
+      invoice: renderableInvoice,
+      customer: invoice.customer as Customer,
+      items,
+      company: settings,
+      originalInvoiceNumber: args.originalInvoiceNumber,
+      paymentAccountRequired: invoiceRequiresPaymentAccount(invoice as Invoice),
+    })
 
     const filename = invoicePdfFilename({
       companyName: settings.company_name,
@@ -118,7 +207,7 @@ export async function archiveIssuedInvoicePdf(args: {
       invoiceId: invoice.id,
       invoiceDate: invoice.invoice_date,
       documentType: invoice.document_type,
-      isCreditNote: !!invoice.credited_invoice_id,
+      isCreditNote: isCreditNoteDocument(invoice),
     })
 
     const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
@@ -134,6 +223,8 @@ export async function archiveIssuedInvoicePdf(args: {
       {
         upload_source: 'system',
         journal_entry_id: journalEntryId ?? undefined,
+        // The invoice's own PDF on the invoice's own verifikat.
+        linkBasis: linkBasisColumns('system_derived'),
       },
     )
     return null
@@ -154,7 +245,13 @@ export type MarkSentAndBookResult =
     }
   | {
       ok: false
-      errorCode: 'INVOICE_MARK_SENT_STATUS_FAILED' | 'INVOICE_MARK_SENT_RACE' | 'INVOICE_MARK_SENT_BOOK_FAILED'
+      errorCode:
+        | 'INVOICE_MARK_SENT_STATUS_FAILED'
+        | 'INVOICE_MARK_SENT_RACE'
+        | 'INVOICE_MARK_SENT_BOOK_FAILED'
+        | 'INVOICE_CUSTOMER_MISSING'
+        /** paidAtIssue only: the payment at issue was refused (settleInvoicePayment's code). */
+        | PaidAtIssueSettleFailureCode
       /**
        * INVOICE_MARK_SENT_BOOK_FAILED only: why no verifikat was posted, in
        * Swedish (the engine's refusal, such as a required dimension or an
@@ -165,6 +262,17 @@ export type MarkSentAndBookResult =
       /** INVOICE_MARK_SENT_BOOK_FAILED only: the engine's thrown refusal. */
       bookingError?: unknown
     }
+
+/** The settleInvoicePayment refusals a kontantfaktura's payment at issue can answer with. */
+export type PaidAtIssueSettleFailureCode =
+  | 'MATCH_AMOUNT_EXCEEDS_REMAINING'
+  | 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED'
+  | 'INVOICE_PAID_NO_FISCAL_PERIOD'
+  | 'INVOICE_PAID_BOOK_FAILED'
+  | 'INVOICE_PAID_NOT_PAYABLE'
+  | 'INVOICE_QUOTE_NOT_PAYABLE'
+  | 'INVOICE_PAID_RACE'
+  | 'PAYMENT_DATE_IN_FUTURE'
 
 /**
  * The issue step every path runs BEFORE an invoice reaches anyone: compare-
@@ -187,6 +295,13 @@ export async function markInvoiceSentAndBook(
   const customLines = opts.customLines ?? null
   const id = invoice.id
 
+  // No buyer, no invoice (crm#263): a draft whose customer was deleted is
+  // never issued, whichever path tries. Checked before the status flip, so
+  // nothing has changed when it refuses.
+  if (invoiceLacksCustomer(invoice)) {
+    return { ok: false, errorCode: 'INVOICE_CUSTOMER_MISSING' }
+  }
+
   const entityType = await resolveCompanyEntityType(supabase, companyId, settings.entity_type)
 
   // Compare-and-set prevents two concurrent requests from posting two journal
@@ -207,8 +322,16 @@ export async function markInvoiceSentAndBook(
     return { ok: false, errorCode: 'INVOICE_MARK_SENT_RACE' }
   }
 
-  // Only create journal entries for real invoices (not proformas or delivery notes)
-  const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
+  // A kontantfaktura is paid at issue: its one verifikat is the payment's
+  // cash entry below, never a registration entry on 1510.
+  const paidAtIssue = opts.paidAtIssue ?? null
+  if (paidAtIssue) {
+    return settleAtIssue(opts, paidAtIssue.settlementAccountNumber, entityType)
+  }
+
+  // Only a faktura books at issue (not proformas, quotes or delivery notes):
+  // the same predicate the send dialog describes the outcome with.
+  const booksOnIssue = issueBooksDocument(invoice, settings)
   let journalEntryId: string | null = null
   const partialFailures: IssuePartialFailure[] = []
   let bookingReason = 'Fakturans verifikat kunde inte skapas.'
@@ -217,14 +340,14 @@ export async function markInvoiceSentAndBook(
   // Custom lines only apply where issuance books inline; elsewhere they are
   // deliberately ignored (documented in MarkInvoiceSentSchema). Log it so the
   // mismatch is visible in audit review instead of vanishing silently.
-  if (customLines && (!isRealInvoice || !booksInvoicesOnIssue(settings))) {
+  if (customLines && !booksOnIssue) {
     log.warn('issue: custom lines ignored (not on accrual book-at-issue path)', {
       invoiceId: id,
       lineCount: customLines.length,
     })
   }
 
-  if (isRealInvoice && booksInvoicesOnIssue(settings)) {
+  if (booksOnIssue) {
     // #967: deferred companies fall past this branch (mark sent WITHOUT
     // booking); ekonomi books later via POST /api/invoices/[id]/book, like
     // under kontantmetoden.
@@ -237,6 +360,10 @@ export async function markInvoiceSentAndBook(
           lineCount: customLines.length,
         })
       }
+      // The posting port's event, while POSTING_EVENTS is on: the person
+      // issued the invoice (a staged approval, an API key or the recurring
+      // run resolve to their own basis in linkBasisColumns).
+      const posting = () => ({ linkBasis: linkBasisColumns('user_created') })
       const journalEntry = customLines
         ? await createInvoiceJournalEntry(
             supabase,
@@ -245,7 +372,7 @@ export async function markInvoiceSentAndBook(
             invoice as Invoice,
             entityType,
             invoice.customer?.name,
-            { customLines },
+            { customLines, posting },
           )
         : await createInvoiceJournalEntry(
             supabase,
@@ -254,6 +381,7 @@ export async function markInvoiceSentAndBook(
             invoice as Invoice,
             entityType,
             invoice.customer?.name,
+            { posting },
           )
       if (journalEntry) {
         journalEntryId = journalEntry.id
@@ -283,6 +411,14 @@ export async function markInvoiceSentAndBook(
               reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
             })
           }
+          // An upplupen intäkt (17xx) posts all its months now: one that
+          // could not leaves 17xx credited without its revenue until retried.
+          if ((accrual.releasesFailed ?? 0) > 0) {
+            partialFailures.push({
+              step: 'accrual_releases',
+              reason: ACCRUAL_RELEASE_FAILED_WARNING.message_sv,
+            })
+          }
         }
 
         const { error: linkError } = await supabase
@@ -293,7 +429,7 @@ export async function markInvoiceSentAndBook(
           // Don't fail the issuance: the verifikat committed; only the link
           // failed. But log it through the structured logger so it reaches log
           // aggregation/alerting: this write silently no-ops when the
-          // journal_entry_id column is missing (it was absent in prod until the
+          // journal_entry_id column is missing (it was absent in production until the
           // 20260613100000 migration), which leaves mark-paid unable to detect
           // an already-booked sale.
           log.error('issue: journal_entry_id link to invoice failed', linkError, {
@@ -316,7 +452,7 @@ export async function markInvoiceSentAndBook(
 
   // Fail-closed only when inline booking was supposed to happen: deferred
   // (#967) and cash-method invoices are legitimately unbooked at this point.
-  if (isRealInvoice && booksInvoicesOnIssue(settings) && !journalEntryId) {
+  if (booksOnIssue && !journalEntryId) {
     await restoreUnbookedDraft(supabase, companyId, id, log)
     return {
       ok: false,
@@ -327,6 +463,83 @@ export async function markInvoiceSentAndBook(
   }
 
   return { ok: true, journalEntryId, partialFailures }
+}
+
+/**
+ * The kontantfaktura's half of the issue step (crm#1281): the invoice was
+ * just flipped to 'sent' by the compare-and-set above, so settle it in full
+ * on its fakturadatum to the chosen account, booking the sale and the
+ * payment as one cash verifikat (settleInvoicePayment with
+ * recognizeSaleAtPayment: the kontantmetoden shape in either method).
+ *
+ * Fail closed like the registration path: when the payment is refused (a
+ * locked or missing period, an account outside the chart) the settlement has
+ * already cancelled anything it posted, nothing is booked, and the invoice
+ * goes back to draft so nobody delivers a receipt the ledger does not have.
+ * On success the in-memory row reads paid, so the archived PDF is the
+ * receipt the customer gets (BETALD with the date).
+ */
+async function settleAtIssue(
+  opts: IssueAndBookOptions,
+  settlementAccountNumber: string,
+  entityType: EntityType,
+): Promise<MarkSentAndBookResult> {
+  const { supabase, companyId, userId, invoice, settings, log } = opts
+  const remaining = invoice.remaining_amount ?? roundOre(invoice.total - (invoice.paid_amount ?? 0))
+
+  let settled: Awaited<ReturnType<typeof settleInvoicePayment>>
+  try {
+    settled = await settleInvoicePayment(supabase, companyId, userId, {
+      invoice: { ...(invoice as Invoice), status: 'sent' },
+      paymentAmountInInvoiceCurrency: remaining,
+      paymentDate: invoice.invoice_date,
+      accountingMethod: settings.accounting_method || 'accrual',
+      entityType,
+      settlementAccountNumber,
+      paymentSource: 'manual',
+      recognizeSaleAtPayment: true,
+    })
+  } catch (err) {
+    log.error('kontantfaktura: settlement at issue threw', err as Error)
+    await restoreUnbookedDraft(supabase, companyId, invoice.id, log)
+    return { ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED', reason: getErrorMessage(err), bookingError: err }
+  }
+
+  if (!settled.ok) {
+    await restoreUnbookedDraft(supabase, companyId, invoice.id, log)
+    switch (settled.code) {
+      case 'BOOKKEEPING_ERROR':
+        return {
+          ok: false,
+          errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED',
+          reason: getErrorMessage(settled.error),
+          bookingError: settled.error,
+        }
+      case 'UPDATE_FAILED':
+      case 'INVOICE_PAID_LINES_UNBALANCED':
+        log.error('kontantfaktura: settlement at issue failed', settled.code === 'UPDATE_FAILED' ? settled.error as Error : undefined)
+        return { ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED' }
+      case 'SALE_FIRST_REFUSED':
+        // Not reached: the cash entry books the kontantfaktura's sale itself,
+        // so settleInvoicePayment plans no sale first for it. Fail closed if
+        // it ever does: nothing was written.
+        log.error('kontantfaktura: settlement at issue planned a sale first', undefined, {
+          refusalCode: settled.refusal.code,
+        })
+        return { ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED' }
+      default:
+        return { ok: false, errorCode: settled.code }
+    }
+  }
+
+  // The issue's tail (archive, delivery, invoice.sent) renders from this row.
+  Object.assign(invoice, {
+    status: settled.newStatus,
+    paid_amount: settled.newPaidAmount,
+    remaining_amount: settled.newRemaining,
+    paid_at: settled.paidAt,
+  })
+  return { ok: true, journalEntryId: settled.journalEntryId, partialFailures: [] }
 }
 
 /**
@@ -374,6 +587,22 @@ export async function issueAndBookInvoice(
 ): Promise<IssueAndBookResult> {
   const { supabase, companyId, invoice, settings, log } = opts
 
+  // Before the number below is taken: a draft without a customer (crm#263)
+  // is refused while it is still unnumbered and deletable.
+  if (invoiceLacksCustomer(invoice)) {
+    return { ok: false, errorCode: 'INVOICE_CUSTOMER_MISSING' }
+  }
+
+  // A kontantfaktura (crm#1281) only for a plain faktura without custom
+  // lines: refused here, for every door, before the payee is frozen or a
+  // number taken, so nothing has changed when it refuses.
+  if (opts.paidAtIssue) {
+    const reason = paidAtIssueBlockReason(invoice, { customLines: opts.customLines })
+    if (reason) {
+      return { ok: false, errorCode: 'INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', details: { reason } }
+    }
+  }
+
   // An invoice that chose a bank account freezes that account's payee now,
   // from the account as it is at issue; a chosen account that can no longer
   // be used blocks issue instead of silently printing the company default.
@@ -383,28 +612,32 @@ export async function issueAndBookInvoice(
   }
   ;(invoice as Invoice).payment_details = payeeSnapshot.payee
 
-  if (!hasRequiredInvoicePaymentAccount(settings, invoice as Invoice)) {
-    return {
-      ok: false,
-      errorCode: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING',
-      details: { currency: (invoice as Invoice).currency },
-    }
-  }
-
-  if (!hasRequiredSellerVatNumber(settings, invoice as Invoice)) {
-    return { ok: false, errorCode: 'INVOICE_SEND_VAT_NUMBER_MISSING' }
-  }
+  const refused = issuable(invoice, settings)
+  if (refused) return { ok: false, errorCode: refused.code, details: refused.details }
 
   // Assign the number only after all payment-instruction guards pass.
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
     log.error('failed to assign invoice number on mark-sent', err as Error)
-    return { ok: false, errorCode: 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED' }
+    const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+    return {
+      ok: false,
+      errorCode: failure.code,
+      ...(failure.details ? { details: failure.details } : {}),
+      ...(failure.messageSv ? { messageSv: failure.messageSv, messageEn: failure.messageEn } : {}),
+    }
   }
 
   const issued = await markInvoiceSentAndBook(opts)
-  if (!issued.ok) return { ok: false, errorCode: issued.errorCode }
+  if (!issued.ok) {
+    return {
+      ok: false,
+      errorCode: issued.errorCode,
+      ...(issued.reason !== undefined ? { reason: issued.reason } : {}),
+      ...(issued.bookingError !== undefined ? { bookingError: issued.bookingError } : {}),
+    }
+  }
   const { journalEntryId, partialFailures } = issued
 
   if (partialFailures.some((failure) => failure.step === 'journal_link')) {
@@ -467,10 +700,7 @@ export async function finishIssuedInvoice(
     }
   }
 
-  await eventBus.emit({
-    type: 'invoice.sent',
-    payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, companyId, userId },
-  })
+  await emitInvoiceSent({ supabase, companyId, userId, invoice: invoice as Invoice, settings, log })
 
   return failures
 }

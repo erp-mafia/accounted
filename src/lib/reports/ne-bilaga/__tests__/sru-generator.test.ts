@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   generateNESRUSubmission,
-  validateBlanketterSru,
   getZipFilename,
+  NESruBlockedError,
 } from '../sru-generator'
+import { validateNeBlanketterSru } from '@/tests/sru-validators'
 import { encodeISO88591 } from '@/lib/reports/sru-encoding'
 import type { NEDeclaration, NEDeclarationRutor } from '../types'
 
@@ -11,6 +12,7 @@ function makeDeclaration(opts: {
   rutor?: Partial<NEDeclarationRutor>
   companyInfo?: Partial<NEDeclaration['companyInfo']>
   fiscalYear?: Partial<NEDeclaration['fiscalYear']>
+  extra?: Partial<Pick<NEDeclaration, 'bookedResult' | 'sruBlockers' | 'warnings'>>
 } = {}): NEDeclaration {
   const rutor: NEDeclarationRutor = {
     R1: 500000, R2: 0, R3: 0, R4: 1200,
@@ -39,6 +41,7 @@ function makeDeclaration(opts: {
     companyInfo: {
       companyName: 'Östgöta Träförädling',
       orgNumber: '199001019802',
+      entityType: 'enskild_firma',
       addressLine1: 'Storgatan 1',
       postalCode: '111 22',
       city: 'Stockholm',
@@ -46,6 +49,9 @@ function makeDeclaration(opts: {
       ...opts.companyInfo,
     },
     warnings: [],
+    bookedResult: rutor.R11,
+    sruBlockers: [],
+    ...opts.extra,
   }
 }
 
@@ -145,12 +151,26 @@ describe('NE-bilaga SRU generator', () => {
       expect(infoSru).toContain('#ORGNR 199001019802')
     })
 
-    it('infers 1900s for a 10-digit yy that would map to a child in the 2000s', () => {
-      // yy=24 for income year 2024: naive yy<=24 → 2024 (age 0); adult-age logic must pick 1924.
+    it('takes the most recent birth date not after today, the century moms and AGI file under', () => {
+      // Born 2008-12-15 (fabricated samordningsnummer): under 18 in the income
+      // year, and a century back would make the owner 117.
       const { infoSru } = generateNESRUSubmission(
-        makeDeclaration({ companyInfo: { orgNumber: '2401019808' } })
+        makeDeclaration({ companyInfo: { orgNumber: '0812759808' } })
       )
-      expect(infoSru).toContain('#ORGNR 192401019808')
+      expect(infoSru).toContain('#ORGNR 200812759808')
+    })
+
+    it('reads a plus as one century further back', () => {
+      const { infoSru } = generateNESRUSubmission(
+        makeDeclaration({ companyInfo: { orgNumber: '240161+9808' } })
+      )
+      expect(infoSru).toContain('#ORGNR 192401619808')
+    })
+
+    it('refuses a number that is no person, in place of a birth century on it', () => {
+      expect(() =>
+        generateNESRUSubmission(makeDeclaration({ companyInfo: { orgNumber: '5566778899' } }))
+      ).toThrow(/personnummer/i)
     })
   })
 
@@ -168,24 +188,34 @@ describe('NE-bilaga SRU generator', () => {
     })
   })
 
-  describe('validateBlanketterSru', () => {
+  describe('R11 check (no file that differs from the books)', () => {
+    it('refuses the file when the declaration has a blocker, naming it', () => {
+      const blocker = 'Konto 8470 Egen post (100,00 kr debet) hör inte till någon ruta i NE-bilagan.'
+      const refuse = () =>
+        generateNESRUSubmission(makeDeclaration({ extra: { sruBlockers: [blocker] } }))
+      expect(refuse).toThrow(NESruBlockedError)
+      expect(refuse).toThrow(blocker)
+    })
+  })
+
+  describe('validateNeBlanketterSru', () => {
     it('passes on generated output', () => {
       const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
-      const result = validateBlanketterSru(blanketterSru)
+      const result = validateNeBlanketterSru(blanketterSru)
       expect(result.isValid).toBe(true)
       expect(result.errors).toEqual([])
     })
 
     it('fails when #FIL_SLUT is missing', () => {
       const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
-      const result = validateBlanketterSru(blanketterSru.replace('#FIL_SLUT', ''))
+      const result = validateNeBlanketterSru(blanketterSru.replace('#FIL_SLUT', ''))
       expect(result.isValid).toBe(false)
       expect(result.errors).toContain('Missing #FIL_SLUT terminator')
     })
 
     it('fails when the mandatory fiscal-year date field (7011) is missing', () => {
       const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
-      const result = validateBlanketterSru(blanketterSru.replace(/#UPPGIFT 7011 \d+\r?\n/, ''))
+      const result = validateNeBlanketterSru(blanketterSru.replace(/#UPPGIFT 7011 \d+\r?\n/, ''))
       expect(result.isValid).toBe(false)
       expect(result.errors.some((e) => e.includes('7011'))).toBe(true)
     })

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isValidOrgNumber, normalizeOrgNumber } from '@/lib/documents/extract/fields'
+import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { ledgerKey } from '@/lib/parties/ledger-key'
 
 /**
@@ -29,8 +29,7 @@ interface PartyRow {
 }
 
 export async function resolveCounterparty(supabase: SupabaseClient, input: CounterpartyInput): Promise<CounterpartyResolution> {
-  const org = normalizeOrgNumber(input.orgNumber)
-  const orgNumber = org && isValidOrgNumber(org) ? org : null
+  const orgNumber = normalizeOrgNumber(input.orgNumber)
   const name = input.name?.trim() || null
   const key = name ? ledgerKey(name) : ''
 

@@ -94,8 +94,20 @@ describe('exceedsUnattendedLimit', () => {
     expect(result.exceeded).toBe(false)
   })
 
+  it('blocks an OAuth connector key above its ceiling the same way', () => {
+    // The OAuth access token is a minted API key; its commits are labelled
+    // mcp_oauth, and the label must not lift the key's ceiling.
+    expect(exceedsUnattendedLimit({ ...over, actorType: 'mcp_oauth' }).exceeded).toBe(true)
+  })
+
+  it("blocks a service account's key above its ceiling the same way", () => {
+    // A service account acts through its own minted keys; being labelled
+    // service_account must not lift the key's ceiling either.
+    expect(exceedsUnattendedLimit({ ...over, actorType: 'service_account' }).exceeded).toBe(true)
+  })
+
   it('never fires for a human, cron or unattributed commit', () => {
-    for (const actorType of ['user', 'cron', 'mcp_oauth', 'system', undefined]) {
+    for (const actorType of ['user', 'cron', 'agent_chat', 'system', undefined]) {
       expect(
         exceedsUnattendedLimit({ ...over, actorType: actorType as string | undefined }).exceeded,
       ).toBe(false)
@@ -156,5 +168,39 @@ describe('priceOperation: operation-registry writes that move money', () => {
 
   it('stays unpriced (not enforced) when the nested path is missing', () => {
     expect(priceOperation('book_invoice', { journal_entry: null })).toBeNull()
+  })
+
+  it('prices the IB split per project like the inline rättelse it is (#3313)', () => {
+    expect(priceOperation('split_opening_balances_per_project', { changed_amount_sek: 182500 })).toBe(182500)
+    expect(priceOperation('correct_entry_lines_inline', { changed_amount_sek: 182500 })).toBe(182500)
+    expect(
+      exceedsUnattendedLimit({
+        actorType: 'api_key',
+        limit: 10000,
+        operationType: 'split_opening_balances_per_project',
+        previewData: { changed_amount_sek: 182500 },
+      }),
+    ).toEqual({ exceeded: true, attempted: 182500, limit: 10000 })
+  })
+})
+
+describe('priceOperation: attest of a supplier invoice (#124)', () => {
+  it('prices the attest by the invoice total in SEK, which releases it for payment', () => {
+    // A EUR invoice: total_sek, not the EUR total, is what the ceiling compares.
+    const preview = { supplier_invoice_number: 'F-1', total: 1000, currency: 'EUR', total_sek: 11250 }
+    expect(priceOperation('approve_supplier_invoice', preview)).toBe(11250)
+    expect(
+      exceedsUnattendedLimit({ actorType: 'api_key', limit: 10000, operationType: 'approve_supplier_invoice', previewData: preview }),
+    ).toEqual({ exceeded: true, attempted: 11250, limit: 10000 })
+  })
+
+  it('falls back to total for an attest staged before total_sek, or when no SEK total exists', () => {
+    expect(priceOperation('approve_supplier_invoice', { total: 25000, currency: 'SEK' })).toBe(25000)
+    expect(priceOperation('approve_supplier_invoice', { total: 25000, currency: 'USD', total_sek: null })).toBe(25000)
+  })
+
+  it('never stops a person approving it in the app', () => {
+    const previewData = { total: 25000, currency: 'SEK', total_sek: 25000 }
+    expect(exceedsUnattendedLimit({ actorType: 'user', limit: 1000, operationType: 'approve_supplier_invoice', previewData }).exceeded).toBe(false)
   })
 })

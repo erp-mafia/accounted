@@ -69,8 +69,10 @@ function promptOf(call = 0) {
 }
 
 describe('createOpenAICompatibleService', () => {
-  it('builds the provider from AI_BASE_URL / AI_API_KEY', () => {
-    createOpenAICompatibleService(readAiConfig())
+  it('builds the provider from AI_BASE_URL / AI_API_KEY on first call', async () => {
+    const svc = createOpenAICompatibleService(readAiConfig())
+    expect(createdWith).not.toHaveBeenCalled()
+    await svc.generateText({ tier: 'assistant', prompt: 'Hej', maxTokens: 50 })
     expect(createdWith).toHaveBeenCalledWith(
       expect.objectContaining({ baseURL: 'https://api.berget.ai/v1', apiKey: 'sk-berget-example', supportsStructuredOutputs: false })
     )
@@ -277,9 +279,10 @@ describe('createOpenAICompatibleService', () => {
     expect(system).toContain('pairing verdict')
   })
 
-  it('turns on structured outputs at the provider when AI_STRICT_JSON=true', () => {
+  it('turns on structured outputs at the provider when AI_STRICT_JSON=true', async () => {
     process.env.AI_STRICT_JSON = 'true'
     const svc = createOpenAICompatibleService(readAiConfig())
+    await svc.generateText({ tier: 'assistant', prompt: 'Hej', maxTokens: 50 })
     expect(createdWith).toHaveBeenLastCalledWith(expect.objectContaining({ supportsStructuredOutputs: true }))
     expect(svc.capabilities.strictJsonSchema).toBe(true)
   })

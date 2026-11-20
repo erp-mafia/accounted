@@ -45,6 +45,18 @@ describe('evaluateInvoiceForBatch', () => {
     }
   })
 
+  it('excludes an invoice its stated bank details hold back, before the supplier card is read', () => {
+    expect(evaluateInvoiceForBatch(invoice({ payee_hold: 'payee_unconfirmed' }), supplier, { today: TODAY })).toEqual({
+      eligible: false,
+      reason: 'payee_unconfirmed',
+    })
+    // Even with an empty card, the reason a person acts on is the hold.
+    expect(
+      evaluateInvoiceForBatch(invoice({ payee_hold: 'payee_rejected' }), { ...supplier, bankgiro: null }, { today: TODAY }),
+    ).toEqual({ eligible: false, reason: 'payee_rejected' })
+    expect(evaluateInvoiceForBatch(invoice({ payee_hold: null }), supplier, { today: TODAY }).eligible).toBe(true)
+  })
+
   it('rejects credit notes before anything else', () => {
     const result = evaluateInvoiceForBatch(
       invoice({ is_credit_note: true, status: 'paid' }),
@@ -64,6 +76,14 @@ describe('evaluateInvoiceForBatch', () => {
       today: TODAY,
     })
     expect(justAbove.eligible).toBe(true)
+  })
+
+  it('excludes an invoice the supplier debits itself, which a payment would pay twice (crm#1463)', () => {
+    expect(evaluateInvoiceForBatch(invoice({ auto_debit: true }), supplier, { today: TODAY })).toEqual({
+      eligible: false,
+      reason: 'auto_debit',
+    })
+    expect(evaluateInvoiceForBatch(invoice({ auto_debit: false }), supplier, { today: TODAY }).eligible).toBe(true)
   })
 
   it('rejects foreign currency', () => {
@@ -96,6 +116,21 @@ describe('evaluateInvoiceForBatch', () => {
     expect(result.eligible && result.defaults.payment_date).toBe('2026-08-20')
   })
 
+  it('pays a weekend or holiday due date on the banking day before it, never after (crm#1595)', () => {
+    // A bank pays a non-banking day on the next banking day: a Saturday due
+    // date paid on Monday is paid late.
+    const due = (due_date: string, today: string) => {
+      const result = evaluateInvoiceForBatch(invoice({ due_date }), supplier, { today })
+      return result.eligible ? result.defaults.payment_date : null
+    }
+    expect(due('2026-11-07', '2026-11-02')).toBe('2026-11-06') // Saturday: Friday
+    expect(due('2026-11-08', '2026-11-02')).toBe('2026-11-06') // Sunday: Friday
+    expect(due('2026-12-25', '2026-12-01')).toBe('2026-12-23') // juldagen: julafton is no banking day either
+    expect(due('2026-11-06', '2026-11-02')).toBe('2026-11-06') // a banking day stays
+    expect(due('2026-11-07', '2026-11-06')).toBe('2026-11-06') // its Friday is today: today
+    expect(due('2026-11-08', '2026-11-07')).toBe('2026-11-07') // its Friday has passed: today, as an overdue invoice
+  })
+
   it('defaults the payment date to today when the due date has passed', () => {
     const result = evaluateInvoiceForBatch(
       invoice({ due_date: '2026-07-07', status: 'overdue' }),
@@ -119,6 +154,56 @@ describe('evaluateInvoiceForBatch', () => {
       { today: TODAY },
     )
     expect(result.eligible && result.warnings).toContain('unattested')
+  })
+
+  // crm#1141: kontantmetoden has no attest step, so "not attested" is every
+  // invoice there and the warning said nothing.
+  it('does not warn on an un-attested invoice where the company has no attest step (kontantmetoden)', () => {
+    for (const status of PAYABLE_SUPPLIER_INVOICE_STATUSES) {
+      const result = evaluateInvoiceForBatch(invoice({ status, approved_at: null }), supplier, {
+        today: TODAY,
+        companyAttests: false,
+      })
+      expect(result.eligible, status).toBe(true)
+      expect(result.eligible && result.warnings, status).toEqual([])
+    }
+  })
+
+  it('warns on an un-attested invoice where the company attests (faktureringsmetoden), as before', () => {
+    for (const status of PAYABLE_SUPPLIER_INVOICE_STATUSES) {
+      const result = evaluateInvoiceForBatch(invoice({ status, approved_at: null }), supplier, {
+        today: TODAY,
+        companyAttests: true,
+      })
+      expect(result.eligible && result.warnings, status).toEqual(['unattested'])
+    }
+    // An attested invoice carries no warning under either method.
+    for (const companyAttests of [true, false]) {
+      const result = evaluateInvoiceForBatch(invoice(), supplier, { today: TODAY, companyAttests })
+      expect(result.eligible && result.warnings).toEqual([])
+    }
+  })
+
+  it('keeps the other warnings under kontantmetoden', () => {
+    const result = evaluateInvoiceForBatch(
+      invoice({ status: 'registered', approved_at: null, payment_reference: '1234568' }),
+      { ...supplier, city: null },
+      { today: TODAY, companyAttests: false, activeBatchIdByInvoice: new Map([['inv-1', 'batch-9']]) },
+    )
+    expect(result.eligible && result.warnings).toEqual(['already_batched', 'ocr_invalid', 'payee_city_missing'])
+  })
+
+  it('excludes an invoice the attest policy waits on (attest_required), and only that one', () => {
+    const blocked = evaluateInvoiceForBatch(invoice({ status: 'registered', approved_at: null }), supplier, {
+      today: TODAY,
+      attestBlocked: new Set(['inv-1']),
+    })
+    expect(blocked).toEqual({ eligible: false, reason: 'attest_required' })
+    const other = evaluateInvoiceForBatch(invoice({ status: 'registered', approved_at: null }), supplier, {
+      today: TODAY,
+      attestBlocked: new Set(['inv-2']),
+    })
+    expect(other.eligible && other.warnings).toContain('unattested')
   })
 
   it('warns when the invoice already sits in an active batch', () => {
@@ -152,5 +237,24 @@ describe('evaluateInvoiceForBatch', () => {
     const result = evaluateInvoiceForBatch(invoice(), supplier, { today: TODAY })
     expect(result.eligible && result.reference).toEqual({ type: 'ocr', value: VALID_OCR })
     expect(result.eligible && result.warnings).toEqual([])
+  })
+
+  // crm#1039: a supplier invoice may lack the supplier's number.
+  it('pays a number-less invoice by its OCR', () => {
+    const result = evaluateInvoiceForBatch(invoice({ supplier_invoice_number: null }), supplier, {
+      today: TODAY,
+    })
+    expect(result.eligible && result.reference).toEqual({ type: 'ocr', value: VALID_OCR })
+  })
+
+  it('leaves out an invoice with neither a valid OCR nor a number (reference_missing)', () => {
+    for (const payment_reference of [null, '1234568']) {
+      const result = evaluateInvoiceForBatch(
+        invoice({ supplier_invoice_number: null, payment_reference }),
+        supplier,
+        { today: TODAY },
+      )
+      expect(result).toEqual({ eligible: false, reason: 'reference_missing' })
+    }
   })
 })

@@ -16,6 +16,14 @@ vi.mock('../engine', () => ({
 
 // Mock currency-utils with real logic
 vi.mock('../currency-utils', () => ({
+  resolveSekAmountOrNull: vi.fn().mockImplementation(
+    (amount: number, amountSek: number | null, currency: string | null, exchangeRate: number | null) => {
+      if (!currency || currency === 'SEK') return amount
+      if (amountSek != null) return Math.round(amountSek * 100) / 100
+      if (exchangeRate != null && exchangeRate > 0) return Math.round(amount * exchangeRate * 100) / 100
+      return null
+    }
+  ),
   resolveSekAmount: vi.fn().mockImplementation(
     (amount: number, amountSek: number | null, currency: string | null, exchangeRate: number | null) => {
       if (!currency || currency === 'SEK') return amount
@@ -50,25 +58,14 @@ vi.mock('../vat-entries', () => ({
       }
     }
   ),
-  extractNetAmount: vi.fn().mockImplementation(
-    (totalAmount: number, vatRate: number) => {
-      if (vatRate === 0) return totalAmount
-      return Math.round((totalAmount / (1 + vatRate)) * 100) / 100
-    }
-  ),
-  extractVatAmount: vi.fn().mockImplementation(
-    (totalAmount: number, vatRate: number) => {
-      if (vatRate === 0) return 0
-      return Math.round((totalAmount - totalAmount / (1 + vatRate)) * 100) / 100
-    }
-  ),
 }))
 
 const { createJournalEntry, findFiscalPeriod } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 const mockedFindFiscalPeriod = vi.mocked(findFiscalPeriod)
 
-const { createTransactionJournalEntry, buildDomesticExpenseLines, buildTransactionEntryLines } = await import('../transaction-entries')
+const { createTransactionJournalEntry, buildTransactionEntryLines } = await import('../transaction-entries')
+const { TransactionMissingSekValueError } = await import('../errors')
 
 function makeMappingResult(overrides: Partial<MappingResult> = {}): MappingResult {
   return {
@@ -613,7 +610,7 @@ describe('createTransactionJournalEntry: pre-FY clamp', () => {
 })
 
 // The exported builder feeds the staged categorization preview (MCP
-// preview_data.lines and the pending-operations PATCH re-derive) — these
+// preview_data.lines and the pending-operations PATCH re-derive) - these
 // tests pin that what a user approves is the netted entry, not the
 // gross-on-cost-account summary that used to mislead users and agents.
 describe('buildTransactionEntryLines', () => {
@@ -662,6 +659,67 @@ describe('buildTransactionEntryLines', () => {
     expect(previewLines).toEqual(input.lines)
   })
 
+  // crm#1136: a refund to a customer debits the revenue account and the
+  // utgående moms it carried. The money-out branch used to take only 2641 off
+  // the business line, so a 26x1 debit sat on top of the gross: 150 debit
+  // against 125 credit, an entry the balance trigger refuses.
+  it('nets the revenue line against utgående moms taken back on a refund to a customer', () => {
+    const tx = makeTransaction({ amount: -125, description: 'Återbetalning kund' })
+    const mapping = makeMappingResult({
+      debit_account: '3001',
+      credit_account: '1686',
+      vat_lines: [
+        { account_number: '2611', debit_amount: 25, credit_amount: 0, description: 'Återföring utgående moms 25%' },
+      ],
+    })
+
+    const lines = buildTransactionEntryLines(tx, mapping)
+
+    expect(lines.map(l => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['2611', 25, 0],
+      ['3001', 100, 0],
+      ['1686', 0, 125],
+    ])
+    assertBalanced({ lines } as CreateJournalEntryInput)
+  })
+
+  it('keeps the gross on the cost line beside a reverse-charge set (the set nets to zero)', () => {
+    const tx = makeTransaction({ amount: -1000, description: 'EU SaaS' })
+    const mapping = makeMappingResult({
+      debit_account: '6540',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 250, credit_amount: 0, description: 'Fiktiv ingående moms' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 250, description: 'Fiktiv utgående moms' },
+        { account_number: '4535', debit_amount: 1000, credit_amount: 0, description: 'Basbelopp' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 1000, description: 'Motkonto' },
+      ],
+    })
+
+    const lines = buildTransactionEntryLines(tx, mapping)
+
+    expect(lines.find(l => l.account_number === '6540')?.debit_amount).toBe(1000)
+    expect(lines.find(l => l.account_number === '1930')?.credit_amount).toBe(1000)
+    assertBalanced({ lines } as CreateJournalEntryInput)
+  })
+
+  it('books the refund on the bank ledger named in the source snapshot (money out credits it)', async () => {
+    const tx = makeTransaction({ amount: -125, description: 'Återbetalning kund' })
+    const mapping = makeMappingResult({
+      debit_account: '3001',
+      credit_account: '1686',
+      vat_lines: [
+        { account_number: '2611', debit_amount: 25, credit_amount: 0, description: 'Återföring utgående moms 25%' },
+      ],
+    })
+
+    await createTransactionJournalEntry(null as never, 'company-1', 'user-1', tx, mapping)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.bank_booking_context?.[0]).toMatchObject({ transaction_id: tx.id, settlement_account: '1686', amount: -125 })
+    assertBalanced(input)
+  })
+
   it('throws InvalidMappingResultError on missing accounts', () => {
     const tx = makeTransaction()
     expect(() => buildTransactionEntryLines(tx, makeMappingResult({ debit_account: '' })))
@@ -699,79 +757,84 @@ describe('buildTransactionEntryLines', () => {
   })
 })
 
-describe('buildDomesticExpenseLines', () => {
-  it('25% VAT: 3 lines (expense net + 2641 + 1930)', () => {
-    const lines = buildDomesticExpenseLines(1250, '5410', 'Office supplies', 0.25)
-
-    expect(lines).toHaveLength(3)
-
-    const expense = lines.find(l => l.account_number === '5410')
-    expect(expense?.debit_amount).toBe(1000) // 1250 / 1.25
-
-    const vat = lines.find(l => l.account_number === '2641')
-    expect(vat?.debit_amount).toBe(250) // 1250 - 1000
-
-    const bank = lines.find(l => l.account_number === '1930')
-    expect(bank?.credit_amount).toBe(1250)
-
-    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    expect(totalDebit).toBeCloseTo(totalCredit, 2)
+// Agent feedback seq 887729: a foreign row with neither amount_sek nor
+// exchange_rate was booked with the foreign figure as kronor (the lenient
+// resolver's fallback). It is refused now, at preview and at commit alike.
+describe('buildTransactionEntryLines: a foreign row needs a SEK value', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
   })
 
-  it('12% VAT: correct amounts', () => {
-    const lines = buildDomesticExpenseLines(1120, '5400', 'Food supplies', 0.12)
+  const ratelessCad = () =>
+    makeTransaction({
+      id: 'tx-cad',
+      amount: -200,
+      currency: 'CAD' as Transaction['currency'],
+      amount_sek: null,
+      exchange_rate: null,
+      date: '2026-09-30',
+      description: 'Card purchase',
+    })
+  const privateMapping = () =>
+    makeMappingResult({ debit_account: '2013', credit_account: '1930', default_private: true })
 
-    expect(lines).toHaveLength(3)
-
-    const expense = lines.find(l => l.account_number === '5400')
-    expect(expense?.debit_amount).toBe(1000) // 1120 / 1.12
-
-    const vat = lines.find(l => l.account_number === '2641')
-    expect(vat?.debit_amount).toBe(120) // 1120 - 1000
-
-    const bank = lines.find(l => l.account_number === '1930')
-    expect(bank?.credit_amount).toBe(1120)
-
-    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    expect(totalDebit).toBeCloseTo(totalCredit, 2)
+  it('refuses the preview lines with TX_MISSING_SEK_VALUE', () => {
+    let thrown: unknown
+    try {
+      buildTransactionEntryLines(ratelessCad(), privateMapping())
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(TransactionMissingSekValueError)
+    expect(thrown).toMatchObject({
+      code: 'TX_MISSING_SEK_VALUE',
+      transactionId: 'tx-cad',
+      currency: 'CAD',
+      date: '2026-09-30',
+    })
   })
 
-  it('vatRate=0: 2 lines, no 2641', () => {
-    const lines = buildDomesticExpenseLines(500, '5410', 'No VAT expense', 0)
-
-    expect(lines).toHaveLength(2)
-
-    const expense = lines.find(l => l.account_number === '5410')
-    expect(expense?.debit_amount).toBe(500)
-
-    const bank = lines.find(l => l.account_number === '1930')
-    expect(bank?.credit_amount).toBe(500)
-
-    const vatLine = lines.find(l => l.account_number === '2641')
-    expect(vatLine).toBeUndefined()
-
-    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    expect(totalDebit).toBe(totalCredit)
+  it('refuses the commit before any journal entry is created', async () => {
+    await expect(
+      createTransactionJournalEntry(null as never, 'company-1', 'user-1', ratelessCad(), privateMapping()),
+    ).rejects.toBeInstanceOf(TransactionMissingSekValueError)
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(mockedFindFiscalPeriod).not.toHaveBeenCalled()
   })
 
-  it('negative amount uses Math.abs', () => {
-    const lines = buildDomesticExpenseLines(-750, '5410', 'Negative test', 0)
+  it('refuses every branch, not only the private one (income without VAT)', () => {
+    const tx = makeTransaction({
+      amount: 200, currency: 'CAD' as Transaction['currency'], amount_sek: null, exchange_rate: null,
+    })
+    expect(() =>
+      buildTransactionEntryLines(tx, makeMappingResult({ debit_account: '1930', credit_account: '3900' })),
+    ).toThrow(TransactionMissingSekValueError)
+  })
 
-    expect(lines).toHaveLength(2)
+  it('books a EUR row with amount_sek in kronor, the foreign amount only as metadata', async () => {
+    const tx = makeTransaction({
+      amount: -100, currency: 'EUR', amount_sek: -1148.5, exchange_rate: 11.485, description: 'EUR purchase',
+    })
 
-    const expense = lines.find(l => l.account_number === '5410')
-    expect(expense?.debit_amount).toBe(750)
+    await createTransactionJournalEntry(
+      null as never, 'company-1', 'user-1', tx, makeMappingResult({ debit_account: '6991', credit_account: '1930' }),
+    )
 
-    const bank = lines.find(l => l.account_number === '1930')
-    expect(bank?.credit_amount).toBe(750)
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find(l => l.account_number === '6991')?.debit_amount).toBe(1148.5)
+    const bank = input.lines.find(l => l.account_number === '1930')
+    expect(bank?.credit_amount).toBe(1148.5)
+    expect(bank?.currency).toBe('EUR')
+    expect(bank?.amount_in_currency).toBe(100)
+    assertBalanced(input)
+  })
 
-    // All amounts positive
-    for (const line of lines) {
-      expect(line.debit_amount).toBeGreaterThanOrEqual(0)
-      expect(line.credit_amount).toBeGreaterThanOrEqual(0)
+  it('leaves a SEK row and a legacy null-currency row untouched', () => {
+    for (const currency of ['SEK', null]) {
+      const tx = makeTransaction({ amount: -200, currency: currency as Transaction['currency'] })
+      const lines = buildTransactionEntryLines(tx, makeMappingResult({ debit_account: '6991', credit_account: '1930' }))
+      expect(lines.find(l => l.account_number === '1930')?.credit_amount).toBe(200)
     }
   })
 })
@@ -991,6 +1054,18 @@ describe('buildTransactionEntryLines: the business line carries the bag in every
         vat_lines: [vat('2645', 250, 0), vat('2614', 0, 250), vat('4535', 1000, 0), vat('4598', 0, 1000)],
       },
       business: '6540',
+    },
+    {
+      branch: 'refund to a customer (revenue and output VAT debited)',
+      amount: -1250,
+      mapping: { debit_account: '3001', credit_account: '1930', vat_lines: [vat('2611', 250, 0)] },
+      business: '3001',
+    },
+    {
+      branch: 'refund from a supplier (cost and input VAT credited)',
+      amount: 1250,
+      mapping: { debit_account: '1930', credit_account: '5410', vat_lines: [vat('2641', 0, 250)] },
+      business: '5410',
     },
     {
       branch: 'income with output VAT',

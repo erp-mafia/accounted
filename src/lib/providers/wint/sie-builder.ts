@@ -19,6 +19,7 @@
  */
 
 import { isBalanceSheetAccount } from '@/lib/import/sie-parser';
+import { roundOre } from '@/lib/money';
 
 export interface WintSieTransaction {
   /** Integer in WINT's JSON; stringified at the mapping boundary. */
@@ -69,8 +70,6 @@ export interface BuildWintSieOptions {
   ibByAccount: Map<string, number>;
 }
 
-const round2 = (value: number): number => Math.round(value * 100) / 100;
-
 /** Raw /api/Voucher item (PascalCase, IncludeTransactions=true) -> builder shape. */
 export function mapWintVoucherForSie(raw: Record<string, unknown>): WintSieVoucher {
   const transactions = ((raw['Transactions'] as Record<string, unknown>[] | undefined) ?? []).map(
@@ -78,7 +77,7 @@ export function mapWintVoucherForSie(raw: Record<string, unknown>): WintSieVouch
       // Integer in WINT's JSON: stringified here, never used numerically again.
       accountNumber: t['AccountNumber'] != null ? String(t['AccountNumber']) : '',
       accountName: t['AccountName'] as string | undefined,
-      amount: round2(Number(t['Amount'] ?? 0)),
+      amount: roundOre(Number(t['Amount'] ?? 0)),
       text: (t['Text'] as string | undefined) || undefined,
       bookingDate: (t['BookingDate'] as string | undefined)?.slice(0, 10),
       dimensions: ((t['Dimensions'] as Record<string, unknown>[] | undefined) ?? []).map((d) => ({
@@ -106,12 +105,12 @@ export function mapWintAccountForSie(raw: Record<string, unknown>): WintSieAccou
     accountNumber: raw['Number'] != null ? String(raw['Number']) : '',
     name: (raw['Name'] as string) ?? '',
     sruCode: raw['SRU'] != null && raw['SRU'] !== 0 ? String(raw['SRU']) : undefined,
-    ib: raw['Ib'] != null ? round2(Number(raw['Ib'])) : undefined,
+    ib: raw['Ib'] != null ? roundOre(Number(raw['Ib'])) : undefined,
   };
 }
 
 function fmtAmount(value: number): string {
-  return round2(value).toFixed(2);
+  return roundOre(value).toFixed(2);
 }
 
 function fmtDate(isoDate: string): string {
@@ -169,7 +168,7 @@ export function accountDeltas(vouchers: WintSieVoucher[]): Map<string, number> {
   for (const voucher of vouchers) {
     if (voucher.deleted) continue;
     for (const t of voucher.transactions) {
-      deltas.set(t.accountNumber, round2((deltas.get(t.accountNumber) ?? 0) + t.amount));
+      deltas.set(t.accountNumber, roundOre((deltas.get(t.accountNumber) ?? 0) + t.amount));
     }
   }
   return deltas;
@@ -207,7 +206,7 @@ export function deriveIbByYear(
     const accounts = new Set([...current.keys(), ...deltas.keys()]);
     for (const account of accounts) {
       if (!isBalanceSheetAccount(account)) continue;
-      const value = round2((current.get(account) ?? 0) - (deltas.get(account) ?? 0));
+      const value = roundOre((current.get(account) ?? 0) - (deltas.get(account) ?? 0));
       if (value !== 0) ib.set(account, value);
     }
     result.set(y, ib);
@@ -227,7 +226,7 @@ export function deriveIbByYear(
     const accounts = new Set([...current.keys(), ...deltas.keys()]);
     for (const account of accounts) {
       if (!isBalanceSheetAccount(account)) continue;
-      const value = round2((current.get(account) ?? 0) + (deltas.get(account) ?? 0));
+      const value = roundOre((current.get(account) ?? 0) + (deltas.get(account) ?? 0));
       if (value !== 0) ib.set(account, value);
     }
     result.set(y, ib);
@@ -328,15 +327,15 @@ export function buildWintSieFile(options: BuildWintSieOptions): string {
   // Balances: #IB/#UB for balance-sheet accounts, #RES for result accounts.
   for (const accountNumber of sortedAccounts) {
     if (!isBalanceSheetAccount(accountNumber)) continue;
-    const ib = round2(ibByAccount.get(accountNumber) ?? 0);
-    const ub = round2(ib + (deltas.get(accountNumber) ?? 0));
+    const ib = roundOre(ibByAccount.get(accountNumber) ?? 0);
+    const ub = roundOre(ib + (deltas.get(accountNumber) ?? 0));
     if (ib === 0 && ub === 0) continue;
     lines.push(`#IB 0 ${accountNumber} ${fmtAmount(ib)}`);
     lines.push(`#UB 0 ${accountNumber} ${fmtAmount(ub)}`);
   }
   for (const accountNumber of sortedAccounts) {
     if (isBalanceSheetAccount(accountNumber)) continue;
-    const res = round2(deltas.get(accountNumber) ?? 0);
+    const res = roundOre(deltas.get(accountNumber) ?? 0);
     if (res === 0) continue;
     lines.push(`#RES 0 ${accountNumber} ${fmtAmount(res)}`);
   }

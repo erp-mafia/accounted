@@ -31,14 +31,6 @@ export interface BASReferenceAccount {
 export { BAS_REFERENCE } from './bas-data'
 
 // ---------------------------------------------------------------------------
-// Class & Group Labels
-// ---------------------------------------------------------------------------
-
-// Labels live in ./bas-labels (a few KB, no data) so client code can import
-// them without this module's index over the full chart. Re-exported here.
-export { ACCOUNT_CLASS_LABELS, ACCOUNT_GROUP_LABELS } from './bas-labels'
-
-// ---------------------------------------------------------------------------
 // Lookup indexes (lazy-initialized for performance)
 // ---------------------------------------------------------------------------
 
@@ -46,7 +38,6 @@ export { ACCOUNT_CLASS_LABELS, ACCOUNT_GROUP_LABELS } from './bas-labels'
 import { BAS_REFERENCE } from './bas-data'
 
 let _byAccountNumber: Map<string, BASReferenceAccount> | null = null
-let _byClass: Map<number, BASReferenceAccount[]> | null = null
 
 function getByAccountNumberIndex(): Map<string, BASReferenceAccount> {
   if (!_byAccountNumber) {
@@ -56,18 +47,6 @@ function getByAccountNumberIndex(): Map<string, BASReferenceAccount> {
     }
   }
   return _byAccountNumber
-}
-
-function getByClassIndex(): Map<number, BASReferenceAccount[]> {
-  if (!_byClass) {
-    _byClass = new Map()
-    for (const account of BAS_REFERENCE) {
-      const existing = _byClass.get(account.account_class) ?? []
-      existing.push(account)
-      _byClass.set(account.account_class, existing)
-    }
-  }
-  return _byClass
 }
 
 // ---------------------------------------------------------------------------
@@ -80,14 +59,6 @@ function getByClassIndex(): Map<number, BASReferenceAccount[]> {
  */
 export function getBASReference(accountNumber: string): BASReferenceAccount | undefined {
   return getByAccountNumberIndex().get(accountNumber)
-}
-
-/**
- * Get all BAS reference accounts for a given account class (1-8).
- * Returns an empty array if the class has no accounts in the reference data.
- */
-export function getBASReferenceByClass(accountClass: number): BASReferenceAccount[] {
-  return getByClassIndex().get(accountClass) ?? []
 }
 
 /**

@@ -1,5 +1,5 @@
 /**
- * Secure payslip links — token lifecycle for emailed payslip URLs.
+ * Secure payslip links - token lifecycle for emailed payslip URLs.
  *
  * Payslips are delivered as links, never attachments (salary data +
  * personnummer must not live in inboxes). The token IS the authentication
@@ -47,7 +47,7 @@ export function isValidPayslipTokenFormat(token: string): boolean {
 
 /**
  * Create or rotate the link for one employee in a run. Rotation overwrites
- * token_hash, so any previously emailed link stops resolving — exactly one
+ * token_hash, so any previously emailed link stops resolving - exactly one
  * live token per (salary_run_id, employee_id) at any time.
  *
  * Returns the RAW token (for the email); it is never persisted.
@@ -89,7 +89,7 @@ export async function rotateLinkForEmployee(
 }
 
 /**
- * Revoke every live link for a run. Used when the run is corrected —
+ * Revoke every live link for a run. Used when the run is corrected:
  * the storno replaces the payslips, so old links must stop resolving.
  */
 export async function revokeLinksForRun(
@@ -104,7 +104,7 @@ export async function revokeLinksForRun(
 }
 
 /**
- * Resolve a raw token from the public surface. Service-role client — code is
+ * Resolve a raw token from the public surface. Service-role client - code is
  * the only guard here: strict hash equality, then revocation/expiry checks.
  * Touches access tracking on success. Never log the raw token.
  */

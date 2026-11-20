@@ -27,13 +27,16 @@ import {
   validateVoucherForSupplierInvoiceLink,
 } from '../supplier-voucher-matching'
 import { makeInvoice, makeSupplierInvoice, createQueuedMockSupabase } from '@/tests/helpers'
+import { invoiceSettlementSideFor } from '../invoice-settlement-side'
 
 // Which voucher line settles the invoice is a DB function
 // (supplier_invoice_settlement_side, read through supplier-settlement-side.ts).
 // Stubbed so the lookup takes no slot in the queued Supabase mock. Every test
 // in this file is the 244x-debit side and is unchanged by issue #2854; the
 // 19xx-credit side is in supplier-voucher-matching-kontantmetod.test.ts. The
-// customer-side matcher in this file does not use it.
+// customer-side matcher asks invoice_settlement_side through supabase.rpc,
+// which the filtering mock below answers with the TypeScript twin (pinned to
+// the SQL function by invoice-settlement-side.pg.test.ts).
 vi.mock('@/lib/invoices/supplier-settlement-side', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../supplier-settlement-side')>()
   return { ...actual, resolveSupplierSettlementSide: async () => actual.AP_DEBIT_SIDE }
@@ -170,6 +173,8 @@ function applyEntryFilters(entries: FixtureEntry[], filters: AnyRecordedFilter[]
 
 interface FilteringMockConfig {
   accountingMethod?: 'accrual' | 'cash'
+  /** The customer invoice's booking verifikat (journal_entry_id), if any. */
+  invoiceJournalEntryId?: string | null
   entries: FixtureEntry[]
   /** Rows returned by the invoice_payments / supplier_invoice_payments dedup. */
   existingLinks?: { journal_entry_id: string }[]
@@ -183,7 +188,7 @@ interface FilteringMockConfig {
  * filter strings were typed.
  */
 function createFilteringSupabase(config: FilteringMockConfig) {
-  const queries: { table: string; columns: string; filters: AnyRecordedFilter[] }[] = []
+  const queries: { table: string; columns: string; filters: AnyRecordedFilter[]; limit?: number }[] = []
 
   function chainFor(table: string) {
     const filters: AnyRecordedFilter[] = []
@@ -300,8 +305,12 @@ function createFilteringSupabase(config: FilteringMockConfig) {
       filters.push({ op: 'or', conditions })
       return chain
     }
-    for (const op of ['order', 'range', 'limit', 'not', 'is']) {
+    for (const op of ['order', 'range', 'not', 'is']) {
       chain[op] = () => chain
+    }
+    chain.limit = (n: number) => {
+      ;(record as { limit?: number }).limit = n
+      return chain
     }
     chain.maybeSingle = () => Promise.resolve(resolveSingle())
     chain.single = () => Promise.resolve(resolveSingle())
@@ -311,7 +320,19 @@ function createFilteringSupabase(config: FilteringMockConfig) {
   }
 
   return {
-    supabase: { from: vi.fn((table: string) => chainFor(table)), rpc: vi.fn() },
+    supabase: {
+      from: vi.fn((table: string) => chainFor(table)),
+      // invoice_settlement_side, answered by the twin of the SQL rule.
+      rpc: vi.fn((fn: string) => {
+        const side = fn === 'invoice_settlement_side'
+          ? invoiceSettlementSideFor(config.accountingMethod, config.invoiceJournalEntryId)
+          : null
+        const row = side
+          ? { settlement_side: side.side, account_prefix: side.accountPrefix, entry_side: side.entrySide }
+          : null
+        return { maybeSingle: () => Promise.resolve({ data: row, error: null }) }
+      }),
+    },
     queries,
   }
 }
@@ -408,8 +429,39 @@ const domesticSekVoucher = entry('je-sek', 13, 'Inbetalning inrikes', [
 ])
 
 // ============================================================
-// findMatchingVouchersForInvoice: the SQL pre-filter
+// findMatchingVouchersForInvoice: the shared voucher search
 // ============================================================
+
+type RecordedQuery = { table: string; columns: string; filters: AnyRecordedFilter[]; limit?: number }
+
+/** The settlement-line leg of the shared search (voucher-matching-shared.ts). */
+function candidateLineQuery(queries: RecordedQuery[]): RecordedQuery {
+  const query = queries.find((q) => q.table === 'journal_entry_lines' && q.columns.includes('amount_in_currency'))
+  if (!query) throw new Error('no candidate line query recorded')
+  return query
+}
+
+function plainFilters(query: RecordedQuery): RecordedFilter[] {
+  return query.filters.filter((f): f is RecordedFilter => f.op !== 'or')
+}
+
+/** 1000 EUR paid by a verifikat that carries its 1510 credit in kronor only (an SIE import). */
+const sekBookedEurPayment = entry('je-sek-booked', 21, 'Inbetalning faktura', [
+  {
+    id: 'l-sekb-ar',
+    account_number: '1510',
+    debit_amount: 0,
+    credit_amount: 11600,
+    currency: 'SEK',
+  },
+  {
+    id: 'l-sekb-bank',
+    account_number: '1930',
+    debit_amount: 11600,
+    credit_amount: 0,
+    currency: 'SEK',
+  },
+])
 
 describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
   beforeEach(() => {
@@ -474,53 +526,111 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
     expect(result).toEqual([])
   })
 
-  it('bounds amount_in_currency and matches the currency label, not the SEK column', async () => {
+  it('reads every 1510 credit in the window, whatever its label, with both FX columns', async () => {
+    // The AR side is read unbanded, as the supplier's 244x side always was: a
+    // payment booked in kronor only carries no EUR label and no EUR figure, and
+    // a currency filter or an amount_in_currency band would hide it before the
+    // SEK-booked fallback could judge it.
     const { supabase, queries } = createFilteringSupabase({ entries: [correctEurVoucher] })
 
     await findMatchingVouchersForInvoice(supabase as never, 'company-1', eurInvoice() as never)
 
-    const candidateQuery = queries.find(
-      (q) => q.table === 'journal_entries' && q.columns.includes('journal_entry_lines')
-    )
-    const banded = candidateQuery!.filters
-      .filter((f): f is RecordedFilter => f.op === 'gte' || f.op === 'lte')
-      .map((f) => f.column)
-    expect(banded).toContain('journal_entry_lines.amount_in_currency')
-    expect(banded).not.toContain('journal_entry_lines.credit_amount')
-    expect(candidateQuery!.filters).toEqual(
+    const lineQuery = candidateLineQuery(queries)
+    expect(plainFilters(lineQuery)).toEqual(
       expect.arrayContaining([
-        { op: 'eq', column: 'journal_entry_lines.currency', value: 'EUR' },
-      ])
+        { op: 'like', column: 'account_number', value: '151%' },
+        { op: 'gt', column: 'credit_amount', value: 0 },
+      ]),
     )
+    expect(plainFilters(lineQuery).some((f) => f.column === 'currency')).toBe(false)
+    expect(lineQuery.filters.some((f) => f.op === 'gte' || f.op === 'lte' || f.op === 'or')).toBe(false)
     // Both FX columns must be projected or every line is unconvertible.
-    expect(candidateQuery!.columns).toContain('amount_in_currency')
-    expect(candidateQuery!.columns).toContain('currency')
+    expect(lineQuery.columns).toContain('amount_in_currency')
+    expect(lineQuery.columns).toContain('currency')
   })
 
-  it('applies the fuzzy floor to the FX band on both signs', async () => {
-    // The SEK path has always banded [floor, ceil]; the FX path only kept the
-    // ceiling, so every small same-currency line survived the prefilter and
-    // could crowd the exact-amount voucher out of the .limit(limit * 10) cap
-    // before scoring. The floor arrives as an or-group so negatively-stored
-    // foreign figures stay in: floor <= |amount_in_currency| <= ceil.
+  it('reads every voucher in the window: no row cap on the search', async () => {
+    // The old search capped an unordered query at limit * 10 rows, so the
+    // exact-amount voucher could be dropped before scoring ever saw it.
     const { supabase, queries } = createFilteringSupabase({ entries: [correctEurVoucher] })
 
-    await findMatchingVouchersForInvoice(supabase as never, 'company-1', eurInvoice() as never)
+    await findMatchingVouchersForInvoice(supabase as never, 'company-1', eurInvoice() as never, { limit: 1 })
 
-    const candidateQuery = queries.find(
-      (q) => q.table === 'journal_entries' && q.columns.includes('journal_entry_lines')
+    for (const query of queries.filter((q) => q.table === 'journal_entries' || q.table === 'journal_entry_lines')) {
+      expect(query.limit).toBeUndefined()
+    }
+  })
+
+  it('offers a EUR invoice the payment booked in kronor only, valued at the invoice rate', async () => {
+    const { supabase } = createFilteringSupabase({ entries: [sekBookedEurPayment] })
+
+    const result = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
     )
-    const orGroups = candidateQuery!.filters.filter(
-      (f): f is RecordedOrGroup => f.op === 'or'
+
+    expect(result).toHaveLength(1)
+    expect(result[0].journal_entry_id).toBe('je-sek-booked')
+    // 11 600 kr at the invoice's 11.50: 1008.70 EUR, inside the fuzzy band.
+    expect(result[0].ar_credit_amount).toBe(1008.7)
+    expect(result[0].ar_line_currency).toBeNull()
+    expect(result[0].match_reason).toContain('bokförd i SEK')
+    expect(result[0].match_reason).toMatch(/11.600/)
+    // The link settles the whole remainder there and refuses a share, so the
+    // picker offers no amount to choose.
+    expect(result[0].whole_remainder).toBe(true)
+    expect(result[0].link_amount).toBeUndefined()
+  })
+
+  it('offers only what the link accepts: the SEK-booked candidate validates', async () => {
+    const { supabase } = createFilteringSupabase({ entries: [sekBookedEurPayment] })
+
+    const [candidate] = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
     )
-    expect(orGroups).toHaveLength(1)
-    // hi = lo = 1000 EUR, pad = min(1000 * 0.01, 500) + 0.02 → floor 989.98.
-    expect(orGroups[0].conditions).toEqual(
+    const validated = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      candidate.journal_entry_id,
+    )
+
+    expect(validated.ok).toBe(true)
+  })
+
+  it('on kontantmetoden reads only 19xx (or 2013) lines labelled with the invoice currency', async () => {
+    // Every receipt debits 19xx, so the unfiltered set would be the whole bank
+    // history in the window; only labelled lines are expressible in EUR. A
+    // payment to the owner privately debits 2013 instead (crm#1580).
+    const { supabase, queries } = createFilteringSupabase({
+      accountingMethod: 'cash',
+      entries: [correctEurVoucher],
+    })
+
+    const result = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+    )
+
+    expect(result.map((c) => c.journal_entry_id)).toEqual(['je-correct'])
+    const lineQuery = candidateLineQuery(queries)
+    expect(plainFilters(lineQuery)).toEqual(
       expect.arrayContaining([
-        { op: 'gte', column: 'journal_entry_lines.amount_in_currency', value: '989.98' },
-        { op: 'lte', column: 'journal_entry_lines.amount_in_currency', value: '-989.98' },
-      ])
+        { op: 'gt', column: 'debit_amount', value: 0 },
+        { op: 'eq', column: 'currency', value: 'EUR' },
+      ]),
     )
+    expect(lineQuery.filters).toContainEqual({
+      op: 'or',
+      conditions: [
+        { op: 'like', column: 'account_number', value: '19%' },
+        { op: 'eq', column: 'account_number', value: '2013' },
+      ],
+    })
   })
 
   it('keeps a negatively-stored foreign figure inside the floored band', async () => {
@@ -547,12 +657,12 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
     expect(result.map((c) => c.journal_entry_id)).toContain('je-negative')
   })
 
-  it('the floor keeps a small sibling line from polluting the matched sum', async () => {
-    // One voucher whose 151x legs are the real 1000 EUR settlement plus an
-    // unrelated small 87 EUR credit. Without the floor both lines passed the
-    // prefilter, the matched sum became 1087 EUR and the one correct voucher
-    // scored as a no-match. With the floor the small line drops in SQL and the
-    // voucher matches on its 1000 EUR leg.
+  it('does not offer a voucher whose 1510 credits exceed the invoice, which the link refuses', async () => {
+    // One receipt for two invoices of the same foreign customer: 1000 EUR for
+    // this one and 87 EUR for another. The link sums every 151x credit on the
+    // voucher (1087 EUR) and answers LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING, so
+    // the search does not offer it either (the old line-level floor did, and
+    // the person picking it then met the refusal).
     const withSmallSibling = entry('je-sibling', 19, 'Inbetalning utländsk kund', [
       {
         id: 'l-sib-main',
@@ -578,9 +688,34 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
       'company-1',
       eurInvoice() as never
     )
+    const validated = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      'je-sibling',
+    )
 
-    expect(result.map((c) => c.journal_entry_id)).toContain('je-sibling')
-    expect(result[0].ar_credit_amount).toBe(1000)
+    expect(result).toEqual([])
+    expect(validated).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING' })
+
+    // Where a person picks it is offered with the share the link accepts
+    // (crm#1434): the voucher settles both invoices, 1000 EUR is this one's.
+    const shared = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      { includeShared: true },
+    )
+    expect(shared).toHaveLength(1)
+    expect(shared[0]).toMatchObject({ journal_entry_id: 'je-sibling', ar_credit_amount: 1087, link_amount: 1000 })
+    const withShare = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      'je-sibling',
+      shared[0].link_amount,
+    )
+    expect(withShare).toMatchObject({ ok: true, paymentAmount: 1000, voucherRemainingAfter: 87 })
   })
 })
 
@@ -620,27 +755,19 @@ describe('findMatchingVouchersForInvoice: SEK is untouched', () => {
     expect(candidate.ar_credit_amount).toBe(1000)
   })
 
-  it('keeps the amount band on the SEK column and adds no currency filter', async () => {
-    const { supabase, queries } = createFilteringSupabase({ entries: [domesticSekVoucher] })
+  it('adds no currency filter and bands only the 19xx side, on the SEK column', async () => {
+    const accrual = createFilteringSupabase({ entries: [domesticSekVoucher] })
+    await findMatchingVouchersForInvoice(accrual.supabase as never, 'company-1', sekInvoice() as never)
+    const arQuery = candidateLineQuery(accrual.queries)
+    expect(plainFilters(arQuery).some((f) => f.column === 'currency')).toBe(false)
+    expect(arQuery.filters.some((f) => f.op === 'gte' || f.op === 'lte' || f.op === 'or')).toBe(false)
 
-    await findMatchingVouchersForInvoice(supabase as never, 'company-1', sekInvoice() as never)
-
-    const candidateQuery = queries.find(
-      (q) => q.table === 'journal_entries' && q.columns.includes('journal_entry_lines')
-    )
-    const banded = candidateQuery!.filters
-      .filter((f): f is RecordedFilter => f.op === 'gte' || f.op === 'lte')
-      .map((f) => f.column)
-    expect(banded).toContain('journal_entry_lines.credit_amount')
-    expect(banded).not.toContain('journal_entry_lines.amount_in_currency')
-    expect(
-      candidateQuery!.filters.some(
-        (f) => f.op !== 'or' && f.column === 'journal_entry_lines.currency'
-      )
-    ).toBe(false)
-    // The SEK band is expressed as plain gte/lte on the ledger column: no
-    // or-group is added (the floor already sits in the gte).
-    expect(candidateQuery!.filters.some((f) => f.op === 'or')).toBe(false)
+    const cash = createFilteringSupabase({ accountingMethod: 'cash', entries: [] })
+    await findMatchingVouchersForInvoice(cash.supabase as never, 'company-1', sekInvoice() as never)
+    const bankQuery = cash.queries.find((q) => q.table === 'journal_entries')
+    // No voucher in the window: the line leg never runs. The band itself is
+    // the shared candidateAmountBand, covered with the supplier side.
+    expect(bankQuery).toBeDefined()
   })
 
   it('reads the SEK column even when the line is labelled with a foreign document', async () => {
@@ -687,20 +814,13 @@ describe('findMatchingVouchersForInvoice: SEK is untouched', () => {
       }) as never
     )
 
-    const candidateQuery = queries.find(
-      (q) => q.table === 'journal_entries' && q.columns.includes('journal_entry_lines')
-    )
+    const lineQuery = candidateLineQuery(queries)
+    expect(plainFilters(lineQuery).some((f) => f.column === 'currency')).toBe(false)
     expect(
-      candidateQuery!.filters.some(
-        (f) => f.op !== 'or' && f.column === 'journal_entry_lines.currency'
-      )
-    ).toBe(false)
-    expect(
-      candidateQuery!.filters.some(
+      lineQuery.filters.some(
         (f) =>
-          (f.op === 'or' &&
-            f.conditions.some((c) => c.column === 'journal_entry_lines.amount_in_currency')) ||
-          (f.op !== 'or' && f.column === 'journal_entry_lines.amount_in_currency')
+          (f.op === 'or' && f.conditions.some((c) => c.column === 'amount_in_currency')) ||
+          (f.op !== 'or' && f.column === 'amount_in_currency')
       )
     ).toBe(false)
   })
@@ -979,10 +1099,12 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
     expect(result.ok).toBe(true)
   })
 
-  it('refuses on kontantmetoden when the invoice was booked at issue', async () => {
-    // journal_entry_id means a 1510 balance at the invoice rate: a kronor
-    // settlement leaves a kursdifferens the cash path never books, so the
-    // validator refuses exactly where the RPC does.
+  it('settles a kontantmetod invoice booked at issue (or carried) on its 1510 credit', async () => {
+    // journal_entry_id means a 1510 balance at the invoice rate. Since
+    // #3440 the side follows the invoice, not the method: such an invoice is
+    // read on its 151x credit, and a plain-SEK clearing settles it in full
+    // with the FX residual booked by the RPC, exactly as on
+    // faktureringsmetoden (link-voucher-fx-residual.pg.test.ts).
     const cashVoucher = entry('je-cash-booked', 22, 'Inbetalning', [
       {
         id: 'l-booked-bank',
@@ -1001,6 +1123,7 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
     ])
     const { supabase } = createFilteringSupabase({
       accountingMethod: 'cash',
+      invoiceJournalEntryId: 'je-registration',
       entries: [cashVoucher],
     })
 
@@ -1011,9 +1134,10 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
       'je-cash-booked'
     )
 
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.paymentAmount).toBe(1000)
+    expect(result.isFullyPaid).toBe(true)
   })
 
   it('still refuses the wrong voucher on kontantmetoden', async () => {
@@ -1204,7 +1328,11 @@ describe('findMatchingVouchersForSupplierInvoice: foreign-currency invoices', ()
     expect(result).toEqual([])
   })
 
-  it('narrows the line query to the invoice currency and projects both FX columns', async () => {
+  it('reads every 244x debit, whatever its label, and projects both FX columns (feedback seq 930807)', async () => {
+    // A SEK-booked payment voucher can settle a foreign invoice (the link
+    // validator's SEK-booked fallback), so the 244x side is no longer narrowed
+    // to lines labelled with the invoice's currency: it reads the same set a
+    // SEK invoice reads.
     const { supabase, queries } = createFilteringSupabase({ entries: [correctEurApVoucher] })
 
     await findMatchingVouchersForSupplierInvoice(
@@ -1215,9 +1343,115 @@ describe('findMatchingVouchersForSupplierInvoice: foreign-currency invoices', ()
 
     const lineQuery = queries.find((q) => q.table === 'journal_entry_lines')
     expect(lineQuery!.columns).toContain('amount_in_currency')
-    expect(lineQuery!.filters).toEqual(
-      expect.arrayContaining([{ op: 'eq', column: 'currency', value: 'EUR' }])
+    expect(lineQuery!.columns).toContain('currency')
+    expect(
+      lineQuery!.filters.some((f) => f.op !== 'or' && f.column === 'currency')
+    ).toBe(false)
+  })
+
+  // Feedback seq 930807: a USD invoice paid by an SIE-imported voucher whose
+  // 2440 debit carries SEK only. The link validator accepted the pair and
+  // settled it in full; the finder never proposed it.
+  function usdInvoicePaidInSek() {
+    return makeSupplierInvoice({
+      id: 'sinv-usd',
+      supplier_invoice_number: 'US-501',
+      currency: 'USD',
+      total: 4.8,
+      total_sek: 45,
+      exchange_rate: 9.375,
+      remaining_amount: 4.8,
+      paid_amount: 0,
+      status: 'registered',
+      invoice_date: '2026-06-01',
+      due_date: '2026-06-30',
+      arrival_number: 999999,
+    })
+  }
+
+  const sekBookedUsdPayment = entry('je-usd-sek', 31, 'Betalning molntjanst', [
+    { id: 'l-usd-sek-ap', account_number: '2440', debit_amount: 45, credit_amount: 0, currency: null },
+    { id: 'l-usd-sek-bank', account_number: '1930', debit_amount: 0, credit_amount: 45, currency: null },
+  ])
+
+  it('proposes a SEK-booked 2440 debit for a foreign invoice, converted at the invoice rate, as the validator accepts it', async () => {
+    const { supabase } = createFilteringSupabase({ entries: [sekBookedUsdPayment] })
+
+    const candidates = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      usdInvoicePaidInSek() as never
     )
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({
+      journal_entry_id: 'je-usd-sek',
+      ap_debit_amount: 4.8,
+      currency: 'USD',
+      ap_line_currency: null,
+      settlement_side: 'ap_debit',
+    })
+    expect(candidates[0].match_reason).toMatch(/bokförd i SEK/)
+
+    const validation = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      usdInvoicePaidInSek() as never,
+      'je-usd-sek'
+    )
+    expect(validation.ok).toBe(true)
+    if (!validation.ok) return
+    expect(validation.paymentAmount).toBe(4.8)
+    expect(validation.isFullyPaid).toBe(true)
+  })
+
+  it('proposes nothing the validator would refuse: a SEK-booked debit far from the invoice rate', async () => {
+    const offRate = entry('je-usd-off', 32, 'Betalning', [
+      { id: 'l-usd-off-ap', account_number: '2440', debit_amount: 60, credit_amount: 0, currency: 'SEK' },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [offRate] })
+
+    const candidates = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      usdInvoicePaidInSek() as never
+    )
+    expect(candidates).toEqual([])
+
+    const validation = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      usdInvoicePaidInSek() as never,
+      'je-usd-off'
+    )
+    expect(validation.ok).toBe(false)
+    if (validation.ok) return
+    expect(validation.details).toMatchObject({ reason: 'fx_deviation_too_large' })
+  })
+
+  it('proposes nothing the validator would refuse: a readable line next to a SEK-booked one', async () => {
+    const mixed = entry('je-eur-mixed', 33, 'Betalning', [
+      { id: 'l-mixed-eur', account_number: '2440', debit_amount: 5750, credit_amount: 0, currency: 'EUR', amount_in_currency: 500 },
+      { id: 'l-mixed-sek', account_number: '2440', debit_amount: 5750, credit_amount: 0, currency: 'SEK' },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [mixed] })
+
+    const candidates = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      eurSupplierInvoice() as never
+    )
+    expect(candidates).toEqual([])
+
+    const validation = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurSupplierInvoice() as never,
+      'je-eur-mixed'
+    )
+    expect(validation.ok).toBe(false)
+    if (validation.ok) return
+    expect(validation.code).toBe('LINK_SI_VOUCHER_CURRENCY_MISMATCH')
   })
 
   it('SEK: matches on the raw column and adds no currency filter', async () => {

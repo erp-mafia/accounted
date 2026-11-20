@@ -37,9 +37,11 @@
  * failed submission at the access point (replacesSubmissionId). The buyer's
  * business rejection is final: credit the invoice and issue a new one.
  */
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import {
   finishIssuedInvoice,
   markInvoiceSentAndBook,
@@ -47,7 +49,7 @@ import {
   type MarkSentAndBookResult,
 } from '@/lib/invoices/issue-and-book-invoice'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { hasRequiredInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { hasRequiredInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
@@ -90,7 +92,10 @@ import {
   type PeppolVerifiedEvent,
 } from '@/lib/invoices/peppol-transport'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
+import { listInvoiceAttachments, loadInvoiceEmailAttachments } from '@/lib/invoices/invoice-attachments'
+import { peppolAttachmentIssues, type PeppolAttachmentFile } from '@/lib/invoices/peppol-bis-billing'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { usageGateRefusal } from '@/lib/usage/gate'
 import type { CompanySettings, Invoice } from '@/types'
 
 /** Invoice states that may still be handed to the network. */
@@ -239,9 +244,9 @@ function sendEvent(args: {
   }
 }
 
-function resolveTransport(): { availability: PeppolTransportAvailability; transport: PeppolTransport | null } {
-  const availability = getPeppolTransportAvailability()
-  const transport = availability.available ? getPeppolTransport(availability.provider) : null
+async function resolveTransport(): Promise<{ availability: PeppolTransportAvailability; transport: PeppolTransport | null }> {
+  const availability = await getPeppolTransportAvailability()
+  const transport = availability.available ? await getPeppolTransport(availability.provider) : null
   return { availability, transport }
 }
 
@@ -251,7 +256,7 @@ function isRealInvoice(invoice: Pick<Invoice, 'document_type'>): boolean {
 
 function isSendableInvoice(invoice: PeppolInvoiceRecord): boolean {
   return isRealInvoice(invoice)
-    && !invoice.credited_invoice_id
+    && !isCreditNoteDocument(invoice)
     && !invoice.is_self_billed
     && SENDABLE_STATUSES.has(invoice.status)
 }
@@ -259,15 +264,19 @@ function isSendableInvoice(invoice: PeppolInvoiceRecord): boolean {
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 /**
- * Options for the door. The dashboard's ctx.supabase runs as the user (RLS,
- * auth.uid()), so it passes a service-role client for the rows the user's
- * JWT cannot reach (peppol_deliveries, the lifecycle event RPC). The v1 and
- * MCP doors already run on service role and pass nothing; their delivery is
- * then staged through stage_peppol_delivery_as_actor for ctx.userId, since
- * stage_peppol_delivery reads auth.uid().
+ * Options for the door. `service` is a service-role client for the rows no
+ * user JWT reaches (peppol_deliveries, the lifecycle event RPC); without it
+ * ctx.supabase must be one. A send stages its delivery for ctx.userId through
+ * that client (stage_peppol_delivery_as_actor), unless the door says its
+ * ctx.supabase is the signed-in user's session (`stageAsSession`, the
+ * dashboard send route: stage_peppol_delivery reads auth.uid()). Which client
+ * ctx.supabase is was once guessed from whether `service` was passed: the
+ * operation, approved under Att göra, runs as the person, so its sends
+ * counted peppol_deliveries with the user's JWT and failed (crm#1641).
  */
 export interface PeppolDoorOptions {
   service?: SupabaseClient
+  stageAsSession?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +296,19 @@ export interface PeppolSendResult {
   issuance: { ok: true; partial_failures: unknown[] } | { ok: false; error_code: string } | null
 }
 
+/** Whether a delivery of the invoice already reached the access point. */
+async function invoiceHandedToPeppol(service: SupabaseClient, companyId: string, invoiceId: string): Promise<boolean> {
+  const { data, error } = await service
+    .from('peppol_deliveries')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('invoice_id', invoiceId)
+    .not('submitted_at', 'is', null)
+    .limit(1)
+  if (error) throw new Error(`peppol_deliveries read failed: ${error.message}`)
+  return (data ?? []).length > 0
+}
+
 export async function sendInvoiceViaPeppol(
   ctx: OperationContext,
   invoiceId: string,
@@ -297,8 +319,8 @@ export async function sendInvoiceViaPeppol(
   const service = options.service ?? supabase
 
   // Every refusal before a delivery row exists leaves one structured line
-  // with the registry code: no amounts, no names. Prod had zero deliveries
-  // and no way to tell which gate stopped them (#2484).
+  // with the registry code: no amounts, no names. Without it there was
+  // no way to tell which gate stopped a delivery (#2484).
   const logRefusal = (code: string, extra: Record<string, unknown> = {}) =>
     log.info('peppol send refused', { invoiceId, code, ...extra })
   const refuse = (code: string, rest: Omit<Failure, 'ok' | 'code'> = {}): Failure => {
@@ -306,7 +328,7 @@ export async function sendInvoiceViaPeppol(
     return { ok: false, code, ...rest }
   }
 
-  const { availability, transport } = resolveTransport()
+  const { availability, transport } = await resolveTransport()
   if (!availability.available || !transport) {
     return refuse('PEPPOL_TRANSPORT_UNAVAILABLE', {
       details: { reason: availability.available ? 'provider_adapter_unavailable' : availability.reason },
@@ -330,6 +352,15 @@ export async function sendInvoiceViaPeppol(
     })
   }
 
+  // At the month's included e-invoices, a new send waits until an admin
+  // accepts the charge (lib/usage/gate.ts). Sending an invoice the network
+  // already has again is no new e-invoice.
+  const usageGate = await usageGateRefusal(service, companyId, 'peppol_send')
+  if (usageGate && !(await invoiceHandedToPeppol(service, companyId, invoiceId))) {
+    logRefusal(usageGate.code)
+    return usageGate
+  }
+
   const records = await fetchPeppolRecordRows(supabase, companyId, invoiceId)
   if (!records.ok) return refuse(records.code)
   const { invoice, company } = records
@@ -345,11 +376,34 @@ export async function sendInvoiceViaPeppol(
   // it (submitStagedDocument). Refuse up front what issuance would refuse,
   // before any number is taken.
   if (wasDraft) {
+    // No buyer, nothing to send (customer deleted, crm#263), and no number
+    // spent on finding that out.
+    if (invoiceLacksCustomer(invoice)) return refuse('INVOICE_CUSTOMER_MISSING')
     const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice, { persist: !dryRun })
     if (!payeeSnapshot.ok) return refuse(payeeSnapshot.code, { details: payeeSnapshot.details })
     invoice.payment_details = payeeSnapshot.payee
     if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
       return refuse('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', { details: { currency: invoice.currency } })
+    }
+  }
+
+  // The invoice's files ride inside the e-faktura (crm#1545), read from the
+  // archive and checked (PDF only, the Peppol size ceiling) before a number
+  // is taken, so a file the message cannot carry stops the send while
+  // nothing irreversible has happened.
+  const loaded = await loadInvoiceEmailAttachments(supabase, companyId, invoiceId)
+  if (!loaded.ok) return refuse(loaded.code)
+  const attachments: PeppolAttachmentFile[] = loaded.value
+  const attachmentIssues = peppolAttachmentIssues(
+    attachments.map((file) => ({ filename: file.filename, contentType: file.contentType, sizeBytes: file.content.byteLength })),
+  )
+  if (attachmentIssues.length > 0) {
+    logRefusal('VALIDATION_ERROR', { issues: attachmentIssues.map((i) => i.code) })
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      messageSv: attachmentIssues[0].messageSv,
+      details: { issues: peppolIssueDetails(attachmentIssues) },
     }
   }
 
@@ -359,13 +413,18 @@ export async function sendInvoiceViaPeppol(
       invoice.invoice_number = await ensureInvoiceNumber(supabase, companyId, invoice)
     } catch (err) {
       log.error('failed to assign invoice number before Peppol send', err as Error)
-      return refuse('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+      const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+      return refuse(failure.code, {
+        ...(failure.details ? { details: failure.details } : {}),
+        ...(failure.messageSv ? { messageSv: failure.messageSv } : {}),
+      })
     }
   }
 
   const generated = generatePeppolDocument(
     numberPending && dryRun ? { ...invoice, invoice_number: PLACEHOLDER_INVOICE_NUMBER } : invoice,
     company,
+    attachments,
   )
   if (!generated.ok) {
     if (generated.reason === 'customer_missing') {
@@ -405,6 +464,7 @@ export async function sendInvoiceViaPeppol(
         transport_provider: transport.provider,
         remaining_sends: permission.remaining,
         will_issue_invoice: wasDraft,
+        attachments: attachments.map((file) => ({ file_name: file.filename, file_size_bytes: file.content.byteLength })),
         network_submitted: false,
         // The SMP lookup and the submission are network calls: commit only.
         recipient_lookup: 'on_commit',
@@ -412,13 +472,13 @@ export async function sendInvoiceViaPeppol(
     }
   }
 
-  return submitStagedDocument({ ctx, service, stageAsActor: !options.service, transport, invoice, company, document, wasDraft, refuse })
+  return submitStagedDocument({ ctx, service, stageAsSession: options.stageAsSession === true, transport, invoice, company, document, wasDraft, refuse })
 }
 
 async function submitStagedDocument(args: {
   ctx: OperationContext
   service: SupabaseClient
-  stageAsActor: boolean
+  stageAsSession: boolean
   transport: PeppolTransport
   invoice: PeppolInvoiceRecord
   company: CompanySettings
@@ -452,9 +512,9 @@ async function submitStagedDocument(args: {
   try {
     let delivery: PeppolDeliverySummary
     try {
-      delivery = args.stageAsActor
-        ? await stagePeppolDeliveryAsActor({ supabase, companyId, invoiceId, actorId: userId, document })
-        : await stagePeppolDelivery({ supabase, companyId, invoiceId, document })
+      delivery = args.stageAsSession
+        ? await stagePeppolDelivery({ supabase, companyId, invoiceId, document })
+        : await stagePeppolDeliveryAsActor({ supabase: service, companyId, invoiceId, actorId: userId, document })
     } catch (err) {
       if (isFiscalPeriodMissingError(err)) {
         return refuse('PEPPOL_FISCAL_PERIOD_MISSING', { details: { invoice_date: invoice.invoice_date } })
@@ -811,7 +871,7 @@ export async function getInvoicePeppolReadiness(
   const { invoice, company } = records
   const blockers: PeppolReadinessBlocker[] = []
 
-  const { availability } = resolveTransport()
+  const { availability } = await resolveTransport()
   if (!availability.available) {
     blockers.push(blocker('PEPPOL_TRANSPORT_UNAVAILABLE', { field: availability.reason }))
   }
@@ -839,6 +899,17 @@ export async function getInvoicePeppolReadiness(
         blockers.push(blocker('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', { field: 'company.payment_accounts' }))
       }
     }
+  }
+
+  // The files the e-faktura would carry (crm#1545), checked on the stored
+  // metadata; the send checks the bytes it reads.
+  const attachmentRows = await listInvoiceAttachments(supabase, companyId, invoiceId)
+  for (const issue of peppolAttachmentIssues(attachmentRows.map((row) => ({
+    filename: row.file_name,
+    contentType: row.mime_type,
+    sizeBytes: row.file_size_bytes ?? 0,
+  })))) {
+    blockers.push({ code: issue.code, field: issue.field, message_sv: issue.messageSv, message_en: issue.messageEn })
   }
 
   let sender: PeppolParticipant | null = null
@@ -919,7 +990,7 @@ export async function listInvoicePeppolDeliveries(
   try {
     const deliveries = await listPeppolDeliveriesForInvoice({ service, companyId, invoiceId })
     const access = await getPeppolAccessSummary({ supabase, service, companyId })
-    return { ok: true, data: { deliveries, transport: getPeppolTransportAvailability(), access } }
+    return { ok: true, data: { deliveries, transport: await getPeppolTransportAvailability(), access } }
   } catch (err) {
     return { ok: false, code: 'INTERNAL_ERROR', error: err }
   }

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import type { PendingOperation } from '@/types'
+import { createQueuedMockSupabase, makeCustomer } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
+import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 import { tools, isDefaultCatalogTool } from '../server'
@@ -83,7 +86,7 @@ function enqueueItemsEdit(
 }
 
 describe('gnubok_update_invoice: registration', () => {
-  it('is a strict, staged invoices:write tool at medium risk', () => {
+  it('is a strict, staged invoices:draft tool at medium risk', () => {
     expect(tool()).toBeDefined()
     expect(tool().inputSchema.additionalProperties).toBe(false)
     expect(tool().annotations.readOnlyHint).toBe(false)
@@ -95,7 +98,7 @@ describe('gnubok_update_invoice: registration', () => {
     expect(isDefaultCatalogTool(tool())).toBe(true)
     expect(tool().description).toContain('gnubok_call_tool')
     expect(tool().description.length).toBeLessThanOrEqual(280)
-    expect(TOOL_SCOPE_MAP.gnubok_update_invoice).toBe('invoices:write')
+    expect(TOOL_SCOPE_MAP.gnubok_update_invoice).toBe('invoices:draft')
     expect(OPERATION_RISK_TIERS.update_invoice).toBe('medium')
   })
 
@@ -317,6 +320,78 @@ describe('gnubok_update_invoice: validation and staging', () => {
     expect(result.preview.current_items).toBeUndefined()
   })
 
+  // crm#1202: an agent read status 'draft' in the preview as "the edit
+  // turned my open quote into a draft". The preview now names the quote's
+  // decision, and the next step fits a quote.
+  it('stages a quote edit that names the quote, keeps its decision and points at sending it', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ invoice_number: 'OF-001', document_type: 'quote', quote_status: 'open' }) })
+    enqueue({ data: { id: 'op-quote-1' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, notes: 'Ny text' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown>; next: { tool: string; description: string } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject({ status: 'draft', document_type: 'quote', quote_status: 'open' })
+    expect(result.next.tool).toBe('gnubok_send_invoice')
+    expect(result.next.description).toContain('quote_status is unchanged')
+    expect(result.next.description).toContain('never books')
+    const row = findCall('pending_operations', 'insert')![0] as { title: string; params: { changes: Record<string, unknown> } }
+    expect(row.title).toBe('Uppdatera offert: Acme AB')
+    // The edit carries no lifecycle field: the executor cannot move the quote.
+    expect(row.params.changes).not.toHaveProperty('status')
+    expect(row.params.changes).not.toHaveProperty('quote_status')
+  })
+
+  it('keeps the invoice wording and preview shape for a plain draft', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() })
+    enqueue({ data: { id: 'op-invoice-9' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, notes: 'x' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { preview: Record<string, unknown>; next: { tool: string; description: string } }
+
+    expect(result.preview.document_type).toBeUndefined()
+    expect(result.preview.quote_status).toBeUndefined()
+    expect(result.next.description).toContain('Send it with gnubok_send_invoice')
+    expect((findCall('pending_operations', 'insert')![0] as { title: string }).title).toBe('Uppdatera fakturautkast: Acme AB')
+  })
+
+  it('stages a QR mode change, and null as the way back to the company default', async () => {
+    for (const qrMode of ['bank_app', null]) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: draftInvoice() })
+      enqueue({ data: { id: 'op-invoice-1' } })
+
+      const result = (await tool().execute(
+        { invoice_id: INVOICE_ID, qr_mode: qrMode },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )) as { staged: boolean; preview: { changes?: Record<string, unknown> } }
+
+      expect(result.staged, String(qrMode)).toBe(true)
+      expect(result.preview.changes).toEqual({ qr_mode: qrMode })
+    }
+  })
+
+  it('refuses a QR mode that is not a mode before querying', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute({ invoice_id: INVOICE_ID, qr_mode: 'all_three' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/qr_mode/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
   it('stages a full item replace with the effective booking and the lines being replaced', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueItemsEdit(enqueue, CUSTOMER, null)
@@ -448,6 +523,34 @@ describe('gnubok_update_invoice: article_id on items (issue #1642)', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(3, 'articles')
     expect(supabase.from).toHaveBeenNthCalledWith(4, 'invoice_items')
     expect(supabase.from).toHaveBeenNthCalledWith(5, 'pending_operations')
+  })
+
+  it("takes the article's English name for an English-language customer, the Swedish one otherwise (crm#1084)", async () => {
+    const bilingual = { ...ARTICLE, name_en: 'Consulting hour' }
+    for (const [customer, expected] of [
+      [{ ...EU_CUSTOMER, language: 'en' }, 'Consulting hour'],
+      [{ ...CUSTOMER, language: 'sv' }, 'Konsulttimme'],
+    ] as const) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueueItemsEdit(enqueue, customer, [bilingual])
+      const result = (await tool().execute(
+        { invoice_id: INVOICE_ID, items: [{ article_id: ARTICLE_ID, quantity: 1 }] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )) as StagedResult
+      expect(result.preview.changes?.items?.[0]).toMatchObject({ description: expected })
+    }
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, { ...EU_CUSTOMER, language: 'en' }, [{ ...ARTICLE, name_en: null }])
+    const fallback = (await tool().execute(
+      { invoice_id: INVOICE_ID, items: [{ article_id: ARTICLE_ID, quantity: 1 }] },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+    expect(fallback.preview.changes?.items?.[0]).toMatchObject({ description: 'Konsulttimme' })
   })
 
   it('lets explicit line values win over the article', async () => {
@@ -863,6 +966,53 @@ describe('gnubok_update_invoice: accrual and override pass-back (issue #1642)', 
       accrual_balance_account: '2990',
     })
   })
+
+  const novemberLine = {
+    description: 'Support november',
+    quantity: 1,
+    unit: 'st',
+    unit_price: 5000,
+    vat_rate: 25,
+    accrual_period_start: '2026-11-01',
+    accrual_period_end: '2026-11-30',
+    accrual_balance_account: '2970',
+  }
+
+  it('stages a one-month period after the invoice month', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ invoice_date: '2026-10-15' }) })
+    enqueue({ data: CUSTOMER })
+    enqueue({ data: CURRENT_ROWS })
+    enqueue({ data: { id: 'op-invoice-3' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, items: [novemberLine] },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes?.items?.[0]).toMatchObject({
+      accrual_period_start: '2026-11-01',
+      accrual_period_end: '2026-11-30',
+    })
+  })
+
+  it('refuses at staging a period lying only in the invoice month, judged on the new invoice_date', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ invoice_date: '2026-10-15' }) })
+    enqueue({ data: CUSTOMER })
+
+    await expect(
+      tool().execute(
+        { invoice_id: INVOICE_ID, invoice_date: '2026-11-03', items: [novemberLine] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREATE_ACCRUAL_INVOICE_MONTH' })
+  })
 })
 
 describe('gnubok_update_invoice: says why the VAT treatment is what it is (#2749, #2558)', () => {
@@ -913,5 +1063,102 @@ describe('gnubok_update_invoice: says why the VAT treatment is what it is (#2749
     expect(result.staged).toBe(true)
     expect(result.preview.vat_warnings).toBeUndefined()
     expect(result.message).not.toContain('WARNING')
+  })
+})
+
+describe('gnubok_update_invoice: discounted lines (#90)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  // 3 x 333,33 = 999,99 gross; 12,5 % rabatt is 125,00, so the line nets
+  // 874,99. The preview used to show the gross 999,99 next to a subtotal
+  // that was already net.
+  const DISCOUNTED_ITEMS = [
+    { description: 'Konsultation', quantity: 3, unit: 'tim', unit_price: 333.33, discount_percent: 12.5, vat_rate: 25 },
+    { description: 'Material', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 25 },
+  ]
+
+  async function stageDiscounted() {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, CUSTOMER, null)
+    return (await tool().execute(
+      { invoice_id: INVOICE_ID, items: DISCOUNTED_ITEMS },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+  }
+
+  it('shows each line_total net of its discount, summing to the subtotal', async () => {
+    const result = await stageDiscounted()
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.items?.map((item) => item.line_total)).toEqual([874.99, 1000])
+    expect(result.preview).toMatchObject({ subtotal: 1874.99, vat_amount: 468.75, total: 2343.74 })
+  })
+
+  it('previews the line_total that approval stores', async () => {
+    const result = await stageDiscounted()
+
+    // Approve exactly what was staged and capture the invoice_items insert.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-invoice-2' } }) // claim pending -> committing
+    enqueue({
+      data: {
+        ...draftInvoice(),
+        invoice_date: '2026-07-01',
+        due_date: '2026-07-31',
+        delivery_date: null,
+        your_reference: null,
+        our_reference: null,
+        notes: null,
+        payment_link_url: null,
+        payment_link_auto: true,
+        ore_rounding: null,
+        default_dimensions: {},
+        deduction_personnummer_encrypted: null,
+        deduction_personnummer_last4: null,
+      },
+    })
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+    enqueue({ data: { vat_registered: true } }) // company_settings (builder VAT gate)
+    enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update (draft-guarded)
+    enqueue({ data: [] }) // invoice_items snapshot
+    enqueue({ data: null }) // invoice_items delete
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: null }) // pending_operations final status update
+
+    const committed = await commitPendingOperation(supabase as never, 'user-1', 'company-1', {
+      id: 'op-invoice-2',
+      user_id: 'user-1',
+      company_id: 'company-1',
+      operation_type: 'update_invoice',
+      status: 'pending',
+      title: 'Uppdatera fakturautkast',
+      params: { invoice_id: INVOICE_ID, changes: result.preview.changes },
+      preview_data: result.preview,
+      result_data: null,
+      actor_type: 'api_key',
+      actor_id: 'key-1',
+      actor_label: 'Test key',
+      risk_level: 'medium',
+      agent_metadata: null,
+      rejection_category: null,
+      rejection_reason: null,
+      created_at: '2026-07-27T00:00:00Z',
+      resolved_at: null,
+      updated_at: '2026-07-27T00:00:00Z',
+    } as PendingOperation)
+
+    expect(committed.status).toBe('committed')
+    const insertedRows = findCalls('invoice_items', 'insert')[0][0] as Array<{ line_total: number }>
+    expect(insertedRows.map((row) => row.line_total)).toEqual(result.preview.items?.map((item) => item.line_total))
+    expect(committed.data).toMatchObject({
+      subtotal: result.preview.subtotal,
+      vat_amount: result.preview.vat_amount,
+      total: result.preview.total,
+    })
   })
 })

@@ -3,7 +3,7 @@
  * the dashboard book route's extracted core plus the advance-walk used by the
  * book_salary_run pending-operation executor (MCP gnubok_book_salary_run).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 vi.mock('@/lib/events', () => ({
@@ -21,6 +21,11 @@ vi.mock('@/lib/salary/vacation-ledger', () => ({
 vi.mock('@/lib/salary/ytd', () => ({
   refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
 }))
+// The period pre-check reads fiscal periods through period-service; the
+// verdict is the contract here, so it is mocked (open unless a test says).
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn(),
+}))
 // The pre-booking claim check stays real (zero queries without linked lines,
 // one queued expense_claims read with them); only the settle RPC is mocked.
 vi.mock('@/lib/salary/expense-claim-lines', async () => {
@@ -30,12 +35,13 @@ vi.mock('@/lib/salary/expense-claim-lines', async () => {
   return { ...actual, settleExpenseClaimsForBookedRun: vi.fn() }
 })
 
-import { advanceAndBookSalaryRun, bookPaidSalaryRun } from '../book-run'
+import { advanceAndBookSalaryRun, bookPaidSalaryRun, previewPaidSalaryRunBooking } from '../book-run'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
 import { settleExpenseClaimsForBookedRun } from '@/lib/salary/expense-claim-lines'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { eventBus } from '@/lib/events'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 
 const log = {
   info: vi.fn(),
@@ -94,6 +100,7 @@ const makeSre = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(checkPeriodLock).mockResolvedValue({ locked: false })
   vi.mocked(syncVacationLedgerForEmployees).mockResolvedValue({ ok: true } as never)
   vi.mocked(createSalaryRunEntries).mockResolvedValue({
     salaryEntry: { id: 'je-1' },
@@ -139,6 +146,7 @@ describe('advanceAndBookSalaryRun', () => {
       { data: { id: 'run-1' } }, // review → approved
       { data: { id: 'run-1' } }, // approved → paid
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } }, // paid → booked
     ])
 
@@ -174,6 +182,7 @@ describe('advanceAndBookSalaryRun', () => {
       { data: { id: 'run-1' } },
       { data: { id: 'run-1' } },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -185,6 +194,60 @@ describe('advanceAndBookSalaryRun', () => {
       expect(remark).toBeDefined()
       expect(result.data.warnings.join(' ')).not.toContain('96123456789')
     }
+  })
+
+  it('refuses a draft that was never calculated, the review step it skips', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeRun({ status: 'draft', calculation_params: null }) }, { data: [] }])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_NOT_CALCULATED')
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('refuses a locked payment date with PERIOD_LOCKED before any status moves', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeRun({ status: 'review' }) }, { data: [makeSre()] }])
+    vi.mocked(checkPeriodLock).mockResolvedValue({ locked: true, reason: 'company_lock_date_covers' })
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('PERIOD_LOCKED')
+      expect(result.details).toMatchObject({ reason: 'company_lock_date_covers', payment_date: '2026-06-25' })
+    }
+    // The run stays in review: nothing was approved, paid or posted.
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('needs no bank details for an employee with nothing to pay out', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review' }) },
+      {
+        data: [
+          makeSre({
+            net_salary: 0,
+            tax_withheld: 0,
+            employee: { ...makeSre().employee, clearing_number: null, bank_account_number: null },
+          }),
+        ],
+      },
+      { data: { id: 'run-1' } }, // review → approved
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } }, // paid → booked
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.warnings).toEqual([])
   })
 
   it('books a paid zero-total run as nollkörning without journal entries', async () => {
@@ -217,20 +280,235 @@ describe('advanceAndBookSalaryRun', () => {
       expect.objectContaining({ type: 'salary_run.booked' }),
     )
   })
+
+  it('announces the approval once the run is booked, before salary_run.booked', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review' }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1' } }, // review → approved
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } }, // paid → booked
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    const emitted = vi.mocked(eventBus.emit).mock.calls.map(([event]) => (event as { type: string }).type)
+    expect(emitted).toEqual(['salary_run.approved', 'salary_run.booked'])
+  })
+})
+
+// A staged booking whose posting fails must not leave the run paid with no
+// verifikat (agent feedback 2026-11-02: four benefit-only runs were walked to
+// paid while the engine refused their voucher). The walk is handed back.
+describe('advanceAndBookSalaryRun: a booking that does not complete', () => {
+  type Call = { table: string; method: string; args: unknown[] }
+
+  /** The status-restoring UPDATE and its filters, or null when there was none. */
+  const restoreCall = (calls: Call[]) => {
+    const start = calls.findIndex(
+      (c) =>
+        c.table === 'salary_runs' &&
+        c.method === 'update' &&
+        ['draft', 'review', 'approved'].includes((c.args[0] as { status?: string }).status ?? '') &&
+        'paid_at' in (c.args[0] as Record<string, unknown>),
+    )
+    if (start === -1) return null
+    const filters = calls
+      .slice(start + 1)
+      .filter((c) => c.table === 'salary_runs' && (c.method === 'eq' || c.method === 'is'))
+      .slice(0, 4)
+      .map((c) => [c.method, ...c.args])
+    return { payload: calls[start].args[0], filters }
+  }
+
+  it('hands a walked run back to review when the engine refuses its voucher, and announces no approval', async () => {
+    const { supabase, enqueueMany, calls, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review', approved_by: null, approved_at: null, paid_at: null }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1' } }, // review → approved
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: null }, // claim release
+      { data: [] }, // the run's vouchers in the ledger: none
+      { data: null }, // restore
+    ])
+    vi.mocked(createSalaryRunEntries).mockRejectedValue(
+      new Error('Journal entry is not balanced: debits (0) != credits (0)'),
+    )
+
+    await expect(advanceAndBookSalaryRun(supabase as never, ARGS)).rejects.toThrow('not balanced')
+
+    expect(findCall('journal_entries', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(restoreCall(calls as Call[])).toEqual({
+      payload: { status: 'review', paid_at: null, approved_by: null, approved_at: null },
+      filters: [
+        ['eq', 'id', 'run-1'],
+        ['eq', 'company_id', 'company-1'],
+        ['eq', 'status', 'paid'],
+        ['is', 'booking_claim_id', null],
+      ],
+    })
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
+  it('hands a run that started approved back to approved on a refusal, keeping its approver', async () => {
+    const claimLine = {
+      item_type: 'expense_reimbursement',
+      amount: 500,
+      account_number: '2820',
+      is_net_deduction: false,
+      is_gross_deduction: false,
+      source_expense_claim_id: 'claim-1',
+    }
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      {
+        data: makeRun({
+          status: 'approved',
+          total_net: 23500,
+          approved_by: 'user-0',
+          approved_at: '2026-06-20T10:00:00Z',
+          paid_at: null,
+        }),
+      },
+      { data: [makeSre({ net_salary: 23500, line_items: [claimLine] })] },
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: [{ id: 'claim-1', status: 'paid', employee_id: 'e1', amount_sek: 500 }] }, // paid by bank meanwhile
+      { data: null }, // claim release
+      { data: [] }, // the run's vouchers in the ledger: none
+      { data: null }, // restore
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_EXPENSE_CLAIM_NOT_OPEN')
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+    // Only what the walk set is undone: the approval it found stays.
+    expect(restoreCall(calls as Call[])?.payload).toEqual({ status: 'approved', paid_at: null })
+  })
+
+  it('keeps the run paid when a voucher of it is already in the ledger, so the next booking adopts it', async () => {
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'approved' }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: null }, // claim release
+      { data: [{ id: 'je-1' }] }, // a voucher of the run is posted
+    ])
+    vi.mocked(createSalaryRunEntries).mockRejectedValue(new Error('transient'))
+
+    await expect(advanceAndBookSalaryRun(supabase as never, ARGS)).rejects.toThrow('transient')
+
+    expect(restoreCall(calls as Call[])).toBeNull()
+  })
+
+  it('never moves a run that was already paid when the call started', async () => {
+    const { supabase, enqueueMany, calls, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: null }, // claim release
+    ])
+    vi.mocked(createSalaryRunEntries).mockRejectedValue(new Error('period locked'))
+
+    await expect(advanceAndBookSalaryRun(supabase as never, ARGS)).rejects.toThrow('period locked')
+
+    expect(findCall('journal_entries', 'select')).toBeUndefined()
+    expect(restoreCall(calls as Call[])).toBeNull()
+  })
 })
 
 describe('bookPaidSalaryRun', () => {
-  it('requires the run to be in paid status', async () => {
+  it('answers SALARY_RUN_BOOK_NOT_PAID with the current status for a run not yet paid', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null, error: { message: 'No rows' } }) // status filter misses
+    enqueue({ data: makeRun({ status: 'approved' }) })
 
     const result = await bookPaidSalaryRun(supabase as never, ARGS)
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.code).toBe('SALARY_RUN_NOT_CALCULATED')
-      expect(result.details).toEqual({ reason: 'must_be_paid_status' })
+      expect(result.code).toBe('SALARY_RUN_BOOK_NOT_PAID')
+      expect(result.details).toEqual({ current_status: 'approved' })
     }
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('answers SALARY_RUN_NOT_FOUND for a run outside the company', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_NOT_FOUND')
+  })
+
+  it('refuses a payment date in a locked period with PERIOD_LOCKED before claiming or posting', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRun({ status: 'paid' }) })
+    vi.mocked(checkPeriodLock).mockResolvedValue({
+      locked: true,
+      reason: 'period_locked_at_set',
+      fiscal_period_id: 'fp-1',
+    })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('PERIOD_LOCKED')
+      expect(result.details).toEqual({
+        reason: 'period_locked_at_set',
+        fiscal_period_id: 'fp-1',
+        payment_date: '2026-06-25',
+      })
+    }
+    expect(checkPeriodLock).toHaveBeenCalledWith(supabase, 'company-1', '2026-06-25')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('books a paid nollkörning without asking about the period: nothing is posted', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const zeroRun = makeRun({
+      status: 'paid',
+      total_gross: 0,
+      total_tax: 0,
+      total_net: 0,
+      total_avgifter: 0,
+      total_vacation_accrual: 0,
+    })
+    enqueueMany([
+      { data: zeroRun },
+      { data: [] }, // roster
+      { data: BOOKING_CLAIM }, // claim
+      { data: { ...zeroRun, status: 'booked' } }, // flip
+    ])
+    vi.mocked(checkPeriodLock).mockResolvedValue({ locked: true, reason: 'period_is_closed' })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.nollkorning).toBe(true)
+      expect(result.data.entryIds).toEqual([])
+      expect(result.data.salaryVoucherNumber).toBeNull()
+    }
+    expect(checkPeriodLock).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
   })
 
   it('books a paid run and returns the entry ids', async () => {
@@ -239,6 +517,7 @@ describe('bookPaidSalaryRun', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -259,6 +538,93 @@ describe('bookPaidSalaryRun', () => {
       'user-1',
       expect.objectContaining({ calculation_params: { slpRate: 0.2426 } }),
     )
+  })
+})
+
+describe('previewPaidSalaryRunBooking', () => {
+  it('previews the verifikationer the booking would post, after the same refusals', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeRun({ status: 'paid' }) }, { data: [makeSre()] }])
+
+    const result = await previewPaidSalaryRunBooking(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        id: 'run-1',
+        would_advance_status_from: 'paid',
+        would_advance_status_to: 'booked',
+        nollkorning: false,
+        would_post_entries: ['salary (gross + tax withholding + net payment)', 'arbetsgivaravgifter'],
+      }),
+    })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('answers SALARY_RUN_BOOK_NOT_PAID like the booking does', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRun({ status: 'review' }) })
+
+    const result = await previewPaidSalaryRunBooking(supabase as never, ARGS)
+
+    expect(result).toEqual({ ok: false, code: 'SALARY_RUN_BOOK_NOT_PAID', details: { current_status: 'review' } })
+  })
+})
+
+// crm#1596: a board member whose only pay is a förmån. Nothing is paid,
+// withheld or expensed, so there is no salary voucher, but the avgifter on the
+// benefit are booked and the run is no nollkörning.
+describe('a run whose only amount is a förmånsvärde', () => {
+  const benefitOnlyRun = () => makeRun({ status: 'paid', total_gross: 0, total_tax: 0, total_net: 0, total_avgifter: 93.95 })
+  const benefitOnlySre = () =>
+    makeSre({
+      gross_salary: 0,
+      tax_withheld: 0,
+      net_salary: 0,
+      avgifter_amount: 93.95,
+      line_items: [
+        { item_type: 'benefit_other', amount: 299, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+      ],
+    })
+
+  it('books the avgifter voucher alone and leaves salary_entry_id unset', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: benefitOnlyRun() },
+      { data: [benefitOnlySre()] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+    vi.mocked(createSalaryRunEntries).mockResolvedValue({
+      salaryEntry: null,
+      avgifterEntry: { id: 'je-2' },
+      vacationEntry: null,
+      pensionEntry: null,
+    } as never)
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: true,
+      data: expect.objectContaining({ entryIds: ['je-2'], nollkorning: false, salaryVoucherNumber: null }),
+    })
+    const runUpdate = findCalls('salary_runs', 'update').at(-1)?.[0] as Record<string, unknown>
+    expect(runUpdate).toMatchObject({ status: 'booked', avgifter_entry_id: 'je-2' })
+    expect(runUpdate).not.toHaveProperty('salary_entry_id')
+  })
+
+  it('previews only the arbetsgivaravgifter verifikat', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: benefitOnlyRun() }, { data: [benefitOnlySre()] }])
+
+    const result = await previewPaidSalaryRunBooking(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: true,
+      data: expect.objectContaining({ nollkorning: false, would_post_entries: ['arbetsgivaravgifter'] }),
+    })
   })
 })
 
@@ -306,6 +672,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
       { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: '500.00' }] },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -328,6 +695,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
       { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: 500 }] },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
     vi.mocked(settleExpenseClaimsForBookedRun).mockResolvedValue({ ok: false, code: 'SETTLE_FAILED', detail: 'boom' })
@@ -349,6 +717,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -375,6 +744,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
       },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: 800 }] },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -399,6 +769,76 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
     const runUpdate = findCalls('salary_runs', 'update').at(-1)?.[0] as Record<string, unknown>
     expect(runUpdate).toMatchObject({ status: 'booked', salary_entry_id: 'je-1' })
     expect(runUpdate).not.toHaveProperty('avgifter_entry_id')
+  })
+})
+
+// Plan 1: the booking stamps each roster row with the personnel category it
+// posts with, before anything is posted, so a booked run's Lönejournal keeps
+// the category its verifikat was booked with.
+describe('bookPaidSalaryRun: personnel category stamp', () => {
+  const arbetare = (id: string, employeeId: string) =>
+    makeSre({ id, employee_id: employeeId, employee: { ...makeSre().employee, personnel_category: 'arbetare' } })
+  const tjansteman = (id: string, employeeId: string) =>
+    makeSre({ id, employee_id: employeeId, employee: { ...makeSre().employee, personnel_category: 'tjansteman' } })
+
+  it('stamps every roster row with its category, then posts with the same category', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [arbetare('sre-1', 'e1'), tjansteman('sre-2', 'e2'), arbetare('sre-3', 'e3')] },
+      { data: BOOKING_CLAIM },
+      { data: null }, // stamp arbetare
+      { data: null }, // stamp tjansteman
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    const stamps = findCalls('salary_run_employees', 'update').map((call) => call[0])
+    expect(stamps).toEqual([{ personnel_category: 'arbetare' }, { personnel_category: 'tjansteman' }])
+    expect(findCalls('salary_run_employees', 'in')).toEqual([
+      ['id', ['sre-1', 'sre-3']],
+      ['id', ['sre-2']],
+    ])
+    const engineInput = vi.mocked(createSalaryRunEntries).mock.calls[0][3]
+    expect(engineInput.employees.map((e) => e.personnel_category)).toEqual(['arbetare', 'tjansteman', 'arbetare'])
+  })
+
+  it('stops before posting anything when the stamp fails, and hands the claim back', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [arbetare('sre-1', 'e1')] },
+      { data: BOOKING_CLAIM },
+      { data: null, error: { message: 'stamp failed' } },
+      { data: null }, // claim release
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_BOOK_FAILED')
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+    const runUpdates = findCalls('salary_runs', 'update').map((call) => call[0])
+    expect(runUpdates).toEqual([{ booking_claim_id: null, booking_claimed_at: null }])
+  })
+
+  it('stamps a roster row whose employee has no category as tjänsteman', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre({ id: 'sre-1' })] },
+      { data: BOOKING_CLAIM },
+      { data: null },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    expect(findCalls('salary_run_employees', 'update')).toEqual([[{ personnel_category: 'tjansteman' }]])
   })
 })
 
@@ -438,6 +878,7 @@ describe('salary run booking claim (#3251)', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -505,6 +946,7 @@ describe('salary run booking claim (#3251)', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -560,6 +1002,7 @@ describe('salary run booking claim (#3251)', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM },
+      { data: null }, // personnel category stamp
       { data: null }, // the flip matched no row: the claim is no longer ours
     ])
 
@@ -648,5 +1091,112 @@ describe('salary run booking claim (#3251)', () => {
 
     expect(result).toEqual({ ok: false, code: 'SALARY_RUN_BOOKING_IN_PROGRESS' })
     expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1216: the salary verifikat credits the net pay to the bank account on
+// the payment date, so a date still ahead needs the caller's confirmation at
+// every door before anything moves (paymentDateAheadRefusal).
+describe('salary run booking with the payment date still ahead (crm#1216)', () => {
+  const AHEAD = '2026-10-23'
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-15T10:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('bookPaidSalaryRun refuses without the confirmation, before claiming or posting', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRun({ status: 'paid', payment_date: AHEAD }) })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED',
+      details: { payment_date: AHEAD, today: '2026-10-15' },
+    })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('previewPaidSalaryRunBooking answers the same refusal', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRun({ status: 'paid', payment_date: AHEAD }) })
+
+    const result = await previewPaidSalaryRunBooking(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+  })
+
+  it('bookPaidSalaryRun books a confirmed run on its payment date', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', payment_date: AHEAD }) },
+      { data: [makeSre()] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, { ...ARGS, confirmPaymentDateAhead: true })
+
+    expect(result.ok).toBe(true)
+    expect(createSalaryRunEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ payment_date: AHEAD }),
+    )
+  })
+
+  it('bookPaidSalaryRun needs no confirmation for a run with nothing paid out', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', payment_date: AHEAD, total_gross: 0, total_tax: 0, total_net: 0, total_avgifter: 0 }) },
+      { data: [] },
+      { data: BOOKING_CLAIM },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.nollkorning).toBe(true)
+  })
+
+  it('advanceAndBookSalaryRun refuses without the confirmation before any status moves', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeRun({ status: 'review', payment_date: AHEAD }) }, { data: [makeSre()] }])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+    // The run stays in review: nothing was approved, paid or posted.
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('advanceAndBookSalaryRun walks a confirmed run through to booked', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review', payment_date: AHEAD }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1' } }, // review → approved
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM },
+      { data: null },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, { ...ARGS, confirmPaymentDateAhead: true })
+
+    expect(result.ok).toBe(true)
+    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
   })
 })

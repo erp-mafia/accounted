@@ -7,7 +7,8 @@ vi.mock('@/lib/bookkeeping/rot-rut-entries', () => ({
   createRotRutReclaimEntry: (...args: unknown[]) => mockCreateReclaimEntry(...args),
 }))
 
-import { computeRefusedShares, reclaimRotRutRefusal } from '../rot-rut-reclaim'
+import { reclaimRotRutRefusal } from '../rot-rut-reclaim'
+import { computeRefusedShares } from '../rot-rut-refused-shares'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
@@ -271,7 +272,7 @@ describe('reclaimRotRutRefusal', () => {
       deductionType: 'rut',
       bookingDate: '2026-08-21',
       legs: [{ invoiceId: INVOICE_B, invoiceNumber: '2026-002', amount: 2000 }],
-    })
+    }, expect.any(Function))
 
     // Request CAS on reclaim_journal_entry_id IS NULL.
     const requestUpdate = findCall('rot_rut_payout_requests', 'update')?.[0] as Record<string, unknown>

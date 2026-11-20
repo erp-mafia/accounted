@@ -3,11 +3,69 @@ import {
   extractLocalPartForDomain,
   extractSharedRecipientsForDomain,
   groupSharedRecipientsByInbox,
+  isMailMachineryPart,
+  isPlainTextPart,
   kindHintFromTag,
-  parseRecipients,
+  mayRedeliverOverMinuteCap,
+  MINUTE_CAP_REDELIVERY_WINDOW_MS,
   resolveKindHintForTags,
   splitKnownInboxTags,
 } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
+
+describe('mayRedeliverOverMinuteCap', () => {
+  const now = Date.parse('2026-11-10T13:20:30Z')
+
+  it('hands back a mail inside the first hour, where Resend retries at 5 s, 5 min and 30 min', () => {
+    expect(mayRedeliverOverMinuteCap('2026-11-10T13:20:10Z', now)).toBe(true)
+    expect(mayRedeliverOverMinuteCap('2026-11-10T12:50:30Z', now)).toBe(true)
+  })
+
+  it('drops a mail still over the cap after that window, as a flood', () => {
+    expect(mayRedeliverOverMinuteCap(new Date(now - MINUTE_CAP_REDELIVERY_WINDOW_MS).toISOString(), now)).toBe(false)
+    expect(mayRedeliverOverMinuteCap('2026-11-10T10:00:00Z', now)).toBe(false)
+  })
+
+  it('treats a missing or unreadable receive time as too old, so the mail ends in a record', () => {
+    expect(mayRedeliverOverMinuteCap(null, now)).toBe(false)
+    expect(mayRedeliverOverMinuteCap(undefined, now)).toBe(false)
+    expect(mayRedeliverOverMinuteCap('not a date', now)).toBe(false)
+  })
+})
+
+describe('isPlainTextPart', () => {
+  it('reads text/plain with or without parameters and in any case', () => {
+    expect(isPlainTextPart('text/plain')).toBe(true)
+    expect(isPlainTextPart('text/plain; charset=utf-8')).toBe(true)
+    expect(isPlainTextPart('Text/Plain')).toBe(true)
+  })
+
+  it('leaves every other type alone', () => {
+    expect(isPlainTextPart('text/html')).toBe(false)
+    expect(isPlainTextPart('application/pdf')).toBe(false)
+    expect(isPlainTextPart(null)).toBe(false)
+    expect(isPlainTextPart(undefined)).toBe(false)
+  })
+})
+
+describe('isMailMachineryPart (crm#1809)', () => {
+  it('reads invites, mail signatures, contact cards and delivery reports, with parameters and in any case', () => {
+    expect(isMailMachineryPart('text/calendar')).toBe(true)
+    expect(isMailMachineryPart('Text/Calendar; method=REQUEST; charset=UTF-8')).toBe(true)
+    expect(isMailMachineryPart('application/ics')).toBe(true)
+    expect(isMailMachineryPart('application/pkcs7-signature; name="smime.p7s"')).toBe(true)
+    expect(isMailMachineryPart('application/pgp-signature')).toBe(true)
+    expect(isMailMachineryPart('text/vcard')).toBe(true)
+    expect(isMailMachineryPart('message/delivery-status')).toBe(true)
+  })
+
+  it('leaves anything that can be a document, in a format the inbox takes or not', () => {
+    for (const type of ['application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/tiff', 'text/html', 'text/plain', 'application/zip', 'application/xml', 'application/octet-stream', 'message/rfc822']) {
+      expect(isMailMachineryPart(type)).toBe(false)
+    }
+    expect(isMailMachineryPart(null)).toBe(false)
+    expect(isMailMachineryPart(undefined)).toBe(false)
+  })
+})
 
 describe('extractLocalPartForDomain', () => {
   it('returns the local part when a recipient matches the domain', () => {
@@ -103,27 +161,6 @@ describe('kindHintFromTag', () => {
     expect(kindHintFromTag('')).toBeNull()
     expect(kindHintFromTag(null)).toBeNull()
     expect(kindHintFromTag(undefined)).toBeNull()
-  })
-})
-
-describe('parseRecipients', () => {
-  it('splits recipients into lowercased localPart/domain pairs in order', () => {
-    expect(
-      parseRecipients(['Faktura@HansBolag.SE', 'billing@acme.se'])
-    ).toEqual([
-      { localPart: 'faktura', domain: 'hansbolag.se' },
-      { localPart: 'billing', domain: 'acme.se' },
-    ])
-  })
-
-  it('skips malformed addresses', () => {
-    expect(parseRecipients(['not-an-email', '@x.se', 'foo@', 'ok@a.se'])).toEqual([
-      { localPart: 'ok', domain: 'a.se' },
-    ])
-  })
-
-  it('returns an empty array for no recipients', () => {
-    expect(parseRecipients([])).toEqual([])
   })
 })
 

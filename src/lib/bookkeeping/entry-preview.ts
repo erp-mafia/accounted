@@ -21,7 +21,8 @@ export interface EntryPreviewLine {
 }
 
 export interface EntryPreview {
-  fiscal_period_id: string
+  /** Absent when the stager shows the lines without resolving the period. */
+  fiscal_period_id?: string
   entry_date: string
   description: string
   lines: EntryPreviewLine[]
@@ -34,10 +35,19 @@ export interface EntryPreview {
 export const ENTRY_PREVIEW_NOTE =
   'Lines as the entry generator builds them. At commit the voucher number is assigned and the company\'s account dimension rules may add default dimension values; amounts and accounts do not change.'
 
-export function toEntryPreview(input: CreateJournalEntryInput): EntryPreview {
+/**
+ * The period is optional: the lines do not depend on it, and a stager that
+ * shows them (one verifikat per skattekonto row) leaves period resolution to
+ * the executor, which refuses a row without an open period on its own terms.
+ */
+export type EntryPreviewInput = Omit<CreateJournalEntryInput, 'fiscal_period_id'> & {
+  fiscal_period_id?: string
+}
+
+export function toEntryPreview(input: EntryPreviewInput): EntryPreview {
   const balance = validateBalance(input.lines)
   return {
-    fiscal_period_id: input.fiscal_period_id,
+    ...(input.fiscal_period_id ? { fiscal_period_id: input.fiscal_period_id } : {}),
     entry_date: input.entry_date,
     description: input.description,
     lines: input.lines.map((line) => ({

@@ -9,6 +9,8 @@
  *   - an item converted to a supplier invoice is frozen: its reading cannot
  *     be edited and it cannot be deleted;
  *   - a booked item (created_journal_entry_id) cannot be deleted;
+ *   - a deleted item is kept on the decision row its deletion writes, so it
+ *     can be put back as it was (lib/operations/inbox-restore.ts);
  *   - field edits merge into the reading (never drop fields the edit did not
  *     name) under optimistic concurrency on updated_at;
  *   - releasing a transaction match clears the transaction's document pin
@@ -21,6 +23,7 @@
  * A dry run reads and checks; it writes nothing.
  */
 import { z } from 'zod'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/pagination'
 import { UUID_RE } from '@/lib/invariants/uuid'
@@ -28,9 +31,29 @@ import {
   resolveBookedJournalEntryIds,
   resolveUnderlagAnchoring,
   type UnderlagAnchoring,
+  type UnderlagAnchoringResult,
 } from '@/lib/transactions/inbox-underlag'
 import type { InvoiceExtractionResult } from '@/types'
 import { INBOX_DOCUMENT_KINDS } from '@/lib/documents/inbox-kind'
+import {
+  INBOX_ITEM_DOCUMENT_HOLD,
+  isOpenInboxItem,
+  removalCanBePutBack,
+  whereInboxItemOpen,
+  withDocumentHold,
+  type DocumentHoldRow,
+  type StageFields,
+} from '@/lib/documents/inbox-item-state'
+import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { passed } from '@/lib/suggestion-log/checks'
+import { intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
+import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
+import { correctionPaths, withPersonFields } from '@/lib/documents/person-corrections'
+import { resolveInboxPurchaseCategories, type InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-category'
+import type { DocumentReadingLoader } from '@/lib/documents/reading/load'
+import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
+import type { DocumentReading } from '@/lib/documents/reading/types'
+import { readInboxBankMatch, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -58,6 +81,8 @@ interface InboxItemSummaryRow {
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
+  routed_to_arkiv_at?: string | null
+  document_journal_entry_id?: string | null
   email_from: string | null
   email_subject: string | null
   email_received_at: string | null
@@ -89,7 +114,8 @@ export interface InboxItemSummary {
   error_message: string | null
 }
 
-function readingSummary(extracted: Record<string, unknown> | null) {
+/** What a list says about a reading: the vendor, the total, its currency and the invoice date. */
+export function readingSummary(extracted: Record<string, unknown> | null) {
   const supplier = (extracted?.supplier ?? undefined) as Record<string, unknown> | undefined
   const invoice = (extracted?.invoice ?? undefined) as Record<string, unknown> | undefined
   const totals = (extracted?.totals ?? undefined) as Record<string, unknown> | undefined
@@ -101,34 +127,61 @@ function readingSummary(extracted: Record<string, unknown> | null) {
   }
 }
 
+/** The columns the booked-state enrichment reads. */
+export type InboxBookedStateRow = Pick<
+  InboxItemSummaryRow,
+  'id' | 'document_id' | 'matched_transaction_id' | 'created_journal_entry_id' | 'created_supplier_invoice_id'
+>
+
+export interface InboxBookedState {
+  /** The verifikat that books the item's matched transaction, when it is booked. */
+  journalEntryId: string | null
+  /** Whether THIS item's document reached that verifikat; null when nothing to judge. */
+  underlag: UnderlagStatus | null
+}
+
 /**
- * The booked-state enrichment the dashboard list and detail apply: a matched
- * but unstamped item whose transaction is booked reports that verifikat, and
- * whether THIS item's document actually reached it (#1548).
+ * The booked-state enrichment every inbox list and detail applies (the
+ * dashboard routes and the v1 operations): a matched but unstamped item whose
+ * transaction is booked reports that verifikat, and whether THIS item's
+ * document actually reached it (#1548).
+ *
+ * created_journal_entry_id is UNIQUE per verifikat, so on a samlingsverifikat
+ * only one of N items can carry it: deriving "booked" from the transaction's
+ * own state is what lets the rest leave the active inbox. The transaction
+ * being booked says a verifikat exists, not that this item's underlag reached
+ * it, so a document whose link failed or that is anchored to another
+ * verifikat keeps the item in "Att göra". Absent from the anchoring read
+ * means the document row could not be read: 'unknown', which the UI treats
+ * like a divergent item. Never booked on a guess.
  */
-async function enrich(
-  ctx: OperationContext,
-  rows: Array<Pick<InboxItemSummaryRow, 'id' | 'document_id' | 'matched_transaction_id' | 'created_journal_entry_id' | 'created_supplier_invoice_id'>>,
-): Promise<Map<string, { journalEntryId: string | null; underlag: UnderlagStatus | null }>> {
-  const out = new Map<string, { journalEntryId: string | null; underlag: UnderlagStatus | null }>()
+export async function resolveInboxBookedState(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: InboxBookedStateRow[],
+): Promise<Map<string, InboxBookedState>> {
+  const out = new Map<string, InboxBookedState>()
   const unresolved = rows.filter(
     (r) => r.matched_transaction_id && !r.created_journal_entry_id && !r.created_supplier_invoice_id,
   )
   const txIds = Array.from(new Set(unresolved.map((r) => r.matched_transaction_id as string)))
-  const bookedByTx = await resolveBookedJournalEntryIds(ctx.supabase, ctx.companyId, txIds)
-  const anchoring = await resolveUnderlagAnchoring(
-    ctx.supabase,
-    ctx.companyId,
-    unresolved
-      .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
-      .map((r) => ({
-        id: r.id,
-        document_id: r.document_id,
-        journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
-      })),
-  )
+  const bookedByTx = txIds.length > 0
+    ? await resolveBookedJournalEntryIds(supabase, companyId, txIds)
+    : new Map<string, string>()
+  const toAnchor = unresolved
+    .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
+    .map((r) => ({
+      id: r.id,
+      document_id: r.document_id,
+      journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
+    }))
+  const anchoring = toAnchor.length > 0
+    ? await resolveUnderlagAnchoring(supabase, companyId, toAnchor)
+    : new Map<string, UnderlagAnchoringResult>()
   for (const r of rows) {
     const derived = r.matched_transaction_id ? bookedByTx.get(r.matched_transaction_id) ?? null : null
+    // Only unstamped items were sent to the anchoring read; a stamped sibling
+    // is booked by its own column and gets no verdict here.
     const unstamped = !r.created_journal_entry_id && !r.created_supplier_invoice_id
     out.set(r.id, {
       journalEntryId: derived,
@@ -140,7 +193,7 @@ async function enrich(
 
 function toSummary(
   row: InboxItemSummaryRow,
-  extra: { journalEntryId: string | null; underlag: UnderlagStatus | null } | undefined,
+  extra: InboxBookedState | undefined,
 ): InboxItemSummary {
   return {
     inbox_item_id: row.id,
@@ -150,8 +203,8 @@ function toSummary(
     document_id: row.document_id ?? null,
     kind_hint: row.kind_hint ?? null,
     ...readingSummary(row.extracted_data),
-    // Processed = any terminal link, the same semantics gnubok_list_inbox_items uses.
-    processed: !!(row.matched_transaction_id || row.created_supplier_invoice_id || row.created_journal_entry_id),
+    // Unprocessed = open, the one reading (lib/documents/inbox-item-state.ts).
+    processed: !isOpenInboxItem(row),
     matched_supplier_id: row.matched_supplier_id ?? null,
     matched_transaction_id: row.matched_transaction_id ?? null,
     matched_transaction_journal_entry_id: extra?.journalEntryId ?? null,
@@ -174,9 +227,10 @@ export interface ListInboxItemsFilters {
 
 /**
  * One page of inbox items, newest first, keyset on (created_at, id)
- * descending. unprocessed_only keeps items with no terminal link (no
- * transaction match, supplier invoice or verifikat). A cursor that does not
- * decode starts over.
+ * descending. unprocessed_only keeps the open items: its filter reads the
+ * item's own columns and a page then drops the items a verifikat holds the
+ * document of, so a page can run short with a next_cursor to go on from. A
+ * cursor that does not decode starts over.
  */
 export async function listInboxItemsPage(
   ctx: OperationContext,
@@ -186,31 +240,28 @@ export async function listInboxItemsPage(
   const decoded = decodeDefaultCursor(filters.cursor)
   let query = ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, status, source, created_at, document_id, extracted_data, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, email_received_at, error_message, kind_hint')
+    .select(`id, status, source, created_at, document_id, extracted_data, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at, email_from, email_subject, email_received_at, error_message, kind_hint, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('company_id', ctx.companyId)
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(limit + 1)
   if (filters.status) query = query.eq('status', filters.status)
-  if (filters.unprocessed_only === 'true') {
-    query = query
-      .is('matched_transaction_id', null)
-      .is('created_supplier_invoice_id', null)
-      .is('created_journal_entry_id', null)
-  }
+  const openOnly = filters.unprocessed_only === 'true'
+  if (openOnly) query = whereInboxItemOpen(query)
   if (decoded) {
     query = query.or(`created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.lt.${decoded.id})`)
   }
   const { data, error } = await query
   if (error) return failed(error)
-  const rows = (data ?? []) as unknown as InboxItemSummaryRow[]
+  const rows = ((data ?? []) as unknown as Array<InboxItemSummaryRow & DocumentHoldRow>).map(withDocumentHold)
   const page = rows.slice(0, limit)
-  const extras = await enrich(ctx, page)
   const last = page[page.length - 1]
+  const listed = openOnly ? page.filter(isOpenInboxItem) : page
+  const extras = await resolveInboxBookedState(ctx.supabase, ctx.companyId, listed)
   return {
     ok: true,
     data: {
-      inbox_items: page.map((row) => toSummary(row, extras.get(row.id))),
+      inbox_items: listed.map((row) => toSummary(row, extras.get(row.id))),
       next_cursor: rows.length > limit && last ? encodeDefaultCursor(last) : null,
     },
   }
@@ -220,14 +271,28 @@ interface InboxItemDetailRow extends InboxItemSummaryRow {
   email_body_text: string | null
   extraction_skipped: boolean | null
   updated_at: string
+  channel_context?: { intake_source?: unknown; channel?: unknown } | null
+  routed_to_arkiv_at: string | null
+  bank_match_transaction_id: string | null
+  bank_match_basis: string | null
+  bank_match_evidence_level: string | null
+  bank_match_source_key: string | null
 }
 
 export interface InboxItemDetail extends InboxItemSummary {
   extracted_data: Record<string, unknown> | null
+  /** What was bought, computed at read time (lib/categories/inbox-purchase-category.ts). */
+  purchase_category: InboxPurchaseCategory | null
   extraction_skipped: boolean
   email_body_text: string | null
   file_name: string | null
   updated_at: string
+  /** The canonical door it came through (lib/intake/sources.ts); null when nothing on the row names one. */
+  intake_source: IntakeSourceId | null
+  /** The one reading (lib/documents/reading), only when the caller asked for it. */
+  reading?: DocumentReading
+  /** Match on arrival: the bank row it looks already paid by, a proposal (lib/documents/inbox-bank-match.ts). */
+  bank_match: BankMatch | null
 }
 
 /**
@@ -238,45 +303,77 @@ export interface InboxItemDetail extends InboxItemSummary {
 export async function getInboxItem(
   ctx: OperationContext,
   inboxItemId: string,
+  /** reading: the loader of the one reading (the inbox block's, passed in by the caller: the ledger may not import it). */
+  options: { reading?: DocumentReadingLoader } = {},
 ): Promise<OperationOutcome<InboxItemDetail>> {
   if (!UUID_RE.test(inboxItemId)) return NOT_FOUND
   const { data, error } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, status, source, created_at, updated_at, document_id, extracted_data, extraction_skipped, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, email_received_at, email_body_text, error_message, kind_hint')
+    .select(`id, status, source, created_at, updated_at, document_id, extracted_data, extraction_skipped, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, email_received_at, email_body_text, error_message, kind_hint, channel_context, routed_to_arkiv_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
   if (error) return failed(error)
   if (!data) return NOT_FOUND
-  const row = data as unknown as InboxItemDetailRow
+  const row = withDocumentHold(data as unknown as InboxItemDetailRow & DocumentHoldRow)
+  // As stored, before the document's reading stands in below: the reading tells the two apart itself.
+  const storedItem = { ...row } as unknown as ReadingItemRow
+  // The proposal is read from the row as stored too: it is a hint, so a failed read answers none.
+  let bankMatch: BankMatch | null = null
+  try {
+    bankMatch = await readInboxBankMatch(ctx.supabase, ctx.companyId, { ...row } as BankMatchItemRow)
+  } catch (err) {
+    ctx.log.warn('inbox item bank match read failed', { inboxItemId, reason: err instanceof Error ? err.message : String(err) })
+  }
 
   let fileName: string | null = null
+  let uploadSource: string | null = null
   if (row.document_id) {
     const { data: doc, error: docError } = await ctx.supabase
       .from('document_attachments')
-      .select('id, file_name, extracted_data')
+      .select('id, file_name, extracted_data, upload_source')
       .eq('id', row.document_id)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
     if (docError) return failed(docError)
-    const document = doc as { file_name?: string | null; extracted_data?: Record<string, unknown> | null } | null
+    const document = doc as { file_name?: string | null; extracted_data?: Record<string, unknown> | null; upload_source?: string | null } | null
     fileName = document?.file_name ?? null
+    uploadSource = document?.upload_source ?? null
     if (row.extracted_data == null && document?.extracted_data) {
       row.extracted_data = document.extracted_data
       row.extraction_skipped = false
     }
   }
 
-  const extras = await enrich(ctx, [row])
+  let reading: DocumentReading | undefined
+  if (options.reading) {
+    try {
+      reading = await options.reading(ctx.supabase, ctx.companyId, { item: storedItem })
+    } catch (err) {
+      return failed(err)
+    }
+  }
+
+  const extras = await resolveInboxBookedState(ctx.supabase, ctx.companyId, [row])
+  const purchaseCategories = await resolveInboxPurchaseCategories(ctx.supabase, ctx.companyId, [row])
   return {
     ok: true,
     data: {
       ...toSummary(row, extras.get(row.id)),
       extracted_data: row.extracted_data ?? null,
+      purchase_category: purchaseCategories.get(row.id) ?? null,
       extraction_skipped: row.extraction_skipped === true,
       email_body_text: row.email_body_text ?? null,
       file_name: fileName,
       updated_at: row.updated_at,
+      intake_source: intakeSourceForInboxItem({
+        source: row.source,
+        channel_context: row.channel_context ?? null,
+        document_upload_source: uploadSource,
+        document_file_name: fileName,
+      }),
+      ...(reading ? { reading } : {}),
+      bank_match: bankMatch,
     },
   }
 }
@@ -285,10 +382,76 @@ export async function getInboxItem(
 // Delete
 // ---------------------------------------------------------------------------
 
+interface DeletePreviewRow extends StageFields {
+  id: string
+  document_id: string | null
+  extracted_data: Record<string, unknown> | null
+  email_from: string | null
+  email_subject: string | null
+  created_at: string | null
+}
+
+/**
+ * What approving a delete removes, and how the approver recognises the item
+ * (crm#1411, crm#1412). The card in Granskning showed "Ta bort post ur
+ * inkorgen" and nothing else, so the owner approved blind; and the preview
+ * said `would_delete: true` beside the document id, which read as if the
+ * file went too. It never does: the item goes, the document stays in the
+ * archive, and the preview now says both outright, with the file name,
+ * supplier, amount and sender to tell one item from another. A file name
+ * that cannot be read is left out, never a reason to refuse.
+ *
+ * can_be_put_back is removalCanBePutBack (./inbox-item-state.ts) on the row
+ * and on the verifikat that holds its document: the approval sentence of a
+ * staged removal promises Senast borttagna only when it is true. A document
+ * that cannot be read answers false: nothing is promised on a guess.
+ */
+async function deletePreview(ctx: OperationContext, item: DeletePreviewRow): Promise<Record<string, unknown>> {
+  let fileName: string | null = null
+  let canBePutBack = false
+  if (item.document_id) {
+    const { data: doc } = await ctx.supabase
+      .from('document_attachments')
+      .select('file_name, journal_entry_id, entry:journal_entries!document_attachments_journal_entry_id_fkey(status)')
+      .eq('id', item.document_id)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle()
+    const document = doc as unknown as {
+      file_name?: string | null
+      journal_entry_id?: string | null
+      entry?: { status: string | null } | Array<{ status: string | null }> | null
+    } | null
+    fileName = document?.file_name ?? null
+    canBePutBack =
+      !!document &&
+      removalCanBePutBack(withDocumentHold({ ...item, document_hold: { journal_entry_id: document.journal_entry_id ?? null, entry: document.entry } }))
+  }
+  const reading = readingSummary(item.extracted_data)
+  return {
+    inbox_item_id: item.id,
+    document_id: item.document_id ?? null,
+    inbox_item_deleted: true,
+    document_kept: true,
+    can_be_put_back: canBePutBack,
+    file_name: fileName,
+    supplier_name: reading.vendor_name,
+    amount: reading.amount,
+    currency: reading.currency,
+    invoice_date: reading.invoice_date,
+    email_from: item.email_from ?? null,
+    email_subject: item.email_subject ?? null,
+    received_at: item.created_at ?? null,
+  }
+}
+
 /**
  * Discard an inbox item. Refused once it became a supplier invoice or was
  * booked. The document it carried stays in the archive (a separate row with
- * its own deletion rule).
+ * its own deletion rule), and the decision row keeps the item as it was, so
+ * it can be put back (restoreInboxItem, lib/operations/inbox-restore.ts). An item
+ * without a document leaves no decision row and cannot be put back; whether
+ * a removal can be undone is removalCanBePutBack (./inbox-item-state.ts), and
+ * the dry run answers it as can_be_put_back.
  */
 export async function deleteInboxItem(
   ctx: OperationContext,
@@ -297,7 +460,8 @@ export async function deleteInboxItem(
 ): Promise<OperationOutcome<{ id: string; deleted: true }>> {
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id')
+    // The whole row: the decision keeps it as it was deleted.
+    .select('*')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -311,12 +475,11 @@ export async function deleteInboxItem(
   }
 
   if (options.dryRun) {
-    return {
-      ok: true,
-      dryRun: true,
-      preview: { inbox_item_id: item.id, document_id: item.document_id ?? null, would_delete: true },
-    }
+    return { ok: true, dryRun: true, preview: await deletePreview(ctx, item as DeletePreviewRow) }
   }
+
+  // Deleting the item dismisses the model's reading of its underlag.
+  const extractionSnapshot = await snapshotInboxExtraction(ctx.supabase, ctx.companyId, item)
 
   const { error } = await ctx.supabase
     .from('invoice_inbox_items')
@@ -324,7 +487,38 @@ export async function deleteInboxItem(
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
   if (error) return failed(error)
+  // Deleting ran one guard: the item was neither converted nor booked.
+  await recordInboxDecision(ctx.supabase, extractionSnapshot, null, ctx.userId, [passed('already_booked')], item)
   return { ok: true, data: { id: inboxItemId, deleted: true } }
+}
+
+/** What became of one item of a batch: gone, or refused with the code the single delete answers. */
+export type InboxItemRemoval = { id: string; removed: true } | { id: string; removed: false; code: string }
+
+/**
+ * Discard several inbox items, one at a time through deleteInboxItem, so each
+ * item meets the same rules as a single delete (converted or booked: refused)
+ * and leaves the same decision row. One refusal or failure never stops the
+ * rest: every id gets its own outcome, in the order asked (an id named twice
+ * is taken once).
+ */
+export async function deleteInboxItems(ctx: OperationContext, inboxItemIds: readonly string[]): Promise<InboxItemRemoval[]> {
+  const results: InboxItemRemoval[] = []
+  for (const id of new Set(inboxItemIds)) {
+    try {
+      const outcome = await deleteInboxItem(ctx, id)
+      if (outcome.ok) {
+        results.push({ id, removed: true })
+        continue
+      }
+      if (outcome.error) ctx.log.error('inbox item removal failed', outcome.error, { inbox_item_id: id, code: outcome.code })
+      results.push({ id, removed: false, code: outcome.code })
+    } catch (error) {
+      ctx.log.error('inbox item removal threw', error, { inbox_item_id: id })
+      results.push({ id, removed: false, code: 'UNKNOWN_ERROR' })
+    }
+  }
+  return results
 }
 
 // ---------------------------------------------------------------------------
@@ -455,7 +649,11 @@ export type UpdateInboxItemFieldsInput = z.infer<typeof UpdateInboxItemFieldsSch
  * Merge a correction into the item's reading. The spread of the current
  * reading comes first on purpose: naming surviving keys one by one once
  * wiped documentKind, merchantCategory, legibility and more on the first
- * manual edit. A hand-set TOTALT stops being a promoted prominent amount.
+ * manual edit. A hand-set TOTALT stops being a promoted prominent amount
+ * and is the amount due (no prepaid deduction).
+ * The paths the correction names are recorded beside the reading
+ * (personFields, lib/documents/person-corrections.ts), so a new reading
+ * never overwrites them.
  */
 export function mergeInboxItemFields(
   current: InvoiceExtractionResult,
@@ -472,11 +670,13 @@ export function mergeInboxItemFields(
   }
   if (body.totals && 'total' in body.totals) {
     merged.totalSource = null
+    // The amount a person types is the amount due ("Att betala"): it drops a read prepaid deduction (crm#1518).
+    if (merged.totals.prepaidAmount != null) merged.totals = { ...merged.totals, prepaidAmount: null }
   }
   if (body.documentKind !== undefined) {
     merged.documentKind = body.documentKind
   }
-  return merged
+  return withPersonFields(merged, correctionPaths(body))
 }
 
 /**
@@ -484,6 +684,10 @@ export function mergeInboxItemFields(
  * updated_at: the write is read-merge-write over the whole jsonb, so a racing
  * save must not restore its stale copy of every field; zero rows updated
  * answers INBOX_ITEM_EDIT_CONFLICT and the caller re-reads.
+ *
+ * The corrected reading is then mirrored onto the document's extracted_data
+ * (mirrorCorrectedReadingToDocument), best effort: a document in a locked
+ * period, or a failed write, is logged and the edit still stands.
  */
 export async function updateInboxItemFields(
   ctx: OperationContext,
@@ -493,7 +697,7 @@ export async function updateInboxItemFields(
 ): Promise<OperationOutcome<{ id: string; extracted_data: Record<string, unknown> }>> {
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, extracted_data, created_supplier_invoice_id, updated_at')
+    .select('id, document_id, extracted_data, created_supplier_invoice_id, updated_at')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -523,6 +727,11 @@ export async function updateInboxItemFields(
     .maybeSingle()
   if (updateError) return failed(updateError)
   if (!updated) return { ok: false, code: 'INBOX_ITEM_EDIT_CONFLICT' }
+  await mirrorCorrectedReadingToDocument({
+    documentId: (item as { document_id?: string | null }).document_id,
+    companyId: ctx.companyId,
+    reading: updated.extracted_data as Record<string, unknown>,
+  })
   return {
     ok: true,
     data: { id: updated.id as string, extracted_data: updated.extracted_data as Record<string, unknown> },

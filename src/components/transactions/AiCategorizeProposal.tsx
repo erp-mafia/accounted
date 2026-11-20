@@ -2,13 +2,15 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
+import { useAssistantReadsAvailable } from '@/contexts/CompanyContext'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { TransactionCategory, VatTreatment } from '@/types'
 
 /**
@@ -31,6 +33,8 @@ export interface AiProposalMeta {
 export interface AssistantPick {
   account: string
   vat: VatTreatment | 'none'
+  /** The basis box of a reverse charge the read named (ruta 21 or 22); absent books an EU service. */
+  reverseChargeKind?: ReverseChargeKind | null
   category: TransactionCategory | null
   label: string
 }
@@ -49,6 +53,8 @@ interface Props {
   hasUnderlag?: boolean
   /** The business account the dialog currently books to, for the agree check. */
   currentAccount?: string | null
+  /** The reverse-charge box the dialog currently books, for the agree check (accounted#37). */
+  currentBox?: ReverseChargeKind | null
   /** Take the pick as soon as it lands; off when the dialog already has a template of its own. */
   autoApply?: boolean
   /** Take the pick into the dialog: `auto` when it landed on its own, false when the person clicked Använd. */
@@ -63,7 +69,13 @@ interface Props {
 export function pickFromRead(read: AssistantRead): AssistantPick | null {
   if (!read.account) return null
   const label = read.candidates.find((c) => c.account === read.account)?.label ?? getAccountName(read.account)
-  return { account: read.account, vat: read.vat_treatment ?? 'none', category: read.category, label }
+  return {
+    account: read.account,
+    vat: read.vat_treatment ?? 'none',
+    reverseChargeKind: read.reverse_charge_kind ?? null,
+    category: read.category,
+    label,
+  }
 }
 
 /** Where the read came from, for the calibration sample logged on book. */
@@ -80,17 +92,17 @@ export function proposalMetaFromRead(read: AssistantRead, pick: AssistantPick): 
   }
 }
 
-const LINE_CLASS = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
+const LINE_CLASS = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground'
 
 /** The assistant's one-line "working" status (avatar, spinner, text). Shared with the review dialog's own document read. */
 export function AiStatusLine({ text }: { text: string }) {
   const { identity } = useAgentSheet()
   return (
-    <p className={LINE_CLASS}>
+    <div className={LINE_CLASS}>
       <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
-      <Loader2 className="h-3.5 w-3.5 flex-none animate-spin" aria-hidden="true" />
+      <SpinnerIcon className="h-3.5 w-3.5 flex-none animate-spin" aria-hidden="true" />
       {text}
-    </p>
+    </div>
   )
 }
 
@@ -99,6 +111,7 @@ export default function AiCategorizeProposal({
   open,
   hasUnderlag = false,
   currentAccount,
+  currentBox = null,
   autoApply = true,
   onTake,
   onProposal,
@@ -106,6 +119,7 @@ export default function AiCategorizeProposal({
 }: Props) {
   const t = useTranslations('tx_quick_review')
   const { identity } = useAgentSheet()
+  const canAsk = useAssistantReadsAvailable()
   const [state, setState] = useState<State>(() => (initial ? { status: 'ready', read: initial } : { status: 'loading' }))
   const [expanded, setExpanded] = useState(false)
   // The pick is handed to the dialog once per read, so the person's later
@@ -113,7 +127,7 @@ export default function AiCategorizeProposal({
   const takenRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!open || initial) return
+    if (!open || initial || !canAsk) return
     let alive = true
     takenRef.current = null
     ;(async () => {
@@ -134,7 +148,7 @@ export default function AiCategorizeProposal({
     return () => {
       alive = false
     }
-  }, [open, transactionId, initial])
+  }, [open, transactionId, initial, canAsk])
 
   const reportedRef = useRef(false)
   useEffect(() => {
@@ -157,6 +171,9 @@ export default function AiCategorizeProposal({
   const mark = <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
 
   if (state.status === 'silent') return null
+  // A company the route refuses is never asked, and shows what a refusal
+  // shows: nothing.
+  if (!canAsk && state.status === 'loading') return null
   if (state.status === 'loading') {
     return <AiStatusLine text={hasUnderlag ? t('ai_reading') : t('ai_looking')} />
   }
@@ -166,7 +183,7 @@ export default function AiCategorizeProposal({
   const why = read.reasoning ? (expanded ? read.reasoning : firstSentence(read.reasoning)) : ''
   const hasMore = !!read.reasoning && why !== read.reasoning.trim()
   const more = hasMore ? (
-    <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')} onClick={() => setExpanded((v) => !v)}>
+    <button type="button" className={cn(QUIET_LINK_CLASS, 'text-xs')} onClick={() => setExpanded((v) => !v)}>
       {expanded ? t('ai_less') : t('ai_more')}
     </button>
   ) : null
@@ -184,7 +201,11 @@ export default function AiCategorizeProposal({
     )
   }
 
-  const agrees = !!currentAccount && pick.account === currentAccount
+  // The same account in another reverse-charge box (ruta 21 against 22) is
+  // not agreement: the line then offers the read's box.
+  const boxDiffers =
+    pick.vat === 'reverse_charge' && !!pick.reverseChargeKind && !!currentBox && currentBox !== pick.reverseChargeKind
+  const agrees = !!currentAccount && pick.account === currentAccount && !boxDiffers
 
   return (
     <p className={line}>
@@ -198,7 +219,12 @@ export default function AiCategorizeProposal({
         <span>
           {t('ai_instead')} <span className="font-mono text-foreground">{pick.account}</span>
           <span className="text-foreground"> {pick.label}</span>
-          {pick.vat === 'reverse_charge' ? <span className="text-foreground"> {t('ai_reverse_charge')}</span> : null}
+          {pick.vat === 'reverse_charge' ? (
+            <span className="text-foreground">
+              {' '}
+              {t(pick.reverseChargeKind === 'non_eu_services' ? 'ai_reverse_charge_non_eu' : 'ai_reverse_charge')}
+            </span>
+          ) : null}
           {why ? <span className="ml-1">· {why}</span> : null}
         </span>
       )}
@@ -206,7 +232,7 @@ export default function AiCategorizeProposal({
       {!agrees && (
         <button
           type="button"
-          className={cn(QUIET_LINK_CLASS, 'text-[12.5px] font-medium')}
+          className={cn(QUIET_LINK_CLASS, 'text-xs font-medium')}
           onClick={() => {
             takenRef.current = pick.account
             onTake(pick, { auto: false })

@@ -1,24 +1,36 @@
 'use client'
 
+import { effectiveRow, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
 import { use, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, Calculator, Loader2, X } from 'lucide-react'
+import { ArrowLeftIcon, CalculatorIcon, SpinnerIcon, XMarkIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { PageHeaderParent, PageHeaderBelow } from '@/components/ui/page-header'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
+import { HourlyTotalHours } from '@/components/salary/HourlyTotalHours'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { AddPayslipLineDialog } from '@/components/salary/AddPayslipLineDialog'
-import { isManualPayslipLineType, manualLineCapsFromRunParams } from '@/lib/salary/manual-payslip-lines'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import {
+  isManualPayslipLineType,
+  manualLineCapsFromRunParams,
+  mealBenefitSchablonFromRunParams,
+} from '@/lib/salary/manual-payslip-lines'
+import { comparePayslipLines, isTextRow } from '@/lib/salary/text-rows'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { hasCustomDeviationWindow } from '@/lib/salary/deviation-period'
 import { payslipCalendarWindow } from '@/lib/salary/payslip-calendar'
 import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, EmployeeMasked } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
 
 /** Translation keys in the `salary_run_employee` namespace. */
 const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
@@ -61,19 +73,8 @@ const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
   oresavrundning: 'li_oresavrundning',
   correction: 'li_correction',
   other: 'li_other',
+  text: 'li_text',
 }
-
-// Same chip vocabulary as the Löner list and the run header (chips mark
-// exceptions): booked renders as muted text, everything else as a chip.
-// paid and booked are the normal outcome, so they render as muted text
-// (MUTED_STATUSES) and never reach the chip.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'warning' | 'destructive' | 'outline'> = {
-  draft: 'secondary',
-  review: 'secondary',
-  approved: 'secondary',
-  corrected: 'outline',
-}
-const MUTED_STATUSES = new Set(['paid', 'booked'])
 
 /** A line as the detail route returns it: the source columns say where it came from. */
 type LineRow = SalaryLineItem & {
@@ -94,7 +95,15 @@ interface DetailResponse {
  */
 function isRemovableLine(li: LineRow): boolean {
   if (li.source_expense_claim_id) return true
-  return isManualPayslipLineType(li.item_type) && !li.source_recurring_line_id && !li.source_benefit_id
+  // calculation_source marks an engine row, such as the semestertillägg the
+  // calculation derives from a vacation line's days (#85): the vacation line
+  // itself stays removable.
+  return (
+    isManualPayslipLineType(li.item_type) &&
+    !li.source_recurring_line_id &&
+    !li.source_benefit_id &&
+    !li.calculation_source
+  )
 }
 
 export default function SalaryRunEmployeeDetailPage({
@@ -106,6 +115,7 @@ export default function SalaryRunEmployeeDetailPage({
   const tSalary = useTranslations('salary')
   const tRun = useTranslations('salary_run')
   const { id: runId, employeeId } = use(params)
+  const { canWrite, lockedTitle } = useViewerLock()
   const [data, setData] = useState<DetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -115,6 +125,9 @@ export default function SalaryRunEmployeeDetailPage({
   // Live counts pushed from the calendar: overrides the stale snapshot from
   // the last calculation so badges update immediately on absence save.
   const [liveCounts, setLiveCounts] = useState<{ sick: number; vab: number; parental: number } | null>(null)
+  // Hourly: the calendar's worked hours in the period (null until it has
+  // loaded). With any, the calendar is the source and the total is read-only.
+  const [calendarHours, setCalendarHours] = useState<number | null>(null)
 
   // Reloads overlap now that the content stays mounted while one is in
   // flight (save twice in the calendar, or save and recalculate): only the
@@ -222,7 +235,7 @@ export default function SalaryRunEmployeeDetailPage({
   // selection, the scroll position and any open dialog with it.
   if (!current && loading) {
     return (
-      <div role="status" aria-label={t('loading')} className="space-y-8">
+      <LateReveal role="status" aria-label={t('loading')} className="space-y-8">
         <Skeleton className="h-8 w-64" />
         <div className="flex flex-wrap gap-x-10 gap-y-4">
           {[1, 2, 3, 4].map((i) => (
@@ -230,7 +243,7 @@ export default function SalaryRunEmployeeDetailPage({
           ))}
         </div>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </LateReveal>
     )
   }
 
@@ -241,106 +254,119 @@ export default function SalaryRunEmployeeDetailPage({
           href={`/salary/runs/${runId}`}
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           {t('back_to_run')}
         </Link>
-        <p className="text-sm text-destructive">{error ?? t('error_load_employee')}</p>
+        <LoadError title={t('error_load_employee')} description={error ?? undefined} onRetry={() => void load()} />
       </div>
     )
   }
 
   const { run, runEmployee } = current
   const employee = runEmployee.employee
-  const lineItems = runEmployee.line_items ?? []
+  // The payslip order (the PDF uses the same compare): base salary, the
+  // recurring text rows, manual text rows, then the rest by sort_order.
+  const lineItems = [...(runEmployee.line_items ?? [])].sort(comparePayslipLines)
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-  const readOnly = run.status !== 'draft' && run.status !== 'review'
+  const readOnly = !canWrite || (run.status !== 'draft' && run.status !== 'review')
   // Lines can be added to and taken off the payslip only while the run is a
   // draft (the line commands' gate); the button and the column exist only then.
-  const canEditLines = run.status === 'draft'
-  const statusLabel = tSalary(`status_${run.status}`)
+  const canEditLines = canWrite && run.status === 'draft'
+  // The same status as the Löner list and the run header (lib/salary/run-status-display.ts).
+  const statusDisplay = salaryRunStatusDisplay(run.status)
+  const statusLabel = statusDisplay ? tSalary(statusDisplay.labelKey) : run.status
 
-  const taxValue = runEmployee.tax_withheld_override ?? runEmployee.tax_withheld
-  const taxOverridden = runEmployee.tax_withheld_override !== null
-  const avgifterOverridden = runEmployee.avgifter_amount_override !== null
+  // The figures the booking, the AGI and the payslip use (effectiveRow): an
+  // avgifter override on an F-skatt row is ignored there, so here too.
+  const figures = effectiveRow(runEmployee as unknown as EffectiveFiguresInput)
   const kpis: Array<{ label: string; value: number; accent?: boolean; overridden?: boolean }> = [
-    { label: t('gross'), value: runEmployee.gross_salary },
-    { label: t('tax'), value: taxValue, overridden: taxOverridden },
+    { label: t('gross'), value: figures.gross_salary },
+    { label: t('tax'), value: figures.tax_withheld, overridden: figures.tax_overridden },
     {
       label: t('net'),
-      value: runEmployee.net_salary + (runEmployee.tax_withheld - taxValue),
+      value: figures.net_salary,
       accent: true,
-      overridden: taxOverridden,
+      overridden: figures.tax_overridden,
     },
     {
       label: t('avgifter'),
-      value: runEmployee.avgifter_amount_override ?? runEmployee.avgifter_amount,
-      overridden: avgifterOverridden,
+      value: figures.avgifter_amount,
+      overridden: figures.avgifter_overridden,
     },
   ]
+  // Hourly: a total on the run row with no calendar days is what the
+  // calculation prices, so the calendar takes no worked hours meanwhile.
+  const isHourly = employee.salary_type === 'hourly'
+  const workedHoursFromTotal = isHourly && calendarHours === 0 && (Number(runEmployee.hours_worked) || 0) > 0
   const absenceCounts = [
     { label: t('sick_days'), days: liveCounts?.sick ?? runEmployee.sick_days },
     { label: t('vab_days'), days: liveCounts?.vab ?? runEmployee.vab_days },
     { label: t('parental_days'), days: liveCounts?.parental ?? runEmployee.parental_days },
   ]
 
+  const statusChip =
+    statusDisplay && statusDisplay.chip === null ? (
+      <span className="text-sm text-muted-foreground">{statusLabel}</span>
+    ) : (
+      <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
+    )
+  const payslipFacts = (
+    <>
+      <span className="tabular-nums">{employee.personnummer_masked}</span>
+      {' · '}
+      <span className="tabular-nums">{t('payslip_period', { period: periodLabel })}</span>
+      {/* Same note as the run header: say which days this payslip reads
+          when they are not the pay month, since the calendar opens there. */}
+      {hasCustomDeviationWindow(run) && (
+        <>
+          {' · '}
+          <span className="tabular-nums">
+            {tRun('deviation_period_note', {
+              start: formatDate(calendarWindow.start),
+              end: formatDate(calendarWindow.end),
+            })}
+          </span>
+        </>
+      )}
+    </>
+  )
+
   return (
     <div className="space-y-8 stagger-enter" aria-busy={loading}>
       {/* Header: the page-header hooks turn it into the top bar (convention
-          2), like the run and employee pages. The way back to the run is a
-          quiet arrow before the name instead of a row of its own; the run's
+          2), like the run and employee pages. The way back to the run is the
+          quiet parent link before the name instead of a row of its own; the run's
           status is the one status element, the meta line stays inline, and
           the next step sits on the right. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href={`/salary/runs/${runId}`}
-              aria-label={t('back_to_run')}
-              title={t('back_to_run')}
-              className="inline-flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
+            {/* The way back to the run, as the quiet parent before the name. */}
+            <PageHeaderParent label={tRun('title', { period: periodLabel })} href={`/salary/runs/${runId}`} />
+            <h1 className="page-header-title">
               {employee.first_name} {employee.last_name}
             </h1>
-            {MUTED_STATUSES.has(run.status) ? (
-              <span className="text-sm text-muted-foreground">{statusLabel}</span>
-            ) : (
-              <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>{statusLabel}</Badge>
-            )}
+            {/* On a phone the bar has no room for this: it is the first line under the bar (PageHeaderBelow). */}
+            <span className="hidden md:contents">{statusChip}</span>
             {loading && (
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label={t('loading')} />
+              <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" aria-label={t('loading')} />
             )}
           </div>
-          <p className="page-header-meta mt-1 text-sm text-muted-foreground">
-            <span className="tabular-nums">{employee.personnummer_masked}</span>
-            {' · '}
-            <span className="tabular-nums">{t('payslip_period', { period: periodLabel })}</span>
-            {/* Same note as the run header: say which days this payslip reads
-                when they are not the pay month, since the calendar opens there. */}
-            {hasCustomDeviationWindow(run) && (
-              <>
-                {' · '}
-                <span className="tabular-nums">
-                  {tRun('deviation_period_note', {
-                    start: formatDate(calendarWindow.start),
-                    end: formatDate(calendarWindow.end),
-                  })}
-                </span>
-              </>
-            )}
-          </p>
+          <p data-below="" className="page-header-meta mt-1 text-sm text-muted-foreground">{payslipFacts}</p>
         </div>
         {run.status === 'draft' && (
-          <div className="page-header-action flex shrink-0 items-center gap-2">
-            <Button size="sm" onClick={handleCalculate} loading={calculating}>
-              {!calculating && <Calculator className="mr-2 h-4 w-4" />}
+          <PageHeaderActions className="page-header-action flex shrink-0 items-center gap-2">
+            <Button size="toolbar" onClick={handleCalculate} loading={calculating} disabled={!canWrite} title={lockedTitle}>
+              {!calculating && <CalculatorIcon className="h-4 w-4" />}
               {t('calculate')}
             </Button>
-          </div>
+          </PageHeaderActions>
         )}
       </div>
+      <PageHeaderBelow>
+        {statusChip}
+        <p>{payslipFacts}</p>
+      </PageHeaderBelow>
 
       {/* A failed reload or recalculation is said under the bar, with the
           payslip still on screen, instead of replacing the page. */}
@@ -355,7 +381,7 @@ export default function SalaryRunEmployeeDetailPage({
       <div className="flex flex-wrap gap-x-10 gap-y-4">
         {kpis.map(({ label, value, accent, overridden }) => (
           <div key={label} className="min-w-0">
-            <p className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
               {label}
               {overridden && <Badge variant="warning">{t('adjusted_badge')}</Badge>}
             </p>
@@ -395,6 +421,16 @@ export default function SalaryRunEmployeeDetailPage({
           </HelpPopover>
         }
       >
+        {isHourly && (
+          <HourlyTotalHours
+            runId={runId}
+            employeeId={employeeId}
+            hoursWorked={runEmployee.hours_worked}
+            calendarHours={calendarHours}
+            editable={canWrite && run.status === 'draft'}
+            onSaved={load}
+          />
+        )}
         <SalaryCalendar
           employeeId={employee.id}
           salaryType={employee.salary_type}
@@ -406,11 +442,13 @@ export default function SalaryRunEmployeeDetailPage({
           readOnly={readOnly}
           onChange={load}
           onAbsenceCountsChange={setLiveCounts}
+          onWorkedHoursChange={setCalendarHours}
+          workedHoursFromTotal={workedHoursFromTotal}
         />
         <div className="mt-4 flex flex-wrap gap-x-10 gap-y-3">
           {absenceCounts.map(({ label, days }) => (
             <div key={label} className="min-w-0">
-              <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
+              <p className="text-xs text-muted-foreground">{label}</p>
               <p className="mt-1 text-sm tabular-nums">{t('days_count', { days })}</p>
             </div>
           ))}
@@ -424,7 +462,7 @@ export default function SalaryRunEmployeeDetailPage({
         kicker={t('line_items_title', { count: lineItems.length })}
         aside={
           canEditLines ? (
-            <Button type="button" size="sm" variant="outline" className="-my-1" onClick={() => setAddingLine(true)}>
+            <Button type="button" variant="outline" className="-my-1" onClick={() => setAddingLine(true)}>
               {t('add_line')}
             </Button>
           ) : undefined
@@ -437,6 +475,9 @@ export default function SalaryRunEmployeeDetailPage({
             runId={runId}
             salaryRunEmployeeId={runEmployee.id}
             taxFreeCaps={manualLineCapsFromRunParams(run.calculation_params)}
+            mealSchablon={mealBenefitSchablonFromRunParams(run.calculation_params)}
+            employmentType={employee.employment_type}
+            personnelCategory={employee.personnel_category}
             onAdded={load}
           />
         )}
@@ -459,35 +500,39 @@ export default function SalaryRunEmployeeDetailPage({
                 </tr>
               </thead>
               <tbody>
-                {lineItems.map(li => (
-                  <tr key={li.id} className={cn(canEditLines && 'group')}>
-                    <td className={cn(TD_CLASS, 'pl-0 text-muted-foreground')}>
-                      {LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}
-                    </td>
-                    <td className={TD_CLASS}>{li.description}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{li.quantity ?? '-'}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums', !canEditLines && 'pr-0')}>
-                      {formatCurrency(li.amount)}
-                    </td>
-                    {canEditLines && (
-                      <td className={cn(TD_CLASS, 'pr-0 text-right')}>
-                        {isRemovableLine(li) && (
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className={cn('-my-1 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
-                            onClick={() => handleRemoveLine(li.id)}
-                            loading={removingLineId === li.id}
-                            aria-label={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
-                            title={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
-                          >
-                            {removingLineId !== li.id && <X className="h-4 w-4" />}
-                          </Button>
-                        )}
+                {lineItems.map(li => {
+                  // A text row is words only: blank quantity and amount, never "0,00 kr".
+                  const text = isTextRow(li)
+                  return (
+                    <tr key={li.id} className={cn(canEditLines && 'group')}>
+                      <td className={cn(TD_CLASS, 'pl-0 text-muted-foreground')}>
+                        {LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className={TD_CLASS}>{li.description}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{text ? null : (li.quantity ?? '-')}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums', !canEditLines && 'pr-0')}>
+                        {text ? null : formatRowAmount(li.amount)}
+                      </td>
+                      {canEditLines && (
+                        <td className={cn(TD_CLASS, 'pr-0 text-right')}>
+                          {isRemovableLine(li) && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className={cn('-my-1 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
+                              onClick={() => handleRemoveLine(li.id)}
+                              loading={removingLineId === li.id}
+                              aria-label={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
+                              title={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
+                            >
+                              {removingLineId !== li.id && <XMarkIcon className="h-4 w-4" />}
+                            </Button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

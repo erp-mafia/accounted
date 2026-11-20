@@ -6,6 +6,8 @@ import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { invoiceAmountDue } from '@/lib/invoices/amount-due'
+import { companyOreRoundingFor } from '@/lib/invoices/amount-to-pay-fields'
 import type { Invoice, CreditNote } from '@/types'
 import {
   connectedAccountOptions,
@@ -41,8 +43,15 @@ async function getActiveConnection(
  * simply sends the invoice without a link. Throws on actual Stripe API
  * failures so the caller can surface a warning.
  *
- * The link amount is the customer's payable share (`remaining_amount`, which
- * is total minus ROT/RUT deduction at send time) in the invoice currency.
+ * The link amount is what the invoice asks for (invoiceAmountDue, the figure
+ * its PDF and every payment QR print): "Att betala" after öresavrundning and
+ * any ROT/RUT deduction, the remainder once partly paid, in the invoice
+ * currency. It used to be `remaining_amount`, the exact ledger figure, so an
+ * invoice asking 3 116 kr charged 3 116,25 kr by card (crm#1568). The
+ * company's öresavrundning is read only for an invoice without its own
+ * choice (a draft at send); a failed read throws, so no link is priced on a
+ * guessed setting.
+ *
  * Stripe idempotency keys are derived from the invoice id plus the payable
  * amount in minor units: a retried send of the same amount reuses the same
  * Price and Payment Link instead of minting duplicates, while a resend after
@@ -74,8 +83,7 @@ export async function createInvoicePaymentLink(
     return null
   }
 
-  const payable =
-    invoice.remaining_amount ?? (invoice.total - (invoice.deduction_total ?? 0))
+  const payable = invoiceAmountDue(invoice, await companyOreRoundingFor(supabase, companyId, [invoice]))
   if (!(payable > 0)) return null
 
   const stripe = getStripe()
@@ -139,7 +147,8 @@ export async function deactivatePaymentLink(
  * invoice.paid handler: once an invoice is settled (through Stripe or any
  * other channel), its payment link must stop accepting money. Belt to the
  * single-use restriction's suspenders. Best-effort: a failure is logged,
- * never surfaced to the flow that emitted the event.
+ * never surfaced to the flow that emitted the event, and it is an error:
+ * nothing retries it, and the link keeps taking money for a settled claim.
  */
 export async function handleInvoicePaid(
   payload: { invoice: Invoice; companyId: string },
@@ -149,13 +158,14 @@ export async function handleInvoicePaid(
   if (!linkId) return
   const supabase = ctx?.supabase ?? createServiceClientNoCookies()
   try {
-    await deactivatePaymentLink(supabase, payload.companyId, linkId)
-    log.info('deactivated payment link after invoice paid', {
+    const deactivated = await deactivatePaymentLink(supabase, payload.companyId, linkId)
+    log.info(deactivated ? 'deactivated payment link after invoice paid' : 'payment link left as it is: no active Stripe connection', {
       invoiceId: payload.invoice.id,
       paymentLinkId: linkId,
     })
   } catch (err) {
-    log.warn('failed to deactivate payment link after invoice paid', {
+    log.error('failed to deactivate payment link after invoice paid', {
+      companyId: payload.companyId,
       invoiceId: payload.invoice?.id,
       paymentLinkId: linkId,
       reason: err instanceof Error ? err.message : String(err),
@@ -176,21 +186,24 @@ export async function handleCreditNoteCreated(
   if (!originalId) return
   const supabase = ctx?.supabase ?? createServiceClientNoCookies()
   try {
-    const { data: original } = await supabase
+    const { data: original, error } = await supabase
       .from('invoices')
       .select('id, stripe_payment_link_id')
       .eq('id', originalId)
       .eq('company_id', payload.companyId)
       .maybeSingle()
+    // A failed read must not read as "no link": the credited claim's link would keep taking money.
+    if (error) throw new Error(`credited invoice read failed: ${error.message}`)
     const linkId = original?.stripe_payment_link_id
     if (!linkId) return
-    await deactivatePaymentLink(supabase, payload.companyId, linkId)
-    log.info('deactivated payment link after credit note', {
+    const deactivated = await deactivatePaymentLink(supabase, payload.companyId, linkId)
+    log.info(deactivated ? 'deactivated payment link after credit note' : 'payment link left as it is: no active Stripe connection', {
       invoiceId: originalId,
       paymentLinkId: linkId,
     })
   } catch (err) {
-    log.warn('failed to deactivate payment link after credit note', {
+    log.error('failed to deactivate payment link after credit note', {
+      companyId: payload.companyId,
       invoiceId: originalId,
       reason: err instanceof Error ? err.message : String(err),
     })

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -13,6 +14,7 @@ import {
   parseCellDate,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 interface FlatRow {
   account_number: string
@@ -108,7 +110,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
           // Preserve the original ISO string in the cell if parsing fails (avoids
           // NaN dates polluting the workbook).
           date: parseCellDate(line.date) ?? line.date,
-          voucher: `${line.voucher_series}${line.voucher_number}`,
+          voucher: formatVoucher(line),
           description: line.description,
           source_type: line.source_type,
           debit: line.debit,
@@ -131,9 +133,10 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
       })
     }
 
-    // Partial-view disclosure: a filtered huvudbok starts balance accounts
-    // at zero IB (opening balances cannot be dimension-scoped): the export
-    // must say so or a project-filtered ledger reads as a full one.
+    // Partial-view disclosure: a filtered huvudbok opens each account at the
+    // object's own IB (its tagged IB lines, issue #3313), not the account's
+    // full IB: the export must say so or a project-filtered ledger reads as a
+    // full one.
     const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
     if (disclosure) {
       rows.unshift({
@@ -141,7 +144,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         account_name: '',
         date: null as unknown as Date,
         voucher: '',
-        description: 'Ingående balanser ingår inte i filtrerad vy',
+        description: 'Ingående balans avser endast objektets egna IB-rader',
         source_type: '',
         debit: null as unknown as number,
         credit: null as unknown as number,
@@ -150,7 +153,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
       })
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Huvudbok',
         columns: [
@@ -182,12 +185,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
     ])
 
     const filename = xlsxFilename(`huvudbok${dimensionFilterFileSuffix(dimFilter.dimensions)}`, companyRow?.company_name ?? '', report.period.end)
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera huvudbok' },

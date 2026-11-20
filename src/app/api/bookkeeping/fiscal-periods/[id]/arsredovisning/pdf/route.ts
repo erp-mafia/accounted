@@ -1,6 +1,7 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getArsredovisningPdfFile } from '@/lib/bokslut/arsredovisning/file-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { fileResponse } from '@/lib/api/file-response'
 
 export const GET = withRouteContext(
   'period.arsredovisning_pdf',
@@ -20,13 +21,14 @@ export const GET = withRouteContext(
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return sessionFailureResponse({ ok: false, code: 'INTERNAL_ERROR' }, log, requestId)
     const file = outcome.data
-    return new Response(new Uint8Array(file.bytes), {
+    return fileResponse(new Uint8Array(file.bytes), {
+      filename: file.filename,
+      contentType: file.contentType,
+      disposition: 'inline',
+      // ÅR contains company financials + officer names: don't let any
+      // intermediary cache the document.
+      cacheControl: 'private, no-store, no-cache, must-revalidate',
       headers: {
-        'Content-Type': file.contentType,
-        'Content-Disposition': `inline; filename="${file.filename}"`,
-        // ÅR contains company financials + officer names: don't let any
-        // intermediary cache the document.
-        'Cache-Control': 'private, no-store, no-cache, must-revalidate',
         'Pragma': 'no-cache',
         ...(file.versionId ? { 'X-Annual-Report-Version': file.versionId } : {}),
       },

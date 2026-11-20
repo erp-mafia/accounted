@@ -74,7 +74,7 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
   if (!snapshot) {
     // Dynamic status (nothing fetched yet): stays visible as a quiet line.
     return (
-      <p className="border-b border-border px-1 py-3 text-sm text-muted-foreground">
+      <p className="border-b-hairline px-1 py-3 text-sm text-muted-foreground">
         Inga företagsuppgifter hämtade ännu. Uppgifterna hämtas automatiskt
         från Bolagsverket via organisationsnumret.
       </p>
@@ -164,7 +164,7 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
         <SettingsRow label="Bankuppgifter" align="baseline">
           {/* Registry read-out, not a setting: without the note this row makes
               the bankgiro look configured while payment files and invoices
-              read the editable fields under Fakturering. */}
+              read the bank accounts under Fakturor. */}
           <div className="w-full space-y-1">
             <ul className="space-y-1">
               {snapshot.bankAccounts.map((b, i) => (
@@ -175,8 +175,8 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
               ))}
             </ul>
             <SettingsRowNote className="block">
-              Enligt Bolagsverket. Fakturor och betalfiler använder bankuppgifterna
-              under Inställningar → Fakturering.
+              Enligt Bolagsverket. Fakturor och betalfiler använder bankkontona
+              under Inställningar → Fakturor.
             </SettingsRowNote>
           </div>
         </SettingsRow>

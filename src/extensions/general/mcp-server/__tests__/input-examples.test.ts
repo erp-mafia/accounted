@@ -156,7 +156,7 @@ describe('shortestExampleFor: examples reach the caller that already failed', ()
   })
 
   it('gives the kpi-report caller the empty-object shape it needed', () => {
-    // The exact prod case: `metric` sent to a tool whose only parameter is
+    // The exact case seen: `metric` sent to a tool whose only parameter is
     // period_id, 604 times over seven days.
     const kpi = tools.find((t) => t.name === 'gnubok_get_kpi_report')!
     expect(shortestExampleFor(kpi.inputSchema as Record<string, unknown>)).toBe('{}')

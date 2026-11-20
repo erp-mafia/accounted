@@ -15,7 +15,17 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
-import { Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy, Eye, EyeOff } from 'lucide-react'
+import {
+  ArrowDownTrayIcon,
+  ArrowUpTrayIcon,
+  ChevronDownIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  PencilIcon,
+  PlusIcon,
+  Square2StackIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
 import { GROUP_LABEL_KEYS, libraryTemplateGroup } from '@/lib/bookkeeping/template-groups'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -26,6 +36,7 @@ import { cn } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useBookingTemplates } from '@/lib/reference-data/hooks'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 export function BookingTemplatesPanel() {
   const t = useTranslations('settings_booking_templates')
@@ -39,6 +50,8 @@ export function BookingTemplatesPanel() {
     enskild_firma: t('entity_enskild_firma'),
     aktiebolag: t('entity_aktiebolag'),
     ideell_forening: t('entity_ideell_forening'),
+    ekonomisk_forening: t('entity_ekonomisk_forening'),
+    bostadsrattsforening: t('entity_bostadsrattsforening'),
   }
 
   // The panel renders the same session-cached list the pickers use
@@ -154,7 +167,7 @@ export function BookingTemplatesPanel() {
       })
       const json = await res.json()
       if (!res.ok) {
-        toast({ title: t('toast_import_error'), description: json.error || t('toast_import_generic'), variant: 'destructive' })
+        toast({ title: t('toast_import_error'), description: getErrorMessage(json, { locale: locale, fallback: t('toast_import_generic') }), variant: 'destructive' })
         return
       }
       toast({ title: t('toast_import_done'), description: t('toast_import_count', { count: json.imported }) })
@@ -186,7 +199,7 @@ export function BookingTemplatesPanel() {
           quiet buttons, "Ny mall" as the one pill. The old card description
           lives behind the "?". */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1">
-        <p className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <span>{t('title')}</span>
           <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
         </p>
@@ -194,21 +207,19 @@ export function BookingTemplatesPanel() {
           <div className="flex shrink-0 items-center gap-1">
             <Button
               variant="outline"
-              size="sm"
               onClick={handleExport}
               loading={isExporting}
               className="text-muted-foreground hover:text-foreground"
             >
-              {!isExporting && <Download className="mr-1.5 h-3.5 w-3.5" />}
+              {!isExporting && <ArrowDownTrayIcon className="h-3.5 w-3.5" />}
               {t('export')}
             </Button>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => importRef.current?.click()}
               className="text-muted-foreground hover:text-foreground"
             >
-              <Upload className="mr-1.5 h-3.5 w-3.5" />
+              <ArrowUpTrayIcon className="h-3.5 w-3.5" />
               {t('import')}
             </Button>
             <input
@@ -220,12 +231,12 @@ export function BookingTemplatesPanel() {
             />
             <Dialog open={showCreate} onOpenChange={setShowCreate}>
               <DialogTrigger asChild>
-                <Button size="sm">
-                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                <Button>
+                  <PlusIcon className="h-3.5 w-3.5" />
                   {t('new_template')}
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg">
+              <DialogContent size="form">
                 <DialogHeader>
                   <DialogTitle>{t('create_dialog_title')}</DialogTitle>
                 </DialogHeader>
@@ -287,9 +298,9 @@ export function BookingTemplatesPanel() {
               type="button"
               onClick={() => setShowHidden((v) => !v)}
               aria-expanded={showHidden}
-              className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+              className="flex items-center gap-2 px-1 text-xs font-medium text-muted-foreground"
             >
-              <ChevronDown
+              <ChevronDownIcon
                 className={cn('h-4 w-4 shrink-0 transition-transform', !showHidden && '-rotate-90')}
               />
               <span>{t('section_hidden')}</span>
@@ -300,7 +311,7 @@ export function BookingTemplatesPanel() {
                 {hiddenSystemTemplates.map((tt) => (
                   <div
                     key={tt.id}
-                    className="flex items-center gap-3 border-b border-border px-1 py-3 transition-colors duration-150 hover:bg-secondary/60"
+                    className="flex items-center gap-3 border-b-hairline px-1 py-3 transition-colors duration-150 hover:bg-secondary/60"
                   >
                     <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
                       <span className="truncate text-sm text-muted-foreground">{tt.name}</span>
@@ -312,14 +323,14 @@ export function BookingTemplatesPanel() {
                     {canWrite && (
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon"
                         onClick={() => handleToggleHidden(tt.id, false)}
                         loading={hidingId === tt.id}
                         aria-label={t('unhide')}
                         title={t('unhide')}
                         className="shrink-0 text-muted-foreground hover:text-foreground"
                       >
-                        {hidingId !== tt.id && <Eye className="h-3.5 w-3.5" />}
+                        {hidingId !== tt.id && <EyeIcon className="h-3.5 w-3.5" />}
                       </Button>
                     )}
                   </div>
@@ -368,7 +379,7 @@ export function BookingTemplatesPanel() {
         copy via POST. The form is keyed by template id so it re-seeds state when
         switching between rows. */}
     <Dialog open={!!activeTemplate} onOpenChange={(open) => { if (!open) setActiveTemplate(null) }}>
-      <DialogContent className="max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>
             {activeTemplate?.is_system ? t('customize_dialog_title') : t('edit_dialog_title')}
@@ -432,7 +443,7 @@ function TemplateSection({
   return (
     <SettingsGroup>
       {/* Origin eyebrow with count; mirrors SettingsGroup's label line. */}
-      <p className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+      <p className="flex items-center gap-2 px-1 text-xs font-medium text-muted-foreground">
         <span>{title}</span>
         <span className="tabular-nums">{templates.length}</span>
       </p>
@@ -441,7 +452,7 @@ function TemplateSection({
           const isExpanded = expandedId === tt.id
           const isConvertible = convertLibraryToBookingTemplate(tt) !== null
           return (
-            <div key={tt.id} className="border-b border-border">
+            <div key={tt.id} className="border-b-hairline">
               <div className="flex items-center gap-3 px-1 py-3 transition-colors duration-150 hover:bg-secondary/60">
                 <button
                   type="button"
@@ -449,7 +460,7 @@ function TemplateSection({
                   aria-expanded={isExpanded}
                   className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 >
-                  <ChevronDown
+                  <ChevronDownIcon
                     className={cn(
                       'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
                       !isExpanded && '-rotate-90',
@@ -462,7 +473,7 @@ function TemplateSection({
                       {tt.entity_type !== 'all' && ` · ${entityLabels[tt.entity_type]}`}
                     </span>
                     {!isConvertible && (
-                      <Badge variant="warning" className="px-1.5 py-0 text-[11px]">
+                      <Badge variant="warning" className="px-1.5 py-0 text-xs">
                         {t('unconvertible_badge')}
                       </Badge>
                     )}
@@ -471,51 +482,51 @@ function TemplateSection({
                 {canCustomize && onCustomize && (
                   <Button
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     onClick={() => onCustomize(tt)}
                     aria-label={t('customize')}
                     title={t('customize')}
                     className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
-                    <Copy className="h-3.5 w-3.5" />
+                    <Square2StackIcon className="h-3.5 w-3.5" />
                   </Button>
                 )}
                 {canHide && onHide && (
                   <Button
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     onClick={() => onHide(tt)}
                     loading={hidingId === tt.id}
                     aria-label={t('hide')}
                     title={t('hide')}
                     className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
-                    {hidingId !== tt.id && <EyeOff className="h-3.5 w-3.5" />}
+                    {hidingId !== tt.id && <EyeSlashIcon className="h-3.5 w-3.5" />}
                   </Button>
                 )}
                 {canEdit && onEdit && (
                   <Button
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     onClick={() => onEdit(tt)}
                     aria-label={t('edit')}
                     title={t('edit')}
                     className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
-                    <Pencil className="h-3.5 w-3.5" />
+                    <PencilIcon className="h-3.5 w-3.5" />
                   </Button>
                 )}
                 {canDelete && (
                   <Button
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     onClick={() => onDelete(tt.id)}
                     loading={deletingId === tt.id}
                     aria-label={tCommon('delete')}
                     title={tCommon('delete')}
                     className="shrink-0 text-muted-foreground hover:text-destructive"
                   >
-                    {deletingId !== tt.id && <Trash2 className="h-3.5 w-3.5" />}
+                    {deletingId !== tt.id && <TrashIcon className="h-3.5 w-3.5" />}
                   </Button>
                 )}
               </div>
@@ -525,8 +536,8 @@ function TemplateSection({
                     <p className="mb-2 text-xs text-muted-foreground">{tt.description}</p>
                   )}
                   <table className="w-full text-xs">
-                    <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                      <tr className="border-b border-border">
+                    <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                      <tr className="border-b-hairline">
                         <th className="w-14 py-1 text-left">{t('th_account')}</th>
                         <th className="py-1 text-left">{t('th_description')}</th>
                         <th className="w-16 py-1 text-center">{t('th_type')}</th>
@@ -536,7 +547,7 @@ function TemplateSection({
                     </thead>
                     <tbody>
                       {tt.lines.map((line: BookingTemplateLibraryLine, i: number) => (
-                        <tr key={i} className="border-b border-border last:border-0">
+                        <tr key={i} className="border-b-hairline last:border-0">
                           <td className="py-1 font-mono">{line.account}</td>
                           <td className="py-1">{line.label}</td>
                           <td className="py-1 text-center">

@@ -5,8 +5,18 @@ import { createPortal } from 'react-dom'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Upload, FileText, ImageIcon, X, Loader2 } from 'lucide-react'
-import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
+import { cn } from '@/lib/utils'
+import {
+  ArrowUpTrayIcon,
+  DocumentTextIcon,
+  PhotoIcon,
+  SpinnerIcon,
+  XMarkIcon,
+} from '@/components/icons'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
+import { prepareDocumentUpload } from '@/lib/documents/shrink-image'
+import { DOCUMENT_UPLOAD_ACCEPT, isAllowedDocumentFile } from '@/lib/documents/upload-types'
+import { addUploads, finishUpload, removeUpload, type UploadedFilesUpdate } from './upload-list'
 
 export interface UploadedFile {
   id?: string
@@ -21,7 +31,13 @@ export interface UploadedFile {
 
 interface DocumentUploadZoneProps {
   files: UploadedFile[]
-  onFilesChange: (files: UploadedFile[]) => void
+  /**
+   * Every change (a drop, a finished upload, the x on a file) arrives as an
+   * update of the host's latest list, never as a whole list: an upload
+   * finishes after later changes, and a list built at its drop would undo
+   * them (upload-list.ts). A useState setter can be passed as is.
+   */
+  onFilesChange: (update: UploadedFilesUpdate) => void
   journalEntryId?: string
   maxFiles?: number
   disabled?: boolean
@@ -34,12 +50,27 @@ interface DocumentUploadZoneProps {
    * file in the tab).
    */
   dropSurfaceRef?: React.RefObject<HTMLElement | null>
+  /**
+   * Called once for every file that finished uploading (it has its document
+   * id by then), also when the host closed in the meantime: a booking dialog
+   * pins it to its bank transaction right away.
+   */
+  onUploaded?: (file: UploadedFile) => void
+  /**
+   * Receives the zone's file input, so a host button can open the file
+   * picker in its own click (one click to the OS picker) instead of only
+   * revealing the zone and waiting for a second click inside it.
+   */
+  fileInputRef?: React.RefObject<HTMLInputElement | null>
+  /**
+   * More ways in, shown in the compact row after "Ladda upp" (e.g. "Välj
+   * från Inkorgen"), so a dialog's Underlag reads as one line.
+   */
+  actions?: React.ReactNode
 }
 
 let uploadCounter = 0
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
-const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
-const ACCEPTED_EXTENSIONS = '.pdf,.jpg,.jpeg,.png,.webp,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.ods,.odp,.rtf,.csv'
 const FILE_NAME_TAIL_LENGTH = 16
 
 function TruncatedFileName({ fileName }: { fileName: string }) {
@@ -117,6 +148,9 @@ export default function DocumentUploadZone({
   disabled = false,
   compact = false,
   dropSurfaceRef,
+  onUploaded,
+  fileInputRef,
+  actions,
 }: DocumentUploadZoneProps) {
   const t = useTranslations('document_upload')
   const locale = useLocale()
@@ -129,22 +163,18 @@ export default function DocumentUploadZone({
   const [surfaceRect, setSurfaceRect] = useState<DOMRect | null>(null)
 
   const uploadFile = useCallback(async (file: UploadedFile): Promise<UploadedFile> => {
-    const prepared = await prepareForMultipartUpload(file.file)
+    const prepared = await prepareDocumentUpload(file.file)
     if (!prepared.ok) {
       return { ...file, status: 'error', error: prepared.message }
     }
     const formData = new FormData()
-    formData.append('file', prepared.file)
     formData.append('upload_source', 'file_upload')
     if (journalEntryId) {
       formData.append('journal_entry_id', journalEntryId)
     }
 
     try {
-      const res = await fetch('/api/documents', {
-        method: 'POST',
-        body: formData,
-      })
+      const res = await postDocumentForm('/api/documents', formData, prepared.file)
 
       // Try to parse JSON, but tolerate non-JSON responses (auth redirect HTML, 502 etc.)
       let result: { data?: { id?: string }; error?: unknown } = {}
@@ -188,7 +218,10 @@ export default function DocumentUploadZone({
     const validFiles: UploadedFile[] = []
 
     for (const file of newFiles.slice(0, remaining)) {
-      if (!ACCEPTED_TYPES.includes(file.type)) {
+      // Same allowlist and type reading as POST /api/documents
+      // (lib/documents/upload-types), so a file the picker offers is never
+      // refused here and then accepted by the server, or the other way round.
+      if (!isAllowedDocumentFile(file)) {
         validFiles.push({
           file,
           status: 'error',
@@ -219,18 +252,16 @@ export default function DocumentUploadZone({
       })
     }
 
-    let currentFiles = [...files, ...validFiles]
-    onFilesChange(currentFiles)
+    onFilesChange(addUploads(validFiles))
 
-    // Upload files that passed validation
+    // Upload files that passed validation. Each result lands on the host's
+    // list as it is by then, not on the one this drop started from.
     for (const f of validFiles.filter((f) => f.status === 'uploading')) {
       const result = await uploadFile(f)
-      currentFiles = currentFiles.map((cf) =>
-        cf.uploadKey === f.uploadKey ? result : cf
-      )
-      onFilesChange([...currentFiles])
+      onFilesChange(finishUpload(result))
+      if (result.status === 'uploaded' && result.id) onUploaded?.(result)
     }
-  }, [files, maxFiles, onFilesChange, t, uploadFile])
+  }, [files.length, maxFiles, onFilesChange, onUploaded, t, uploadFile])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -260,9 +291,9 @@ export default function DocumentUploadZone({
     if (inputRef.current) inputRef.current.value = ''
   }, [handleFiles])
 
-  const removeFile = useCallback((index: number) => {
-    onFilesChange(files.filter((_, i) => i !== index))
-  }, [files, onFilesChange])
+  const removeFile = useCallback((uploadKey: string) => {
+    onFilesChange(removeUpload(uploadKey))
+  }, [onFilesChange])
 
   // Whole-surface drop. Native listeners on the surface element: a
   // dragenter/dragleave pair fires for every child crossed, so a depth
@@ -340,64 +371,82 @@ export default function DocumentUploadZone({
             style={{ top: surfaceRect.top, left: surfaceRect.left, width: surfaceRect.width, height: surfaceRect.height }}
           >
             <div className="flex flex-col items-center gap-2 text-center">
-              <Upload className="h-8 w-8 text-primary" />
+              <ArrowUpTrayIcon className="h-8 w-8 text-primary" />
               <p className="text-sm font-medium text-foreground">{t('drop_surface_prompt')}</p>
               <p className="text-xs text-muted-foreground">{t('format_hint')}</p>
             </div>
           </div>,
           document.body,
         )}
-      {/* Drop zone */}
-      <div
-        ref={zoneRef}
-        className={`
-          relative border-2 border-dashed rounded-lg text-center transition-colors
-          ${compact ? 'p-3' : 'p-6'}
-          ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
-          ${disabled ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:border-primary/50'}
-        `}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept={ACCEPTED_EXTENSIONS}
-          className="hidden"
-          onChange={handleInputChange}
-          disabled={disabled}
-        />
-
-        <div className={compact ? 'flex items-center justify-center gap-2' : 'space-y-2'}>
-          <Upload className={compact ? 'h-4 w-4 text-muted-foreground' : 'mx-auto h-8 w-8 text-muted-foreground'} />
-          <div>
-            <p className={compact ? 'text-sm text-muted-foreground' : 'text-sm font-medium'}>
-              {compact ? t('compact_prompt') : t('prompt')}
-            </p>
-            {!compact && (
-              <p className="text-xs text-muted-foreground">
-                {t('format_hint')}
-              </p>
-            )}
+      <input
+        ref={(element) => {
+          inputRef.current = element
+          if (fileInputRef) fileInputRef.current = element
+        }}
+        type="file"
+        multiple
+        accept={DOCUMENT_UPLOAD_ACCEPT}
+        className="hidden"
+        onChange={handleInputChange}
+        disabled={disabled}
+      />
+      {compact ? (
+        // Compact (Stil v3, board Dlg-Bokfor): one line, not a dashed box:
+        // "Ladda upp", the host's other ways in, and the drag hint. The row
+        // still takes a dropped file, and so does dropSurfaceRef.
+        <div
+          ref={zoneRef}
+          className={cn(
+            'flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md transition-shadow duration-150',
+            isDragging && 'ring-[1.5px] ring-primary',
+            disabled && 'pointer-events-none opacity-40',
+          )}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <Button variant="outline" onClick={() => inputRef.current?.click()} disabled={disabled}>
+            <ArrowUpTrayIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('upload_button')}
+          </Button>
+          {actions}
+          <span className="text-xs text-muted-foreground">{t('drag_hint')}</span>
+        </div>
+      ) : (
+        <div
+          ref={zoneRef}
+          className={`
+            relative border-2 border-dashed rounded-lg text-center transition-colors p-6
+            ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
+            ${disabled ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:border-primary/50'}
+          `}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onClick={() => inputRef.current?.click()}
+        >
+          <div className="space-y-2">
+            <ArrowUpTrayIcon className="mx-auto h-8 w-8 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium">{t('prompt')}</p>
+              <p className="text-xs text-muted-foreground">{t('format_hint')}</p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* File list */}
       {files.length > 0 && (
         <div className="space-y-1">
-          {files.map((file, index) => (
+          {files.map((file) => (
             <div
               key={file.uploadKey}
               className="flex min-w-0 items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50"
             >
               {isImageType(file.file.type) ? (
-                <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
               ) : (
-                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
               )}
               <TruncatedFileName fileName={file.fileName} />
               <span className="text-xs text-muted-foreground shrink-0">
@@ -405,7 +454,7 @@ export default function DocumentUploadZone({
               </span>
 
               {file.status === 'uploading' && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
+                <SpinnerIcon className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
               )}
               {file.status === 'uploaded' && (
                 <span className="text-xs text-muted-foreground shrink-0">
@@ -425,16 +474,18 @@ export default function DocumentUploadZone({
 
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 aria-label={t('remove_file')}
                 className="shrink-0"
                 onClick={(e) => {
                   e.stopPropagation()
-                  removeFile(index)
+                  removeFile(file.uploadKey)
                 }}
-                disabled={file.status === 'uploading'}
+                // A disabled zone takes no removal either: a booking dialog
+                // locks it while it links what the list held when it began.
+                disabled={disabled || file.status === 'uploading'}
               >
-                <X className="h-3 w-3" />
+                <XMarkIcon className="h-3 w-3" />
               </Button>
             </div>
           ))}
