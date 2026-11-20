@@ -68,6 +68,8 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate, formatAmount, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { postDocumentForm, uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { expenseClaimantKey, outstandingByClaimant as groupOutstandingByClaimant } from '@/lib/expenses/expense-payout-candidates'
+import { lastOwnerClaimantName } from '@/lib/expenses/payer'
 import {
   PLAIN_DOCUMENT_UPLOAD_URL,
   documentIdFromPlainUpload,
@@ -92,6 +94,7 @@ interface ExpenseClaim {
   expense_account: string
   liability_account: string
   status: 'registered' | 'paid'
+  created_at: string
   /** Registered and on no payslip: the server's answer (lib/salary/expense-claim-payout-state.ts). */
   awaits_payout: boolean
   /** The salary run that repays the claim, while it is registered and on a payslip. */
@@ -248,6 +251,10 @@ export default function ExpenseClaimsPage() {
         const rows: ExpenseClaim[] = data || []
         setClaims(rows)
         setLoadError(false)
+        // "Jag, privat" opens with the name the owner's claims were last
+        // registered under, as in the Underlag pane: an empty field books
+        // as "Ägare", one more person to pay.
+        setOwnerName((current) => current || lastOwnerClaimantName(rows) || '')
         // Prune ids that no longer exist or are no longer payable, so a
         // payout request never names a claim deleted or paid in another tab.
         setSelected((prev) => {
@@ -336,14 +343,7 @@ export default function ExpenseClaimsPage() {
     [claims, statusFilter],
   )
 
-  const outstandingByClaimant = useMemo(() => {
-    const sums = new Map<string, number>()
-    for (const c of claims) {
-      if (!c.awaits_payout) continue
-      sums.set(c.claimant_name, (sums.get(c.claimant_name) ?? 0) + c.amount_sek)
-    }
-    return [...sums.entries()].sort((a, b) => b[1] - a[1])
-  }, [claims])
+  const outstandingByClaimant = useMemo(() => groupOutstandingByClaimant(claims), [claims])
 
   const selectableIds = useMemo(
     () => visibleClaims.filter((c) => c.awaits_payout).map((c) => c.id),
@@ -358,7 +358,7 @@ export default function ExpenseClaimsPage() {
   const selectedTotal = selectedClaims.reduce((sum, c) => sum + c.amount_sek, 0)
   const selectionValid =
     selectedClaims.length > 0 &&
-    new Set(selectedClaims.map((c) => c.employee_id ?? OWNER_VALUE)).size === 1 &&
+    new Set(selectedClaims.map(expenseClaimantKey)).size === 1 &&
     new Set(selectedClaims.map((c) => c.liability_account)).size === 1
 
   // Entity type drives the owner liability account (AB creditor vs enskild
@@ -1048,9 +1048,9 @@ export default function ExpenseClaimsPage() {
 
       {outstandingByClaimant.length > 0 && (
         <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-          {outstandingByClaimant.map(([name, sum]) => (
+          {outstandingByClaimant.map(({ key, claimant_name: name, total_sek: sum }) => (
             <button
-              key={name}
+              key={key}
               type="button"
               disabled={!canWrite}
               title={canWrite ? t('outstanding_select_hint') : undefined}
@@ -1058,7 +1058,7 @@ export default function ExpenseClaimsPage() {
                 setSelected(
                   new Set(
                     claims
-                      .filter((c) => c.awaits_payout && c.claimant_name === name)
+                      .filter((c) => c.awaits_payout && expenseClaimantKey(c) === key)
                       .map((c) => c.id),
                   ),
                 )
