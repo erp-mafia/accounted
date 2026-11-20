@@ -47,7 +47,7 @@ CREATE TABLE public.oauth_partner_clients (
     CHECK (slug ~ '^[a-z][a-z0-9_]{1,39}$'),
   CONSTRAINT oauth_partner_clients_slug_not_built_in
     CHECK (slug NOT IN (
-      'claude', 'chatgpt', 'grok', 'gemini', 'cursor', 'cursor_deeplink',
+      'claude', 'chatgpt', 'grok', 'gemini', 'copilot', 'cursor', 'cursor_deeplink',
       'squidler', 'celemine', 'flytt_extension', 'local',
       'mcp', 'key', 'partner', 'registered'
     )),

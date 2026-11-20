@@ -1,6 +1,8 @@
 // Browser-safe on purpose: Settings → API & MCP renders from this in a
 // client component. Pure so the readout can be pinned in tests.
 
+import { partnerSlugOf } from '@/lib/auth/oauth-partner-clients'
+
 /**
  * Who is behind a connection row, as the Settings list labels it. The
  * built-in OAuth clients come from api_keys.client (migration
@@ -22,7 +24,7 @@ export interface ConnectionRow {
 /** Map a key row to the label/logo family it is shown with. */
 export function connectionKind(row: Pick<ConnectionRow, 'source' | 'client'>): ConnectionKind {
   if (row.source !== 'signin') return 'key'
-  if (typeof row.client === 'string' && /^partner:[a-z][a-z0-9_]{1,39}$/.test(row.client)) return 'partner'
+  if (partnerSlugOf(row.client)) return 'partner'
   switch (row.client) {
     case 'claude':
     case 'chatgpt':
