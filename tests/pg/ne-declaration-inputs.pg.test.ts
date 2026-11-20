@@ -84,6 +84,25 @@ describe('ne_declaration_inputs RLS', () => {
     ).rejects.toThrow(/row-level security|viewer|role/i)
   })
 
+  it("refuses a viewer's move of a row into a company they write (20261120153000)", async () => {
+    const a = await seedCompany()
+    const b = await seedCompany()
+    const id = await insertInputs(a.companyId, a.fiscalPeriodId, a.userId)
+    await insertCompanyMember({ companyId: a.companyId, userId: b.userId, role: 'viewer' })
+
+    const res = await withUserContext(b.userId, (client) =>
+      client.query(
+        `UPDATE public.ne_declaration_inputs
+            SET company_id = $2, fiscal_period_id = $3, updated_by = $4
+          WHERE id = $1`,
+        [id, b.companyId, b.fiscalPeriodId, b.userId],
+      ),
+    )
+    expect(res.rowCount).toBe(0)
+    const row = await getPool().query(`SELECT company_id FROM public.ne_declaration_inputs WHERE id = $1`, [id])
+    expect(row.rows).toEqual([{ company_id: a.companyId }])
+  })
+
   it('is never deleted by a member: no DELETE grant or policy', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await insertInputs(companyId, fiscalPeriodId, userId)
