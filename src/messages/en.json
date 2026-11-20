@@ -12138,7 +12138,7 @@
     "opened_today": "today",
     "opened_yesterday": "yesterday",
     "help_text": "Every report opens for the selected fiscal year and can be narrowed to any period inside the report. Last opened remembers what you use the most.",
-    "catalog_footnote": "Every report opens for any period and can be downloaded as a PDF. The NE attachment replaces INK2 for sole traders.",
+    "catalog_footnote": "Most reports open for the period you choose and can be downloaded as PDF or Excel. The NE attachment replaces INK2 for sole traders.",
     "no_fiscal_year_title": "No fiscal year selected",
     "no_fiscal_year_description": "Create a fiscal year to see reports.",
     "no_fiscal_year_action": "Go to settings",

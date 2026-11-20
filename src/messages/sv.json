@@ -12138,7 +12138,7 @@
     "opened_today": "idag",
     "opened_yesterday": "igår",
     "help_text": "Alla rapporter öppnas för det valda räkenskapsåret och kan avgränsas till valfri period inne i rapporten. Senast öppnad kommer ihåg vad du använder mest.",
-    "catalog_footnote": "Alla rapporter öppnas för valfri period och kan laddas ner som PDF. NE-bilagan visas i stället för INK2 för enskild firma.",
+    "catalog_footnote": "De flesta rapporter öppnas för den period du väljer och kan laddas ner som PDF eller Excel. NE-bilagan visas i stället för INK2 för enskild firma.",
     "no_fiscal_year_title": "Inget räkenskapsår valt",
     "no_fiscal_year_description": "Skapa ett räkenskapsår för att kunna se rapporter.",
     "no_fiscal_year_action": "Gå till inställningar",
