@@ -124,6 +124,6 @@
     "tailwindcss": "^4",
     "tsx": "4.20.5",
     "typescript": "^5",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }
