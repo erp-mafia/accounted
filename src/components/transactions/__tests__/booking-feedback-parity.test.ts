@@ -161,7 +161,34 @@ describe('duplicate-guard 409 routing parity', () => {
     expect(PAGE_SRC).toMatch(
       /TRANSACTION_BOOK_POSSIBLE_DUPLICATE'[\s\S]{0,1600}if \(silent\) \{[\s\S]{0,600}batchDuplicatesRef\.current\.push\(\{ transactionId: id, candidate, retry \}\)/,
     )
+    // Two writers of the single-row slot: the 409 handler (non-silent rows
+    // only) and askTwinFirst, which runs on one row's Bokför click, is never
+    // reached from a batch, and leaves a dialog another row opened in place.
     expect(PAGE_SRC.match(/setDuplicateWarning\(\{/g) ?? []).toHaveLength(1)
+    expect(PAGE_SRC).toMatch(
+      /async function askTwinFirst\([\s\S]{0,2000}setDuplicateWarning\(\(prev\) =>\s*prev \?\? \{/,
+    )
+    expect(PAGE_SRC).not.toMatch(/handleBatchCategorize[\s\S]{0,4000}askTwinFirst\(/)
+  })
+
+  /**
+   * The on-click twin probe writes the same single slot, so it must own it
+   * alone (a second row's late answer would re-point an open dialog's Koppla),
+   * and a "Bokför ändå" must not outlive the attempt it answered (a later
+   * attempt whose probe failed would otherwise send force without asking).
+   */
+  it('runs one twin probe at a time and scopes an acknowledgement to one booking', () => {
+    expect(PAGE_SRC).toMatch(
+      /async function askTwinFirst\([^{]*\{\s*if \(twinProbeOwnerRef\.current\) return\s*twinProbeOwnerRef\.current = transaction\.id\s*acknowledgedTwinRef\.current = null/,
+    )
+    expect(PAGE_SRC).toMatch(/finally \{\s*twinProbeOwnerRef\.current = null/)
+    // Read once and cleared before the booking is sent.
+    expect(PAGE_SRC).toMatch(
+      /const ack = acknowledgedTwinRef\.current\s*acknowledgedTwinRef\.current = null\s*const acknowledgedTwin = ack\?\.transactionId === transaction\.id/,
+    )
+    // A direct booking the server sends to review hands the answer on to the
+    // review's booking instead of asking the same twin again.
+    expect(PAGE_SRC).toMatch(/if \(acknowledgedTwin\) acknowledgedTwinRef\.current = ack\s*extras\.onReviewRequired\?\.\(\)/)
   })
 
   it('gives a parked row its own outcome so the batch tally never calls it failed', () => {

@@ -91,7 +91,9 @@ describe('Transaktioner: the row keeps the booking the person set', () => {
     // One resolver: the chip and Bokför cannot disagree about the row.
     expect(PAGE_SRC.match(/rowProposal\(templateSuggestions\[/g)).toHaveLength(1)
     expect(PAGE_SRC).toMatch(/const proposalFor = [\s\S]{0,200}const s = rowProposalFor\(tx\)/)
-    expect(PAGE_SRC).toMatch(/function bookProposal\(transaction: TransactionWithInvoice\) \{\s*const s = rowProposalFor\(transaction\)/)
+    // Bokför asks the ledger-twin probe first (askTwinFirst), then resolves.
+    expect(PAGE_SRC).toMatch(/function bookProposal\(transaction: TransactionWithInvoice\) \{\s*void askTwinFirst\(transaction, \(\) => bookProposalUnchecked\(transaction\)\)/)
+    expect(PAGE_SRC).toMatch(/function bookProposalUnchecked\(transaction: TransactionWithInvoice\) \{\s*const s = rowProposalFor\(transaction\)/)
   })
 
   it('marks it as the person\'s on the row: its why, not a recommendation with a confidence', () => {
