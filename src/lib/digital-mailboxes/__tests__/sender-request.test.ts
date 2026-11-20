@@ -224,7 +224,7 @@ describe('checkPendingSenderRequests (cron)', () => {
 
     const summary = await checkPendingSenderRequests(service, { log })
 
-    expect(summary).toEqual({ checked: 1, activated: 1, rejected: 0, errors: [] })
+    expect(summary).toEqual({ checked: 1, activated: 1, rejected: 0, deferred: 0, errors: [] })
     expect(upsertConnection).not.toHaveBeenCalled()
     const [, guardedRow, patch] = updateConnectionIfUnchanged.mock.calls[0]!
     expect(guardedRow).toMatchObject({ id: 'conn-kivra', updated_at: '2026-11-01T00:00:00Z' })
@@ -239,7 +239,7 @@ describe('checkPendingSenderRequests (cron)', () => {
 
     const summary = await checkPendingSenderRequests(service, { log })
 
-    expect(summary).toEqual({ checked: 1, activated: 0, rejected: 0, errors: [] })
+    expect(summary).toEqual({ checked: 1, activated: 0, rejected: 0, deferred: 0, errors: [] })
     expect(upsertConnection).not.toHaveBeenCalled()
   })
 
@@ -259,10 +259,24 @@ describe('checkPendingSenderRequests (cron)', () => {
     expect(updateConnectionIfUnchanged).not.toHaveBeenCalled()
   })
 
+  it('leaves the requests past its time budget to the next run', async () => {
+    const other = { ...pendingRow(), id: 'conn-2', company_id: '22222222-2222-4222-8222-222222222222' }
+    listPendingSenderConnections.mockResolvedValue([pendingRow(), other])
+    checkSenderRequest.mockResolvedValue({ status: 'pending', requestRef: 'req-1' })
+    // The clock moves one millisecond per reading: the deadline passes after the first request.
+    let clock = 0
+    const now = () => clock++
+
+    const summary = await checkPendingSenderRequests(service, { log, budgetMs: 1, now })
+
+    expect(summary).toEqual({ checked: 1, activated: 0, rejected: 0, deferred: 1, errors: [] })
+    expect(checkSenderRequest).toHaveBeenCalledTimes(1)
+  })
+
   it('does not read the database when no provider can follow a request up', async () => {
     getDigitalMailboxProviders.mockReturnValue({ kivra: { sender: { registerSender } }, billo: null })
 
-    await expect(checkPendingSenderRequests(service, { log })).resolves.toEqual({ checked: 0, activated: 0, rejected: 0, errors: [] })
+    await expect(checkPendingSenderRequests(service, { log })).resolves.toEqual({ checked: 0, activated: 0, rejected: 0, deferred: 0, errors: [] })
     expect(listPendingSenderConnections).not.toHaveBeenCalled()
   })
 })

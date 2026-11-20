@@ -13,7 +13,7 @@ describe('GET /api/digital-mailboxes/cron', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubEnv('CRON_SECRET', 'cron-secret')
-    checkSenders.mockResolvedValue({ checked: 0, activated: 0, rejected: 0, errors: [] })
+    checkSenders.mockResolvedValue({ checked: 0, activated: 0, rejected: 0, deferred: 0, errors: [] })
   })
 
   it('returns 401 without the cron secret', async () => {
@@ -35,17 +35,21 @@ describe('GET /api/digital-mailboxes/cron', () => {
         failed: 0,
         deferred: 0,
         errors: 0,
-        sender_requests: { checked: 0, activated: 0, rejected: 0, errors: 0 },
+        sender_requests: { checked: 0, activated: 0, rejected: 0, deferred: 0, errors: 0 },
       },
     })
   })
 
   it('asks about sender access requests that wait for the provider, after the sweep', async () => {
     sweep.mockResolvedValue({ connections: 0, activated: 0, filed: 0, failed: 0, deferred: 0, errors: [] })
-    checkSenders.mockResolvedValue({ checked: 3, activated: 1, rejected: 0, errors: [{ companyId: 'c', provider: 'kivra', reason: 'x' }] })
+    checkSenders.mockResolvedValue({ checked: 3, activated: 1, rejected: 0, deferred: 0, errors: [{ companyId: 'c', provider: 'kivra', reason: 'x' }] })
     const response = await GET(createCronRequest('/api/digital-mailboxes/cron', 'Bearer cron-secret'))
     expect(response.status).toBe(200)
     expect(checkSenders).toHaveBeenCalledTimes(1)
-    expect((await response.json()).data.sender_requests).toEqual({ checked: 3, activated: 1, rejected: 0, errors: 1 })
+    // Bounded by what is left of maxDuration (300 s), less a started request's timeouts.
+    const { budgetMs } = checkSenders.mock.calls[0]![1] as { budgetMs: number }
+    expect(budgetMs).toBeGreaterThan(200_000)
+    expect(budgetMs).toBeLessThanOrEqual(255_000)
+    expect((await response.json()).data.sender_requests).toEqual({ checked: 3, activated: 1, rejected: 0, deferred: 0, errors: 1 })
   })
 })

@@ -522,6 +522,8 @@ export interface SenderRequestSweep {
   checked: number
   activated: number
   rejected: number
+  /** Waiting requests not asked about within this run's budget: the next run asks. */
+  deferred: number
   errors: Array<{ companyId: string; provider: string; reason: string }>
 }
 
@@ -530,13 +532,23 @@ export interface SenderRequestSweep {
  * accepted one switches sending on, as if the admin had switched it on then.
  * Kivra has no webhook for these, so asking is the only way to learn.
  */
-export async function checkPendingSenderRequests(service: SupabaseClient, args: { log: Logger }): Promise<SenderRequestSweep> {
-  const summary: SenderRequestSweep = { checked: 0, activated: 0, rejected: 0, errors: [] }
+export async function checkPendingSenderRequests(
+  service: SupabaseClient,
+  args: { log: Logger; budgetMs?: number; now?: () => number },
+): Promise<SenderRequestSweep> {
+  const now = args.now ?? Date.now
+  const deadline = now() + (args.budgetMs ?? 60_000)
+  const summary: SenderRequestSweep = { checked: 0, activated: 0, rejected: 0, deferred: 0, errors: [] }
   const providers = getDigitalMailboxProviders()
   const senderOf = (id: DigitalMailboxProviderId): MailboxSender | null => providers[id]?.sender ?? null
   if (!DIGITAL_MAILBOX_PROVIDERS.some((id) => senderOf(id)?.checkSenderRequest)) return summary
   const rows = await listPendingSenderConnections(service)
-  for (const row of rows) {
+  for (let index = 0; index < rows.length; index++) {
+    if (now() > deadline) {
+      summary.deferred = rows.length - index
+      break
+    }
+    const row = rows[index]!
     const sender = senderOf(row.provider)
     const request = senderRequestOf(row)
     if (!sender?.checkSenderRequest || request?.status !== 'pending' || !isDigitalMailboxEnabled(row.company_id)) continue
