@@ -1180,7 +1180,7 @@ export const arcimMigrationExtension: Extension = {
           // migration job use. A bare sieAvailable: false read as "SIE-import
           // krävs" in the wizard, so a rate limit, an outage or a missing
           // permission asked for a file the provider can serve (crm#1118).
-          // Stays null for Visma and Bokio, which serve no SIE over the API.
+          // Stays null for providers without SIE-over-API support.
           let sieError: SieFetchFailure | null = null
           // Every fiscal year the source has, with the default selection
           // marked: the preview step renders them as the year picker, so the

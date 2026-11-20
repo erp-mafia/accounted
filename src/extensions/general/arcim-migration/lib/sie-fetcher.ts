@@ -11,6 +11,7 @@
  * and /sie-data (the years the user ticked).
  */
 
+import { BokioClient } from '@/lib/providers/bokio/client'
 import { FortnoxClient } from '@/lib/providers/fortnox/client'
 import { BrioxClient } from '@/lib/providers/briox/client'
 import { BjornLundenClient } from '@/lib/providers/bjornlunden/client'
@@ -157,6 +158,7 @@ export interface SourceFiscalYear {
 }
 
 // Singleton clients (they hold rate limiters)
+const bokioClient = new BokioClient()
 const fortnoxClient = new FortnoxClient()
 const brioxClient = new BrioxClient()
 const bjornLundenClient = new BjornLundenClient()
@@ -170,7 +172,7 @@ const wintClient = new WintClient()
  * from a provider export and goes through the same parse/validate/import path.
  */
 export function providerSupportsSie(provider: ProviderName): boolean {
-  return provider === 'fortnox' || provider === 'briox' || provider === 'bjornlunden' || provider === 'wint'
+  return provider === 'bokio' || provider === 'fortnox' || provider === 'briox' || provider === 'bjornlunden' || provider === 'wint'
 }
 
 interface FiscalYearRef {
@@ -269,6 +271,40 @@ function getSieFetcher(
   providerCompanyId: string | undefined,
   selectedYears?: number[],
 ): SieFetcher | null {
+  if (provider === 'bokio') {
+    if (!providerCompanyId) throw new Error('Bokio SIE export requires a company id')
+    const companyId = providerCompanyId
+    return {
+      async listYears(accessToken) {
+        const years: FiscalYearRef[] = []
+        let page = 1
+        let totalPages = 1
+        do {
+          const result = await bokioClient.getPage<{
+            id: string; startDate: string; endDate: string
+          }>(accessToken, companyId, '/fiscal-years', { page, pageSize: 100 })
+          for (const fy of result.items) {
+            years.push({
+              id: fy.id,
+              year: new Date(fy.startDate).getUTCFullYear(),
+              fromDate: fy.startDate,
+              toDate: fy.endDate,
+            })
+          }
+          totalPages = result.totalPages
+          page += 1
+        } while (page <= totalPages)
+        return years
+      },
+      async fetchSie(accessToken, fy) {
+        const { bytes } = await bokioClient.getBytes(
+          accessToken, companyId, `/sie/${fy.id}/download`,
+        )
+        return decodeBuffer(bytes, detectEncoding(bytes))
+      },
+    }
+  }
+
   if (provider === 'fortnox') {
     return {
       async listYears(accessToken) {
